@@ -135,7 +135,7 @@ impl SsvNetworkConfig {
             Self::parse_fork_schedule(schedule_file, ssv_domain_type, &network_name)?
         } else {
             // Default to Alan fork only if no schedule file exists
-            ForkSchedule::new(ssv_domain_type, &network_name)
+            ForkSchedule::new(Fork::Alan, ssv_domain_type, &network_name)
         };
 
         // Load eth2 network config

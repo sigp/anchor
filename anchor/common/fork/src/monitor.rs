@@ -553,7 +553,11 @@ mod tests {
 
     fn make_schedule_no_future_forks() -> Arc<ForkSchedule> {
         // Just Alan active, no Boole scheduled
-        Arc::new(ForkSchedule::new(TEST_BASELINE_DOMAIN, TEST_NETWORK))
+        Arc::new(ForkSchedule::new(
+            Fork::Alan,
+            TEST_BASELINE_DOMAIN,
+            TEST_NETWORK,
+        ))
     }
 
     /// Create a ManualSlotClock at the given epoch.

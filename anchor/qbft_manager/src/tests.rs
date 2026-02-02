@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fork::ForkSchedule;
+use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use qbft::InstanceHeight;
@@ -293,7 +293,7 @@ where
         let (network_tx, network_rx) = mpsc::unbounded_channel();
 
         // Create a test fork schedule with a default domain type
-        let fork_schedule = Arc::new(ForkSchedule::new(DomainType([0; 4]), "test"));
+        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
 
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and

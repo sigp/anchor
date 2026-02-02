@@ -96,19 +96,15 @@ pub struct ForkSchedule {
 }
 
 impl ForkSchedule {
-    /// Create a new fork schedule with Alan active from epoch 0.
-    ///
-    /// All SSV networks have Alan active from the start.
-    pub fn new(baseline_domain_type: DomainType, network_name: &str) -> Self {
+    /// Create a new fork schedule with the given fork active from epoch 0.
+    pub fn new(fork: Fork, baseline_domain_type: DomainType, network_name: &str) -> Self {
         let mut configs = BTreeMap::new();
-        configs.insert(
-            Fork::Alan,
-            ForkConfig::new(
-                Fork::Alan,
-                Epoch::new(0),
-                baseline_domain_type,
-            ),
-        );
+        for fork in Fork::all().iter().take_while(|&f| f <= &fork) {
+            configs.insert(
+                *fork,
+                ForkConfig::new(*fork, Epoch::new(0), baseline_domain_type),
+            );
+        }
         Self {
             configs,
             network_name: network_name.to_string(),
@@ -152,11 +148,13 @@ impl ForkSchedule {
             _ => {}
         }
 
-        // Validate chronological ordering - earlier forks must have <= epochs
+        // Validate chronological ordering - earlier forks must have < epochs
+        // The exception is epoch 0, which may schedule multiple forks (to enable them at genesis)
         let mut prev_epoch: Option<u64> = None;
         for (fork, (epoch, _)) in &raw_configs {
             if let Some(prev) = prev_epoch
-                && epoch.as_u64() < prev
+                && epoch.as_u64() <= prev
+                && epoch.as_u64() != 0
             {
                 return Err(format!(
                     "Fork {fork} at epoch {} is scheduled before an earlier fork at epoch {prev}",
@@ -169,12 +167,7 @@ impl ForkSchedule {
         // Convert raw configs to full ForkConfigs
         let configs = raw_configs
             .into_iter()
-            .map(|(fork, (epoch, domain_type))| {
-                (
-                    fork,
-                    ForkConfig::new(fork, epoch, domain_type),
-                )
-            })
+            .map(|(fork, (epoch, domain_type))| (fork, ForkConfig::new(fork, epoch, domain_type)))
             .collect();
 
         Ok(Self {
@@ -202,22 +195,18 @@ impl ForkSchedule {
     ///
     /// Returns the latest fork that has activated by this epoch.
     pub fn active_fork(&self, epoch: Epoch) -> Fork {
-        self.configs
-            .iter()
-            .filter(|&(_, config)| epoch >= config.epoch)
-            .max_by_key(|(_, config)| config.epoch.as_u64())
-            .map(|(fork, _)| *fork)
-            .unwrap_or(Fork::Alan)
+        self.active_fork_config(epoch).fork
     }
 
     /// Get the configuration for the currently active fork at the given epoch.
     ///
     /// This is a convenience method that combines `active_fork` and `config`.
     pub fn active_fork_config(&self, epoch: Epoch) -> &ForkConfig {
-        let fork = self.active_fork(epoch);
         self.configs
-            .get(&fork)
-            .expect("active fork always has config in schedule")
+            .values()
+            .filter(|&config| epoch >= config.epoch)
+            .max_by_key(|config| config.fork)
+            .expect("constructors ensure there is at least one fork at epoch 0")
     }
 
     /// Get the next scheduled fork after the given epoch.
@@ -234,7 +223,7 @@ impl ForkSchedule {
         self.configs
             .iter()
             .filter(|&(_, config)| config.epoch < epoch)
-            .max_by_key(|(_, config)| config.epoch.as_u64())
+            .max_by_key(|(_, config)| config.fork)
             .map(|(fork, config)| (*fork, config.epoch))
     }
 
@@ -281,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_new_schedule() {
-        let schedule = ForkSchedule::new(BASELINE_DOMAIN, TEST_NETWORK);
+        let schedule = ForkSchedule::new(Fork::Alan, BASELINE_DOMAIN, TEST_NETWORK);
         // Alan is active from epoch 0
         assert_eq!(schedule.active_fork(Epoch::new(0)), Fork::Alan);
         assert_eq!(schedule.active_fork(Epoch::new(100)), Fork::Alan);
@@ -345,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_no_scheduled_boole() {
-        let schedule = ForkSchedule::new(BASELINE_DOMAIN, TEST_NETWORK);
+        let schedule = ForkSchedule::new(Fork::Alan, BASELINE_DOMAIN, TEST_NETWORK);
         assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::Alan);
         assert_eq!(schedule.fork_epoch(Fork::Boole), None);
         assert_eq!(schedule.domain_type(Fork::Boole), None);
