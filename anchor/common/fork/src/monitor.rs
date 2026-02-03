@@ -403,14 +403,6 @@ async fn sleep_until_slot<S: SlotClock>(slot_clock: &S, target_slot: u64, second
     tokio::time::sleep(sleep_duration).await;
 }
 
-/// Broadcast a fork-phase event.
-async fn broadcast_phase(
-    phase_sender: &ForkPhaseSender,
-    phase: ForkPhase,
-) -> Result<(), async_broadcast::SendError<ForkPhase>> {
-    phase_sender.broadcast_direct(phase).await.map(|_| ())
-}
-
 /// Run the fork monitor.
 ///
 /// This is the core async logic, separated from `spawn` for testability.
@@ -443,7 +435,7 @@ pub async fn run<S: SlotClock>(
     }
 
     if let Some(phase) = initial_phase
-        && let Err(err) = broadcast_phase(&phase_sender, phase).await
+        && let Err(err) = phase_sender.broadcast_direct(phase).await
     {
         warn!(?err, "Fork monitor: phase channel closed; stopping");
         return MonitorResult::Completed;
@@ -470,7 +462,7 @@ pub async fn run<S: SlotClock>(
 
         let phases = state.check_slot(slot);
         for phase in phases {
-            if let Err(err) = broadcast_phase(&phase_sender, phase).await {
+            if let Err(err) = phase_sender.broadcast_direct(phase).await {
                 warn!(?err, "Fork monitor: phase channel closed; stopping");
                 return MonitorResult::Completed;
             }
