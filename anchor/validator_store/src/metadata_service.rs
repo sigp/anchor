@@ -30,11 +30,15 @@ use crate::{
     VotingContext, metrics,
 };
 
-/// Tuple of (`validator_index`, `pubkey`, `selection_proof`) for sync committee aggregators.
-type SyncAggregatorData = (u64, PublicKeyBytes, SyncSelectionProof);
+/// Data for sync committee aggregators.
+struct SyncAggregatorData {
+    validator_index: u64,
+    pubkey: PublicKeyBytes,
+    selection_proof: SyncSelectionProof,
+}
 
 /// Map from SSV committee to its sync aggregators grouped by subnet.
-type SyncByCommitteeMap<'a> = HashMap<CommitteeId, Vec<(SyncSubnetId, &'a SyncAggregatorData)>>;
+type SyncByCommitteeMap = HashMap<CommitteeId, Vec<(SyncSubnetId, SyncAggregatorData)>>;
 
 /// Maximum time to wait for beacon node API calls to fetch aggregated attestations
 /// and sync contributions. After this timeout, we return whatever partial results
@@ -357,24 +361,30 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let sync_aggregators = sync_duties.as_ref().map(|duties| &duties.aggregators);
 
         let mut validator_subnet_counts: HashMap<PublicKeyBytes, usize> = HashMap::new();
-        let mut sync_by_ssv_committee: SyncByCommitteeMap<'_> = HashMap::new();
+        let mut sync_by_ssv_committee: SyncByCommitteeMap = HashMap::new();
         let mut all_subnet_ids: HashSet<SyncSubnetId> =
             HashSet::with_capacity(sync_aggregators.map(|a| a.len()).unwrap_or(0));
 
         if let Some(aggregators) = sync_aggregators {
             for (subnet_id, subnet_aggregators) in aggregators {
-                for sync_aggregator in subnet_aggregators {
-                    let (_validator_index, pubkey, _proof) = sync_aggregator;
+                for (validator_index, pubkey, selection_proof) in subnet_aggregators {
+                    let sync_aggregator = SyncAggregatorData {
+                        validator_index: *validator_index,
+                        pubkey: *pubkey,
+                        selection_proof: selection_proof.clone(),
+                    };
 
                     // Only process validators with valid, non-liquidated SSV committees
                     if let Some(ssv_committee_id) = self
                         .validator_store
-                        .get_validator_and_cluster(*pubkey)
+                        .get_validator_and_cluster(sync_aggregator.pubkey)
                         .ok()
                         .map(|(_, cluster)| cluster.committee_id())
                     {
                         // For AggregationAssignments output
-                        *validator_subnet_counts.entry(*pubkey).or_insert(0) += 1;
+                        *validator_subnet_counts
+                            .entry(sync_aggregator.pubkey)
+                            .or_insert(0) += 1;
 
                         // For consensus data building - group by SSV committee
                         sync_by_ssv_committee
@@ -432,11 +442,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
     ///
     /// Takes pre-grouped data from `update_aggregation_assignments` to avoid redundant iteration.
-    async fn build_consensus_data_for_all_committees<'a>(
+    async fn build_consensus_data_for_all_committees(
         &self,
         slot: Slot,
-        attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&'a DutyAndProof>>,
-        sync_by_ssv_committee: SyncByCommitteeMap<'a>,
+        attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>>,
+        sync_by_ssv_committee: SyncByCommitteeMap,
         attestation_committee_indexes: HashSet<u64>,
         all_subnet_ids: HashSet<SyncSubnetId>,
     ) -> Result<HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>, String> {
@@ -512,7 +522,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         slot: Slot,
         ssv_committee_id: &CommitteeId,
         ssv_committee_attesters: Option<&Vec<&DutyAndProof>>,
-        ssv_committee_sync: Option<&Vec<(SyncSubnetId, &SyncAggregatorData)>>,
+        ssv_committee_sync: Option<&Vec<(SyncSubnetId, SyncAggregatorData)>>,
         aggregated_attestations: &HashMap<u64, Attestation<E>>,
         sync_contributions: &HashMap<SyncSubnetId, SyncCommitteeContribution<E>>,
     ) -> Result<Option<AggregatorCommitteeConsensusData<E>>, String> {
@@ -571,8 +581,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     .validator_store
                     .compute_sync_selection_root(slot, (*subnet_id).into());
 
-                let (validator_idx, _, proof) = sync_aggregator;
-                let validator_index = ValidatorIndex(*validator_idx as usize);
+                let validator_index = ValidatorIndex(sync_aggregator.validator_index as usize);
 
                 // Lighthouse duties service already filters sync duties to only include valid
                 // aggregators (those whose proofs meet the modulo threshold), so we can proceed.
@@ -580,7 +589,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     sync_selection_root,
                     AssignedAggregator {
                         validator_index,
-                        selection_proof: proof.clone().into(),
+                        selection_proof: sync_aggregator.selection_proof.clone().into(),
                         committee_index: (*subnet_id).into(),
                     },
                 ));
