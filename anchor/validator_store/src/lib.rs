@@ -24,8 +24,8 @@ use openssl::{
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
-    AggregatorCommitteeInstanceId, CommitteeInstanceId, QbftError, QbftManager, ValidatorDutyKind,
-    ValidatorInstanceId,
+    AggregatorCommitteeInstanceId, CommitteeInstanceId, QbftError, QbftManager, TimeoutMode,
+    ValidatorDutyKind, ValidatorInstanceId,
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
@@ -319,7 +319,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // first, we have to get to consensus
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
-        let start_time = self.get_instant_in_slot(slot, Duration::ZERO)?;
+        let timeout_mode = TimeoutMode::Relative {
+            current_round_start_time: self.get_instant_in_slot(slot, Duration::ZERO)?,
+        };
 
         // Define the validator instance identity for QBFT consensus
         let instance_id = ValidatorInstanceId {
@@ -368,7 +370,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 instance_id,
                 consensus_data,
                 data_validator,
-                start_time,
+                timeout_mode,
                 cluster,
             )
             .await
@@ -720,10 +722,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // Run QBFT consensus with committee-based instance ID
         let timer =
             metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
-        let start_time = self.get_instant_in_slot(
-            slot,
-            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-        )?;
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?,
+        };
 
         let completed = self
             .qbft_manager
@@ -734,7 +738,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 },
                 (*our_consensus_data).clone(),
                 Box::new(AggregatorCommitteeDataValidator::new()),
-                start_time,
+                timeout_mode,
                 &cluster,
             )
             .await
@@ -891,10 +895,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         // first, we have to get to consensus
         let timer =
             metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
-        let start_time = self.get_instant_in_slot(
-            message.aggregate().data().slot,
-            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-        )?;
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                message.aggregate().data().slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?,
+        };
+
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -926,7 +933,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     })?,
                 },
                 self.create_validator_consensus_data_validator(validator_pubkey),
-                start_time,
+                timeout_mode,
                 &cluster,
             )
             .await
@@ -1005,10 +1012,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             &metrics::CONSENSUS_TIMES,
             &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
         );
-        let start_time = self.get_instant_in_slot(
-            slot,
-            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-        )?;
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?,
+        };
 
         let completed = self
             .qbft_manager
@@ -1019,7 +1028,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 },
                 (*our_consensus_data).clone(),
                 Box::new(AggregatorCommitteeDataValidator::new()),
-                start_time,
+                timeout_mode,
                 &cluster,
             )
             .await
@@ -1184,10 +1193,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             &metrics::CONSENSUS_TIMES,
             &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
         );
-        let start_time = self.get_instant_in_slot(
-            slot,
-            Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-        )?;
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?,
+        };
+
         let completed = self
             .qbft_manager
             .decide_instance(
@@ -1217,7 +1229,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     })?,
                 },
                 self.create_validator_consensus_data_validator(aggregator_pubkey),
-                start_time,
+                timeout_mode,
                 &cluster,
             )
             .await;
@@ -1848,10 +1860,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
             let timer =
                 metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-            let start_time = self.get_instant_in_slot(
-                attestation.data().slot,
-                Duration::from_secs(self.spec.seconds_per_slot) / 3,
-            )?;
+            let timeout_mode = TimeoutMode::SlotTime {
+                instance_start_time: self.get_instant_in_slot(
+                    attestation.data().slot,
+                    Duration::from_secs(self.spec.seconds_per_slot) / 3,
+                )?,
+            };
             let completed = self
                 .qbft_manager
                 .decide_instance(
@@ -1868,7 +1882,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         attestation.data().slot,
                         validator_attestation_committees,
                     ),
-                    start_time,
+                    timeout_mode,
                     &cluster,
                 )
                 .await
@@ -2280,8 +2294,12 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
 
             let timer =
                 metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-            let start_time = self
-                .get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?;
+            let timeout_mode = TimeoutMode::SlotTime {
+                instance_start_time: self.get_instant_in_slot(
+                    slot,
+                    Duration::from_secs(self.spec.seconds_per_slot) / 3,
+                )?,
+            };
             let completed = self
                 .qbft_manager
                 .decide_instance(
@@ -2291,7 +2309,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                     },
                     metadata.beacon_vote.clone(),
                     self.create_beacon_vote_validator(slot, validator_attestation_committees),
-                    start_time,
+                    timeout_mode,
                     &cluster,
                 )
                 .await
