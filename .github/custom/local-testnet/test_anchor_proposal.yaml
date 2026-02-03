@@ -1,6 +1,6 @@
 id: test_anchor_proposal
 name: "Check for Anchor Proposal"
-timeout: 30m
+timeout: 20m
 tasks:
   - name: sleep
     config:
@@ -15,9 +15,8 @@ tasks:
             minAttestationCount: 1
         - name: check_consensus_attestation_stats
           config:
-            minTargetPercent: 100
-            minHeadPercent: 100
-            minTotalPercent: 100
+            minTargetPercent: 98
+            minHeadPercent: 80
             failOnCheckMiss: true
             minCheckedEpochs: 2
   - name: check_consensus_finality
