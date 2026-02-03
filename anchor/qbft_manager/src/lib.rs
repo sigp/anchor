@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{fmt::Debug, hash::Hash, num::NonZeroU64, sync::Arc};
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
@@ -129,7 +129,7 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
     // Number of slots per epoch
-    slots_per_epoch: u64,
+    slots_per_epoch: NonZeroU64,
     // Fork schedule for looking up the active fork's domain type
     fork_schedule: Arc<ForkSchedule>,
     // Slot clock for determining the current epoch
@@ -143,7 +143,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         operator_id: OwnOperatorId,
         slot_clock: S,
         message_sender: Arc<dyn MessageSender>,
-        slots_per_epoch: u64,
+        slots_per_epoch: NonZeroU64,
         fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {

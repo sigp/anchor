@@ -3,6 +3,7 @@ use std::{
     cmp::Eq,
     fmt::{Debug, Display, Formatter},
     hash::Hash,
+    num::NonZeroU64,
 };
 
 use derive_more::{Deref, From};
@@ -29,12 +30,12 @@ pub trait LeaderFunction {
 /// Default leader function implementation with configurable epoch-based rotation.
 #[derive(Debug, Clone)]
 pub struct DefaultLeaderFunction {
-    slots_per_epoch: u64,
+    slots_per_epoch: NonZeroU64,
     include_epoch_shift: bool,
 }
 
 impl DefaultLeaderFunction {
-    pub fn new(slots_per_epoch: u64, include_epoch_shift: bool) -> Self {
+    pub fn new(slots_per_epoch: NonZeroU64, include_epoch_shift: bool) -> Self {
         Self {
             slots_per_epoch,
             include_epoch_shift,
@@ -45,7 +46,7 @@ impl DefaultLeaderFunction {
 impl Default for DefaultLeaderFunction {
     fn default() -> Self {
         Self {
-            slots_per_epoch: 32, // Default mainnet value
+            slots_per_epoch: NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
             include_epoch_shift: false,
         }
     }
@@ -67,7 +68,7 @@ impl LeaderFunction for DefaultLeaderFunction {
 
         // Calculate epoch shift if enabled (Boole fork)
         let eth_epoch = if self.include_epoch_shift {
-            height / self.slots_per_epoch as usize
+            height / self.slots_per_epoch.get() as usize
         } else {
             0
         };

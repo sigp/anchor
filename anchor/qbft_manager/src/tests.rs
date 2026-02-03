@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock, RwLockWriteGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -311,7 +312,7 @@ where
                 operator_id.into(),
                 slot_clock.clone(),
                 Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
-                32, // slots_per_epoch
+                NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
                 fork_schedule.clone(),
             )
             .expect("Creation should not fail");
@@ -940,7 +941,7 @@ mod manager_tests {
             OperatorId(1).into(),
             setup.clock,
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
-            32, // slots_per_epoch
+            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
             Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test")), // No Boole fork
         )
         .expect("Manager creation should succeed");
@@ -1018,7 +1019,7 @@ mod manager_tests {
             OperatorId(1).into(),
             setup.clock,
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
-            32, // slots_per_epoch
+            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
             Arc::new(fork_schedule),
         )
         .expect("Manager creation should succeed");
