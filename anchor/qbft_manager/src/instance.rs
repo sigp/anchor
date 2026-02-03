@@ -127,13 +127,14 @@ impl Uninitialized {
         };
         tokio::time::sleep_until(start_time).await;
 
-        // For Relative: sleep until start_time, but use Instant::now() as reference
-        let timeout_mode = match init.timeout_mode {
-            TimeoutMode::SlotTime { .. } => init.timeout_mode,
-            TimeoutMode::Relative { .. } => TimeoutMode::Relative {
-                current_round_start_time: Instant::now(),
-            },
-        };
+        // For Relative mode, reset to Instant::now() after the sleep
+        let mut timeout_mode = init.timeout_mode;
+        if let TimeoutMode::Relative {
+            current_round_start_time,
+        } = &mut timeout_mode
+        {
+            *current_round_start_time = Instant::now();
+        }
 
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
 
@@ -320,16 +321,16 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         if let QbftInstance::Initialized(initialized) = &mut instance
                             && let Some(old) = old_round
                             && initialized.qbft.get_round() > old
-                            && matches!(initialized.timeout_mode, TimeoutMode::Relative { .. })
+                            && let TimeoutMode::Relative {
+                                current_round_start_time,
+                            } = &mut initialized.timeout_mode
                         {
                             debug!(
                                 old_round = ?old,
                                 new_round = ?initialized.qbft.get_round(),
                                 "Resetting round timer due to round advancement"
                             );
-                            initialized.timeout_mode = TimeoutMode::Relative {
-                                current_round_start_time: Instant::now(),
-                            };
+                            *current_round_start_time = Instant::now();
                         }
                     }
                 }
@@ -341,10 +342,11 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     warn!("Round timer elapsed");
                     initialized.qbft.end_round();
                     // Reset timer for new round in Relative mode
-                    if matches!(initialized.timeout_mode, TimeoutMode::Relative { .. }) {
-                        initialized.timeout_mode = TimeoutMode::Relative {
-                            current_round_start_time: Instant::now(),
-                        };
+                    if let TimeoutMode::Relative {
+                        current_round_start_time,
+                    } = &mut initialized.timeout_mode
+                    {
+                        *current_round_start_time = Instant::now();
                     }
                 };
                 None
