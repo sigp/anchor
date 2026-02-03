@@ -49,7 +49,6 @@ struct Initialized<D: QbftData<Hash = Hash256>> {
     qbft: Box<Qbft<D>>,
     msgs_sent_by_us: UnboundedReceiver<WrappedQbftMessage>,
     on_completed: Vec<oneshot::Sender<Completed<D>>>,
-    start_time: Instant,
     timeout_mode: TimeoutMode,
 }
 
@@ -117,13 +116,23 @@ impl Uninitialized {
         init: QbftInitialization<D>,
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D> {
-        // For SlotTime: sleep until start_time, then use that as reference
-        // For Relative: sleep until start_time, but use Instant::now() as reference
-        tokio::time::sleep_until(init.start_time).await;
-
+        // Sleep until the start time embedded in the timeout mode
         let start_time = match init.timeout_mode {
-            TimeoutMode::SlotTime => init.start_time,
-            TimeoutMode::Relative => Instant::now(),
+            TimeoutMode::SlotTime {
+                instance_start_time,
+            } => instance_start_time,
+            TimeoutMode::Relative {
+                current_round_start_time,
+            } => current_round_start_time,
+        };
+        tokio::time::sleep_until(start_time).await;
+
+        // For Relative: sleep until start_time, but use Instant::now() as reference
+        let timeout_mode = match init.timeout_mode {
+            TimeoutMode::SlotTime { .. } => init.timeout_mode,
+            TimeoutMode::Relative { .. } => TimeoutMode::Relative {
+                current_round_start_time: Instant::now(),
+            },
         };
 
         let (sent_by_us_tx, sent_by_us_rx) = mpsc::unbounded_channel();
@@ -165,8 +174,7 @@ impl Uninitialized {
             qbft: instance,
             msgs_sent_by_us: sent_by_us_rx,
             on_completed: vec![init.on_completed],
-            start_time,
-            timeout_mode: init.timeout_mode,
+            timeout_mode,
         }
     }
 }
@@ -190,11 +198,7 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
     async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
         // We calculate the sleep dynamically, as both messages and the local timer might cause the
         // round to advance
-        let round_end = calculate_round_timeout(
-            self.qbft.get_round().into(),
-            &self.start_time,
-            self.timeout_mode,
-        );
+        let round_end = calculate_round_timeout(self.qbft.get_round().into(), self.timeout_mode);
 
         let Some(timeout_instant) = round_end else {
             error!(
@@ -316,14 +320,16 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         if let QbftInstance::Initialized(initialized) = &mut instance
                             && let Some(old) = old_round
                             && initialized.qbft.get_round() > old
-                            && initialized.timeout_mode == TimeoutMode::Relative
+                            && matches!(initialized.timeout_mode, TimeoutMode::Relative { .. })
                         {
                             debug!(
                                 old_round = ?old,
                                 new_round = ?initialized.qbft.get_round(),
                                 "Resetting round timer due to round advancement"
                             );
-                            initialized.start_time = Instant::now();
+                            initialized.timeout_mode = TimeoutMode::Relative {
+                                current_round_start_time: Instant::now(),
+                            };
                         }
                     }
                 }
@@ -335,8 +341,10 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     warn!("Round timer elapsed");
                     initialized.qbft.end_round();
                     // Reset timer for new round in Relative mode
-                    if initialized.timeout_mode == TimeoutMode::Relative {
-                        initialized.start_time = Instant::now();
+                    if matches!(initialized.timeout_mode, TimeoutMode::Relative { .. }) {
+                        initialized.timeout_mode = TimeoutMode::Relative {
+                            current_round_start_time: Instant::now(),
+                        };
                     }
                 };
                 None

@@ -50,12 +50,12 @@ const QBFT_RETAIN_SLOTS: u64 = 1;
 /// Determines how round timeouts are calculated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutMode {
-    /// Timeouts are cumulative from slot start. The timer never resets.
+    /// Cumulative timeouts from instance start. Never resets.
     /// Used for: attestations, aggregations, sync committee.
-    SlotTime,
-    /// Timeouts are relative to when each round started. Timer resets on justified proposals.
+    SlotTime { instance_start_time: Instant },
+    /// Per-round timeouts. Resets on round changes.
     /// Used for: block proposals.
-    Relative,
+    Relative { current_round_start_time: Instant },
 }
 
 // Unique Identifier for a committee and its corresponding QBFT instance
@@ -113,9 +113,7 @@ pub struct QbftInitialization<D: QbftData> {
     validator: Box<dyn QbftDataValidator<D>>,
     /// The message id to be embedded into outgoing messages.
     message_id: MessageId,
-    /// The time reference for timeout calculations.
-    start_time: Instant,
-    /// The timeout mode for this instance.
+    /// The timeout mode for this instance (includes timing reference).
     timeout_mode: TimeoutMode,
     /// The configuration for the instance.
     config: qbft::Config<DefaultLeaderFunction>,
@@ -183,7 +181,6 @@ impl<E: types::EthSpec> QbftManager<E> {
         id: D::Id,
         initial: D,
         validator: Box<dyn QbftDataValidator<D>>,
-        start_time: Instant,
         timeout_mode: TimeoutMode,
         committee: &Cluster,
     ) -> Result<Completed<D>, QbftError> {
@@ -222,7 +219,6 @@ impl<E: types::EthSpec> QbftManager<E> {
                         initial,
                         validator,
                         message_id,
-                        start_time,
                         timeout_mode,
                         config,
                         on_completed: result_sender,

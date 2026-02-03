@@ -395,8 +395,9 @@ where
                                 id_clone,
                                 data_clone.clone(),
                                 Box::new(NoDataValidation),
-                                Instant::now(),
-                                TimeoutMode::SlotTime,
+                                TimeoutMode::SlotTime {
+                                    instance_start_time: Instant::now(),
+                                },
                                 &cluster,
                             )
                             .await;
@@ -1109,8 +1110,9 @@ async fn test_timeout(round_timeout_to_test: usize) {
                     Role::Committee,
                     &DutyExecutor::Committee(CommitteeId::default()),
                 ),
-                start_time: qbft_start_time,
-                timeout_mode: TimeoutMode::SlotTime,
+                timeout_mode: TimeoutMode::SlotTime {
+                    instance_start_time: qbft_start_time,
+                },
                 config: qbft::ConfigBuilder::new(
                     OperatorId(1),
                     InstanceHeight::from(0),
@@ -1177,8 +1179,9 @@ async fn test_relative_mode_timeout() {
                     Role::Committee,
                     &DutyExecutor::Committee(CommitteeId::default()),
                 ),
-                start_time: qbft_start_time,
-                timeout_mode: TimeoutMode::Relative, // Using Relative mode
+                timeout_mode: TimeoutMode::Relative {
+                    current_round_start_time: qbft_start_time,
+                },
                 config: qbft::ConfigBuilder::new(
                     OperatorId(1),
                     InstanceHeight::from(0),
@@ -1198,7 +1201,7 @@ async fn test_relative_mode_timeout() {
     let total_time = Instant::now() - slot_start_time;
 
     // For Relative mode:
-    // - Wait 4 seconds until start_time
+    // - Wait 4 seconds until current_round_start_time
     // - Round 1: 2 seconds (single round timeout, not cumulative)
     // - Round 2: 2 seconds
     // - Round 3: 2 seconds
@@ -1221,9 +1224,9 @@ async fn test_relative_mode_timeout() {
 #[tokio::test(start_paused = true)]
 async fn test_relative_vs_slottime_timing_difference() {
     // Test with start_time in the past - this highlights the difference
-    // between SlotTime (uses original start_time) and Relative (uses Instant::now())
+    // between SlotTime (uses original instance_start_time) and Relative (uses Instant::now())
 
-    async fn run_with_mode(mode: TimeoutMode) -> Duration {
+    async fn run_with_mode(use_relative: bool) -> Duration {
         let (sender_tx, _sender_rx) = unbounded_channel();
         let (message_tx, message_rx) = unbounded_channel();
         let (result_tx, result_rx) = oneshot::channel();
@@ -1234,8 +1237,16 @@ async fn test_relative_vs_slottime_timing_difference() {
         ));
 
         let now = Instant::now();
-        // start_time is NOW (no waiting)
-        let qbft_start_time = now;
+
+        let timeout_mode = if use_relative {
+            TimeoutMode::Relative {
+                current_round_start_time: now,
+            }
+        } else {
+            TimeoutMode::SlotTime {
+                instance_start_time: now,
+            }
+        };
 
         message_tx
             .send(crate::QbftMessage {
@@ -1247,8 +1258,7 @@ async fn test_relative_vs_slottime_timing_difference() {
                         Role::Committee,
                         &DutyExecutor::Committee(CommitteeId::default()),
                     ),
-                    start_time: qbft_start_time,
-                    timeout_mode: mode,
+                    timeout_mode,
                     config: qbft::ConfigBuilder::new(
                         OperatorId(1),
                         InstanceHeight::from(0),
@@ -1267,13 +1277,13 @@ async fn test_relative_vs_slottime_timing_difference() {
         Instant::now() - now
     }
 
-    let slottime_duration = run_with_mode(TimeoutMode::SlotTime).await;
-    let relative_duration = run_with_mode(TimeoutMode::Relative).await;
+    let slottime_duration = run_with_mode(false).await;
+    let relative_duration = run_with_mode(true).await;
 
     // Both should complete in 4 seconds (2 rounds * 2 seconds each)
     // The difference is in HOW they calculate it:
-    // - SlotTime: cumulative from original start_time
-    // - Relative: single-round from Instant::now() after sleep
+    // - SlotTime: cumulative from original instance_start_time
+    // - Relative: single-round from current_round_start_time (reset each round)
     //
     // When start_time is now, both should behave similarly for the first run,
     // but the internal calculations differ.
