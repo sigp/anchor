@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{fmt::Debug, hash::Hash, num::NonZeroU64, sync::Arc};
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
@@ -31,7 +31,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{EthSpec, Hash256, Slot};
+use types::{Epoch, EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
 
@@ -128,6 +128,8 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
         Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
+    // Number of slots per epoch
+    slots_per_epoch: NonZeroU64,
     // Fork schedule for looking up the active fork's domain type
     fork_schedule: Arc<ForkSchedule>,
     // Slot clock for determining the current epoch
@@ -141,6 +143,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         operator_id: OwnOperatorId,
         slot_clock: S,
         message_sender: Arc<dyn MessageSender>,
+        slots_per_epoch: NonZeroU64,
         fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
@@ -150,6 +153,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
             message_sender,
+            slots_per_epoch,
             fork_schedule,
             slot_clock: slot_clock.clone(),
         });
@@ -189,11 +193,18 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let domain = self.domain_type_for_instance(instance_height);
         let message_id = D::message_id(&domain, &id);
 
+        // Compute whether to include epoch shift based on fork schedule
+        let instance_height = initial.instance_height(&id);
+        let epoch = Epoch::new(*instance_height as u64 / self.slots_per_epoch);
+        let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
+        let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
+
         // General the qbft configuration
-        let config = ConfigBuilder::new(
+        let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
-            initial.instance_height(&id),
+            instance_height,
             committee.cluster_members.iter().copied().collect(),
+            leader_fn,
         );
         let config = config
             .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)

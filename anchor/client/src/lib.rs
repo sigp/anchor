@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::Read,
     net::SocketAddr,
+    num::NonZeroU64,
     path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -523,6 +524,7 @@ impl Client {
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
+            NonZeroU64::new(E::slots_per_epoch()).expect("slots_per_epoch is non-zero"),
             fork_schedule.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;

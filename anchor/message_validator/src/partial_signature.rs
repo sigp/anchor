@@ -446,13 +446,14 @@ mod tests {
         committee_info: &'a crate::CommitteeInfo,
         role: Role,
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> ValidationContext<'a, ManualSlotClock> {
         create_test_validation_context_with_fork(
             signed_msg,
             committee_info,
             role,
             operator_pub_keys,
-            None,
+            Some(fork_schedule),
         )
     }
 
@@ -568,8 +569,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Committee,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -614,8 +621,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -650,8 +663,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -686,8 +705,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -722,8 +747,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -757,8 +788,14 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -803,11 +840,13 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
             Role::Proposer, // Not a committee role, so validator index is checked
             &map,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -849,11 +888,13 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), binding.to_vec());
 
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_test_validation_context(
             &signed_msg,
             &committee_info,
             Role::Committee, // Committee role, so validator index is not checked
             &map,
+            Arc::new(fork_schedule),
         );
 
         let result = validate_partial_signature_message(
@@ -975,8 +1016,14 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::SyncCommittee, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::SyncCommittee,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         validate_partial_signature_message(
             validation_context,
@@ -1016,8 +1063,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Proposer, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Proposer,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -1121,8 +1174,14 @@ mod tests {
         let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
 
-        let validation_context =
-            create_test_validation_context(&signed_msg, &committee_info, Role::Committee, &map);
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::Committee,
+            &map,
+            Arc::new(fork_schedule),
+        );
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -1157,6 +1216,7 @@ mod tests {
         role: Role,
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
         slots_late: u64,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> ValidationContext<'a, ManualSlotClock> {
         let now = SystemTime::now();
         let slot_clock = ManualSlotClock::new(
@@ -1176,7 +1236,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys,
-            fork_schedule: generate_fork_schedule(Fork::Alan),
+            fork_schedule,
         }
     }
 
@@ -1226,12 +1286,14 @@ mod tests {
             &private_key,
         );
 
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
             Role::ValidatorRegistration,
             &map,
             TTL_SLOTS,
+            Arc::new(fork_schedule),
         );
 
         // Execute
@@ -1261,12 +1323,14 @@ mod tests {
             &private_key,
         );
 
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
             Role::ValidatorRegistration,
             &map,
             BEYOND_TTL_SLOTS,
+            Arc::new(fork_schedule),
         );
 
         // Execute
@@ -1300,12 +1364,14 @@ mod tests {
             &private_key,
         );
 
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
             Role::VoluntaryExit,
             &map,
             TTL_SLOTS,
+            Arc::new(fork_schedule),
         );
 
         // Execute
@@ -1585,12 +1651,14 @@ mod tests {
             &private_key,
         );
 
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
             Role::VoluntaryExit,
             &map,
             BEYOND_TTL_SLOTS,
+            Arc::new(fork_schedule),
         );
 
         // Execute

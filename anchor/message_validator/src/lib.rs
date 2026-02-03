@@ -329,6 +329,7 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     fork_schedule: Arc<ForkSchedule>,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
