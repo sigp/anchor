@@ -4,7 +4,8 @@ use database::{NetworkState, NonUniqueIndex, UniqueIndex};
 use gossipsub::{Message, MessageAcceptance, MessageId};
 use libp2p::PeerId;
 use message_validator::{
-    DutiesProvider, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
+    DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationResult,
+    Validator,
 };
 use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
@@ -27,8 +28,8 @@ pub struct Outcome {
 /// A message receiver that passes messages to responsible managers.
 pub struct NetworkMessageReceiver<E: types::EthSpec, S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
-    qbft_manager: Arc<QbftManager<E>>,
-    signature_collector: Arc<SignatureCollectorManager>,
+    qbft_manager: Arc<QbftManager<E, S>>,
+    signature_collector: Arc<SignatureCollectorManager<S>>,
     network_state_rx: watch::Receiver<NetworkState>,
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
@@ -40,8 +41,8 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessag
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
-        qbft_manager: Arc<QbftManager<E>>,
-        signature_collector: Arc<SignatureCollectorManager>,
+        qbft_manager: Arc<QbftManager<E, S>>,
+        signature_collector: Arc<SignatureCollectorManager<S>>,
         network_state_rx: watch::Receiver<NetworkState>,
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
@@ -69,6 +70,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
+        topic_context: TopicContext,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(
@@ -76,7 +78,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                 let span = debug_span!("message_receiver", msg=%message_id);
                 let _enter = span.enter();
 
-                let result = receiver.validator.validate(&message.data);
+                let result = receiver.validator.validate(&message.data, &topic_context);
 
                 let mut action = MessageAcceptance::from(&result);
 

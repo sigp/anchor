@@ -412,6 +412,39 @@ impl Discovery {
         Ok(true)
     }
 
+    /// Update the domain type in both the local state and ENR.
+    ///
+    /// Called when a fork activates to ensure this node can be discovered by
+    /// nodes using the new fork's domain type filter.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_domain_type` - The domain type for the newly activated fork
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Domain type was updated successfully
+    /// * `Err(String)` - Update failed with the given error message
+    pub fn update_domain_type(&mut self, new_domain_type: DomainType) -> Result<(), String> {
+        // Update local state used for query filtering
+        self.domain_type = new_domain_type;
+
+        // Update ENR so other nodes can discover us
+        self.discv5
+            .enr_insert("domaintype", &new_domain_type.0)
+            .map_err(|e| format!("Failed to update ENR domain type: {e:?}"))?;
+
+        save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
+
+        info!(
+            domain_type = ?new_domain_type,
+            enr_seq = self.discv5.local_enr().seq(),
+            "Updated ENR domain type for fork activation"
+        );
+
+        Ok(())
+    }
+
     /// Search for a specified number of new peers using the underlying discovery mechanism.
     ///
     /// This can optionally search for peers for a given predicate. Regardless of the predicate

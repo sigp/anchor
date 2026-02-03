@@ -269,6 +269,8 @@ When contributing to Anchor, follow these Rust best practices:
 
 ## Testing
 
+**MANDATORY: Always use the `tester-subagent` via the Task tool when creating or modifying tests.** Do not write tests directly - spawn the agent first. This ensures proper AAA structure, naming conventions, and avoids common mistakes.
+
 ### Database Testing Patterns
 
 Anchor uses two types of test fixtures for database testing:
@@ -321,7 +323,7 @@ All agents and contributors must follow these fundamental principles:
 
 Use these agents proactively to prevent errors and enforce quality standards:
 
-- **tester-subagent**: **Use immediately when creating any tests.** Expert in Anchor architecture, QBFT consensus testing, and bug reproduction methodology.
+- **tester-subagent**: **MANDATORY - Spawn via Task tool before creating or modifying ANY tests.** Do not write test code directly. Expert in AAA structure, naming conventions, and Anchor-specific testing patterns.
 
 - **code-reviewer-subagent**: **Use immediately after writing or modifying Rust code.** Reviews for safety, memory management, idiomatic patterns, and performance.
 

@@ -1,18 +1,18 @@
 use std::{collections::HashMap, convert::Into, sync::Arc, time::Duration};
 
 use duties_tracker::DutiesProvider;
-use fork::Fork;
+use fork::{Fork, ForkSchedule};
 use openssl::{pkey::Public, rsa::Rsa};
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeInfo, IndexSet, OperatorId, Round, VariableList,
+    CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
 };
 use ssz::Decode;
 use typenum::{U13, Unsigned};
-use types::Slot;
+use types::Epoch;
 
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
@@ -243,10 +243,13 @@ pub(crate) fn validate_qbft_logic(
             return Err(ValidationFailure::NoSigners);
         };
 
+        let mut committee = validation_context.committee_info.committee_members.clone();
         let leader = round_robin_proposer(
             consensus_message.height,
             consensus_message.round.into(),
-            &validation_context.committee_info.committee_members,
+            &mut committee,
+            validation_context.slots_per_epoch,
+            &validation_context.fork_schedule,
         )?;
 
         if signer != leader {
@@ -324,16 +327,30 @@ const MAX_ALLOWED_ROUNDS_FUTURE: u64 = 3;
 fn round_robin_proposer(
     height: u64,
     round: Round,
-    committee: &IndexSet<OperatorId>,
+    committee: &mut IndexSet<OperatorId>,
+    slots_per_epoch: u64,
+    fork_schedule: &ForkSchedule,
 ) -> Result<OperatorId, ValidationFailure> {
     if committee.is_empty() {
         return Err(ValidationFailure::NonExistentCommitteeID);
     }
 
+    // Sort the committee to ensure deterministic leader selection
+    committee.sort_unstable();
+
     let first_round_index = height % committee.len() as u64;
 
+    let epoch = Epoch::new(height / slots_per_epoch);
+
+    // Include epoch to shift leader rotation across epoch boundaries
+    let eth_epoch = if fork_schedule.active_fork(epoch) >= Fork::Boole {
+        epoch.into()
+    } else {
+        0
+    };
+
     let round: u64 = round.into();
-    let index = (first_round_index + round - FIRST_ROUND) % committee.len() as u64;
+    let index = (first_round_index + round - FIRST_ROUND + eth_epoch) % committee.len() as u64;
 
     // Get the operator at the calculated index
     Ok(committee[index as usize])
@@ -470,7 +487,10 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
@@ -523,6 +543,14 @@ mod tests {
         (private_key, public_key)
     }
 
+    fn generate_fork_schedule() -> Arc<ForkSchedule> {
+        Arc::new(ForkSchedule::new(
+            Fork::Alan,
+            DomainType::default(),
+            "testing",
+        ))
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
@@ -567,7 +595,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let expected_duty_count = 5;
@@ -627,7 +655,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -682,7 +710,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &HashMap::new(),
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -734,7 +762,7 @@ mod tests {
                 Duration::from_secs(1),
             ),
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -1119,37 +1147,194 @@ mod tests {
     }
 
     #[test]
-    fn test_round_robin_proposer() {
-        let committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+    fn test_round_robin_proposer_alan_fork() {
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
             .into_iter()
             .collect();
+        let slots_per_epoch = 32;
+        // Alan fork: eth_epoch is not included in calculation
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
 
-        // Test basic round robin
+        // Test basic round robin at height 0
         assert_eq!(
-            round_robin_proposer(0, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(1)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 1).into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                (FIRST_ROUND + 1).into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(2)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 2).into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                (FIRST_ROUND + 2).into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(3)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 3).into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                (FIRST_ROUND + 3).into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(1)
-        ); // Wraps around
+        );
 
-        // Test with different heights
+        // Test with different heights within same epoch
         assert_eq!(
-            round_robin_proposer(1, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(
+                1,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(2)
         );
         assert_eq!(
-            round_robin_proposer(2, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(
+                2,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(3)
+        );
+
+        // Test epoch boundaries (without epoch shift in Alan fork)
+        assert_eq!(
+            round_robin_proposer(
+                31,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2) // last slot of epoch 0
+        );
+        assert_eq!(
+            round_robin_proposer(
+                32,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(3) // first slot of epoch 1 (no epoch shift in Alan)
+        );
+        assert_eq!(
+            round_robin_proposer(
+                64,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2) // first slot of epoch 2 (no epoch shift in Alan)
+        );
+    }
+
+    #[test]
+    fn test_round_robin_proposer_boole_fork() {
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+            .into_iter()
+            .collect();
+        let slots_per_epoch = 32;
+        // Boole fork: eth_epoch IS included in calculation
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "testing"); // Boole active from epoch 0
+
+        // Test basic round robin at height 0, epoch 0
+        // index = (0 + 1 - 1 + 0) % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                0,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Test epoch boundaries WITH epoch shift in Boole fork
+        // Slot 31, epoch 0: index = (31 + 1 - 1 + 0) % 3 = 31 % 3 = 1 -> OperatorId(2)
+        assert_eq!(
+            round_robin_proposer(
+                31,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2)
+        );
+
+        // Slot 32, epoch 1: index = (32 + 1 - 1 + 1) % 3 = 33 % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                32,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Slot 64, epoch 2: index = (64 + 1 - 1 + 2) % 3 = 66 % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                64,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Slot 65, epoch 2: index = (65 + 1 - 1 + 2) % 3 = 67 % 3 = 1 -> OperatorId(2)
+        assert_eq!(
+            round_robin_proposer(
+                65,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2)
         );
     }
 
@@ -1196,12 +1381,14 @@ mod tests {
     // Signature verification tests
     // ---------------------------------------------------------------------
 
+    use fork::ForkSchedule;
     use openssl::{
         pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
     use slot_clock::ManualSlotClock;
+    use types::Epoch;
 
     use crate::{
         ValidationFailure::{EarlySlotMessage, LateSlotMessage},
@@ -1391,10 +1578,11 @@ mod tests {
         );
 
         // Create fork schedule with Boole at epoch 0 (active from start)
-        let mut fork_epochs = std::collections::HashMap::new();
-        fork_epochs.insert(fork::Fork::Boole, 0);
+        let mut fork_epochs = BTreeMap::new();
+        fork_epochs.insert(Fork::Alan, (Epoch::new(0), DomainType([0, 0, 0, 42])));
+        fork_epochs.insert(Fork::Boole, (Epoch::new(0), DomainType([0, 0, 0, 43])));
         let fork_schedule = Arc::new(
-            fork::ForkSchedule::from_fork_epochs(fork_epochs)
+            fork::ForkSchedule::from_fork_configs(fork_epochs, "testing")
                 .expect("test fork schedule creation should succeed"),
         );
 
@@ -1528,7 +1716,7 @@ mod tests {
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
             operator_pub_keys: &map,
-            fork_schedule: Arc::new(fork::ForkSchedule::new()),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let slot = slot_clock.now().unwrap();

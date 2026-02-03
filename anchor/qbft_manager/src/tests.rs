@@ -1,9 +1,11 @@
 use std::{
     collections::HashMap,
+    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock, RwLockWriteGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use qbft::InstanceHeight;
@@ -199,7 +201,7 @@ where
     // Senders to the processor
     senders: Senders,
     // Track mapping from operator id to the respective manager
-    managers: HashMap<OperatorId, Arc<QbftManager<E>>>,
+    managers: HashMap<OperatorId, Arc<QbftManager<E, ManualSlotClock>>>,
     // The size of the committee
     pub size: CommitteeSize,
     // Mapping of the data hash to the data identifier. This is to send data to the proper instance
@@ -295,6 +297,9 @@ where
         // broadcasted back into the instances
         let (network_tx, network_rx) = mpsc::unbounded_channel();
 
+        // Create a test fork schedule with a default domain type
+        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
+
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and
         // spawn multiple concurrent instances
@@ -307,8 +312,8 @@ where
                 operator_id.into(),
                 slot_clock.clone(),
                 Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
-                DomainType([0; 4]),
-                Arc::new(fork::ForkSchedule::default()),
+                NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
+                fork_schedule.clone(),
             )
             .expect("Creation should not fail");
 
@@ -931,13 +936,13 @@ mod manager_tests {
         let senders = processor::spawn(config, setup.executor);
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
 
-        let manager = QbftManager::<types::MainnetEthSpec>::new(
+        let manager = QbftManager::<types::MainnetEthSpec, _>::new(
             senders,
             OperatorId(1).into(),
             setup.clock,
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
-            DomainType([0; 4]),
-            Arc::new(ForkSchedule::default()), // No Boole fork
+            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
+            Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test")), // No Boole fork
         )
         .expect("Manager creation should succeed");
 
@@ -988,8 +993,6 @@ mod manager_tests {
     /// Verifies the fork gating allows messages through when Boole is active.
     #[tokio::test]
     async fn test_aggregator_committee_accepted_after_boole() {
-        use std::collections::HashMap as StdHashMap;
-
         use fork::{Fork, ForkSchedule};
         use message_sender::testing::MockMessageSender;
         use ssv_types::{
@@ -1002,10 +1005,7 @@ mod manager_tests {
         let setup = setup_test(1);
 
         // Create fork schedule with Boole active at epoch 0
-        let mut fork_epochs = StdHashMap::new();
-        fork_epochs.insert(Fork::Boole, 0); // Boole active from genesis
-        let fork_schedule =
-            Arc::new(ForkSchedule::from_fork_epochs(fork_epochs).expect("Valid fork schedule"));
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "test");
 
         let config = processor::Config {
             max_workers: 4,
@@ -1014,13 +1014,13 @@ mod manager_tests {
         let senders = processor::spawn(config, setup.executor);
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
 
-        let manager = QbftManager::<types::MainnetEthSpec>::new(
+        let manager = QbftManager::<types::MainnetEthSpec, _>::new(
             senders,
             OperatorId(1).into(),
             setup.clock,
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
-            DomainType([0; 4]),
-            fork_schedule,
+            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
+            Arc::new(fork_schedule),
         )
         .expect("Manager creation should succeed");
 

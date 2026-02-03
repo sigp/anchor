@@ -46,6 +46,8 @@ nodes:
   anchor:
     count: 4
 
+boole_epoch: 3
+
 # Docker images configuration
 images:
   ssv: "ssv-node:v2.3.9"

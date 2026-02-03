@@ -8,6 +8,7 @@ use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use database::OwnOperatorId;
+use fork::ForkSchedule;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
@@ -67,13 +68,17 @@ struct CommitteeSignatures {
     for_slot: Slot,
 }
 
-pub struct SignatureCollectorManager {
+pub struct SignatureCollectorManager<S: SlotClock> {
     /// The handle to the processor, for queueing messages to the instances.
     processor: Senders,
     /// The local operator we act for.
     operator_id: OwnOperatorId,
-    /// The network domain to be embedded in the message id of outgoing messages.
-    domain: DomainType,
+    /// The fork schedule for looking up the slot-based domain type.
+    fork_schedule: Arc<ForkSchedule>,
+    /// The slot clock for determining the current epoch.
+    slot_clock: S,
+    /// Number of slots per epoch (needed for epoch calculation).
+    slots_per_epoch: u64,
     /// A message sender used for outgoing messages.
     message_sender: Arc<dyn MessageSender>,
     /// A map from the signing root and signing validator to the corresponding signature collector.
@@ -84,29 +89,38 @@ pub struct SignatureCollectorManager {
     committee_signatures: DashMap<(Hash256, CommitteeId), CommitteeSignatures>,
 }
 
-impl SignatureCollectorManager {
+impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
     pub fn new(
         processor: Senders,
         operator_id: OwnOperatorId,
-        domain: DomainType,
+        fork_schedule: Arc<ForkSchedule>,
+        slots_per_epoch: u64,
         message_sender: Arc<dyn MessageSender>,
-        slot_clock: impl SlotClock + 'static,
+        slot_clock: S,
     ) -> Result<Arc<Self>, CollectionError> {
         let manager = Arc::new(Self {
             processor,
             operator_id,
-            domain,
+            fork_schedule,
+            slot_clock: slot_clock.clone(),
+            slots_per_epoch,
             message_sender,
             signature_collectors: DashMap::new(),
             committee_signatures: DashMap::new(),
         });
 
-        manager.processor.permitless.send_async(
-            Arc::clone(&manager).cleaner(slot_clock),
-            COLLECTOR_CLEANER_NAME,
-        )?;
+        manager
+            .processor
+            .permitless
+            .send_async(Arc::clone(&manager).cleaner(), COLLECTOR_CLEANER_NAME)?;
 
         Ok(manager)
+    }
+
+    /// Get the domain type for a message slot.
+    fn domain_type_for_slot(&self, slot: Slot) -> DomainType {
+        let epoch = slot.epoch(self.slots_per_epoch);
+        self.fork_schedule.active_fork_config(epoch).domain_type
     }
 
     /// Sign a message and wait until the signature has been reconstructed.
@@ -274,6 +288,7 @@ impl SignatureCollectorManager {
         signatures: Vec<PartialSignatureMessage>,
         duty_executor: &DutyExecutor,
     ) -> Result<UnsignedSSVMessage, CreateMessageError> {
+        let domain = self.domain_type_for_slot(metadata.slot);
         let count = signatures.len();
         let messages = ssv_types::VariableList::new(signatures).map_err(|_| {
             CreateMessageError::TooManySignatures {
@@ -291,7 +306,7 @@ impl SignatureCollectorManager {
         Ok(UnsignedSSVMessage {
             ssv_message: SSVMessage::new(
                 MsgType::SSVPartialSignatureMsgType,
-                MessageId::new(&self.domain, metadata.role, duty_executor),
+                MessageId::new(&domain, metadata.role, duty_executor),
                 partial_sig_messages.as_ssz_bytes(),
             )?,
             full_data: vec![],
@@ -381,7 +396,8 @@ impl SignatureCollectorManager {
         }
     }
 
-    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
+    async fn cleaner(self: Arc<Self>) {
+        let slot_clock = &self.slot_clock;
         while !self.processor.permitless.is_closed() {
             sleep(
                 slot_clock

@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::Read,
     net::SocketAddr,
+    num::NonZeroU64,
     path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -43,7 +44,7 @@ use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
+use subnet_service::start_subnet_service;
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -86,7 +87,7 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
+    pub async fn run<E: EthSpec>(executor: TaskExecutor, mut config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -184,24 +185,6 @@ impl Client {
                 }
             },
             "http_api_server",
-        );
-
-        // Open database
-        let database = Arc::new(
-            if let Some(impostor) = &config.impostor {
-                NetworkDatabase::new_as_impostor(
-                    &config.global_config.data_dir.database_file(),
-                    impostor,
-                    config.global_config.ssv_network.ssv_domain_type,
-                )
-            } else {
-                NetworkDatabase::new(
-                    &config.global_config.data_dir.database_file(),
-                    &pubkey,
-                    config.global_config.ssv_network.ssv_domain_type,
-                )
-            }
-            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         // Initialize slashing protection.
@@ -359,13 +342,50 @@ impl Client {
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
 
-        // Start fork monitor to log fork transitions
+        // Get current epoch for fork context initialization
+        let current_epoch = slot_clock
+            .now_or_genesis()
+            .ok_or("Unable to get current slot for fork context")?
+            .epoch(E::slots_per_epoch());
+
+        // Get the initial fork config for the current active fork
+        let initial_fork_config = fork_schedule.active_fork_config(current_epoch);
+
+        // Ensure network domain type matches the active fork at startup (needed for handshake/ENR)
+        config.network.domain_type = initial_fork_config.domain_type;
+
+        // Get network name for database isolation (stable across forks)
+        let network_name = config.global_config.ssv_network.network_name.as_str();
+
+        // Open database using network name for network isolation
+        let database = Arc::new(
+            if let Some(impostor) = &config.impostor {
+                NetworkDatabase::new_as_impostor(
+                    &config.global_config.data_dir.database_file(),
+                    impostor,
+                    network_name,
+                )
+            } else {
+                NetworkDatabase::new(
+                    &config.global_config.data_dir.database_file(),
+                    &pubkey,
+                    network_name,
+                )
+            }
+            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
+        );
+
+        // Create fork phase channel for fork transition events
+        let (fork_phase_tx, fork_phase_rx) = async_broadcast::broadcast(16);
+
+        // Start fork monitor to log fork transitions and send ForkPhase events
         fork::monitor::spawn(
             fork_schedule.clone(),
             slot_clock.clone(),
             E::slots_per_epoch(),
             spec.seconds_per_slot,
             executor.clone(),
+            fork_phase_tx,
         );
 
         // Start validator index syncer
@@ -411,8 +431,9 @@ impl Client {
         // chain).
         let operator_id = OwnOperatorId::new(database.watch());
 
-        // Network sender/receiver
-        let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
+        // Network sender/receiver - topic string and message bytes
+        // The message sender determines the full topic string based on message slot (per SIP-43)
+        let (network_tx, network_rx) = mpsc::channel::<(String, Vec<u8>)>(9001);
 
         let duties_tracker = Arc::new(DutiesTracker::new(
             voluntary_exit_tracker.clone(),
@@ -423,17 +444,6 @@ impl Client {
             database.watch(),
         ));
         duties_tracker.clone().start(executor.clone());
-
-        let message_validator = Validator::new(
-            database.watch(),
-            E::slots_per_epoch(),
-            spec.epochs_per_sync_committee_period.as_u64(),
-            E::sync_committee_size(),
-            duties_tracker.clone(),
-            slot_clock.clone(),
-            fork_schedule.clone(),
-            &executor,
-        );
 
         // Create operator doppelgänger protection if enabled (will be started after sync)
         let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
@@ -452,6 +462,32 @@ impl Client {
             None
         };
 
+        // Start the subnet service now that we have slot_clock
+        // This returns Arc<SubnetService> for message routing and topic event receiver for network
+        let (subnet_service, topic_event_rx) = start_subnet_service::<_, E>(
+            database.watch(),
+            config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
+            &executor,
+            slot_clock.clone(),
+            spec.clone(),
+            fork_schedule.clone(),
+            fork_phase_rx.clone(),
+        );
+
+        // Create message validator after subnet_service (depends on it for fork-aware validation)
+        let message_validator = Validator::new(
+            database.watch(),
+            E::slots_per_epoch(),
+            spec.epochs_per_sync_committee_period.as_u64(),
+            E::sync_committee_size(),
+            duties_tracker.clone(),
+            slot_clock.clone(),
+            subnet_service.clone(),
+            fork_schedule.clone(),
+            &executor,
+        );
+
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
                 message_sender::NetworkMessageSenderConfig {
@@ -460,45 +496,38 @@ impl Client {
                     private_key: key.clone(),
                     operator_id: operator_id.clone(),
                     validator: Some(message_validator.clone()),
-                    subnet_count: SUBNET_COUNT,
                     is_synced: is_synced.clone(),
+                    subnet_service: subnet_service.clone(),
                 },
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
+            Arc::new(ImpostorMessageSender::new(
+                network_tx.clone(),
+                subnet_service.clone(),
+            ))
         };
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
-            config.global_config.ssv_network.ssv_domain_type,
+            fork_schedule.clone(),
+            E::slots_per_epoch(),
             message_sender.clone(),
             slot_clock.clone(),
         )
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let qbft_manager = QbftManager::<E>::new(
+        let qbft_manager = QbftManager::<E, _>::new(
             processor_senders.clone(),
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.global_config.ssv_network.ssv_domain_type,
+            NonZeroU64::new(E::slots_per_epoch()).expect("slots_per_epoch is non-zero"),
             fork_schedule.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
-
-        // Start the subnet service now that we have slot_clock
-        let subnet_service = start_subnet_service::<E>(
-            database.watch(),
-            SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            config.network.disable_gossipsub_topic_scoring,
-            &executor,
-            slot_clock.clone(),
-            spec.clone(),
-        );
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
@@ -516,12 +545,13 @@ impl Client {
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_service,
+            topic_event_rx,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
             spec.clone(),
+            fork_phase_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
