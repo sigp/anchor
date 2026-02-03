@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use ssv_types::ValidatorIndex;
-use types::{PublicKeyBytes, Slot};
+use types::Slot;
 
 /// Represents an exit request scheduled for processing
 #[derive(Debug, Clone)]

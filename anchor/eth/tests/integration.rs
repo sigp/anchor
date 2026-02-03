@@ -142,12 +142,12 @@ async fn test_database_transaction_rollback_on_error() {
 
 #[tokio::test]
 async fn test_keysplit_mode_processing() {
-    use database::test_utils::{TEST_DOMAIN, generators};
+    use database::test_utils::{TEST_NETWORK, generators};
 
     // Setup database and KeySplit processor (no fixture needed for KeySplit tests)
     let pubkey = generators::pubkey::random_rsa();
     let db = Arc::new(
-        database::NetworkDatabase::new_in_memory(&pubkey, TEST_DOMAIN)
+        database::NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK)
             .expect("Failed to create in-memory database"),
     );
     let processor = create_keysplit_mode_processor(db);

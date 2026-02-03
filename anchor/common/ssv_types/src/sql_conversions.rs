@@ -4,9 +4,10 @@ use std::{
 };
 
 use base64::prelude::*;
+use bls::PublicKeyBytes;
 use openssl::rsa::Rsa;
 use rusqlite::{Error as SqlError, Row, types::Type};
-use types::{Address, GRAFFITI_BYTES_LEN, Graffiti, PublicKeyBytes};
+use types::{Address, GRAFFITI_BYTES_LEN, Graffiti};
 
 use crate::{
     Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,

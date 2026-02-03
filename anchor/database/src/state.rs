@@ -4,13 +4,14 @@ use std::{
 };
 
 use base64::prelude::*;
+use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::{Error as SqlError, OptionalExtension, params, types::Type};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
 };
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,

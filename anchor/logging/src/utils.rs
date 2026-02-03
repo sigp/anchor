@@ -9,6 +9,7 @@ pub(crate) const LIGHTHOUSE_CRATES: &[&str] = &[
     "slashing_protection",
     "task_executor",
     "validator_services",
+    "fork",
 ];
 
 /// Constructs a filter which only permits logging from crates which are members of the workspace.
