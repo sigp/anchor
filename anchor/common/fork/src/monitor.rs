@@ -403,17 +403,12 @@ async fn sleep_until_slot<S: SlotClock>(slot_clock: &S, target_slot: u64, second
     tokio::time::sleep(sleep_duration).await;
 }
 
-/// Broadcast a fork-phase event and stop the monitor if the channel is closed.
-///
-/// Returns `false` when the monitor should exit early.
-async fn broadcast_phase(phase_sender: &ForkPhaseSender, phase: ForkPhase) -> bool {
-    match phase_sender.broadcast_direct(phase).await {
-        Ok(_) => true,
-        Err(err) => {
-            warn!(?err, "Fork monitor: phase channel closed; stopping");
-            false
-        }
-    }
+/// Broadcast a fork-phase event.
+async fn broadcast_phase(
+    phase_sender: &ForkPhaseSender,
+    phase: ForkPhase,
+) -> Result<(), async_broadcast::SendError<ForkPhase>> {
+    phase_sender.broadcast_direct(phase).await.map(|_| ())
 }
 
 /// Run the fork monitor.
@@ -448,8 +443,9 @@ pub async fn run<S: SlotClock>(
     }
 
     if let Some(phase) = initial_phase
-        && !broadcast_phase(&phase_sender, phase).await
+        && let Err(err) = broadcast_phase(&phase_sender, phase).await
     {
+        warn!(?err, "Fork monitor: phase channel closed; stopping");
         return MonitorResult::Completed;
     }
 
@@ -474,7 +470,8 @@ pub async fn run<S: SlotClock>(
 
         let phases = state.check_slot(slot);
         for phase in phases {
-            if !broadcast_phase(&phase_sender, phase).await {
+            if let Err(err) = broadcast_phase(&phase_sender, phase).await {
+                warn!(?err, "Fork monitor: phase channel closed; stopping");
                 return MonitorResult::Completed;
             }
         }
