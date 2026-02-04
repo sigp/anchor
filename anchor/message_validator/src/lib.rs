@@ -38,8 +38,7 @@ use tracing::{debug, trace};
 use types::{Epoch, Slot};
 
 use crate::{
-    consensus_message::validate_consensus_message,
-    duty_state::{DutyState, OperatorState},
+    consensus_message::validate_consensus_message, duty_state::OperatorState,
     partial_signature::validate_partial_signature_message,
 };
 
@@ -319,7 +318,7 @@ struct ValidationContext<'a, S> {
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
     network_state_rx: Receiver<NetworkState>,
-    duty_state_map: DashMap<MessageId, DutyState>,
+    duty_state_map: DashMap<(MessageId, OperatorId), OperatorState>,
     slots_per_epoch: u64,
     epochs_per_sync_committee_period: u64,
     sync_committee_size: usize,
@@ -438,10 +437,14 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
         let operator_pub_keys =
             &get_operator_pub_keys(&network_state, &committee_info.committee_members);
-
+        let operator_id = *signed_ssv_message
+            .operator_ids()
+            .first()
+            .expect("Should have an OperatorId");
         drop(network_state);
 
-        let mut duty_state = self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
+        let mut operator_state =
+            self.get_duty_state(ssv_message.msg_id(), operator_id, self.slots_per_epoch);
 
         let validation_context = ValidationContext {
             signed_ssv_message,
@@ -458,7 +461,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
         validate_ssv_message(
             validation_context,
-            duty_state.value_mut(),
+            operator_state.value_mut(),
             self.duties_provider.clone(),
         )
         .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
@@ -468,14 +471,15 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     fn get_duty_state(
         &self,
         message_id: &MessageId,
+        operator_id: OperatorId,
         slots_per_epoch: u64,
-    ) -> RefMut<'_, MessageId, DutyState> {
+    ) -> RefMut<'_, (MessageId, OperatorId), OperatorState> {
         self.duty_state_map
-            .entry(message_id.clone())
+            .entry((message_id.clone(), operator_id))
             .or_insert_with(|| {
                 let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
 
-                DutyState::new(stored_slot_count as usize)
+                OperatorState::new(stored_slot_count as usize)
             })
     }
 
@@ -507,9 +511,9 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                 continue;
             };
 
-            validator
-                .duty_state_map
-                .retain(|_, duty_state| !duty_state.outdated(now));
+            validator.duty_state_map.retain(|_, operator_state| {
+                !operator_state.outdated(now, (slots_per_epoch * 2) as usize)
+            });
         }
     }
 
@@ -633,17 +637,17 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
 fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
-    duty_state: &mut DutyState,
+    operator_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
         MsgType::SSVConsensusMsgType => {
-            validate_consensus_message(validation_context, duty_state, duty_provider)
+            validate_consensus_message(validation_context, operator_state, duty_provider)
         }
         MsgType::SSVPartialSignatureMsgType => {
-            validate_partial_signature_message(validation_context, duty_state, duty_provider)
+            validate_partial_signature_message(validation_context, operator_state, duty_provider)
         }
     }
 }
