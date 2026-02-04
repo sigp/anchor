@@ -704,6 +704,7 @@ impl Client {
             beacon_nodes.clone(),
             executor.clone(),
             spec.clone(),
+            fork_schedule.clone(),
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
