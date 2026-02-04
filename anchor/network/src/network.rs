@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use async_broadcast::RecvError;
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
@@ -72,13 +71,6 @@ pub enum NetworkError {
 enum LoopControl {
     Continue,
     Exit,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ForkPhaseRxState {
-    Active,
-    /// Disable after closure to avoid repeatedly polling a closed receiver.
-    Disabled,
 }
 
 pub struct Network<R: MessageReceiver> {
@@ -183,8 +175,6 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Main loop for polling and handling swarm and channels.
     pub async fn run<E: EthSpec>(mut self) {
-        let mut fork_phase_rx_state = ForkPhaseRxState::Active;
-
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
@@ -206,8 +196,8 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 }
 
-                result = self.fork_phase_rx.recv(), if fork_phase_rx_state == ForkPhaseRxState::Active => {
-                    fork_phase_rx_state = self.handle_fork_phase_result(result);
+                Ok(phase) = self.fork_phase_rx.recv() => {
+                    self.on_fork_phase(phase);
                 }
             }
         }
@@ -422,27 +412,6 @@ impl<R: MessageReceiver> Network<R> {
             None => {
                 error!("message validator has quit");
                 LoopControl::Exit
-            }
-        }
-    }
-
-    /// Process fork-phase events and handle receiver closure.
-    fn handle_fork_phase_result(
-        &mut self,
-        result: Result<ForkPhase, RecvError>,
-    ) -> ForkPhaseRxState {
-        match result {
-            Ok(phase) => {
-                self.on_fork_phase(phase);
-                ForkPhaseRxState::Active
-            }
-            Err(RecvError::Overflowed(missed)) => {
-                warn!(missed, "Fork phase channel overflowed");
-                ForkPhaseRxState::Active
-            }
-            Err(RecvError::Closed) => {
-                warn!("Fork phase channel closed; disabling receiver");
-                ForkPhaseRxState::Disabled
             }
         }
     }
