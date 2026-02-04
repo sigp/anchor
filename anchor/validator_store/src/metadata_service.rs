@@ -792,26 +792,20 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             }
         }
 
-        // Track success rate
+        // Track success/failure counts
         let successful = aggregated_attestations.len();
         let total = total_committees;
-
-        // Increment counters for each successful fetch
-        for _ in 0..successful {
-            metrics::inc_counter_vec(
-                &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
-                &["aggregated_attestations", "success"],
-            );
-        }
-
-        // Increment counters for each failed fetch
         let failed = total.saturating_sub(successful);
-        for _ in 0..failed {
-            metrics::inc_counter_vec(
-                &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
-                &["aggregated_attestations", "failed"],
-            );
-        }
+        metrics::inc_counter_vec_by(
+            &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
+            &["aggregated_attestations", "success"],
+            successful as u64,
+        );
+        metrics::inc_counter_vec_by(
+            &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
+            &["aggregated_attestations", "failed"],
+            failed as u64,
+        );
 
         aggregated_attestations
     }
@@ -910,26 +904,20 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             }
         }
 
-        // Track success rate
+        // Track success/failure counts
         let successful = sync_contributions.len();
         let total = total_subnets;
-
-        // Increment counters for each successful fetch
-        for _ in 0..successful {
-            metrics::inc_counter_vec(
-                &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
-                &["sync_contributions", "success"],
-            );
-        }
-
-        // Increment counters for each failed fetch
         let failed = total.saturating_sub(successful);
-        for _ in 0..failed {
-            metrics::inc_counter_vec(
-                &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
-                &["sync_contributions", "failed"],
-            );
-        }
+        metrics::inc_counter_vec_by(
+            &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
+            &["sync_contributions", "success"],
+            successful as u64,
+        );
+        metrics::inc_counter_vec_by(
+            &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
+            &["sync_contributions", "failed"],
+            failed as u64,
+        );
 
         sync_contributions
     }
