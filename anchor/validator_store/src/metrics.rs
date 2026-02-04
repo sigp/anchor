@@ -54,3 +54,33 @@ pub static METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL: LazyLock<Result<IntCounter>
             "Count of slots where VotingAssignments had no duties",
         )
     });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AggregatorCommittee metrics
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub static AGGREGATOR_COMMITTEE_FETCH_TIMES: LazyLock<Result<HistogramVec>> = LazyLock::new(|| {
+    try_create_histogram_vec(
+        "anchor_aggregator_committee_fetch_times_seconds",
+        "Time taken to fetch aggregated attestations and sync contributions",
+        &["type"],
+    )
+});
+
+pub static AGGREGATOR_COMMITTEE_PARTIAL_RESULTS: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_aggregator_committee_partial_results_total",
+            "Number of times partial results were returned due to timeout",
+            &["type"],
+        )
+    });
+
+pub static AGGREGATOR_COMMITTEE_FETCH_SUCCESS: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_aggregator_committee_fetch_success_total",
+            "Number of successful vs total fetches for aggregator committee data",
+            &["type", "status"],
+        )
+    });
