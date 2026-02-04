@@ -77,6 +77,7 @@ enum LoopControl {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ForkPhaseRxState {
     Active,
+    /// Disable after closure to avoid repeatedly polling a closed receiver.
     Disabled,
 }
 
