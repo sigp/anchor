@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     num::{NonZeroU8, NonZeroUsize},
+    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -65,12 +66,6 @@ pub enum NetworkError {
 
     #[error("DNS transport config error: {0}")]
     DnsTransport(std::io::Error),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LoopControl {
-    Continue,
-    Exit,
 }
 
 pub struct Network<R: MessageReceiver> {
@@ -186,12 +181,12 @@ impl<R: MessageReceiver> Network<R> {
                 }
 
                 event = self.message_rx.recv() => {
-                    if self.handle_outbound_message(event) == LoopControl::Exit {
+                    if let ControlFlow::Break(()) = self.handle_outbound_message(event) {
                         return;
                     }
                 }
                 event = self.outcome_rx.recv() => {
-                    if self.handle_validation_outcome(event) == LoopControl::Exit {
+                    if let ControlFlow::Break(()) = self.handle_validation_outcome(event) {
                         return;
                     }
                 }
@@ -379,7 +374,7 @@ impl<R: MessageReceiver> Network<R> {
     }
 
     /// Publish an outbound message or signal shutdown if the channel closed.
-    fn handle_outbound_message(&mut self, event: Option<(String, Vec<u8>)>) -> LoopControl {
+    fn handle_outbound_message(&mut self, event: Option<(String, Vec<u8>)>) -> ControlFlow<()> {
         match event {
             Some((topic_string, message)) => {
                 // Topic is determined by message sender based on message slot (per SIP-43)
@@ -389,17 +384,17 @@ impl<R: MessageReceiver> Network<R> {
                 {
                     error!(?err, "Failed to publish message");
                 }
-                LoopControl::Continue
+                ControlFlow::Continue(())
             }
             None => {
                 error!("message queue was closed");
-                LoopControl::Exit
+                ControlFlow::Break(())
             }
         }
     }
 
     /// Report validation outcomes to gossipsub or signal shutdown if the channel closed.
-    fn handle_validation_outcome(&mut self, event: Option<Outcome>) -> LoopControl {
+    fn handle_validation_outcome(&mut self, event: Option<Outcome>) -> ControlFlow<()> {
         match event {
             Some(outcome) => {
                 self.gossipsub().report_message_validation_result(
@@ -407,11 +402,11 @@ impl<R: MessageReceiver> Network<R> {
                     &outcome.propagation_source,
                     outcome.action,
                 );
-                LoopControl::Continue
+                ControlFlow::Continue(())
             }
             None => {
                 error!("message validator has quit");
-                LoopControl::Exit
+                ControlFlow::Break(())
             }
         }
     }
