@@ -115,7 +115,7 @@ fn main() -> Result<(), String> {
         }
         AnchorSubcommands::Keygen(keygen) => {
             keygen::run_keygen(keygen, &global_config.data_dir)
-                .map_err(|e| format!("Keygen error: {e:?}"))?;
+                .map_err(|e| format!("Keygen error: {e}"))?;
             Ok(())
         }
     }

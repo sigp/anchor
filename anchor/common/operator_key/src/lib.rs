@@ -9,6 +9,7 @@ use thiserror::Error;
 pub mod encrypted;
 pub mod public;
 pub mod unencrypted;
+pub mod util;
 
 #[derive(Error, Debug)]
 pub enum ConversionError {
