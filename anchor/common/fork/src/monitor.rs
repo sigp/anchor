@@ -446,10 +446,10 @@ pub async fn run<S: SlotClock>(
         return MonitorResult::Completed;
     }
 
-    if let Some(phase) = initial_phase {
-        if let ControlFlow::Break(result) = broadcast_or_stop(&phase_sender, phase).await {
-            return result;
-        }
+    if let Some(phase) = initial_phase
+        && let ControlFlow::Break(result) = broadcast_or_stop(&phase_sender, phase).await
+    {
+        return result;
     }
 
     let mut last_slot = current_slot.as_u64();
