@@ -19,7 +19,7 @@ use std::{ops::ControlFlow, sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use types::{Epoch, Slot};
 
 use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
@@ -409,7 +409,7 @@ async fn broadcast_or_stop(
     phase: ForkPhase,
 ) -> ControlFlow<MonitorResult, ()> {
     if let Err(err) = phase_sender.broadcast_direct(phase).await {
-        warn!(?err, "Fork monitor: phase channel closed; stopping");
+        debug!(?err, "Fork monitor: phase channel closed; stopping");
         return ControlFlow::Break(MonitorResult::Completed);
     }
     ControlFlow::Continue(())
