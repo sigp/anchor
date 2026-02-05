@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
 use duties_tracker::DutiesProvider;
-use fork::Fork;
 use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
@@ -13,7 +12,8 @@ use types::consts::altair::SYNC_COMMITTEE_SUBNET_COUNT;
 
 use crate::{
     ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
-    validate_beacon_duty, validate_duty_count, validate_slot_time, verify_message_signature,
+    validate_beacon_duty, validate_duty_count, validate_role_for_fork, validate_slot_time,
+    verify_message_signature,
 };
 
 // Constants for validation rules
@@ -32,32 +32,8 @@ pub(crate) fn validate_partial_signature_message(
         Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
 
-    // Reject AggregatorCommittee before Boole fork (safety net)
-    if validation_context.role == Role::AggregatorCommittee {
-        let epoch = messages.slot.epoch(validation_context.slots_per_epoch);
-        if validation_context.fork_schedule.active_fork(epoch) < Fork::Boole {
-            return Err(ValidationFailure::RoleNotActiveBeforeFork {
-                role: validation_context.role,
-                current_fork: validation_context.fork_schedule.active_fork(epoch),
-                minimum_fork: Fork::Boole,
-            });
-        }
-    }
-
-    // Reject deprecated roles after Boole fork
-    if matches!(
-        validation_context.role,
-        Role::Aggregator | Role::SyncCommittee
-    ) {
-        let epoch = messages.slot.epoch(validation_context.slots_per_epoch);
-        if validation_context.fork_schedule.active_fork(epoch) >= Fork::Boole {
-            return Err(ValidationFailure::RoleNotActiveAfterFork {
-                role: validation_context.role,
-                current_fork: validation_context.fork_schedule.active_fork(epoch),
-                deprecated_since_fork: Fork::Boole,
-            });
-        }
-    }
+    // Validate role is allowed for the fork active at this slot
+    validate_role_for_fork(messages.slot, &validation_context)?;
 
     // Validate basic semantics
     let signer = validate_partial_signature_message_semantics(&validation_context, &messages)?;
@@ -353,7 +329,7 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use bls::{Hash256, Signature};
-    use fork::ForkSchedule;
+    use fork::{Fork, ForkSchedule};
     use openssl::{
         hash::MessageDigest,
         pkey::{PKey, Private, Public},

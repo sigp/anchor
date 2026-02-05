@@ -12,7 +12,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
-use fork::ForkSchedule;
+use fork::{Fork, ForkSchedule};
 pub use gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
@@ -781,6 +781,43 @@ pub(crate) fn validate_beacon_duty(
         if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
             return Err(ValidationFailure::NoDuty);
         }
+    }
+
+    Ok(())
+}
+
+/// Validates that a role is allowed for the fork active at the given slot.
+///
+/// Rejects:
+/// - AggregatorCommittee before Boole fork (not yet active)
+/// - Aggregator and SyncCommittee after Boole fork (deprecated)
+pub(crate) fn validate_role_for_fork(
+    slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<(), ValidationFailure> {
+    let role = validation_context.role;
+    let epoch = slot.epoch(validation_context.slots_per_epoch);
+
+    // Reject AggregatorCommittee before Boole fork (safety net)
+    if role == Role::AggregatorCommittee
+        && validation_context.fork_schedule.active_fork(epoch) < Fork::Boole
+    {
+        return Err(ValidationFailure::RoleNotActiveBeforeFork {
+            role,
+            current_fork: validation_context.fork_schedule.active_fork(epoch),
+            minimum_fork: Fork::Boole,
+        });
+    }
+
+    // Reject deprecated roles after Boole fork
+    if matches!(role, Role::Aggregator | Role::SyncCommittee)
+        && validation_context.fork_schedule.active_fork(epoch) >= Fork::Boole
+    {
+        return Err(ValidationFailure::RoleNotActiveAfterFork {
+            role,
+            current_fork: validation_context.fork_schedule.active_fork(epoch),
+            deprecated_since_fork: Fork::Boole,
+        });
     }
 
     Ok(())

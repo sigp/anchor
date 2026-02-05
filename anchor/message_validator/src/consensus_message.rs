@@ -17,7 +17,7 @@ use types::Epoch;
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
     duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
-    validate_slot_time, verify_message_signatures,
+    validate_role_for_fork, validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -33,33 +33,9 @@ pub(crate) fn validate_consensus_message(
         Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
 
-    // Reject AggregatorCommittee before Boole fork (safety net)
+    // Validate role is allowed for the fork active at this slot
     let slot = Slot::new(consensus_message.height);
-    if validation_context.role == Role::AggregatorCommittee {
-        let epoch = slot.epoch(validation_context.slots_per_epoch);
-        if validation_context.fork_schedule.active_fork(epoch) < Fork::Boole {
-            return Err(ValidationFailure::RoleNotActiveBeforeFork {
-                role: validation_context.role,
-                current_fork: validation_context.fork_schedule.active_fork(epoch),
-                minimum_fork: Fork::Boole,
-            });
-        }
-    }
-
-    // Reject deprecated roles after Boole fork
-    if matches!(
-        validation_context.role,
-        Role::Aggregator | Role::SyncCommittee
-    ) {
-        let epoch = slot.epoch(validation_context.slots_per_epoch);
-        if validation_context.fork_schedule.active_fork(epoch) >= Fork::Boole {
-            return Err(ValidationFailure::RoleNotActiveAfterFork {
-                role: validation_context.role,
-                current_fork: validation_context.fork_schedule.active_fork(epoch),
-                deprecated_since_fork: Fork::Boole,
-            });
-        }
-    }
+    validate_role_for_fork(slot, &validation_context)?;
 
     // Call the existing semantic validation
     validate_consensus_message_semantics(
