@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     num::{NonZeroU8, NonZeroUsize},
+    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -172,136 +173,7 @@ impl<R: MessageReceiver> Network<R> {
         loop {
             tokio::select! {
                 swarm_message = self.swarm.select_next_some() => {
-                    match swarm_message {
-                        SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
-                            AnchorBehaviourEvent::Gossipsub(ge) => {
-                                match ge {
-                                    gossipsub::Event::Message {
-                                        propagation_source,
-                                        message_id,
-                                        message,
-                                    } => {
-                                        trace!(
-                                            source = ?propagation_source,
-                                            id = ?message_id,
-                                            "Received SignedSSVMessage"
-                                        );
-
-                                        // Build topic context for fork-aware validation.
-                                        // If we can't parse the topic, reject immediately - we only
-                                        // subscribe to topics we create, so parsing should always succeed.
-                                        let topic_context = match topic::parse_topic(&message.topic) {
-                                            Some(parsed) => TopicContext::Validate { parsed },
-                                            None => {
-                                                warn!(
-                                                    topic = ?message.topic,
-                                                    "Received message on unparseable topic - this is a bug"
-                                                );
-                                                continue;
-                                            }
-                                        };
-
-                                        if let Err(err) = self.message_receiver.receive(
-                                            propagation_source,
-                                            message_id,
-                                            message,
-                                            topic_context,
-                                        ) {
-                                            error!(?err, "Unable to pass message to message receiver");
-                                        }
-                                    }
-                                    gossipsub::Event::Subscribed { peer_id, topic } => {
-                                        if let Some(subnet) = topic::parse_subnet_id(&topic) {
-                                            self.peer_manager().set_peer_subscription(peer_id, subnet, true);
-                                        }
-                                    }
-                                    gossipsub::Event::Unsubscribed { peer_id, topic } => {
-                                        if let Some(subnet) = topic::parse_subnet_id(&topic) {
-                                            self.peer_manager().set_peer_subscription(peer_id, subnet, false);
-                                        }
-                                    }
-                                    _ => {
-                                        trace!(event = ?ge, "Unhandled gossipsub event");
-                                    }
-                                }
-                            },
-                            AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
-                                self.on_discovered_peers(peers);
-                            }
-                            AnchorBehaviourEvent::Handshake(event) => {
-                                self.handle_handshake_result(event);
-                            }
-                            AnchorBehaviourEvent::Upnp(upnp_event) => {
-                                self.on_upnp_event(upnp_event);
-                            }
-                            AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
-                                if let Some(actions) = heartbeat.connect_actions {
-                                    self.handle_connect_actions(actions);
-                                }
-
-                                if heartbeat.check_peer_scores {
-                                    self.check_block_and_prune_peers_by_score();
-                                }
-
-                                // Trigger periodic subnet-aware peer discovery if below target
-                                let connected_peers = self.swarm.behaviour().peer_manager.connected_peers();
-                                let target_peers = self.swarm.behaviour().peer_manager.target_peers();
-                                if connected_peers < target_peers {
-                                    let needed_subnets: Vec<_> = self.swarm.behaviour()
-                                        .peer_manager
-                                        .needed_subnets()
-                                        .iter()
-                                        .copied()
-                                        .collect();
-
-                                    if !needed_subnets.is_empty() {
-                                        debug!(
-                                            connected_peers,
-                                            target_peers,
-                                            subnets = ?needed_subnets,
-                                            "Below target peer count, triggering subnet-aware peer discovery"
-                                        );
-                                        self.swarm.behaviour_mut().discovery.start_subnet_query(needed_subnets);
-                                    }
-                                }
-
-                                if self.swarm.behaviour().peer_manager.active_subnet_count() > 0 {
-                                    // Disconnect peers that no longer subscribe to any needed subnets
-                                    let to_disconnect = self
-                                        .swarm
-                                        .behaviour()
-                                        .peer_manager
-                                        .peers_to_disconnect_due_to_subnets();
-
-                                    for peer_id in to_disconnect {
-                                        self.disconnect_peer(&peer_id, "No longer subscribed to any needed subnets");
-                                    }
-                                }
-                            }
-                            _ => {
-                                trace!(event = ?behaviour_event, "Unhandled behaviour event");
-                            }
-                        },
-                        SwarmEvent::NewListenAddr { listener_id, address } => {
-                            self.on_new_listen_addr(listener_id, address);
-                        },
-                        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                            debug!(?peer_id, ?error, "Outgoing connection error");
-                        },
-                        SwarmEvent::IncomingConnectionError { error, send_back_addr, .. } => {
-                            debug!(?send_back_addr, ?error, "Incoming connection error");
-                        },
-                        SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                            if cause.is_some() {
-                                debug!(?peer_id, ?cause, "Connection closed with error");
-                            } else {
-                                trace!(?peer_id, "Connection closed");
-                            }
-                        },
-                        _ => {
-                            trace!(event = ?swarm_message, "Unhandled swarm event");
-                        },
-                    }
+                    self.handle_swarm_event(swarm_message);
                 }
 
                 Some(event) = self.topic_event_receiver.recv() => {
@@ -309,42 +181,232 @@ impl<R: MessageReceiver> Network<R> {
                 }
 
                 event = self.message_rx.recv() => {
-                    match event {
-                        Some((topic_string, message)) => {
-                            // Topic is determined by message sender based on message slot (per SIP-43)
-                            let topic = IdentTopic::new(topic_string);
-                            if let Err(err) = self.gossipsub().publish(topic, message)
-                                && !matches!(err, PublishError::Duplicate)
-                            {
-                                error!(?err, "Failed to publish message");
-                            }
-                        }
-                        None => {
-                            error!("message queue was closed");
-                            return;
-                        }
+                    if let ControlFlow::Break(()) = self.handle_outbound_message(event) {
+                        return;
                     }
                 }
                 event = self.outcome_rx.recv() => {
-                    match event {
-                        Some(outcome) => {
-                            self.gossipsub()
-                                .report_message_validation_result(
-                                    &outcome.message_id,
-                                    &outcome.propagation_source,
-                                    outcome.action,
-                                );
-                        }
-                        None => {
-                            error!("message validator has quit");
-                            return;
-                        }
+                    if let ControlFlow::Break(()) = self.handle_validation_outcome(event) {
+                        return;
                     }
                 }
 
                 Ok(phase) = self.fork_phase_rx.recv() => {
                     self.on_fork_phase(phase);
                 }
+            }
+        }
+    }
+
+    /// Dispatch a libp2p swarm event to the appropriate handler.
+    ///
+    /// Keeps the main loop readable by isolating protocol-specific handling.
+    fn handle_swarm_event(&mut self, swarm_message: SwarmEvent<AnchorBehaviourEvent>) {
+        match swarm_message {
+            SwarmEvent::Behaviour(behaviour_event) => {
+                self.handle_behaviour_event(behaviour_event);
+            }
+            SwarmEvent::NewListenAddr {
+                listener_id,
+                address,
+            } => {
+                self.on_new_listen_addr(listener_id, address);
+            }
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                debug!(?peer_id, ?error, "Outgoing connection error");
+            }
+            SwarmEvent::IncomingConnectionError {
+                error,
+                send_back_addr,
+                ..
+            } => {
+                debug!(?send_back_addr, ?error, "Incoming connection error");
+            }
+            SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                if cause.is_some() {
+                    debug!(?peer_id, ?cause, "Connection closed with error");
+                } else {
+                    trace!(?peer_id, "Connection closed");
+                }
+            }
+            _ => {
+                trace!(event = ?swarm_message, "Unhandled swarm event");
+            }
+        }
+    }
+
+    /// Handle behaviour events emitted by the libp2p behaviour.
+    fn handle_behaviour_event(&mut self, behaviour_event: AnchorBehaviourEvent) {
+        match behaviour_event {
+            AnchorBehaviourEvent::Gossipsub(ge) => {
+                self.handle_gossipsub_event(ge);
+            }
+            AnchorBehaviourEvent::Discovery(DiscoveredPeers { peers }) => {
+                self.on_discovered_peers(peers);
+            }
+            AnchorBehaviourEvent::Handshake(event) => {
+                self.handle_handshake_result(event);
+            }
+            AnchorBehaviourEvent::Upnp(upnp_event) => {
+                self.on_upnp_event(upnp_event);
+            }
+            AnchorBehaviourEvent::PeerManager(peer_manager::Event::Heartbeat(heartbeat)) => {
+                self.handle_peer_manager_heartbeat(heartbeat);
+            }
+            _ => {
+                trace!(event = ?behaviour_event, "Unhandled behaviour event");
+            }
+        }
+    }
+
+    /// Handle gossipsub events (message flow and subscription changes).
+    fn handle_gossipsub_event(&mut self, event: gossipsub::Event) {
+        match event {
+            gossipsub::Event::Message {
+                propagation_source,
+                message_id,
+                message,
+            } => {
+                self.handle_gossipsub_message(propagation_source, message_id, message);
+            }
+            gossipsub::Event::Subscribed { peer_id, topic } => {
+                if let Some(subnet) = topic::parse_subnet_id(&topic) {
+                    self.peer_manager()
+                        .set_peer_subscription(peer_id, subnet, true);
+                }
+            }
+            gossipsub::Event::Unsubscribed { peer_id, topic } => {
+                if let Some(subnet) = topic::parse_subnet_id(&topic) {
+                    self.peer_manager()
+                        .set_peer_subscription(peer_id, subnet, false);
+                }
+            }
+            _ => {
+                trace!(event = ?event, "Unhandled gossipsub event");
+            }
+        }
+    }
+
+    /// Validate and forward an incoming gossipsub message to the receiver.
+    fn handle_gossipsub_message(
+        &mut self,
+        propagation_source: PeerId,
+        message_id: gossipsub::MessageId,
+        message: gossipsub::Message,
+    ) {
+        trace!(
+            source = ?propagation_source,
+            id = ?message_id,
+            "Received SignedSSVMessage"
+        );
+
+        // Build topic context for fork-aware validation.
+        // If we can't parse the topic, reject immediately - we only
+        // subscribe to topics we create, so parsing should always succeed.
+        let topic_context = match topic::parse_topic(&message.topic) {
+            Some(parsed) => TopicContext::Validate { parsed },
+            None => {
+                warn!(
+                    topic = ?message.topic,
+                    "Received message on unparseable topic - this is a bug"
+                );
+                return;
+            }
+        };
+
+        if let Err(err) =
+            self.message_receiver
+                .receive(propagation_source, message_id, message, topic_context)
+        {
+            error!(?err, "Unable to pass message to message receiver");
+        }
+    }
+
+    /// Process periodic peer-manager heartbeats (peer discovery, pruning, scoring).
+    fn handle_peer_manager_heartbeat(&mut self, heartbeat: peer_manager::heartbeat::Event) {
+        if let Some(actions) = heartbeat.connect_actions {
+            self.handle_connect_actions(actions);
+        }
+
+        if heartbeat.check_peer_scores {
+            self.check_block_and_prune_peers_by_score();
+        }
+
+        // Trigger periodic subnet-aware peer discovery if below target
+        let connected_peers = self.swarm.behaviour().peer_manager.connected_peers();
+        let target_peers = self.swarm.behaviour().peer_manager.target_peers();
+        if connected_peers < target_peers {
+            let needed_subnets: Vec<_> = self
+                .swarm
+                .behaviour()
+                .peer_manager
+                .needed_subnets()
+                .iter()
+                .copied()
+                .collect();
+
+            if !needed_subnets.is_empty() {
+                debug!(
+                    connected_peers,
+                    target_peers,
+                    subnets = ?needed_subnets,
+                    "Below target peer count, triggering subnet-aware peer discovery"
+                );
+                self.swarm
+                    .behaviour_mut()
+                    .discovery
+                    .start_subnet_query(needed_subnets);
+            }
+        }
+
+        if self.swarm.behaviour().peer_manager.active_subnet_count() > 0 {
+            // Disconnect peers that no longer subscribe to any needed subnets
+            let to_disconnect = self
+                .swarm
+                .behaviour()
+                .peer_manager
+                .peers_to_disconnect_due_to_subnets();
+
+            for peer_id in to_disconnect {
+                self.disconnect_peer(&peer_id, "No longer subscribed to any needed subnets");
+            }
+        }
+    }
+
+    /// Publish an outbound message or signal shutdown if the channel closed.
+    fn handle_outbound_message(&mut self, event: Option<(String, Vec<u8>)>) -> ControlFlow<()> {
+        match event {
+            Some((topic_string, message)) => {
+                // Topic is determined by message sender based on message slot (per SIP-43)
+                let topic = IdentTopic::new(topic_string);
+                if let Err(err) = self.gossipsub().publish(topic, message)
+                    && !matches!(err, PublishError::Duplicate)
+                {
+                    error!(?err, "Failed to publish message");
+                }
+                ControlFlow::Continue(())
+            }
+            None => {
+                error!("message queue was closed");
+                ControlFlow::Break(())
+            }
+        }
+    }
+
+    /// Report validation outcomes to gossipsub or signal shutdown if the channel closed.
+    fn handle_validation_outcome(&mut self, event: Option<Outcome>) -> ControlFlow<()> {
+        match event {
+            Some(outcome) => {
+                self.gossipsub().report_message_validation_result(
+                    &outcome.message_id,
+                    &outcome.propagation_source,
+                    outcome.action,
+                );
+                ControlFlow::Continue(())
+            }
+            None => {
+                error!("message validator has quit");
+                ControlFlow::Break(())
             }
         }
     }

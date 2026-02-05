@@ -32,9 +32,10 @@ network:
     cl:
       enabled: true
 
+  # Assertoor can only load from URLs here (for some reason). The placeholder is replaced in the workflow.
   assertoor_params:
     tests:
-      - https://gist.githubusercontent.com/lmnzx/13c4135052bc0f13f3f785010b3197e7/raw/e3ee98c97c54bfaa692640c917d8c6f362d03a4b/check_anchor_proposal.yaml
+      - https://raw.githubusercontent.com/sigp/anchor/<<COMMIT>>/.github/custom/local-testnet/test_anchor_proposal.yaml
 
 
 monitor:
