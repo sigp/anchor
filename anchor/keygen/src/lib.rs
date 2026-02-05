@@ -120,7 +120,7 @@ pub fn run_keygen(keygen: Keygen, data_dir: &DataDir) -> Result<Rsa<Private>, Ke
             let full =
                 Zeroizing::new(fs::read_to_string(password_file).map_err(KeygenError::Password)?);
             // Zeroize the allocation with the trimmed string
-            Zeroizing::new(full.trim().to_string())
+            Zeroizing::new(full.trim_matches(['\n', '\r']).to_string())
         } else {
             read_password_from_user(true)?
         };
