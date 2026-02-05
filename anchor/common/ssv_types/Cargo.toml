@@ -20,8 +20,6 @@ indexmap = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
 rusqlite = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 sha2 = { workspace = true }
 slashing_protection = { workspace = true }
 ssz_types = { workspace = true }
@@ -31,7 +29,6 @@ tree_hash = { workspace = true }
 tree_hash_derive = { workspace = true }
 typenum = { workspace = true }
 types = { workspace = true }
-zerocopy = "0.8.24"
 
 [dev-dependencies]
 strum = { workspace = true }
