@@ -61,6 +61,9 @@ jobs:
       - name: Load Docker Image
         run: docker load -i anchor-docker.tar
 
+      - name: Replace Commit placeholder in params.yaml
+        run: sed -i "s/<<COMMIT>>/${{ github.sha }}/g" anchor/.github/custom/local-testnet/params.yaml
+
       - name: Start Local Testnet with Assertoor
         timeout-minutes: 30
         run: kurtosis run --verbosity DETAILED --enclave localnet ssv-mini --args-file anchor/.github/custom/local-testnet/params.yaml
