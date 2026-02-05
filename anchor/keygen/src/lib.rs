@@ -64,7 +64,7 @@ pub struct Keygen {
         long,
         help = "Path to a file containing the password to use for the new key file",
         requires = "encrypt",
-        value_name = "PATH",
+        value_name = "PATH"
     )]
     pub password_file: Option<PathBuf>,
 
@@ -73,7 +73,7 @@ pub struct Keygen {
         help = "Path to an existing key file to use instead of generating a new one. If encrypted, \
             the password is read from terminal or via --password-file-for existing. The existing \
             file is NOT automatically removed.",
-        value_name = "PATH",
+        value_name = "PATH"
     )]
     pub use_existing: Option<PathBuf>,
 
@@ -81,7 +81,7 @@ pub struct Keygen {
         long,
         help = "Path to a file containing the password to use for the EXISTING key file",
         requires = "use_existing",
-        value_name = "PATH",
+        value_name = "PATH"
     )]
     pub password_file_for_existing: Option<PathBuf>,
 }
