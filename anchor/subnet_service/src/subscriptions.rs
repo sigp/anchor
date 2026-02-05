@@ -85,12 +85,7 @@ impl<S: SlotClock> SubnetService<S> {
                 _ = sleep(delay), if !self.disable_gossipsub_topic_scoring => {
                     self.send_scoring_rate_updates::<E>(&service_state).await;
                 }
-                phase = fork_phase_rx.recv() => {
-                    let Ok(phase) = phase else {
-                        warn!("Fork phase channel closed");
-                        return;
-                    };
-
+                Ok(phase) = fork_phase_rx.recv() => {
                     match phase {
                         ForkPhase::Preparing { upcoming } => {
                             service_state.forks.insert(upcoming.fork, ForkSubscriptions {
