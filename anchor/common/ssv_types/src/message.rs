@@ -9,7 +9,7 @@ use ssz_types::VariableList;
 use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Prod, Sum, U8, U13, U256, U388, U412, U722, U836, U1000, U1000000, Unsigned};
+use typenum::{Prod, Sum, U8, U13, U256, U388, U726, U836, U932, U1000, U1000000, Unsigned};
 use types::{Hash256, Slot};
 
 use crate::{
@@ -55,9 +55,10 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
 
 const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 
-/// SSVMessage.Data max size: 722412 (from Go spec)
-/// 722412 = 722 * 1000 + 412 = 722000 + 412
-pub type SSVMessageDataLen = Sum<Prod<U722, U1000>, U412>;
+/// `SSVMessage.Data` max size: 726932
+/// `max(consensus_msg_max, partial_sig_max)` = `max(722412, 726932)` = 726932
+/// 726932 = 726 * 1000 + 932
+pub type SSVMessageDataLen = Sum<Prod<U726, U1000>, U932>;
 
 /// Defines the types of messages with explicit discriminant values.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]

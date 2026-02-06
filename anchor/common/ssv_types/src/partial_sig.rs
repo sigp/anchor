@@ -4,14 +4,17 @@ use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
-use typenum::{Sum, U512, U1000};
+use typenum::{Prod, Sum, U3, U4, U512, U1000};
 use types::{Hash256, Slot};
 
 use crate::{OperatorId, ValidatorIndex};
 
-/// Maximum number of partial signature messages: 1512
-/// Calculated as 1000 + 512 = 1512
-pub type PartialSignatureMessagesLen = Sum<U1000, U512>;
+/// Maximum number of `PartialSignatureMessage`s: 5048
+/// Worst case scenario for a committee with 3000 validators:
+/// every validator has an aggregation duty (3000) +
+/// every validator is in sync committee and is a contributor to all 4 subnets (512 * 4 = 2048)
+/// Calculated as 3000 + 512 * 4 = 5048
+pub type PartialSignatureMessagesLen = Sum<Prod<U3, U1000>, Prod<U512, U4>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
