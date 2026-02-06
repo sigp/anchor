@@ -24,8 +24,8 @@ use openssl::{
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
-    AggregatorCommitteeInstanceId, CommitteeInstanceId, QbftError, QbftManager, TimeoutMode,
-    ValidatorDutyKind, ValidatorInstanceId,
+    AggregatorCommitteeInstanceId, CommitteeInstanceId, ProposerInstanceId, QbftError, QbftManager,
+    TimeoutMode, ValidatorDutyKind,
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
@@ -40,7 +40,7 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        QbftData, SelectionProofBatchId, ValidatorConsensusData, ValidatorConsensusDataValidator,
+        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
         ValidatorDuty,
     },
     msgid::Role,
@@ -323,8 +323,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             current_round_start_time: self.get_instant_in_slot(slot, Duration::ZERO)?,
         };
 
-        // Define the validator instance identity for QBFT consensus
-        let instance_id = ValidatorInstanceId {
+        // Define the proposer instance identity for QBFT consensus
+        let instance_id = ProposerInstanceId {
             validator: validator.public_key,
             duty: ValidatorDutyKind::Proposal,
             instance_height: slot.as_usize().into(),
@@ -350,7 +350,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         // Package the consensus data
-        let consensus_data = ValidatorConsensusData {
+        let consensus_data = ProposerConsensusData {
             duty: validator_duty,
             version: block_version,
             data_ssz: try_to_variable_list(signable_block.as_ssz_bytes(), |provided, max| {
@@ -361,7 +361,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             })?,
         };
 
-        let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
+        let data_validator = self.create_proposer_consensus_data_validator(validator.public_key);
 
         // Initiate QBFT consensus for this block proposal
         let completed = self
@@ -642,11 +642,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok(signed_exit)
     }
 
-    fn create_validator_consensus_data_validator(
+    fn create_proposer_consensus_data_validator(
         &self,
         validator_pubkey: PublicKeyBytes,
-    ) -> Box<ValidatorConsensusDataValidator<E>> {
-        Box::new(ValidatorConsensusDataValidator::new(
+    ) -> Box<ProposerConsensusDataValidator<E>> {
+        Box::new(ProposerConsensusDataValidator::new(
             Arc::clone(&self.slashing_protection),
             self.disable_slashing_protection,
             self.spec.clone(),
@@ -905,12 +905,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let completed = self
             .qbft_manager
             .decide_instance(
-                ValidatorInstanceId {
+                ProposerInstanceId {
                     validator: validator_pubkey,
                     duty: ValidatorDutyKind::Aggregator,
                     instance_height: message.aggregate().data().slot.as_usize().into(),
                 },
-                ValidatorConsensusData {
+                ProposerConsensusData {
                     duty: ValidatorDuty {
                         r#type: BEACON_ROLE_AGGREGATOR,
                         pub_key: validator_pubkey,
@@ -932,7 +932,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         )))
                     })?,
                 },
-                self.create_validator_consensus_data_validator(validator_pubkey),
+                self.create_proposer_consensus_data_validator(validator_pubkey),
                 timeout_mode,
                 &cluster,
             )
@@ -1203,12 +1203,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let completed = self
             .qbft_manager
             .decide_instance(
-                ValidatorInstanceId {
+                ProposerInstanceId {
                     validator: aggregator_pubkey,
                     duty: ValidatorDutyKind::SyncCommitteeAggregator,
                     instance_height: slot.as_usize().into(),
                 },
-                ValidatorConsensusData {
+                ProposerConsensusData {
                     duty: ValidatorDuty {
                         r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
                         pub_key: aggregator_pubkey,
@@ -1228,7 +1228,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         )))
                     })?,
                 },
-                self.create_validator_consensus_data_validator(aggregator_pubkey),
+                self.create_proposer_consensus_data_validator(aggregator_pubkey),
                 timeout_mode,
                 &cluster,
             )
