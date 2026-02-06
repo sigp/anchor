@@ -32,7 +32,7 @@ const OPERATOR_ID_SIZE: usize = 8;
 const VALIDATOR_INDEX_SIZE: usize = 8;
 const SLOT_SIZE: usize = 8;
 const PARTIAL_SIG_MSG_TYPE_SIZE: usize = 8;
-const MAX_PARTIAL_SIGNATURE_MESSAGES: usize = 1000;
+const MAX_PARTIAL_SIGNATURE_MESSAGES: usize = 5048;
 
 const MAX_CONSENSUS_MSG_SIZE: usize = QBFT_MSG_TYPE_SIZE
     + HEIGHT_SIZE
@@ -1189,7 +1189,7 @@ mod tests {
                 signer: Default::default(),
                 validator_index: Default::default(),
             };
-            1000
+            5048
         ];
         let partial_signature_messages = PartialSignatureMessages {
             kind: PartialSignatureKind::PostConsensus,
