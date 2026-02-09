@@ -253,7 +253,7 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         let header_value = allow_origin
             .parse()
             .map_err(|_| "Invalid allow-origin value")?;
-        config.http_api.allow_origin = AllowOrigin::exact(header_value);
+        config.http_api.allow_origin = Some(AllowOrigin::exact(header_value));
     }
 
     // Prometheus metrics HTTP server
@@ -274,7 +274,7 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         let header_value = allow_origin
             .parse()
             .map_err(|_| "Invalid metrics-allow-origin value")?;
-        config.http_metrics.allow_origin = AllowOrigin::exact(header_value);
+        config.http_metrics.allow_origin = Some(AllowOrigin::exact(header_value));
     }
 
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;

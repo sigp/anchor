@@ -42,7 +42,7 @@ pub async fn run(config: Config, shared_state: Arc<RwLock<Shared>>) -> Result<()
 
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
-        .allow_origin(config.allow_origin);
+        .allow_origin(config.allow_origin());
 
     // Generate the axum routes
     let router = router::new(shared_state).layer(cors);

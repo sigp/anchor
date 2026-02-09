@@ -162,7 +162,7 @@ impl Client {
             let metrics_future = http_metrics::serve(
                 listener,
                 shared_state.clone(),
-                config.http_metrics.allow_origin.clone(),
+                config.http_metrics.allow_origin(),
                 exit,
             );
 
