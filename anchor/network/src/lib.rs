@@ -23,9 +23,22 @@ pub use peer_manager::types::{ClientType, PeerInfo};
 
 /// A shared, thread-safe domain type that serves as a single source of truth.
 ///
-/// Created by [`Network`] and shared with sub-behaviours (`Discovery`, `handshake::Behaviour`)
-/// via `Arc`. When a fork activates, the value is updated once and all components
-/// see the new domain type immediately.
+/// # Lifecycle
+///
+/// Created by [`Network::try_new`] with the initial domain type from config. Clones are
+/// passed to `Discovery` and `handshake::Behaviour` so all three components share the
+/// same underlying value.
+///
+/// # Updates
+///
+/// When a fork activates, [`Network::on_fork_phase`] calls [`SharedDomainType::set`] once.
+/// All components reading via [`SharedDomainType::get`] see the new domain type immediately,
+/// eliminating the need for per-component update methods.
+///
+/// # Concurrency
+///
+/// Uses [`parking_lot::RwLock`] for interior mutability. Writes are brief (single `Copy`
+/// assignment) and rare (only on fork activation), so contention is negligible.
 #[derive(Clone, Debug)]
 pub(crate) struct SharedDomainType(Arc<RwLock<DomainType>>);
 
