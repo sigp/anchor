@@ -243,6 +243,7 @@ impl Client {
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
                     get_deposit_snapshot: slot_duration / HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT,
                     get_validator_block: slot_duration / HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT,
+                    events: slot_duration, // TODO!
                     default: slot_duration / HTTP_DEFAULT_TIMEOUT_QUOTIENT,
                 }
             } else {
@@ -580,6 +581,7 @@ impl Client {
             config.prefer_builder_proposals,
             config.strict_mfp,
             is_synced.clone(),
+            executor.clone(),
         );
 
         start_exit_processor(
