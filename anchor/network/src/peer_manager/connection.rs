@@ -529,6 +529,18 @@ mod tests {
 
     const TARGET_PEERS: usize = 50;
 
+    // Subnet IDs used across tests. Each has a distinct role to aid readability.
+    const SUBNET_A: u64 = 5;
+    const SUBNET_B: u64 = 42;
+    const SUBNET_C: u64 = 10;
+    const SUBNET_D: u64 = 20;
+    const SUBNET_E: u64 = 99;
+    const SUBNET_UNSUBSCRIBED: u64 = 30;
+
+    fn subnet(id: u64) -> SubnetId {
+        SubnetId::new(id)
+    }
+
     // ==================== Helper functions ====================
 
     /// Creates a `ConnectionManager` with default target peers for testing.
@@ -566,15 +578,14 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        let subnet = SubnetId::new(5);
 
         // Act
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
 
         // Assert
         assert!(
-            is_subnet_set(&mgr, &peer, 5),
-            "Subnet 5 should be set after subscribing on Alan fork"
+            is_subnet_set(&mgr, &peer, SUBNET_A),
+            "Subnet should be set after subscribing on Alan fork"
         );
     }
 
@@ -583,16 +594,15 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        let subnet = SubnetId::new(5);
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
 
         // Act
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), false);
 
         // Assert
         assert!(
-            !is_subnet_set(&mgr, &peer, 5),
-            "Subnet 5 should be cleared after unsubscribing on Alan fork"
+            !is_subnet_set(&mgr, &peer, SUBNET_A),
+            "Subnet should be cleared after unsubscribing on Alan fork"
         );
     }
 
@@ -608,18 +618,17 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        let subnet = SubnetId::new(42);
 
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
-        mgr.set_peer_subscribed(peer, Fork::Boole, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
 
         // Act: unsubscribe from Alan only
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), false);
 
-        // Assert: subnet 42 should still be set because Boole holds it
+        // Assert: subnet should still be set because Boole holds it
         assert!(
-            is_subnet_set(&mgr, &peer, 42),
-            "Subnet 42 must remain set when Boole fork still subscribes to it"
+            is_subnet_set(&mgr, &peer, SUBNET_B),
+            "Subnet must remain set when Boole fork still subscribes to it"
         );
     }
 
@@ -628,19 +637,18 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        let subnet = SubnetId::new(42);
 
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
-        mgr.set_peer_subscribed(peer, Fork::Boole, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
 
         // Act: unsubscribe from both forks
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
-        mgr.set_peer_subscribed(peer, Fork::Boole, subnet, false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), false);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), false);
 
-        // Assert: subnet 42 should now be cleared
+        // Assert: subnet should now be cleared
         assert!(
-            !is_subnet_set(&mgr, &peer, 42),
-            "Subnet 42 must be cleared after unsubscribing from all forks"
+            !is_subnet_set(&mgr, &peer, SUBNET_B),
+            "Subnet must be cleared after unsubscribing from all forks"
         );
     }
 
@@ -653,22 +661,22 @@ mod tests {
         let peer = connect_random_peer(&mut mgr);
 
         // Act: subscribe to different subnets on different forks
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(10), true);
-        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(20), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_C), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_D), true);
 
         // Assert: aggregated view should contain both bits
         let bf = aggregated_bitfield(&mgr, &peer).expect("peer should have an aggregated bitfield");
         assert!(
-            bf.get(10).unwrap_or(false),
-            "Subnet 10 (Alan) must be present in aggregated bitfield"
+            bf.get(SUBNET_C as usize).unwrap_or(false),
+            "Alan subnet must be present in aggregated bitfield"
         );
         assert!(
-            bf.get(20).unwrap_or(false),
-            "Subnet 20 (Boole) must be present in aggregated bitfield"
+            bf.get(SUBNET_D as usize).unwrap_or(false),
+            "Boole subnet must be present in aggregated bitfield"
         );
         assert!(
-            !bf.get(30).unwrap_or(false),
-            "Subnet 30 should NOT be present (never subscribed)"
+            !bf.get(SUBNET_UNSUBSCRIBED as usize).unwrap_or(false),
+            "Unsubscribed subnet should NOT be present"
         );
     }
 
@@ -679,12 +687,12 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), true);
-        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(99), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_E), true);
 
         // Act: unsubscribe from everything
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), false);
-        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(99), false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), false);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_E), false);
 
         // Assert: the peer should be completely removed from observed_peer_subnets
         assert!(
@@ -699,11 +707,11 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), true);
-        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(99), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_E), true);
 
         // Act: unsubscribe from Alan only
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), false);
 
         // Assert: peer entry still present (Boole fork still has a subscription)
         assert!(
@@ -721,25 +729,25 @@ mod tests {
         let peer_a = connect_random_peer(&mut mgr);
         let peer_b = connect_random_peer(&mut mgr);
 
-        // peer_a subscribes to subnet 10 on Alan
-        mgr.set_peer_subscribed(peer_a, Fork::Alan, SubnetId::new(10), true);
-        // peer_b subscribes to subnet 10 on Boole (different fork, same subnet)
-        mgr.set_peer_subscribed(peer_b, Fork::Boole, SubnetId::new(10), true);
-        // peer_a also subscribes to subnet 20 on Boole
-        mgr.set_peer_subscribed(peer_a, Fork::Boole, SubnetId::new(20), true);
+        // peer_a subscribes to SUBNET_C on Alan
+        mgr.set_peer_subscribed(peer_a, Fork::Alan, subnet(SUBNET_C), true);
+        // peer_b subscribes to SUBNET_C on Boole (different fork, same subnet)
+        mgr.set_peer_subscribed(peer_b, Fork::Boole, subnet(SUBNET_C), true);
+        // peer_a also subscribes to SUBNET_D on Boole
+        mgr.set_peer_subscribed(peer_a, Fork::Boole, subnet(SUBNET_D), true);
 
         // Act
         let counts = mgr.count_observed_peers_for_subnets(&[
-            SubnetId::new(10),
-            SubnetId::new(20),
-            SubnetId::new(30),
+            subnet(SUBNET_C),
+            subnet(SUBNET_D),
+            subnet(SUBNET_UNSUBSCRIBED),
         ]);
 
         // Assert
         assert_eq!(
             counts,
             vec![2, 1, 0],
-            "Subnet 10 should have 2 peers, subnet 20 should have 1, subnet 30 should have 0"
+            "SUBNET_C should have 2 peers, SUBNET_D should have 1, SUBNET_UNSUBSCRIBED should have 0"
         );
     }
 
@@ -748,15 +756,14 @@ mod tests {
         // Arrange: subscribe a peer but do NOT connect it via on_connection_established
         let mut mgr = create_test_manager();
         let disconnected_peer = PeerId::random();
-        // Directly set a subscription without calling on_connection_established
-        mgr.set_peer_subscribed(disconnected_peer, Fork::Alan, SubnetId::new(5), true);
+        mgr.set_peer_subscribed(disconnected_peer, Fork::Alan, subnet(SUBNET_A), true);
 
         // Also add a properly connected peer for the same subnet
         let connected_peer = connect_random_peer(&mut mgr);
-        mgr.set_peer_subscribed(connected_peer, Fork::Alan, SubnetId::new(5), true);
+        mgr.set_peer_subscribed(connected_peer, Fork::Alan, subnet(SUBNET_A), true);
 
         // Act
-        let counts = mgr.count_observed_peers_for_subnets(&[SubnetId::new(5)]);
+        let counts = mgr.count_observed_peers_for_subnets(&[subnet(SUBNET_A)]);
 
         // Assert: only the connected peer should be counted
         assert_eq!(
@@ -774,14 +781,14 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(50), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_D), true);
 
-        let needed = HashSet::from([SubnetId::new(50)]);
+        let needed = HashSet::from([subnet(SUBNET_D)]);
 
         // Act & Assert
         assert!(
             mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
-            "Peer subscribed to subnet 50 on Boole should satisfy the needed set"
+            "Peer subscribed on Boole should satisfy the needed set"
         );
     }
 
@@ -790,14 +797,14 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(10), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_C), true);
 
-        let needed = HashSet::from([SubnetId::new(99)]);
+        let needed = HashSet::from([subnet(SUBNET_E)]);
 
         // Act & Assert
         assert!(
             !mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
-            "Peer subscribed only to subnet 10 should not satisfy need for subnet 99"
+            "Peer subscribed to a different subnet should not satisfy the needed set"
         );
     }
 
@@ -808,18 +815,18 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(42), true);
-        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(42), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
 
         // Act: unsubscribe from Alan
-        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(42), false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), false);
 
-        let needed = HashSet::from([SubnetId::new(42)]);
+        let needed = HashSet::from([subnet(SUBNET_B)]);
 
-        // Assert: Boole still provides subnet 42
+        // Assert: Boole still provides the subnet
         assert!(
             mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
-            "Peer should still offer subnet 42 after unsubscribing only from Alan"
+            "Peer should still offer subnet after unsubscribing only from Alan"
         );
     }
 
@@ -830,16 +837,15 @@ mod tests {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
-        let subnet = SubnetId::new(5);
 
         // Act: subscribe twice on the same fork+subnet, then unsubscribe once
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
-        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), false);
 
         // Assert: bit should be cleared — bitfield tracks presence, not a count
         assert!(
-            !is_subnet_set(&mgr, &peer, 5),
+            !is_subnet_set(&mgr, &peer, SUBNET_A),
             "A single unsubscribe should clear the bit regardless of duplicate subscribes"
         );
     }

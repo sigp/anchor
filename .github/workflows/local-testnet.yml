@@ -66,7 +66,9 @@ jobs:
 
       - name: Start Local Testnet with Assertoor
         timeout-minutes: 30
-        run: kurtosis run --verbosity DETAILED --enclave localnet ssv-mini --args-file anchor/.github/custom/local-testnet/params.yaml
+        run: |
+          kurtosis clean -a || true
+          kurtosis run --verbosity DETAILED --enclave localnet ssv-mini --args-file anchor/.github/custom/local-testnet/params.yaml
 
       - name: Await Assertoor Test Result
         id: assertoor_test_result
