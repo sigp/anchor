@@ -481,7 +481,11 @@ Use the provided wrapper script to launch Claude Code with worktree-isolated tas
 
 The script auto-detects the worktree name and sets `CLAUDE_CODE_TASK_LIST_ID` so each worktree gets its own task list.
 
-**Note**: Examples below use `upstream` as the remote pointing to `sigp/anchor` and `origin` as your fork, following the standard fork contribution workflow.
+**Note**: Examples below use `upstream` as the remote pointing to `sigp/anchor` and `origin` as your fork, following the standard fork contribution workflow. Set up with:
+
+```bash
+git remote add upstream https://github.com/sigp/anchor.git
+```
 
 ### Creating Worktrees
 
@@ -509,6 +513,8 @@ git worktree remove ../anchor-my-feature
 **Hash command not found**: The script requires `sha256sum` (Linux) or `shasum` (macOS). Install the appropriate tool for your platform.
 
 **Task lists still shared**: Ensure you're launching through the script, not directly via the `claude` command.
+
+**Different task list after moving a worktree**: The task list ID includes a hash of the absolute path. Moving the worktree directory changes the hash, resulting in a new task list.
 
 ## Session Learning Updates
 
