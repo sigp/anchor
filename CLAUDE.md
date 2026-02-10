@@ -481,6 +481,8 @@ Use the provided wrapper script to launch Claude Code with worktree-isolated tas
 
 The script auto-detects the worktree name and sets `CLAUDE_CODE_TASK_LIST_ID` so each worktree gets its own task list.
 
+**Note**: Examples below use `upstream` as the remote pointing to `sigp/anchor` and `origin` as your fork, following the standard fork contribution workflow.
+
 ### Creating Worktrees
 
 ```bash
