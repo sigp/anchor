@@ -45,9 +45,13 @@ const MAX_CONSENSUS_MSG_SIZE: usize = QBFT_MSG_TYPE_SIZE
     + (MAX_SIGNATURES * (PrepareJustificationLength::USIZE + ssz::BYTES_PER_LENGTH_OFFSET)
         + ssz::BYTES_PER_LENGTH_OFFSET);
 
+/// Size of each `PartialSignatureMessage` in bytes
 const PARTIAL_SIGNATURE_MSG_SIZE: usize =
     PARTIAL_SIGNATURE_SIZE + ROOT_SIZE + OPERATOR_ID_SIZE + VALIDATOR_INDEX_SIZE;
 
+/// Maximum size of `PartialSignatureMessages` structure in bytes
+/// Calculation: 8 (`Type`) + 8 (`Slot`) + 4 (offset) + (5048 × 144)
+/// where 144 = `PARTIAL_SIGNATURE_MSG_SIZE`
 const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
     + SLOT_SIZE
     + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE
@@ -57,7 +61,19 @@ const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 
 /// `SSVMessage.Data` max size: 726932
 /// `max(consensus_msg_max, partial_sig_max)` = `max(722412, 726932)` = 726932
-/// 726932 = 726 * 1000 + 932
+///
+/// Calculation breakdown for 726932:
+/// - 8 bytes: `Type` (`PartialSigMsgType`)
+/// - 8 bytes: `Slot`
+/// - 4 bytes: `Messages` list offset
+/// - 726912 bytes: 5048 messages × 144 bytes each
+///
+///   Total: 8 + 8 + 4 + (5048 × 144) = 726932
+///
+/// where 5048 = 3000 (max aggregators) + 2048 (512 sync committee × 4 subnets)
+/// and 144 = `PARTIAL_SIGNATURE_MSG_SIZE`
+///
+/// Expressed as: 726932 = 726 * 1000 + 932
 pub type SSVMessageDataLen = Sum<Prod<U726, U1000>, U932>;
 
 /// Defines the types of messages with explicit discriminant values.
@@ -1182,6 +1198,10 @@ mod tests {
 
     #[test]
     fn ensure_message_sizes_correct() {
+        // Verify individual constants match spec
+        assert_eq!(MAX_PARTIAL_SIGNATURE_MESSAGES, 5048);
+        assert_eq!(PARTIAL_SIGNATURE_MSG_SIZE, 144);
+
         let messages_vec = vec![
             PartialSignatureMessage {
                 partial_signature: Signature::empty(),
