@@ -138,6 +138,12 @@ impl ConnectionManager {
 
         if idx < bitfield.len() {
             let _ = bitfield.set(idx, subscribed);
+        } else {
+            tracing::warn!(
+                subnet = idx,
+                max = bitfield.len(),
+                "Subnet ID exceeds bitfield capacity"
+            );
         }
 
         // Clean up empty entries to keep maps small
@@ -814,6 +820,27 @@ mod tests {
         assert!(
             mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
             "Peer should still offer subnet 42 after unsubscribing only from Alan"
+        );
+    }
+
+    // ==================== Idempotency ====================
+
+    #[test]
+    fn test_duplicate_subscribe_then_single_unsubscribe_clears_bit() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        let subnet = SubnetId::new(5);
+
+        // Act: subscribe twice on the same fork+subnet, then unsubscribe once
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+
+        // Assert: bit should be cleared — bitfield tracks presence, not a count
+        assert!(
+            !is_subnet_set(&mgr, &peer, 5),
+            "A single unsubscribe should clear the bit regardless of duplicate subscribes"
         );
     }
 }
