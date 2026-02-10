@@ -5,4 +5,4 @@ pub mod utils;
 pub use count_layer::CountLayer;
 pub use logging::*;
 pub mod format;
-pub use format::AnchorFormatter;
+pub use format::{AnchorFormatter, FileFields};
