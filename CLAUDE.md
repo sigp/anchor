@@ -502,6 +502,14 @@ cd ../anchor-my-feature
 git worktree remove ../anchor-my-feature
 ```
 
+### Troubleshooting
+
+**Script not executable**: Run `chmod +x scripts/claude-worktree.sh`
+
+**Hash command not found**: The script requires `sha256sum` (Linux) or `shasum` (macOS). Install the appropriate tool for your platform.
+
+**Task lists still shared**: Ensure you're launching through the script, not directly via the `claude` command.
+
 ## Session Learning Updates
 
 After successful Claude Code sessions where the user is satisfied with results, update both CLAUDE.md and relevant specialized agents with general principles learned:

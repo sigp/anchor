@@ -17,7 +17,14 @@ set -euo pipefail
 # Using a hash ensures different directories with the same basename get unique IDs.
 WORKTREE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 WORKTREE_DIR="$(basename "${WORKTREE_PATH}")"
-PATH_HASH="$(echo "${WORKTREE_PATH}" | shasum -a 256 | cut -c1-8)"
+if command -v sha256sum >/dev/null 2>&1; then
+    PATH_HASH="$(echo "${WORKTREE_PATH}" | sha256sum | cut -c1-8)"
+elif command -v shasum >/dev/null 2>&1; then
+    PATH_HASH="$(echo "${WORKTREE_PATH}" | shasum -a 256 | cut -c1-8)"
+else
+    echo "Error: Neither sha256sum nor shasum found in PATH" >&2
+    exit 1
+fi
 
 export CLAUDE_CODE_TASK_LIST_ID="${WORKTREE_DIR}-${PATH_HASH}"
 
