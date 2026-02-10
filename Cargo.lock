@@ -5293,6 +5293,7 @@ dependencies = [
  "message_receiver",
  "metrics",
  "network_utils",
+ "parking_lot",
  "prometheus-client",
  "quick-protobuf",
  "rand 0.9.2",
