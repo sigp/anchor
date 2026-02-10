@@ -276,15 +276,23 @@ impl<R: MessageReceiver> Network<R> {
                 self.handle_gossipsub_message(propagation_source, message_id, message);
             }
             gossipsub::Event::Subscribed { peer_id, topic } => {
-                if let Some(subnet) = topic::parse_subnet_id(&topic) {
-                    self.peer_manager()
-                        .set_peer_subscription(peer_id, subnet, true);
+                if let Some(parsed) = topic::parse_topic(&topic) {
+                    self.peer_manager().set_peer_subscription(
+                        peer_id,
+                        parsed.fork,
+                        parsed.subnet_id,
+                        true,
+                    );
                 }
             }
             gossipsub::Event::Unsubscribed { peer_id, topic } => {
-                if let Some(subnet) = topic::parse_subnet_id(&topic) {
-                    self.peer_manager()
-                        .set_peer_subscription(peer_id, subnet, false);
+                if let Some(parsed) = topic::parse_topic(&topic) {
+                    self.peer_manager().set_peer_subscription(
+                        peer_id,
+                        parsed.fork,
+                        parsed.subnet_id,
+                        false,
+                    );
                 }
             }
             _ => {

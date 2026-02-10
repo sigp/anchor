@@ -4,6 +4,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
+use fork::Fork;
 use libp2p::{
     Multiaddr,
     connection_limits::{self, ConnectionLimits},
@@ -46,8 +47,11 @@ pub struct ConnectionManager {
     pub connected: HashSet<PeerId>,
     pub target_peers: usize,
     pub max_with_priority_peers: usize,
-    // Map of observed gossipsub subscriptions per peer. Prefer this over ENR claims.
-    observed_peer_subnets: HashMap<PeerId, Bitfield<Fixed<U128>>>,
+    // Per-fork observed gossipsub subscriptions per peer. Prefer this over ENR claims.
+    // Tracked per fork so that unsubscribing from one fork's topic doesn't clear the
+    // bit for the same subnet on another fork's topic.
+    // See: https://github.com/sigp/anchor/issues/818
+    observed_peer_subnets: HashMap<PeerId, HashMap<Fork, Bitfield<Fixed<U128>>>>,
     // Track inbound vs outbound connection counts
     inbound_count: usize,
     outbound_count: usize,
@@ -116,20 +120,34 @@ impl ConnectionManager {
         self.connection_limits = Self::create_connection_limits(new_target);
     }
 
-    /// External update from gossipsub events about peer subscription state
-    pub fn set_peer_subscribed(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
-        let entry = self.observed_peer_subnets.entry(peer).or_default();
-
+    /// External update from gossipsub events about peer subscription state.
+    ///
+    /// Subscriptions are tracked per fork so that unsubscribing from one fork's topic
+    /// (e.g., `ssv.v2.42`) does not clear the subnet bit if the peer is still
+    /// subscribed via another fork's topic (e.g., `/ssv/mainnet/boole/42`).
+    pub fn set_peer_subscribed(
+        &mut self,
+        peer: PeerId,
+        fork: Fork,
+        subnet: SubnetId,
+        subscribed: bool,
+    ) {
         let idx = *subnet.deref() as usize;
-        if idx < entry.len() {
-            // Safe to ignore the result of `set` because we have already checked that `idx <
-            // entry.len()`
-            let _ = entry.set(idx, subscribed);
+        let fork_map = self.observed_peer_subnets.entry(peer).or_default();
+        let bitfield = fork_map.entry(fork).or_default();
+
+        if idx < bitfield.len() {
+            let _ = bitfield.set(idx, subscribed);
         }
 
-        // If peer is now unsubscribed from all observed subnets, drop the entry to keep map small
-        if !subscribed && !entry.iter().any(|b| b) {
-            self.observed_peer_subnets.remove(&peer);
+        // Clean up empty entries to keep maps small
+        if !subscribed {
+            if bitfield.is_zero() {
+                fork_map.remove(&fork);
+            }
+            if fork_map.is_empty() {
+                self.observed_peer_subnets.remove(&peer);
+            }
         }
     }
 
@@ -217,12 +235,12 @@ impl ConnectionManager {
             return true;
         }
 
-        // Only use observed subscriptions, no ENR fallback
-        let Some(observed) = self.observed_peer_subnets.get(peer) else {
+        // Only use observed subscriptions (aggregated across forks), no ENR fallback
+        let Some(observed) = self.get_peer_subnets_observed_only(peer) else {
             return false;
         };
 
-        self.bitfield_offers_any_subnet(observed, needed)
+        self.bitfield_offers_any_subnet(&observed, needed)
     }
 
     /// Check if a peer offers any needed subnets, using ENR as fallback.
@@ -263,9 +281,22 @@ impl ConnectionManager {
         false
     }
 
-    /// Get subnets a peer claims to support from observed gossipsub only.
+    /// Get subnets a peer claims to support from observed gossipsub only,
+    /// aggregated across all forks (union of per-fork bitmaps).
     fn get_peer_subnets_observed_only(&self, peer: &PeerId) -> Option<Bitfield<Fixed<U128>>> {
-        self.observed_peer_subnets.get(peer).cloned()
+        let fork_map = self.observed_peer_subnets.get(peer)?;
+        Some(Self::aggregate_fork_bitmaps(fork_map))
+    }
+
+    /// OR all per-fork bitmaps together into a single aggregate bitfield.
+    fn aggregate_fork_bitmaps(
+        fork_map: &HashMap<Fork, Bitfield<Fixed<U128>>>,
+    ) -> Bitfield<Fixed<U128>> {
+        let mut result = Bitfield::default();
+        for bitfield in fork_map.values() {
+            result = result.union(bitfield);
+        }
+        result
     }
 
     /// Get subnets a peer claims to support, with ENR fallback.
@@ -286,8 +317,8 @@ impl ConnectionManager {
 
     /// Handle connection established event
     pub fn on_connection_established(&mut self, peer_id: PeerId, is_outbound: bool) -> bool {
-        // Initialize with empty bitfield to indicate we're now observing this peer
-        // If they never subscribe to anything, we'll know they offer no subnets
+        // Initialize with empty fork map to indicate we're now observing this peer.
+        // If they never subscribe to anything, we'll know they offer no subnets.
         self.observed_peer_subnets.entry(peer_id).or_default();
 
         // Track connection direction counter
@@ -481,5 +512,308 @@ impl ConnectionManager {
     /// Handle swarm events related to connections
     pub fn on_swarm_event(&mut self, event: FromSwarm) {
         self.connection_limits.on_swarm_event(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== Test constants ====================
+
+    const TARGET_PEERS: usize = 50;
+
+    // ==================== Helper functions ====================
+
+    /// Creates a `ConnectionManager` with default target peers for testing.
+    fn create_test_manager() -> ConnectionManager {
+        ConnectionManager::new(TARGET_PEERS)
+    }
+
+    /// Connects a peer to the manager (adds to `connected` set and initializes
+    /// `observed_peer_subnets`), returning the generated `PeerId`.
+    fn connect_random_peer(mgr: &mut ConnectionManager) -> PeerId {
+        let peer = PeerId::random();
+        mgr.on_connection_established(peer, /* is_outbound = */ true);
+        peer
+    }
+
+    /// Returns the aggregated (union across forks) bitfield for a peer, or `None`.
+    fn aggregated_bitfield(
+        mgr: &ConnectionManager,
+        peer: &PeerId,
+    ) -> Option<Bitfield<Fixed<U128>>> {
+        mgr.get_peer_subnets_observed_only(peer)
+    }
+
+    /// Checks whether a specific subnet bit is set in the aggregated bitfield.
+    fn is_subnet_set(mgr: &ConnectionManager, peer: &PeerId, subnet: u64) -> bool {
+        aggregated_bitfield(mgr, peer)
+            .map(|bf| bf.get(subnet as usize).unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    // ==================== Single fork subscribe/unsubscribe ====================
+
+    #[test]
+    fn test_set_peer_subscribed_single_fork_subscribe() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        let subnet = SubnetId::new(5);
+
+        // Act
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+
+        // Assert
+        assert!(
+            is_subnet_set(&mgr, &peer, 5),
+            "Subnet 5 should be set after subscribing on Alan fork"
+        );
+    }
+
+    #[test]
+    fn test_set_peer_subscribed_single_fork_unsubscribe() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        let subnet = SubnetId::new(5);
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+
+        // Act
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+
+        // Assert
+        assert!(
+            !is_subnet_set(&mgr, &peer, 5),
+            "Subnet 5 should be cleared after unsubscribing on Alan fork"
+        );
+    }
+
+    // ==================== Multi-fork bug scenario (issue #818) ====================
+
+    /// Regression test for https://github.com/sigp/anchor/issues/818
+    ///
+    /// When a peer is subscribed to the same subnet on two different forks,
+    /// unsubscribing from one fork must NOT clear the subnet bit in the
+    /// aggregated view because the other fork still holds it.
+    #[test]
+    fn test_unsubscribe_one_fork_retains_subnet_from_other_fork() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        let subnet = SubnetId::new(42);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet, true);
+
+        // Act: unsubscribe from Alan only
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+
+        // Assert: subnet 42 should still be set because Boole holds it
+        assert!(
+            is_subnet_set(&mgr, &peer, 42),
+            "Subnet 42 must remain set when Boole fork still subscribes to it"
+        );
+    }
+
+    #[test]
+    fn test_unsubscribe_both_forks_clears_subnet() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        let subnet = SubnetId::new(42);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet, true);
+
+        // Act: unsubscribe from both forks
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet, false);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet, false);
+
+        // Assert: subnet 42 should now be cleared
+        assert!(
+            !is_subnet_set(&mgr, &peer, 42),
+            "Subnet 42 must be cleared after unsubscribing from all forks"
+        );
+    }
+
+    // ==================== Aggregation across forks ====================
+
+    #[test]
+    fn test_aggregation_unions_subnets_across_forks() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+
+        // Act: subscribe to different subnets on different forks
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(10), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(20), true);
+
+        // Assert: aggregated view should contain both bits
+        let bf = aggregated_bitfield(&mgr, &peer).expect("peer should have an aggregated bitfield");
+        assert!(
+            bf.get(10).unwrap_or(false),
+            "Subnet 10 (Alan) must be present in aggregated bitfield"
+        );
+        assert!(
+            bf.get(20).unwrap_or(false),
+            "Subnet 20 (Boole) must be present in aggregated bitfield"
+        );
+        assert!(
+            !bf.get(30).unwrap_or(false),
+            "Subnet 30 should NOT be present (never subscribed)"
+        );
+    }
+
+    // ==================== Cleanup on full unsubscribe ====================
+
+    #[test]
+    fn test_full_unsubscribe_removes_peer_entry() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(99), true);
+
+        // Act: unsubscribe from everything
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), false);
+        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(99), false);
+
+        // Assert: the peer should be completely removed from observed_peer_subnets
+        assert!(
+            !mgr.observed_peer_subnets.contains_key(&peer),
+            "Peer entry must be removed from observed_peer_subnets when all \
+             per-fork bitmaps are empty"
+        );
+    }
+
+    #[test]
+    fn test_partial_unsubscribe_keeps_peer_entry() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(99), true);
+
+        // Act: unsubscribe from Alan only
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(7), false);
+
+        // Assert: peer entry still present (Boole fork still has a subscription)
+        assert!(
+            mgr.observed_peer_subnets.contains_key(&peer),
+            "Peer entry must remain while at least one fork bitmap is non-empty"
+        );
+    }
+
+    // ==================== count_observed_peers_for_subnets with multi-fork ====================
+
+    #[test]
+    fn test_count_observed_peers_counts_across_forks() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer_a = connect_random_peer(&mut mgr);
+        let peer_b = connect_random_peer(&mut mgr);
+
+        // peer_a subscribes to subnet 10 on Alan
+        mgr.set_peer_subscribed(peer_a, Fork::Alan, SubnetId::new(10), true);
+        // peer_b subscribes to subnet 10 on Boole (different fork, same subnet)
+        mgr.set_peer_subscribed(peer_b, Fork::Boole, SubnetId::new(10), true);
+        // peer_a also subscribes to subnet 20 on Boole
+        mgr.set_peer_subscribed(peer_a, Fork::Boole, SubnetId::new(20), true);
+
+        // Act
+        let counts = mgr.count_observed_peers_for_subnets(&[
+            SubnetId::new(10),
+            SubnetId::new(20),
+            SubnetId::new(30),
+        ]);
+
+        // Assert
+        assert_eq!(
+            counts,
+            vec![2, 1, 0],
+            "Subnet 10 should have 2 peers, subnet 20 should have 1, subnet 30 should have 0"
+        );
+    }
+
+    #[test]
+    fn test_count_observed_peers_requires_connected() {
+        // Arrange: subscribe a peer but do NOT connect it via on_connection_established
+        let mut mgr = create_test_manager();
+        let disconnected_peer = PeerId::random();
+        // Directly set a subscription without calling on_connection_established
+        mgr.set_peer_subscribed(disconnected_peer, Fork::Alan, SubnetId::new(5), true);
+
+        // Also add a properly connected peer for the same subnet
+        let connected_peer = connect_random_peer(&mut mgr);
+        mgr.set_peer_subscribed(connected_peer, Fork::Alan, SubnetId::new(5), true);
+
+        // Act
+        let counts = mgr.count_observed_peers_for_subnets(&[SubnetId::new(5)]);
+
+        // Assert: only the connected peer should be counted
+        assert_eq!(
+            counts,
+            vec![1],
+            "Only connected peers should be counted; disconnected peer must be excluded"
+        );
+    }
+
+    // ==================== peer_offers_needed_subnets_observed_only with multi-fork
+    // ====================
+
+    #[test]
+    fn test_peer_offers_needed_subnets_across_forks() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(50), true);
+
+        let needed = HashSet::from([SubnetId::new(50)]);
+
+        // Act & Assert
+        assert!(
+            mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
+            "Peer subscribed to subnet 50 on Boole should satisfy the needed set"
+        );
+    }
+
+    #[test]
+    fn test_peer_does_not_offer_unsubscribed_subnets() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(10), true);
+
+        let needed = HashSet::from([SubnetId::new(99)]);
+
+        // Act & Assert
+        assert!(
+            !mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
+            "Peer subscribed only to subnet 10 should not satisfy need for subnet 99"
+        );
+    }
+
+    /// Verifies that after unsubscribing from one fork, the peer still offers
+    /// the subnet via the remaining fork.
+    #[test]
+    fn test_peer_offers_needed_subnets_after_partial_unsubscribe() {
+        // Arrange
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(42), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, SubnetId::new(42), true);
+
+        // Act: unsubscribe from Alan
+        mgr.set_peer_subscribed(peer, Fork::Alan, SubnetId::new(42), false);
+
+        let needed = HashSet::from([SubnetId::new(42)]);
+
+        // Assert: Boole still provides subnet 42
+        assert!(
+            mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
+            "Peer should still offer subnet 42 after unsubscribing only from Alan"
+        );
     }
 }
