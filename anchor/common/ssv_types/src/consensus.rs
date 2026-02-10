@@ -337,9 +337,6 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
             });
         }
 
-        // TODO(post-boole): remove `BEACON_ROLE_AGGREGATOR` and
-        // `BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION` branches. Post-Boole, `ProposerConsensusData`
-        // is only used for `Proposer`.
         match value.duty.r#type {
             BEACON_ROLE_AGGREGATOR => {
                 if value.version < DataVersion(ForkName::Electra) {
