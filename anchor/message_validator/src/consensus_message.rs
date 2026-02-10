@@ -1,5 +1,6 @@
 use std::{collections::HashMap, convert::Into, sync::Arc, time::Duration};
 
+use dashmap::DashMap;
 use duties_tracker::DutiesProvider;
 use fork::{Fork, ForkSchedule};
 use openssl::{pkey::Public, rsa::Rsa};
@@ -8,7 +9,7 @@ use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    msgid::Role,
+    msgid::{MessageId, Role},
 };
 use ssz::Decode;
 use typenum::{U13, Unsigned};
@@ -24,6 +25,8 @@ pub(crate) fn validate_consensus_message(
     validation_context: ValidationContext<impl SlotClock>,
     operator_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
+    duty_state_map: &DashMap<(MessageId, OperatorId), OperatorState>,
+    message_id: &MessageId,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message to QbftMessage
     let consensus_message = match QbftMessage::from_ssz_bytes(
@@ -59,8 +62,10 @@ pub(crate) fn validate_consensus_message(
     validate_qbft_message_by_duty_logic(
         &validation_context,
         &consensus_message,
-        operator_state,
-        duty_provider,
+        duty_provider.clone(),
+        duty_state_map,
+        message_id,
+        validation_context.slots_per_epoch,
     )?;
 
     verify_message_signatures(
@@ -263,6 +268,11 @@ pub(crate) fn validate_qbft_logic(
     // Create slot from height
     let msg_slot = Slot::new(consensus_message.height);
 
+    // Rule: Round must be within allowed spread from current time
+    if signers.len() == 1 {
+        validate_round_in_allowed_spread(consensus_message, validation_context)?;
+    }
+
     // Get or create the operator state first, then check if there's a signer state
     let Some(signer_state) = operator_state.get_signer_state(&msg_slot) else {
         return Ok(());
@@ -307,11 +317,6 @@ pub(crate) fn validate_qbft_logic(
         if signer_state.has_seen_signers(signers) {
             return Err(ValidationFailure::DecidedWithSameSigners);
         }
-    }
-
-    // Rule: Round must be within allowed spread from current time
-    if signers.len() == 1 {
-        validate_round_in_allowed_spread(consensus_message, validation_context)?;
     }
 
     Ok(())
@@ -432,20 +437,29 @@ fn current_estimated_round(since_slot_start: Duration) -> Round {
 pub(crate) fn validate_qbft_message_by_duty_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
-    operator_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
+    duty_state_map: &DashMap<(MessageId, OperatorId), OperatorState>,
+    message_id: &MessageId,
+    slots_per_epoch: u64,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
+    let signed_ssv_message = validation_context.signed_ssv_message;
+    let stored_slot_count = (slots_per_epoch * 2) as usize;
 
     // Rule: Height must not be "old". I.e., signer must not have already advanced to a later slot.
     // Skip for committee roles
     if !role.is_committee_role() {
-        let max_slot = operator_state.max_slot();
-        if max_slot > consensus_message.height {
-            return Err(ValidationFailure::SlotAlreadyAdvanced {
-                got: consensus_message.height,
-                want: max_slot.as_u64(),
-            });
+        for &signer in signed_ssv_message.operator_ids() {
+            let signer_state = duty_state_map
+                .entry((message_id.clone(), signer))
+                .or_insert_with(|| OperatorState::new(stored_slot_count));
+            let max_slot = signer_state.max_slot();
+            if max_slot > consensus_message.height {
+                return Err(ValidationFailure::SlotAlreadyAdvanced {
+                    got: consensus_message.height,
+                    want: max_slot.as_u64(),
+                });
+            }
         }
     }
 
@@ -464,13 +478,18 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     // - duty's starting slot + 3 (other types)
     validate_slot_time(msg_slot, validation_context)?;
 
-    // Rule: valid number of duties per epoch
-    validate_duty_count(
-        validation_context,
-        msg_slot,
-        operator_state,
-        duty_provider.clone(),
-    )?;
+    // Rule: valid number of duties per epoch - validate for ALL signers
+    for &signer in signed_ssv_message.operator_ids() {
+        let mut signer_state = duty_state_map
+            .entry((message_id.clone(), signer))
+            .or_insert_with(|| OperatorState::new(stored_slot_count));
+        validate_duty_count(
+            validation_context,
+            msg_slot,
+            signer_state.value_mut(),
+            duty_provider.clone(),
+        )?;
+    }
 
     Ok(())
 }
@@ -589,12 +608,16 @@ mod tests {
         };
 
         let expected_duty_count = 5;
+        let duty_state_map = DashMap::new();
+        let message_id = signed_msg.ssv_message().msg_id();
         let result = validate_ssv_message(
             validation_context,
             &mut OperatorState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: expected_duty_count,
             }),
+            &duty_state_map,
+            message_id,
         );
 
         match result {
@@ -648,12 +671,16 @@ mod tests {
             fork_schedule: generate_fork_schedule(),
         };
 
+        let duty_state_map = DashMap::new();
+        let message_id = signed_msg.ssv_message().msg_id();
         let result = validate_ssv_message(
             validation_context,
             &mut OperatorState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
+            &duty_state_map,
+            message_id,
         );
 
         assert_validation_error(
@@ -703,12 +730,16 @@ mod tests {
             fork_schedule: generate_fork_schedule(),
         };
 
+        let duty_state_map = DashMap::new();
+        let message_id = signed_msg.ssv_message().msg_id();
         let result = validate_ssv_message(
             validation_context,
             &mut OperatorState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
+            &duty_state_map,
+            message_id,
         );
 
         assert_validation_error(
@@ -755,12 +786,16 @@ mod tests {
             fork_schedule: generate_fork_schedule(),
         };
 
+        let duty_state_map = DashMap::new();
+        let message_id = signed_msg.ssv_message().msg_id();
         let result = validate_ssv_message(
             validation_context,
             &mut OperatorState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
+            &duty_state_map,
+            message_id,
         );
 
         assert_validation_error(
@@ -1611,13 +1646,20 @@ mod tests {
         );
 
         // Now validate a consensus message for height 1 (which is "old")
+        let duty_state_map: DashMap<(MessageId, OperatorId), OperatorState> = DashMap::new();
+        // Pre-populate the duty state map with the operator's advanced state
+        let message_id = signed_msg.ssv_message().msg_id();
+        duty_state_map.insert((message_id.clone(), OperatorId(1)), operator_state.clone());
+
         let result = validate_qbft_message_by_duty_logic(
             &validation_context,
             &qbft_message,
-            &mut operator_state,
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
+            &duty_state_map,
+            message_id,
+            32, // slots_per_epoch
         );
 
         // Should succeed because AggregatorCommittee skips the height advancement check
@@ -1644,10 +1686,12 @@ mod tests {
         let result = validate_qbft_message_by_duty_logic(
             &validation_context_proposer,
             &qbft_message,
-            &mut operator_state,
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
+            &duty_state_map,
+            message_id,
+            32, // slots_per_epoch
         );
 
         // Should fail for non-committee roles

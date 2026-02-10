@@ -440,7 +440,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         let operator_id = *signed_ssv_message
             .operator_ids()
             .first()
-            .expect("Should have an OperatorId");
+            .ok_or(ValidationFailure::NoSigners)?;
         drop(network_state);
 
         let mut operator_state =
@@ -459,10 +459,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             fork_schedule: Arc::clone(&self.fork_schedule),
         };
 
+        let message_id = ssv_message.msg_id();
         validate_ssv_message(
             validation_context,
             operator_state.value_mut(),
             self.duties_provider.clone(),
+            &self.duty_state_map,
+            message_id,
         )
         .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
     }
@@ -639,12 +642,14 @@ fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
     operator_state: &mut OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
+    duty_state_map: &DashMap<(MessageId, OperatorId), OperatorState>,
+    message_id: &MessageId,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
         MsgType::SSVConsensusMsgType => {
-            validate_consensus_message(validation_context, operator_state, duty_provider)
+            validate_consensus_message(validation_context, operator_state, duty_provider, duty_state_map, message_id)
         }
         MsgType::SSVPartialSignatureMsgType => {
             validate_partial_signature_message(validation_context, operator_state, duty_provider)
