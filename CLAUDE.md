@@ -463,6 +463,43 @@ Effective code reviews question "why" architectural decisions exist:
 - Follow test-driven development principles when possible
 - Use debugging tools like `tracing` and metrics to understand system behavior
 
+## Parallel Development with Git Worktrees
+
+Git worktrees allow running multiple Claude Code sessions in parallel on different branches of the same repo. However, worktrees share the same `.git` directory, which causes Claude Code's task list (`TaskCreate`/`TodoWrite`) to leak across sessions (see [anthropics/claude-code#24754](https://github.com/anthropics/claude-code/issues/24754)).
+
+### Setup
+
+Use the provided wrapper script to launch Claude Code with worktree-isolated task lists:
+
+```bash
+# Instead of running `claude` directly in a worktree:
+./scripts/claude-worktree.sh
+
+# Or with arguments:
+./scripts/claude-worktree.sh --resume
+```
+
+The script auto-detects the worktree name and sets `CLAUDE_CODE_TASK_LIST_ID` so each worktree gets its own task list.
+
+### Creating Worktrees
+
+```bash
+# Create a worktree for a new feature branch based on upstream/unstable
+git fetch upstream unstable
+git worktree add ../anchor-my-feature -b feat/my-feature FETCH_HEAD
+
+# Launch Claude Code in the new worktree
+cd ../anchor-my-feature
+../anchor/scripts/claude-worktree.sh
+```
+
+### Cleanup
+
+```bash
+# Remove a worktree when done
+git worktree remove ../anchor-my-feature
+```
+
 ## Session Learning Updates
 
 After successful Claude Code sessions where the user is satisfied with results, update both CLAUDE.md and relevant specialized agents with general principles learned:
