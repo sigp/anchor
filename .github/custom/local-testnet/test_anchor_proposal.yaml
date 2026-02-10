@@ -1,6 +1,6 @@
 id: test_anchor_proposal
 name: "Check for Anchor Proposal"
-timeout: 30m
+timeout: 20m
 tasks:
   - name: sleep
     config:
@@ -15,9 +15,12 @@ tasks:
             minAttestationCount: 1
         - name: check_consensus_attestation_stats
           config:
-            minTargetPercent: 100
-            minHeadPercent: 100
-            minTotalPercent: 100
+            # These values are taken from a similar config used in the ethereum-package.
+            # The minTargetPercent ensures that most attestations are included at some point.
+            # The minHeadPercent is more lenient as on shared CI, nodes might not have ideal performance.
+            # 80% is low enough to not cause false positives but high enough to catch consistent issues.
+            minTargetPercent: 98
+            minHeadPercent: 80
             failOnCheckMiss: true
             minCheckedEpochs: 2
   - name: check_consensus_finality

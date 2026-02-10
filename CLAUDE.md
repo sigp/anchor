@@ -289,6 +289,9 @@ Anchor uses two types of test fixtures for database testing:
 
 All agents and contributors must follow these fundamental principles:
 
+### Evidence and Verification
+- **Behavioral claims require evidence**: before asserting language/runtime behavior or performance implications, check authoritative docs/source or run a minimal reproduction; if not verified, label it as a hypothesis or ask.
+
 ### Production Safety Requirements 
 - **Never use `.unwrap()` or `.expect()` without clear safety justification** - always use proper Result/Option handling
 - **Validate all user inputs** and handle potential failure cases gracefully
