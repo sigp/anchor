@@ -1783,4 +1783,183 @@ mod tests {
             "RoleNotActiveAfterFork for Aggregator",
         );
     }
+
+    #[test]
+    fn test_aggregator_consensus_message_accepted_before_boole() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Aggregator, QbftMessageType::Prepare).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(12);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Aggregator,
+            received_at: now + slot_duration,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        match result {
+            Ok(ValidatedSSVMessage::QbftMessage(_)) => {}
+            Err(e) => {
+                panic!("Expected Role::Aggregator to be accepted before Boole fork, got: {e:?}")
+            }
+            _ => panic!("Expected QbftMessage variant"),
+        }
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_accepted_before_boole() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::SyncCommittee, QbftMessageType::Prepare).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(12);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::SyncCommittee,
+            received_at: now + slot_duration,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        match result {
+            Ok(ValidatedSSVMessage::QbftMessage(_)) => {}
+            Err(e) => {
+                panic!("Expected Role::SyncCommittee to be accepted before Boole fork, got: {e:?}")
+            }
+            _ => panic!("Expected QbftMessage variant"),
+        }
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_rejected_after_boole() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let qbft_message =
+            QbftMessageBuilder::new(Role::SyncCommittee, QbftMessageType::Prepare).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(12);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::SyncCommittee,
+            received_at: now + slot_duration,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: Arc::new(ForkSchedule::new(
+                Fork::Boole,
+                DomainType::default(),
+                "testing",
+            )),
+        };
+
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveAfterFork {
+                        role: Role::SyncCommittee,
+                        deprecated_since_fork: Fork::Boole,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveAfterFork for SyncCommittee",
+        );
+    }
 }
