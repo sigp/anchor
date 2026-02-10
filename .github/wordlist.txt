@@ -130,3 +130,7 @@ Callouts
 nav
 dev
 reviewable
+worktree
+worktrees
+Worktrees
+anthropics
