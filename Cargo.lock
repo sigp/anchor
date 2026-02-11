@@ -3237,6 +3237,7 @@ name = "fork"
 version = "0.1.0"
 dependencies = [
  "async-broadcast",
+ "parking_lot",
  "serde",
  "slot_clock",
  "ssv_types",

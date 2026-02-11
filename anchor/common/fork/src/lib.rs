@@ -20,9 +20,11 @@
 //! - **"What"**: Each subsystem queries the active fork to determine behavior
 
 mod fork;
+mod lifecycle;
 pub mod monitor;
 mod schedule;
 
 pub use fork::{ALAN_TOPIC_PREFIX, Fork};
+pub use lifecycle::{ForkLifecycle, SharedForkLifecycle};
 pub use monitor::{ForkPhase, ForkPhaseSender};
 pub use schedule::{FORK_PREPARATION_EPOCHS, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
