@@ -797,25 +797,22 @@ pub(crate) fn validate_role_for_fork(
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
     let epoch = slot.epoch(validation_context.slots_per_epoch);
+    let active_fork = validation_context.fork_schedule.active_fork(epoch);
 
     // Reject AggregatorCommittee before Boole fork (safety net)
-    if role == Role::AggregatorCommittee
-        && validation_context.fork_schedule.active_fork(epoch) < Fork::Boole
-    {
+    if role == Role::AggregatorCommittee && active_fork < Fork::Boole {
         return Err(ValidationFailure::RoleNotActiveBeforeFork {
             role,
-            current_fork: validation_context.fork_schedule.active_fork(epoch),
+            current_fork: active_fork,
             minimum_fork: Fork::Boole,
         });
     }
 
     // Reject deprecated roles after Boole fork
-    if matches!(role, Role::Aggregator | Role::SyncCommittee)
-        && validation_context.fork_schedule.active_fork(epoch) >= Fork::Boole
-    {
+    if matches!(role, Role::Aggregator | Role::SyncCommittee) && active_fork >= Fork::Boole {
         return Err(ValidationFailure::RoleNotActiveAfterFork {
             role,
-            current_fork: validation_context.fork_schedule.active_fork(epoch),
+            current_fork: active_fork,
             deprecated_since_fork: Fork::Boole,
         });
     }
