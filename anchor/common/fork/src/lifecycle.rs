@@ -18,8 +18,8 @@ pub enum ForkLifecycle {
     ///
     /// Used in two scenarios:
     /// - Pre-fork: only one fork exists (e.g., Alan at genesis).
-    /// - Post-grace-period: the fork transition is complete and only
-    ///   the current fork's context is relevant.
+    /// - Post-grace-period: the fork transition is complete and only the current fork's context is
+    ///   relevant.
     Normal {
         current: Fork,
         domain_type: DomainType,
