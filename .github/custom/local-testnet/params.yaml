@@ -30,7 +30,7 @@ network:
 
   port_publisher:
     cl:
-      enabled: true
+      enabled: false
 
   # Assertoor can only load from URLs here (for some reason). The placeholder is replaced in the workflow.
   assertoor_params:
