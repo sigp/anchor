@@ -22,7 +22,10 @@ use task_executor::TaskExecutor;
 use tracing::{debug, info, warn};
 use types::{Epoch, Slot};
 
-use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
+use crate::{
+    FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkLifecycle, ForkSchedule,
+    SUBSEQUENT_WINDOW_SLOTS, SharedForkLifecycle,
+};
 
 /// Fork transition events sent to Network and other components.
 ///
@@ -325,7 +328,6 @@ impl ForkMonitorState {
     }
 
     /// Returns the current fork being monitored.
-    #[cfg(test)]
     pub fn current_fork(&self) -> Fork {
         self.current_fork
     }
@@ -420,6 +422,7 @@ pub async fn run<S: SlotClock>(
     slots_per_epoch: u64,
     seconds_per_slot: u64,
     phase_sender: ForkPhaseSender,
+    fork_lifecycle: SharedForkLifecycle,
 ) -> MonitorResult {
     // Get initial state
     let Some(current_slot) = slot_clock.now() else {
@@ -431,6 +434,10 @@ pub async fn run<S: SlotClock>(
     // Exit early if no forks to monitor
     if !has_work || state.is_complete() {
         return MonitorResult::Completed;
+    }
+
+    if let Some(phase) = &initial_phase {
+        update_lifecycle_for_phase(&fork_lifecycle, phase, &fork_schedule, state.current_fork());
     }
 
     if let Some(phase) = initial_phase {
@@ -457,6 +464,14 @@ pub async fn run<S: SlotClock>(
         };
 
         let phases = state.check_slot(slot);
+        for phase in &phases {
+            update_lifecycle_for_phase(
+                &fork_lifecycle,
+                phase,
+                &fork_schedule,
+                state.current_fork(),
+            );
+        }
         for phase in phases {
             let _ = phase_sender.broadcast_direct(phase).await;
         }
@@ -469,6 +484,48 @@ pub async fn run<S: SlotClock>(
     }
 
     MonitorResult::Completed
+}
+
+/// Update the shared fork lifecycle based on a fork phase event.
+///
+/// Called right before broadcasting each phase event so readers see the new state
+/// at the same time or before listeners process the event.
+fn update_lifecycle_for_phase(
+    fork_lifecycle: &SharedForkLifecycle,
+    phase: &ForkPhase,
+    fork_schedule: &ForkSchedule,
+    current_fork: Fork,
+) {
+    match phase {
+        ForkPhase::Preparing { upcoming } => {
+            // During preparation, current fork's domain type is still active
+            let Some(domain_type) = fork_schedule.domain_type(current_fork) else {
+                tracing::error!(
+                    fork = %current_fork,
+                    "Missing domain type for current fork during preparation"
+                );
+                return;
+            };
+            fork_lifecycle.set(ForkLifecycle::WarmUp {
+                current: current_fork,
+                upcoming: upcoming.fork,
+                domain_type,
+            });
+        }
+        ForkPhase::Activated { current, previous } => {
+            fork_lifecycle.set(ForkLifecycle::GracePeriod {
+                current: current.fork,
+                previous: previous.fork,
+                domain_type: current.domain_type,
+            });
+        }
+        ForkPhase::GracePeriodEnded { current, .. } => {
+            fork_lifecycle.set(ForkLifecycle::Normal {
+                current: current.fork,
+                domain_type: current.domain_type,
+            });
+        }
+    }
 }
 
 /// Spawns a standalone task that monitors and logs fork transitions.
@@ -485,6 +542,7 @@ pub fn spawn<S: SlotClock + 'static>(
     seconds_per_slot: u64,
     executor: TaskExecutor,
     phase_sender: ForkPhaseSender,
+    fork_lifecycle: SharedForkLifecycle,
 ) {
     executor.spawn(
         async move {
@@ -494,6 +552,7 @@ pub fn spawn<S: SlotClock + 'static>(
                 slots_per_epoch,
                 seconds_per_slot,
                 phase_sender,
+                fork_lifecycle,
             )
             .await;
 
@@ -586,6 +645,14 @@ mod tests {
     fn test_phase_sender() -> ForkPhaseSender {
         let (tx, _rx) = async_broadcast::broadcast(16);
         tx
+    }
+
+    /// Create a test SharedForkLifecycle starting on Alan.
+    fn test_fork_lifecycle() -> SharedForkLifecycle {
+        SharedForkLifecycle::new(ForkLifecycle::Normal {
+            current: Fork::Alan,
+            domain_type: TEST_BASELINE_DOMAIN,
+        })
     }
 
     /// Convert epoch to slot for testing.
@@ -825,6 +892,7 @@ mod tests {
         let schedule = make_schedule_no_future_forks();
         let clock = clock_at_epoch(CURRENT_EPOCH);
         let sender = test_phase_sender();
+        let lifecycle = test_fork_lifecycle();
 
         // Act
         let result = run(
@@ -833,6 +901,7 @@ mod tests {
             slots_per_epoch(),
             seconds_per_slot(),
             sender,
+            lifecycle,
         )
         .await;
 
@@ -846,6 +915,7 @@ mod tests {
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(AFTER_FORK_EPOCH);
         let sender = test_phase_sender();
+        let lifecycle = test_fork_lifecycle();
 
         // Act
         let result = run(
@@ -854,6 +924,7 @@ mod tests {
             slots_per_epoch(),
             seconds_per_slot(),
             sender,
+            lifecycle,
         )
         .await;
 
@@ -869,6 +940,7 @@ mod tests {
         let schedule = make_schedule_with_boole(ASYNC_BOOLE_FORK_EPOCH);
         let clock = clock_at_epoch(ASYNC_START_EPOCH);
         let (sender, mut receiver) = async_broadcast::broadcast(16);
+        let lifecycle = test_fork_lifecycle();
 
         // Act: Spawn monitor and advance time through fork activation and grace period
         let monitor = tokio::spawn({
@@ -880,6 +952,7 @@ mod tests {
                     slots_per_epoch(),
                     seconds_per_slot(),
                     sender,
+                    lifecycle,
                 )
                 .await
             }
