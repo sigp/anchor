@@ -60,13 +60,13 @@ jobs:
                     exit 0
                   fi
 
+            # Do NOT set repository/ref here. claude-code-action fetches the
+            # PR branch itself via `git fetch origin pull/N/head:...`. Overriding
+            # origin to a fork repo breaks that fetch since PR refs only exist on
+            # the base repo.
             - name: Checkout repository
               if: steps.check.outputs.is_member == 'true'
               uses: actions/checkout@v4
-              with:
-                  repository: ${{ github.event.pull_request.head.repo.full_name }}
-                  ref: ${{ github.event.pull_request.head.ref }}
-                  fetch-depth: 0
 
             - name: Generate GitHub App token
               if: steps.check.outputs.is_member == 'true'
