@@ -9,6 +9,7 @@ async-broadcast = { workspace = true }
 async-trait = "0.1.85"
 discv5 = { workspace = true }
 ethereum_ssz = { workspace = true }
+fork = { workspace = true }
 futures = { workspace = true }
 global_config = { workspace = true }
 gossipsub = { workspace = true }

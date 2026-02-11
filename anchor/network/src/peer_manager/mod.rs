@@ -205,10 +205,16 @@ impl PeerManager {
         &self.needed_subnets
     }
 
-    /// Update observed gossipsub subscription state for a peer
-    pub fn set_peer_subscription(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
+    /// Update observed gossipsub subscription state for a peer on a specific fork.
+    pub fn set_peer_subscription(
+        &mut self,
+        peer: PeerId,
+        fork: fork::Fork,
+        subnet: SubnetId,
+        subscribed: bool,
+    ) {
         self.connection_manager
-            .set_peer_subscribed(peer, subnet, subscribed);
+            .set_peer_subscribed(peer, fork, subnet, subscribed);
     }
 
     /// Handle a completed handshake by updating peer client type and triggering metrics update.
