@@ -140,6 +140,7 @@ impl ConnectionManager {
             let _ = bitfield.set(idx, subscribed);
         } else {
             tracing::warn!(
+                %peer,
                 subnet = idx,
                 max = bitfield.len(),
                 "Subnet ID exceeds bitfield capacity"
@@ -298,11 +299,9 @@ impl ConnectionManager {
     fn aggregate_fork_bitmaps(
         fork_map: &HashMap<Fork, Bitfield<Fixed<U128>>>,
     ) -> Bitfield<Fixed<U128>> {
-        let mut result = Bitfield::default();
-        for bitfield in fork_map.values() {
-            result = result.union(bitfield);
-        }
-        result
+        fork_map
+            .values()
+            .fold(Bitfield::default(), |acc, bf| acc.union(bf))
     }
 
     /// Get subnets a peer claims to support, with ENR fallback.
