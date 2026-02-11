@@ -5,6 +5,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
+use fork::SharedForkLifecycle;
 use libp2p::{
     Multiaddr,
     core::{Endpoint, transport::PortUse},
@@ -72,7 +73,12 @@ impl PeerManager {
     /// # Arguments
     /// * `config` - Network configuration (may contain user-provided target_peers)
     /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
-    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
+    /// * `fork_lifecycle` - Shared fork lifecycle for fork-aware peer selection
+    pub fn new(
+        config: &Config,
+        one_epoch_duration: Duration,
+        fork_lifecycle: SharedForkLifecycle,
+    ) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
 
@@ -81,7 +87,7 @@ impl PeerManager {
         // subnet_service.
         let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
 
-        let connection_manager = ConnectionManager::new(target_peers);
+        let connection_manager = ConnectionManager::new(target_peers, fork_lifecycle);
         let heartbeat_manager = HeartbeatManager::new();
         let blocking_manager = BlockingManager::new(one_epoch_duration);
 

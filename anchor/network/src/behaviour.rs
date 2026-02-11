@@ -1,5 +1,6 @@
 use std::{hash::Hasher, time::Duration};
 
+use fork::SharedForkLifecycle;
 use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
 use libp2p::{
     identify, ping,
@@ -13,7 +14,7 @@ use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
-    Config, SharedDomainType,
+    Config,
     behaviour::BehaviourError::Gossipsub,
     discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS},
     handshake,
@@ -92,7 +93,7 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
-        domain_type: SharedDomainType,
+        fork_lifecycle: SharedForkLifecycle,
     ) -> Result<Self, BehaviourError> {
         let identify = {
             let local_public_key = local_keypair.public();
@@ -156,8 +157,12 @@ impl AnchorBehaviour {
 
         let discovery = {
             // Build and start the discovery sub-behaviour
-            let mut discovery =
-                Discovery::new(local_keypair.clone(), network_config, domain_type.clone()).await?;
+            let mut discovery = Discovery::new(
+                local_keypair.clone(),
+                network_config,
+                fork_lifecycle.clone(),
+            )
+            .await?;
             // start searching for peers
             discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
             discovery
@@ -167,7 +172,7 @@ impl AnchorBehaviour {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
-            PeerManager::new(network_config, one_epoch_duration)
+            PeerManager::new(network_config, one_epoch_duration, fork_lifecycle.clone())
         };
 
         let handshake = {
@@ -177,7 +182,7 @@ impl AnchorBehaviour {
                 consensus_node: "lighthouse/v1.5.0".to_string(),
                 subnets: "00000000000000000000000000000000".to_string(),
             };
-            handshake::Behaviour::new(local_keypair, domain_type, metadata)
+            handshake::Behaviour::new(local_keypair, fork_lifecycle, metadata)
         };
 
         let upnp = Toggle::from(

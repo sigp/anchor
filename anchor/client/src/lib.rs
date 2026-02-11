@@ -378,6 +378,12 @@ impl Client {
         // Create fork phase channel for fork transition events
         let (fork_phase_tx, fork_phase_rx) = async_broadcast::broadcast(16);
 
+        // Create shared fork lifecycle state for cross-component fork awareness
+        let fork_lifecycle = fork::SharedForkLifecycle::new(fork::ForkLifecycle::Normal {
+            current: initial_fork_config.fork,
+            domain_type: initial_fork_config.domain_type,
+        });
+
         // Start fork monitor to log fork transitions and send ForkPhase events
         fork::monitor::spawn(
             fork_schedule.clone(),
@@ -386,6 +392,7 @@ impl Client {
             spec.seconds_per_slot,
             executor.clone(),
             fork_phase_tx,
+            fork_lifecycle.clone(),
         );
 
         // Start validator index syncer
@@ -552,6 +559,7 @@ impl Client {
             executor.clone(),
             spec.clone(),
             fork_phase_rx,
+            fork_lifecycle,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

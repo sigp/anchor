@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use fork::SharedForkLifecycle;
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
@@ -32,7 +33,7 @@ use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 
 use crate::{
-    Config, Enr, SharedDomainType,
+    Config, Enr,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
@@ -76,7 +77,6 @@ pub struct Network<R: MessageReceiver> {
     peer_id: PeerId,
     message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
-    domain_type: SharedDomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
@@ -99,6 +99,7 @@ impl<R: MessageReceiver> Network<R> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
         fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
+        fork_lifecycle: SharedForkLifecycle,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -110,14 +111,12 @@ impl<R: MessageReceiver> Network<R> {
 
         let mut metrics_registry = Registry::default();
 
-        let domain_type = SharedDomainType::new(config.domain_type);
-
         let behaviour = AnchorBehaviour::new::<E>(
             local_keypair.clone(),
             config,
             &mut metrics_registry,
             &spec,
-            domain_type.clone(),
+            fork_lifecycle,
         )
         .await
         .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
@@ -137,7 +136,6 @@ impl<R: MessageReceiver> Network<R> {
             peer_id,
             message_receiver,
             outcome_rx,
-            domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
             is_dynamic_target_peers,
@@ -427,18 +425,11 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Handle fork phase transition events.
     ///
-    /// - `Activated`: Update shared domain type and ENR.
+    /// Domain type updates are handled by `SharedForkLifecycle` (updated by ForkMonitor).
+    /// This method only handles ENR updates that require direct discv5 interaction.
     fn on_fork_phase(&mut self, phase: ForkPhase) {
-        if let ForkPhase::Activated { current, previous } = phase {
-            info!(
-                current_fork = %current.fork,
-                previous_fork = %previous.fork,
-                "Fork activated, updating domain type"
-            );
-
-            // Update the shared domain type — all components (discovery, handshake) see the
-            // new value immediately.
-            self.domain_type.set(current.domain_type);
+        if let ForkPhase::Activated { current, .. } = phase {
+            info!(current_fork = %current.fork, "Fork activated, updating ENR");
 
             // Update ENR so other nodes can discover us with the new fork's domain
             if let Err(e) = self.discovery().update_enr_domain_type(current.domain_type) {

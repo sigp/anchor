@@ -4,7 +4,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
-use fork::Fork;
+use fork::{Fork, ForkLifecycle, SharedForkLifecycle};
 use libp2p::{
     Multiaddr,
     connection_limits::{self, ConnectionLimits},
@@ -52,6 +52,9 @@ pub struct ConnectionManager {
     // bit for the same subnet on another fork's topic.
     // See: https://github.com/sigp/anchor/issues/818
     observed_peer_subnets: HashMap<PeerId, HashMap<Fork, Bitfield<Fixed<U128>>>>,
+    // Shared fork lifecycle state for fork-aware peer selection.
+    // After the grace period ends, only peers on the current fork are considered useful.
+    fork_lifecycle: SharedForkLifecycle,
     // Track inbound vs outbound connection counts
     inbound_count: usize,
     outbound_count: usize,
@@ -78,8 +81,8 @@ impl ConnectionManager {
         connection_limits::Behaviour::new(limits)
     }
 
-    /// Initialize ConnectionManager with a target peer count.
-    pub fn new(target_peers: usize) -> Self {
+    /// Initialize ConnectionManager with a target peer count and shared fork lifecycle.
+    pub fn new(target_peers: usize, fork_lifecycle: SharedForkLifecycle) -> Self {
         let connection_limits = Self::create_connection_limits(target_peers);
 
         let max_priority_peers = (target_peers as f32
@@ -92,6 +95,7 @@ impl ConnectionManager {
             target_peers,
             max_with_priority_peers: max_priority_peers,
             observed_peer_subnets: HashMap::new(),
+            fork_lifecycle,
             inbound_count: 0,
             outbound_count: 0,
         }
@@ -216,9 +220,11 @@ impl ConnectionManager {
     /// gossipsub. This only counts peers we've observed via gossipsub, no ENR fallback.
     /// Used for making decisions about existing connections and subnet health.
     pub fn count_observed_peers_for_subnets(&self, subnet_ids: &[SubnetId]) -> Vec<usize> {
+        // Read the fork lifecycle once for the entire iteration rather than per-peer.
+        let lifecycle = self.fork_lifecycle.get();
         let mut peer_subnet_counts = vec![0; subnet_ids.len()];
         for peer in self.connected.iter() {
-            let Some(subnets) = self.get_peer_subnets_observed_only(peer) else {
+            let Some(subnets) = self.get_peer_subnets_for_lifecycle(peer, &lifecycle) else {
                 continue;
             };
             for (&subnet_id, count) in subnet_ids.iter().zip(&mut peer_subnet_counts) {
@@ -242,7 +248,7 @@ impl ConnectionManager {
             return true;
         }
 
-        // Only use observed subscriptions (aggregated across forks), no ENR fallback
+        // Only use observed subscriptions, no ENR fallback
         let Some(observed) = self.get_peer_subnets_observed_only(peer) else {
             return false;
         };
@@ -288,11 +294,34 @@ impl ConnectionManager {
         false
     }
 
-    /// Get subnets a peer claims to support from observed gossipsub only,
-    /// aggregated across all forks (union of per-fork bitmaps).
+    /// Get subnets a peer claims to support from observed gossipsub subscriptions.
+    ///
+    /// Convenience wrapper that reads the fork lifecycle once per call. For bulk
+    /// operations over many peers, prefer [`get_peer_subnets_for_lifecycle`] with
+    /// a pre-read lifecycle value to avoid repeated lock acquisition.
     fn get_peer_subnets_observed_only(&self, peer: &PeerId) -> Option<Bitfield<Fixed<U128>>> {
+        let lifecycle = self.fork_lifecycle.get();
+        self.get_peer_subnets_for_lifecycle(peer, &lifecycle)
+    }
+
+    /// Fork-aware peer subnet lookup with a pre-read lifecycle value.
+    ///
+    /// In `Normal` state (post-grace-period), only the current fork's bitmap is
+    /// returned. During `WarmUp` or `GracePeriod`, bitmaps from both relevant
+    /// forks are aggregated (union). This prevents peers subscribed only to a
+    /// defunct fork from appearing useful for subnet coverage.
+    fn get_peer_subnets_for_lifecycle(
+        &self,
+        peer: &PeerId,
+        lifecycle: &ForkLifecycle,
+    ) -> Option<Bitfield<Fixed<U128>>> {
         let fork_map = self.observed_peer_subnets.get(peer)?;
-        Some(Self::aggregate_fork_bitmaps(fork_map))
+        match lifecycle {
+            ForkLifecycle::Normal { current, .. } => fork_map.get(current).cloned(),
+            ForkLifecycle::WarmUp { .. } | ForkLifecycle::GracePeriod { .. } => {
+                Some(Self::aggregate_fork_bitmaps(fork_map))
+            }
+        }
     }
 
     /// OR all per-fork bitmaps together into a single aggregate bitfield.
@@ -543,8 +572,17 @@ mod tests {
     // ==================== Helper functions ====================
 
     /// Creates a `ConnectionManager` with default target peers for testing.
+    /// Defaults to `ForkLifecycle::Normal { current: Alan }` for backward compatibility.
     fn create_test_manager() -> ConnectionManager {
-        ConnectionManager::new(TARGET_PEERS)
+        create_test_manager_with_lifecycle(ForkLifecycle::Normal {
+            current: Fork::Alan,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+        })
+    }
+
+    /// Creates a `ConnectionManager` with a specific fork lifecycle state.
+    fn create_test_manager_with_lifecycle(lifecycle: ForkLifecycle) -> ConnectionManager {
+        ConnectionManager::new(TARGET_PEERS, SharedForkLifecycle::new(lifecycle))
     }
 
     /// Connects a peer to the manager (adds to `connected` set and initializes
@@ -606,6 +644,18 @@ mod tests {
     }
 
     // ==================== Multi-fork bug scenario (issue #818) ====================
+    //
+    // These tests use GracePeriod lifecycle because they test cross-fork aggregation
+    // behavior, which only occurs during WarmUp or GracePeriod states.
+
+    /// Creates a `ConnectionManager` in GracePeriod lifecycle for multi-fork tests.
+    fn create_grace_period_manager() -> ConnectionManager {
+        create_test_manager_with_lifecycle(ForkLifecycle::GracePeriod {
+            current: Fork::Boole,
+            previous: Fork::Alan,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 2]),
+        })
+    }
 
     /// Regression test for https://github.com/sigp/anchor/issues/818
     ///
@@ -614,8 +664,8 @@ mod tests {
     /// aggregated view because the other fork still holds it.
     #[test]
     fn test_unsubscribe_one_fork_retains_subnet_from_other_fork() {
-        // Arrange
-        let mut mgr = create_test_manager();
+        // Arrange: grace period aggregates across forks
+        let mut mgr = create_grace_period_manager();
         let peer = connect_random_peer(&mut mgr);
 
         mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), true);
@@ -633,8 +683,8 @@ mod tests {
 
     #[test]
     fn test_unsubscribe_both_forks_clears_subnet() {
-        // Arrange
-        let mut mgr = create_test_manager();
+        // Arrange: grace period aggregates across forks
+        let mut mgr = create_grace_period_manager();
         let peer = connect_random_peer(&mut mgr);
 
         mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), true);
@@ -655,8 +705,8 @@ mod tests {
 
     #[test]
     fn test_aggregation_unions_subnets_across_forks() {
-        // Arrange
-        let mut mgr = create_test_manager();
+        // Arrange: grace period aggregates across forks
+        let mut mgr = create_grace_period_manager();
         let peer = connect_random_peer(&mut mgr);
 
         // Act: subscribe to different subnets on different forks
@@ -723,8 +773,8 @@ mod tests {
 
     #[test]
     fn test_count_observed_peers_counts_across_forks() {
-        // Arrange
-        let mut mgr = create_test_manager();
+        // Arrange: grace period aggregates across forks
+        let mut mgr = create_grace_period_manager();
         let peer_a = connect_random_peer(&mut mgr);
         let peer_b = connect_random_peer(&mut mgr);
 
@@ -777,8 +827,8 @@ mod tests {
 
     #[test]
     fn test_peer_offers_needed_subnets_across_forks() {
-        // Arrange
-        let mut mgr = create_test_manager();
+        // Arrange: grace period aggregates across forks
+        let mut mgr = create_grace_period_manager();
         let peer = connect_random_peer(&mut mgr);
         mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_D), true);
 
@@ -811,8 +861,8 @@ mod tests {
     /// the subnet via the remaining fork.
     #[test]
     fn test_peer_offers_needed_subnets_after_partial_unsubscribe() {
-        // Arrange
-        let mut mgr = create_test_manager();
+        // Arrange: grace period aggregates across forks
+        let mut mgr = create_grace_period_manager();
         let peer = connect_random_peer(&mut mgr);
         mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_B), true);
         mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
@@ -846,6 +896,102 @@ mod tests {
         assert!(
             !is_subnet_set(&mgr, &peer, SUBNET_A),
             "A single unsubscribe should clear the bit regardless of duplicate subscribes"
+        );
+    }
+
+    // ==================== Fork-aware peer selection ====================
+
+    #[test]
+    fn test_normal_alan_only_shows_alan_bitmap() {
+        // Arrange: Normal state on Alan
+        let mut mgr = create_test_manager();
+        let peer = connect_random_peer(&mut mgr);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
+
+        // Assert: only Alan bitmap is visible
+        assert!(is_subnet_set(&mgr, &peer, SUBNET_A));
+        assert!(
+            !is_subnet_set(&mgr, &peer, SUBNET_B),
+            "Boole subnet should not be visible in Normal(Alan) state"
+        );
+    }
+
+    #[test]
+    fn test_warmup_aggregates_both_forks() {
+        // Arrange: WarmUp state (preparing for Boole)
+        let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::WarmUp {
+            current: Fork::Alan,
+            upcoming: Fork::Boole,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+        });
+        let peer = connect_random_peer(&mut mgr);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
+
+        // Assert: both forks' bitmaps are aggregated
+        assert!(is_subnet_set(&mgr, &peer, SUBNET_A));
+        assert!(is_subnet_set(&mgr, &peer, SUBNET_B));
+    }
+
+    #[test]
+    fn test_grace_period_aggregates_both_forks() {
+        // Arrange: GracePeriod state
+        let mut mgr = create_grace_period_manager();
+        let peer = connect_random_peer(&mut mgr);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
+
+        // Assert: both forks' bitmaps are aggregated
+        assert!(is_subnet_set(&mgr, &peer, SUBNET_A));
+        assert!(is_subnet_set(&mgr, &peer, SUBNET_B));
+    }
+
+    #[test]
+    fn test_normal_boole_only_shows_boole_bitmap() {
+        // Arrange: Normal state on Boole (post-grace-period)
+        let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::Normal {
+            current: Fork::Boole,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 2]),
+        });
+        let peer = connect_random_peer(&mut mgr);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+        mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_B), true);
+
+        // Assert: only Boole bitmap is visible
+        assert!(
+            !is_subnet_set(&mgr, &peer, SUBNET_A),
+            "Alan subnet should not be visible in Normal(Boole) state"
+        );
+        assert!(is_subnet_set(&mgr, &peer, SUBNET_B));
+    }
+
+    #[test]
+    fn test_peer_only_on_alan_becomes_invisible_after_boole_normal() {
+        // Arrange: peer only subscribed to Alan subnets
+        let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::Normal {
+            current: Fork::Boole,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 2]),
+        });
+        let peer = connect_random_peer(&mut mgr);
+
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
+
+        // Assert: peer is invisible (returns None since no Boole subscriptions)
+        assert!(
+            aggregated_bitfield(&mgr, &peer).is_none(),
+            "Peer with only Alan subscriptions should return None in Normal(Boole) state"
+        );
+
+        // Also verify it doesn't offer needed subnets
+        let needed = HashSet::from([subnet(SUBNET_A)]);
+        assert!(
+            !mgr.peer_offers_needed_subnets_observed_only(&peer, &needed),
+            "Peer only on Alan should not offer subnets in Normal(Boole) state"
         );
     }
 }

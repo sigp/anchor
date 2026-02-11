@@ -15,6 +15,7 @@ use discv5::{
     libp2p_identity::{Keypair, PeerId},
     multiaddr::Multiaddr,
 };
+use fork::SharedForkLifecycle;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use libp2p::{
     bytes::Bytes,
@@ -35,7 +36,7 @@ use tracing::{debug, error, info, trace, warn};
 use typenum::U128;
 
 use crate::{
-    Config, SharedDomainType,
+    Config,
     discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey},
 };
 
@@ -152,7 +153,7 @@ pub struct Discovery {
     /// been started
     update_ports: UpdatePorts,
 
-    domain_type: SharedDomainType,
+    fork_lifecycle: SharedForkLifecycle,
 
     enr_file_path: PathBuf,
 }
@@ -161,7 +162,7 @@ impl Discovery {
     pub async fn new(
         local_keypair: Keypair,
         network_config: &Config,
-        domain_type: SharedDomainType,
+        fork_lifecycle: SharedForkLifecycle,
     ) -> Result<Self, DiscoveryError> {
         let protocol_identity = ProtocolIdentity {
             protocol_id: *b"ssvdv5",
@@ -307,7 +308,7 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            domain_type,
+            fork_lifecycle,
             update_ports,
             enr_file_path,
         })
@@ -447,12 +448,13 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
-        // Clone the shared domain type so the closure can read the current value at query time.
-        let shared_domain_type = self.domain_type.clone();
+        // Clone the shared fork lifecycle so the closure can read the current domain type at query
+        // time.
+        let shared_lifecycle = self.fork_lifecycle.clone();
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
-                shared_domain_type.get().0 == domain_type
+                shared_lifecycle.domain_type().0 == domain_type
             } else {
                 trace!(?enr, "Rejecting ENR with missing domaintype");
                 false
