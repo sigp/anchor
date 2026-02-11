@@ -60,14 +60,12 @@ jobs:
                     exit 0
                   fi
 
-            - name: Checkout repository
-              if: steps.check.outputs.is_member == 'true'
-              uses: actions/checkout@v4
-              with:
-                  repository: ${{ github.event.pull_request.head.repo.full_name }}
-                  ref: ${{ github.event.pull_request.head.ref }}
-                  fetch-depth: 0
-
+            # Generate the app token before checkout so it can be used for
+            # git operations. claude-code-action calls setupBranch() (which
+            # fetches PR refs via `git fetch origin pull/N/head:...`) before
+            # configureGitAuth(), so the token embedded in origin by
+            # actions/checkout must already have permission to fetch fork
+            # PR refs.
             - name: Generate GitHub App token
               if: steps.check.outputs.is_member == 'true'
               id: app-token
@@ -75,6 +73,12 @@ jobs:
               with:
                   app-id: ${{ vars.APP_ID }}
                   private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+            - name: Checkout repository
+              if: steps.check.outputs.is_member == 'true'
+              uses: actions/checkout@v4
+              with:
+                  token: ${{ steps.app-token.outputs.token }}
 
             - name: Configure AWS Credentials (OIDC)
               if: steps.check.outputs.is_member == 'true'
