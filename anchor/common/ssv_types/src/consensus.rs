@@ -35,7 +35,7 @@ use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatu
 //            |                                            |
 //          SSVMessage                                 FullData
 //     ---------------------                          ----------
-//     |                   |              ValidatorConsensusData/BeaconVote SSZ
+//     |                   |              ProposerConsensusData/BeaconVote SSZ
 //     |                   |
 //   MsgType            FullData
 //  ---------          -----------
@@ -60,10 +60,10 @@ impl<D: QbftData> QbftDataValidator<D> for NoDataValidation {
     }
 }
 
-/// ValidatorConsensusData.DataSSZ max size: 8388608 bytes (2^23)
-/// This is the maximum size that the validator consensus data may be
+/// ProposerConsensusData.DataSSZ max size: 8388608 bytes (2^23)
+/// This is the maximum size that the proposer consensus data may be
 /// Calculated as 2^23 = 8,388,608
-pub type ValidatorConsensusDataLen = <U2 as Pow<U23>>::Output;
+pub type ProposerConsensusDataLen = <U2 as Pow<U23>>::Output;
 
 // RoundChange max size: 51852
 // This is the maximum size that a round change justification may be
@@ -241,13 +241,13 @@ impl TreeHash for QbftMessageType {
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
-pub struct ValidatorConsensusData {
+pub struct ProposerConsensusData {
     pub duty: ValidatorDuty,
     pub version: DataVersion,
-    pub data_ssz: VariableList<u8, ValidatorConsensusDataLen>,
+    pub data_ssz: VariableList<u8, ProposerConsensusDataLen>,
 }
 
-impl QbftData for ValidatorConsensusData {
+impl QbftData for ProposerConsensusData {
     type Hash = Hash256;
 
     fn hash(&self) -> Self::Hash {
@@ -260,7 +260,7 @@ impl QbftData for ValidatorConsensusData {
     }
 }
 
-pub struct ValidatorConsensusDataValidator<E: EthSpec> {
+pub struct ProposerConsensusDataValidator<E: EthSpec> {
     slashing_database: Arc<SlashingDatabase>,
     disable_slashing_protection: bool,
     spec: Arc<ChainSpec>,
@@ -269,19 +269,19 @@ pub struct ValidatorConsensusDataValidator<E: EthSpec> {
     _phantom: PhantomData<E>,
 }
 
-impl<E: EthSpec> QbftDataValidator<ValidatorConsensusData> for ValidatorConsensusDataValidator<E> {
-    fn validate(&self, value: &ValidatorConsensusData, our_value: &ValidatorConsensusData) -> bool {
+impl<E: EthSpec> QbftDataValidator<ProposerConsensusData> for ProposerConsensusDataValidator<E> {
+    fn validate(&self, value: &ProposerConsensusData, our_value: &ProposerConsensusData) -> bool {
         match self.do_validation(value, our_value) {
             Ok(_) => true,
             Err(err) => {
-                warn!(%err, "Operator proposed invalid validator consensus data");
+                warn!(%err, "Operator proposed invalid proposer consensus data");
                 false
             }
         }
     }
 }
 
-impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
+impl<E: EthSpec> ProposerConsensusDataValidator<E> {
     pub fn new(
         slashing_database: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
@@ -301,8 +301,8 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
 
     pub fn do_validation(
         &self,
-        value: &ValidatorConsensusData,
-        our_value: &ValidatorConsensusData,
+        value: &ProposerConsensusData,
+        our_value: &ProposerConsensusData,
     ) -> Result<(), DataValidationError> {
         // Check whether the slot matches
         if value.duty.slot != our_value.duty.slot {
@@ -360,7 +360,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
 
     fn validate_block_proposal(
         &self,
-        value: &ValidatorConsensusData,
+        value: &ProposerConsensusData,
     ) -> Result<(), DataValidationError> {
         let fork = ForkName::from(value.version);
 
@@ -395,7 +395,7 @@ impl<E: EthSpec> ValidatorConsensusDataValidator<E> {
 
 #[derive(Error, Debug)]
 pub enum DataValidationError {
-    #[error("Unable to decode ssz in ValidatorConsensusData: {0:?}")]
+    #[error("Unable to decode ssz in ProposerConsensusData: {0:?}")]
     DecodeError(DecodeError),
     #[error("Invalid duty type for QBFT: {0:?}")]
     InvalidDutyType(BeaconRole),

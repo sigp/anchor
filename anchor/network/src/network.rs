@@ -24,7 +24,6 @@ use libp2p::{
 use message_receiver::{MessageReceiver, Outcome, TopicContext};
 use prometheus_client::registry::Registry;
 use ssv_network_config::ForkPhase;
-use ssv_types::domain_type::DomainType;
 use subnet_service::{SUBNET_COUNT, SubnetId, TopicEvent, topic};
 use task_executor::TaskExecutor;
 use thiserror::Error;
@@ -33,7 +32,7 @@ use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 
 use crate::{
-    Config, Enr,
+    Config, Enr, SharedDomainType,
     behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
@@ -77,7 +76,7 @@ pub struct Network<R: MessageReceiver> {
     peer_id: PeerId,
     message_receiver: Arc<R>,
     outcome_rx: mpsc::Receiver<Outcome>,
-    domain_type: DomainType,
+    domain_type: SharedDomainType,
     metrics_registry: Option<Registry>,
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
@@ -111,10 +110,17 @@ impl<R: MessageReceiver> Network<R> {
 
         let mut metrics_registry = Registry::default();
 
-        let behaviour =
-            AnchorBehaviour::new::<E>(local_keypair.clone(), config, &mut metrics_registry, &spec)
-                .await
-                .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
+        let domain_type = SharedDomainType::new(config.domain_type);
+
+        let behaviour = AnchorBehaviour::new::<E>(
+            local_keypair.clone(),
+            config,
+            &mut metrics_registry,
+            &spec,
+            domain_type.clone(),
+        )
+        .await
+        .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
 
         let peer_id = local_keypair.public().to_peer_id();
 
@@ -131,7 +137,7 @@ impl<R: MessageReceiver> Network<R> {
             peer_id,
             message_receiver,
             outcome_rx,
-            domain_type: config.domain_type,
+            domain_type,
             metrics_registry: Some(metrics_registry),
             spec,
             is_dynamic_target_peers,
@@ -413,20 +419,21 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Handle fork phase transition events.
     ///
-    /// - `Activated`: Update ENR domain type.
+    /// - `Activated`: Update shared domain type and ENR.
     fn on_fork_phase(&mut self, phase: ForkPhase) {
         if let ForkPhase::Activated { current, previous } = phase {
             info!(
                 current_fork = %current.fork,
                 previous_fork = %previous.fork,
-                "Fork activated, updating ENR domain type"
+                "Fork activated, updating domain type"
             );
 
-            // Update local domain type for any future use
-            self.domain_type = current.domain_type;
+            // Update the shared domain type — all components (discovery, handshake) see the
+            // new value immediately.
+            self.domain_type.set(current.domain_type);
 
-            // Update ENR domain type so other nodes can discover us with the new fork's domain
-            if let Err(e) = self.discovery().update_domain_type(current.domain_type) {
+            // Update ENR so other nodes can discover us with the new fork's domain
+            if let Err(e) = self.discovery().update_enr_domain_type(current.domain_type) {
                 error!(?e, "Failed to update ENR domain type after fork activation");
             }
         }
@@ -637,19 +644,18 @@ impl<R: MessageReceiver> Network<R> {
 
     fn update_subnet_membership(&mut self, subnet: SubnetId, subscribed: bool) {
         self.discovery().set_subscribed(subnet, subscribed);
-        if let Some(metadata) = self.handshake().node_metadata_mut() {
-            match metadata.set_subscribed(subnet, subscribed) {
-                Ok(()) => {
-                    info!(
-                        subnet = *subnet,
-                        subscribed = subscribed,
-                        subnets_bitfield = %metadata.subnets,
-                        "Updated node_info metadata subnet bitfield"
-                    );
-                }
-                Err(err) => {
-                    error!(?err, "unable to update node info");
-                }
+        let metadata = self.handshake().node_metadata_mut();
+        match metadata.set_subscribed(subnet, subscribed) {
+            Ok(()) => {
+                info!(
+                    subnet = *subnet,
+                    subscribed = subscribed,
+                    subnets_bitfield = %metadata.subnets,
+                    "Updated node_info metadata subnet bitfield"
+                );
+            }
+            Err(err) => {
+                error!(?err, "unable to update node info");
             }
         }
     }

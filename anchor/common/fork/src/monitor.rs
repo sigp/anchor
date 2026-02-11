@@ -19,7 +19,7 @@ use std::{sync::Arc, time::Duration};
 
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use types::{Epoch, Slot};
 
 use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
@@ -423,7 +423,6 @@ pub async fn run<S: SlotClock>(
 ) -> MonitorResult {
     // Get initial state
     let Some(current_slot) = slot_clock.now() else {
-        warn!("Fork monitor: unable to determine current slot");
         return MonitorResult::NoSlotClock;
     };
     let (mut state, has_work, initial_phase) =
@@ -489,7 +488,7 @@ pub fn spawn<S: SlotClock + 'static>(
 ) {
     executor.spawn(
         async move {
-            run(
+            let result = run(
                 fork_schedule,
                 slot_clock,
                 slots_per_epoch,
@@ -497,6 +496,13 @@ pub fn spawn<S: SlotClock + 'static>(
                 phase_sender,
             )
             .await;
+
+            match result {
+                MonitorResult::Completed => debug!("No more forks scheduled, fork monitor exiting"),
+                MonitorResult::NoSlotClock => {
+                    warn!("Fork monitor: unable to determine current slot")
+                }
+            }
         },
         "fork_monitor",
     );

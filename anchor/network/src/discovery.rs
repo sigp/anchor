@@ -35,7 +35,7 @@ use tracing::{debug, error, info, trace, warn};
 use typenum::U128;
 
 use crate::{
-    Config,
+    Config, SharedDomainType,
     discovery::DiscoveryError::{Discv5Init, Discv5Start, EnrKey},
 };
 
@@ -152,7 +152,7 @@ pub struct Discovery {
     /// been started
     update_ports: UpdatePorts,
 
-    domain_type: DomainType,
+    domain_type: SharedDomainType,
 
     enr_file_path: PathBuf,
 }
@@ -161,6 +161,7 @@ impl Discovery {
     pub async fn new(
         local_keypair: Keypair,
         network_config: &Config,
+        domain_type: SharedDomainType,
     ) -> Result<Self, DiscoveryError> {
         let protocol_identity = ProtocolIdentity {
             protocol_id: *b"ssvdv5",
@@ -306,7 +307,7 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            domain_type: network_config.domain_type,
+            domain_type,
             update_ports,
             enr_file_path,
         })
@@ -412,24 +413,11 @@ impl Discovery {
         Ok(true)
     }
 
-    /// Update the domain type in both the local state and ENR.
+    /// Update the ENR domain type so other nodes can discover us with the new fork's domain.
     ///
-    /// Called when a fork activates to ensure this node can be discovered by
-    /// nodes using the new fork's domain type filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `new_domain_type` - The domain type for the newly activated fork
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - Domain type was updated successfully
-    /// * `Err(String)` - Update failed with the given error message
-    pub fn update_domain_type(&mut self, new_domain_type: DomainType) -> Result<(), String> {
-        // Update local state used for query filtering
-        self.domain_type = new_domain_type;
-
-        // Update ENR so other nodes can discover us
+    /// Called when a fork activates. The shared domain type is updated separately;
+    /// this method only handles the ENR update and disk persistence.
+    pub fn update_enr_domain_type(&mut self, new_domain_type: DomainType) -> Result<(), String> {
         self.discv5
             .enr_insert("domaintype", &new_domain_type.0)
             .map_err(|e| format!("Failed to update ENR domain type: {e:?}"))?;
@@ -459,12 +447,12 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
-        // Capture a copy of the domain type so the closure no longer references `self`.
-        let local_domain_type = self.domain_type;
+        // Clone the shared domain type so the closure can read the current value at query time.
+        let shared_domain_type = self.domain_type.clone();
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
-                local_domain_type.0 == domain_type
+                shared_domain_type.get().0 == domain_type
             } else {
                 trace!(?enr, "Rejecting ENR with missing domaintype");
                 false

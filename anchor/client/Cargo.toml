@@ -14,7 +14,6 @@ async-broadcast = { workspace = true }
 beacon_node_fallback = { workspace = true }
 clap = { workspace = true }
 database = { workspace = true }
-dirs = { workspace = true }
 duties_tracker = { workspace = true }
 eth = { workspace = true }
 eth2 = { workspace = true }
@@ -37,16 +36,12 @@ operator_doppelganger = { workspace = true }
 operator_key = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
-qbft = { workspace = true }
 qbft_manager = { workspace = true }
 sensitive_url = { workspace = true }
-serde = { workspace = true }
 signature_collector = { workspace = true }
 slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
-ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
-strum = { workspace = true }
 subnet_service = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
