@@ -36,7 +36,7 @@ pub enum KeygenError {
     #[error("Key file(s) already exist in {0}")]
     Exists(String),
 
-    #[error("Failed read existing key for conversion: {0}")]
+    #[error("Failed to read existing key for conversion: {0}")]
     ReadError(#[from] FileReadError),
 }
 
@@ -71,7 +71,7 @@ pub struct Keygen {
     #[clap(
         long,
         help = "Path to an existing key file to use instead of generating a new one. If encrypted, \
-            the password is read from terminal or via --password-file-for existing. The existing \
+            the password is read from terminal or via --password-file-for-existing. The existing \
             file is NOT automatically removed.",
         value_name = "PATH"
     )]
