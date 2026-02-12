@@ -82,6 +82,8 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
+// Generally the timeout for events should be longer than a slot.
+const HTTP_GET_EVENTS_TIMEOUT_MULTIPLIER: u32 = 50;
 
 pub struct Client {}
 
@@ -243,6 +245,7 @@ impl Client {
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
                     get_deposit_snapshot: slot_duration / HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT,
                     get_validator_block: slot_duration / HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT,
+                    events: HTTP_GET_EVENTS_TIMEOUT_MULTIPLIER * slot_duration,
                     default: slot_duration / HTTP_DEFAULT_TIMEOUT_QUOTIENT,
                 }
             } else {
@@ -580,6 +583,7 @@ impl Client {
             config.prefer_builder_proposals,
             config.strict_mfp,
             is_synced.clone(),
+            executor.clone(),
         );
 
         start_exit_processor(
