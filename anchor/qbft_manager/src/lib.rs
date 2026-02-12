@@ -14,8 +14,8 @@ use slot_clock::SlotClock;
 use ssv_types::{
     Cluster, CommitteeId,
     consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, QbftData, QbftDataValidator,
-        ValidatorConsensusData,
+        AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
+        QbftDataValidator,
     },
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -72,15 +72,18 @@ pub struct AggregatorCommitteeInstanceId {
     pub instance_height: InstanceHeight,
 }
 
-// Unique Identifier for a validator instance
+// Unique Identifier for a proposer QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ValidatorInstanceId {
+pub struct ProposerInstanceId {
     pub validator: PublicKeyBytes,
+    // TODO(post-boole): remove `duty` field and `ValidatorDutyKind`. Post-boole,
+    // `Proposal` is the only validator specific duty
     pub duty: ValidatorDutyKind,
     pub instance_height: InstanceHeight,
 }
 
-// Type of validator duty that is being voted one
+// TODO(post-boole): remove this enum. Post-boole, `Proposal` is the only
+// validator specific duty kind.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ValidatorDutyKind {
     Proposal,
@@ -130,8 +133,8 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     processor: Senders,
     // OperatorID
     operator_id: OwnOperatorId,
-    // All of the QBFT instances that are voting on validator consensus data
-    validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
+    // All of the QBFT instances that are voting on proposer consensus data
+    proposer_consensus_data_instances: Map<ProposerInstanceId, ProposerConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
     // QBFT instances for AggregatorCommitteeConsensusData
@@ -160,7 +163,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
-            validator_consensus_data_instances: DashMap::new(),
+            proposer_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
             message_sender,
@@ -276,12 +279,12 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                         return Err(QbftError::InconsistentMessageId);
                     }
                 };
-                let id = ValidatorInstanceId {
+                let id = ProposerInstanceId {
                     validator,
                     duty,
                     instance_height,
                 };
-                self.pass_to_instance::<ValidatorConsensusData>(
+                self.pass_to_instance::<ProposerConsensusData>(
                     id,
                     WrappedQbftMessage {
                         signed_message: full_message,
@@ -375,7 +378,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
             self.beacon_vote_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
-            self.validator_consensus_data_instances
+            self.proposer_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
             self.aggregator_committee_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
@@ -416,10 +419,10 @@ pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 's
     fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId;
 }
 
-impl<E: EthSpec> QbftDecidable<E> for ValidatorConsensusData {
-    type Id = ValidatorInstanceId;
+impl<E: EthSpec> QbftDecidable<E> for ProposerConsensusData {
+    type Id = ProposerInstanceId;
     fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
-        &manager.validator_consensus_data_instances
+        &manager.proposer_consensus_data_instances
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
