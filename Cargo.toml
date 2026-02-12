@@ -68,7 +68,7 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse commit is stable branch `edba56b` as of 2/5/2026
+# Lighthouse version 8.1.0
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "edba56b" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "edba56b" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "edba56b" }

@@ -1429,24 +1429,17 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     );
                 }
                 Err(Error::Slashable(NotSafe::UnregisteredValidator(pk))) => {
-                    warn!(
-                        msg = "Carefully consider running with --init-slashing-protection (see --help)",
-                        public_key = ?pk,
-                        "Not signing attestation for unregistered validator"
+                    error!(
+                        ?pk,
+                        "Internal error: validator was not properly registered for slashing protection",
                     );
                     validator_metrics::inc_counter_vec(
                         &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
                         &[validator_metrics::UNREGISTERED],
                     );
                 }
-                Err(Error::Slashable(e)) => {
-                    warn!(
-                        slot = %attestation.data().slot,
-                        block_root = ?attestation.data().beacon_block_root,
-                        public_key = ?validator_pubkey,
-                        error = ?e,
-                        "Skipping signing of slashable attestation"
-                    );
+                Err(Error::Slashable(err)) => {
+                    error!(?err, "Not signing slashable attestation");
                     validator_metrics::inc_counter_vec(
                         &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
                         &[validator_metrics::SLASHABLE],
