@@ -22,7 +22,7 @@ pub enum Error {
     #[error("Unable to read the slot clock")]
     UnableToReadSlotClock,
     #[error("Arithmetic error")]
-    Arith(#[allow(dead_code)] ArithError),
+    Arith(ArithError),
     #[error("Failed to poll proposers: {0}")]
     FailedToPollProposers(String),
 }

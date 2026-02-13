@@ -25,7 +25,6 @@ pub const VERSION: &str = git_version!(
 ///
 /// No indication is given if the tree is dirty. This is part of the standard
 /// for reporting the client version to the execution engine.
-#[allow(dead_code)]
 pub const COMMIT_PREFIX: &str = git_version!(
     args = [
         "--always",

@@ -38,7 +38,7 @@ pub struct NetworkMessageReceiver<E: types::EthSpec, S: SlotClock, D: DutiesProv
 }
 
 impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<E, S, D> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager<E, S>>,

@@ -91,7 +91,6 @@ impl Default for TestQBFTCommitteeBuilder {
     }
 }
 
-#[allow(dead_code)]
 impl TestQBFTCommitteeBuilder {
     /// Consumes self and runs a test scenario. This returns a [`TestQBFTCommittee`] which
     /// represents a running quorum.
@@ -105,7 +104,6 @@ impl TestQBFTCommitteeBuilder {
 }
 
 /// A testing structure representing a committee of running instances
-#[allow(clippy::type_complexity)]
 struct TestQBFTCommittee<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> {
     msg_queue: Rc<RefCell<VecDeque<(OperatorId, UnsignedWrappedQbftMessage)>>>,
     instances: HashMap<OperatorId, Qbft<DefaultLeaderFunction, D, S>>,

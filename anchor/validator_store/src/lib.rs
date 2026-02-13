@@ -118,7 +118,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         database: Arc<NetworkDatabase>,
         signature_collector: Arc<SignatureCollectorManager<T>>,
@@ -236,7 +236,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         .signing_root(domain)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn collect_signature(
         &self,
         signature_kind: PartialSignatureKind,
@@ -704,7 +704,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
     /// Boole+ path for `produce_signed_aggregate_and_proof`: committee-based consensus using
     /// `AggregatorCommitteeConsensusData`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn produce_signed_aggregate_and_proof_boole(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -877,7 +877,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     }
 
     /// Pre-Boole path for `produce_signed_aggregate_and_proof`: per-validator consensus.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn produce_signed_aggregate_and_proof_alan(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -991,7 +991,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
     /// Boole+ path for `produce_signed_contribution_and_proof`: committee-based consensus using
     /// `AggregatorCommitteeConsensusData`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn produce_signed_contribution_and_proof_boole(
         &self,
         aggregator_index: u64,
@@ -1142,7 +1142,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     }
 
     /// Pre-Boole path for `produce_signed_contribution_and_proof`: per-validator consensus.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn produce_signed_contribution_and_proof_alan(
         &self,
         aggregator_index: u64,

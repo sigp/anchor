@@ -54,7 +54,7 @@ pub struct SubnetService<S: SlotClock> {
 
 impl<S: SlotClock> SubnetService<S> {
     /// Create a new subnet service.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn new(
         tx: mpsc::Sender<TopicEvent>,
         db: watch::Receiver<NetworkState>,
@@ -145,7 +145,7 @@ impl<S: SlotClock> SubnetService<S> {
 
 /// Spawn the subnet service task and return both the service (for subnet queries)
 /// and the receiver for topic events.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     db: watch::Receiver<NetworkState>,
     subscribe_all_subnets: bool,
