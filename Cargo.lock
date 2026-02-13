@@ -1812,7 +1812,6 @@ dependencies = [
  "http_api",
  "http_metrics",
  "hyper",
- "keygen",
  "logging 0.1.0",
  "message_receiver",
  "message_sender",
@@ -5534,8 +5533,10 @@ dependencies = [
  "eth2_keystore",
  "openssl",
  "rand 0.9.2",
+ "rpassword",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "zeroize",
 ]
