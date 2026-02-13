@@ -17,7 +17,7 @@ use types::Epoch;
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
     duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
-    validate_slot_time, verify_message_signatures,
+    validate_role_for_fork, validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -33,18 +33,9 @@ pub(crate) fn validate_consensus_message(
         Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
 
-    // Reject AggregatorCommittee before Boole fork (safety net)
+    // Validate role is allowed for the fork active at this slot
     let slot = Slot::new(consensus_message.height);
-    if validation_context.role == Role::AggregatorCommittee {
-        let epoch = slot.epoch(validation_context.slots_per_epoch);
-        if validation_context.fork_schedule.active_fork(epoch) < Fork::Boole {
-            return Err(ValidationFailure::RoleNotActiveBeforeFork {
-                role: validation_context.role,
-                current_fork: validation_context.fork_schedule.active_fork(epoch),
-                minimum_fork: Fork::Boole,
-            });
-        }
-    }
+    validate_role_for_fork(slot, &validation_context)?;
 
     // Call the existing semantic validation
     validate_consensus_message_semantics(
@@ -531,6 +522,17 @@ mod tests {
         }
     }
 
+    fn assert_qbft_message_accepted(
+        result: Result<ValidatedSSVMessage, ValidationFailure>,
+        context: &str,
+    ) {
+        match result {
+            Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
+            Err(e) => panic!("{context}: Expected QbftMessage to be accepted, got error: {e:?}"),
+            Ok(other) => panic!("{context}: Expected QbftMessage variant, got: {other:?}"),
+        }
+    }
+
     // Extract common key generation into a helper
     fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
         let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
@@ -606,18 +608,7 @@ mod tests {
             }),
         );
 
-        match result {
-            Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
-            Err(e) => panic!("Expected successful validation, got: {e:?}"),
-            _ => {}
-        }
-
-        assert!(result.is_ok(), "Expected successful validation");
-
-        match result.unwrap() {
-            ValidatedSSVMessage::QbftMessage(_) => {} // success
-            _ => panic!("Expected QbftMessage variant"),
-        }
+        assert_qbft_message_accepted(result, "Expected successful validation");
     }
 
     #[test]
@@ -1723,5 +1714,111 @@ mod tests {
         let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
 
         assert_eq!(result, Ok(Some(expected_duty_count)));
+    }
+
+    /// Helper function for testing role validation against fork schedules.
+    ///
+    /// Tests whether a consensus message for a given role is properly accepted or rejected
+    /// based on the fork schedule. Used to verify that deprecated roles (Aggregator and
+    /// SyncCommittee) are rejected after the Boole fork but accepted before it.
+    fn test_role_fork_validation(role: Role, is_after_boole: bool, should_be_rejected: bool) {
+        // Arrange: Set up test data and validation context
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let qbft_message = QbftMessageBuilder::new(role, QbftMessageType::Prepare).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(12);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
+        let fork_schedule = if is_after_boole {
+            Arc::new(ForkSchedule::new(
+                Fork::Boole,
+                DomainType::default(),
+                "testing",
+            ))
+        } else {
+            generate_fork_schedule()
+        };
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role,
+            received_at: now + slot_duration,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        // Act: Validate the message
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert: Verify the expected outcome
+        if should_be_rejected {
+            assert_validation_error(
+                result,
+                |failure| {
+                    matches!(
+                        failure,
+                        ValidationFailure::RoleNotActiveAfterFork {
+                            role: r,
+                            deprecated_since_fork: Fork::Boole,
+                            ..
+                        } if *r == role
+                    )
+                },
+                &format!("RoleNotActiveAfterFork for {role:?}"),
+            );
+        } else {
+            assert_qbft_message_accepted(
+                result,
+                &format!("Expected {role:?} to be accepted before Boole fork"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_aggregator_consensus_message_rejected_after_boole() {
+        test_role_fork_validation(Role::Aggregator, true, true);
+    }
+
+    #[test]
+    fn test_aggregator_consensus_message_accepted_before_boole() {
+        test_role_fork_validation(Role::Aggregator, false, false);
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_accepted_before_boole() {
+        test_role_fork_validation(Role::SyncCommittee, false, false);
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_rejected_after_boole() {
+        test_role_fork_validation(Role::SyncCommittee, true, true);
     }
 }
