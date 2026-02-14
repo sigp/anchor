@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 mod types;
 mod utils;
 
@@ -5,13 +7,9 @@ use std::{fs, path::Path};
 
 use serde::de::DeserializeOwned;
 
-/// Core trait for spec tests. Mirrors Go's SpecTest interface.
+/// Core trait for spec tests.
 /// Each test type deserializes from JSON and runs assertions.
 trait SpecTest: DeserializeOwned {
-    /// Human-readable test name (from JSON "Name" field, if applicable)
-    fn name(&self) -> &str { "" }
-
-    /// Run the test. Returns Ok(()) on success, Err(description) on failure.
     fn run(&self) -> Result<(), String>;
 }
 
@@ -50,7 +48,7 @@ fn run_types_tests() {
             // Encoding tests (PR 1 - only BeaconVote for now)
             "beaconvote.EncodingTest" => run_test::<types::BeaconVoteEncodingTest>(&path, &contents),
 
-            // Not yet implemented — skip during incremental development.
+            // TODO(spec-tests): Add more test types here as they are implemented.
             // This arm will be replaced with panic!() once all test types are added.
             _ => {
                 eprintln!("SKIP (not yet implemented): {prefix}");
