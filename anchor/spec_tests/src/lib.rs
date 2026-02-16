@@ -67,6 +67,9 @@ fn run_types_tests() {
                 run_test::<types::SignedSSVMessageEncodingTest>(&path, &contents)
             }
             "ssvmsg.EncodingTest" => run_test::<types::SSVMessageEncodingTest>(&path, &contents),
+            "proposerconsensusdata.EncodingTest" => {
+                run_test::<types::ProposerConsensusDataEncodingTest>(&path, &contents)
+            }
 
             // TODO(spec-tests): Add more test types here as they are implemented.
             // This arm will be replaced with panic!() once all test types are added.
