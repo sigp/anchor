@@ -71,6 +71,12 @@ fn run_types_tests() {
                 run_test::<types::ProposerConsensusDataEncodingTest>(&path, &contents)
             }
 
+            // Anchor's `Share` is architecturally different from Go spec's `Share`
+            // (different fields, decomposed across multiple types). Not applicable.
+            "share.EncodingTest" => {
+                continue;
+            }
+
             // TODO(spec-tests): Add more test types here as they are implemented.
             // This arm will be replaced with panic!() once all test types are added.
             _ => {
