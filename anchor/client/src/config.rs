@@ -135,7 +135,7 @@ impl Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, String> {
+pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Config, String> {
     let mut config = Config::new(global_config);
 
     config.key_file = cli_args.key_file.clone();
@@ -157,7 +157,7 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.listen_addresses = parse_listening_addresses(cli_args)?;
+    config.network.listen_addresses = parse_listening_addresses(&cli_args)?;
 
     for addr in cli_args.boot_nodes.clone() {
         match addr.parse() {
@@ -249,11 +249,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         config.http_api.listen_port = port;
     }
 
-    if let Some(allow_origin) = &cli_args.http_allow_origin {
-        let header_value = allow_origin
-            .parse()
-            .map_err(|_| "Invalid allow-origin value")?;
-        config.http_api.allow_origin = Some(AllowOrigin::exact(header_value));
+    if let Some(allow_origin) = cli_args.http_allow_origin.take() {
+        config.http_api.allow_origin = Some(AllowOrigin::exact(allow_origin));
     }
 
     // Prometheus metrics HTTP server
@@ -270,11 +267,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         config.http_metrics.listen_port = port;
     }
 
-    if let Some(allow_origin) = &cli_args.metrics_allow_origin {
-        let header_value = allow_origin
-            .parse()
-            .map_err(|_| "Invalid metrics-allow-origin value")?;
-        config.http_metrics.allow_origin = Some(AllowOrigin::exact(header_value));
+    if let Some(allow_origin) = cli_args.metrics_allow_origin.take() {
+        config.http_metrics.allow_origin = Some(AllowOrigin::exact(allow_origin));
     }
 
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;

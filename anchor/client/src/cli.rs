@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use axum::http::HeaderValue;
 use beacon_node_fallback::ApiTopic;
 use clap::{
     Parser,
@@ -184,7 +185,7 @@ pub struct Node {
         display_order = 0,
         requires = "http"
     )]
-    pub http_allow_origin: Option<String>,
+    pub http_allow_origin: Option<HeaderValue>,
 
     // Network related arguments
     #[clap(
@@ -334,7 +335,7 @@ pub struct Node {
         display_order = 0,
         requires = "metrics"
     )]
-    pub metrics_allow_origin: Option<String>,
+    pub metrics_allow_origin: Option<HeaderValue>,
 
     #[clap(
         long,
