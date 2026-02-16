@@ -1,8 +1,10 @@
+mod aggregator_committee_consensus_data_encoding;
 mod beacon_vote_encoding;
 mod partial_sig_message_encoding;
 mod signed_ssv_msg_encoding;
 mod ssv_message_encoding;
 
+pub use aggregator_committee_consensus_data_encoding::*;
 pub use beacon_vote_encoding::*;
 pub use partial_sig_message_encoding::*;
 pub use signed_ssv_msg_encoding::*;

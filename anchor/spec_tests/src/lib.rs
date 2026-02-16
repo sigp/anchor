@@ -54,6 +54,9 @@ fn run_types_tests() {
 
         let result = match prefix {
             // Encoding tests
+            "aggregatorcommitteeconsensusdata.EncodingTest" => {
+                run_test::<types::AggregatorCommitteeConsensusDataEncodingTest>(&path, &contents)
+            }
             "beaconvote.EncodingTest" => {
                 run_test::<types::BeaconVoteEncodingTest>(&path, &contents)
             }
