@@ -1,0 +1,143 @@
+name: Claude PR Review
+
+# Automated review on PR open, a silent watchdog that only comments when
+# it finds actionable issues.  On-demand help lives in claude-mentions.yml.
+
+on:
+    pull_request_target:
+        types: [opened, ready_for_review, reopened, labeled, unlabeled]
+
+concurrency:
+    group: claude-review-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
+
+permissions:
+    id-token: write
+    contents: write
+    pull-requests: write
+    issues: write
+
+jobs:
+    claude-pr-review:
+        if: |
+            !contains(github.event.pull_request.labels.*.name, 'no-claude-review') &&
+            ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+             (github.event.action == 'labeled' && github.event.label.name == 'claude-recheck') ||
+             (github.event.action == 'unlabeled' && github.event.label.name == 'no-claude-review' && contains(github.event.pull_request.labels.*.name, 'claude-recheck')))
+        name: claude-pr-review
+        runs-on: ubuntu-22.04
+        permissions:
+            id-token: write
+            contents: write
+            pull-requests: write
+            issues: write
+            actions: read
+        steps:
+            - name: Check if PR has no-claude-review label
+              id: check-label
+              run: |
+                  LABELS=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} --jq '.labels[].name')
+                  if echo "$LABELS" | grep -q "no-claude-review"; then
+                    echo "has_no_review_label=true" >> $GITHUB_OUTPUT
+                    echo "⚠️ PR has 'no-claude-review' label. Skipping automated review."
+                    exit 0
+                  else
+                    echo "has_no_review_label=false" >> $GITHUB_OUTPUT
+                  fi
+              env:
+                  GH_TOKEN: ${{ github.token }}
+
+            - name: Check if PR author is org member
+              id: check
+              run: |
+                  PR_AUTHOR="${{ github.event.pull_request.author_association }}"
+                  # Check if user is org member or owner
+                  if [[ "$PR_AUTHOR" == "MEMBER" || "$PR_AUTHOR" == "OWNER" ]]; then
+                    echo "is_member=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "is_member=false" >> $GITHUB_OUTPUT
+                    echo "⚠️ PR author is not a member of sigp organization. Skipping automated review."
+                    exit 0
+                  fi
+
+            # Generate the app token before checkout so it can be used for
+            # git operations. claude-code-action calls setupBranch() (which
+            # fetches PR refs via `git fetch origin pull/N/head:...`) before
+            # configureGitAuth(), so the token embedded in origin by
+            # actions/checkout must already have permission to fetch fork
+            # PR refs.
+            - name: Generate GitHub App token
+              if: steps.check.outputs.is_member == 'true'
+              id: app-token
+              uses: actions/create-github-app-token@v2
+              with:
+                  app-id: ${{ vars.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+            - name: Checkout repository
+              if: steps.check.outputs.is_member == 'true'
+              uses: actions/checkout@v4
+              with:
+                  token: ${{ steps.app-token.outputs.token }}
+
+            - name: Configure AWS Credentials (OIDC)
+              if: steps.check.outputs.is_member == 'true'
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+                  aws-region: us-west-2
+
+            - name: Run Claude Code Action
+              if: steps.check.outputs.is_member == 'true'
+              timeout-minutes: 15
+              env:
+                  ACTIONS_STEP_DEBUG: true
+              uses: anthropics/claude-code-action@v1.0.52
+              with:
+                  github_token: ${{ steps.app-token.outputs.token }}
+                  use_bedrock: "true"
+                  prompt: |
+                      REPO: ${{ github.repository }}
+                      PR NUMBER: ${{ github.event.pull_request.number }}
+
+                      You are an automated silent watchdog reviewer. Your job is to catch
+                      real problems — NOT to provide a comprehensive review or commentary.
+
+                      CRITICAL RULE: If you find NO actionable issues, do NOT post any
+                      PR comments or inline comments. Simply respond with:
+                      "No actionable issues found."
+                      and stop. Do not elaborate, summarize, or praise.
+
+                      Only comment on issues you are CONFIDENT are real problems:
+
+                      1. **Security** — vulnerabilities, unsafe code, input validation, auth logic
+                      2. **Correctness** — logic errors, race conditions, edge cases, off-by-one errors
+                      3. **Performance** — bottlenecks, unnecessary allocations, resource leaks
+                      4. **Error Handling** — missing error paths, unwrap/expect in non-test code, silent failures
+                      5. **Rust Idioms** — non-idiomatic patterns, unnecessary clones, misuse of ownership/borrowing
+                      6. **Design** — incorrect abstractions, module boundary violations, missing trait bounds
+                      7. **Testing** — missing coverage for new code paths, untested edge cases
+
+                      Do NOT comment on:
+                      - Style, formatting, naming (handled by rustfmt/clippy)
+                      - Documentation, TODOs, FIXMEs
+                      - Pre-existing issues not introduced by this PR
+                      - Nice-to-have suggestions or minor improvements
+                      - Rust idiom preferences that don't affect correctness
+                      - Code with lint suppression comments (already acknowledged)
+
+                      When you DO find issues:
+                      - Use inline comments with concrete fix suggestions
+                      - Post a brief summary comment ONLY listing the issues found
+                      - No preamble, no praise, no filler
+                  claude_args: |
+                      --max-turns 50
+                      --model us.anthropic.claude-opus-4-6-v1
+                      --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep"
+
+            - name: Remove claude-recheck label if present
+              if: steps.check.outputs.is_member == 'true' && github.event.action == 'labeled' && github.event.label.name == 'claude-recheck'
+              run: |
+                  gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels/claude-recheck -X DELETE || true
+              env:
+                  GH_TOKEN: ${{ github.token }}
