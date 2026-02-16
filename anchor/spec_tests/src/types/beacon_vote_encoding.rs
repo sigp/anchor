@@ -1,9 +1,12 @@
-use crate::utils::deserializers::{deserialize_base64, deserialize_bytes_to_hash256};
-use crate::SpecTest;
-use ssz::{Decode, Encode};
 use serde::Deserialize;
+use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+use crate::{
+    SpecTest,
+    utils::deserializers::{deserialize_base64, deserialize_bytes_to_hash256},
+};
 
 /// Mirrors Go's `EncodingTest` for `BeaconVote`.
 ///
