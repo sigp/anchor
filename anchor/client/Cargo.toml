@@ -9,9 +9,9 @@ name = "client"
 path = "src/lib.rs"
 
 [dependencies]
-axum = { workspace = true }
 anchor_validator_store = { workspace = true }
 async-broadcast = { workspace = true }
+axum = { workspace = true }
 beacon_node_fallback = { workspace = true }
 clap = { workspace = true }
 database = { workspace = true }
@@ -23,7 +23,7 @@ fork = { workspace = true }
 global_config = { workspace = true }
 http_api = { workspace = true }
 http_metrics = { workspace = true }
-keygen = { workspace = true }
+hyper = { workspace = true }
 logging = { workspace = true }
 message_receiver = { workspace = true }
 message_sender = { workspace = true }

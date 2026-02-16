@@ -13,7 +13,7 @@ use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
 
 use crate::{
-    Config,
+    Config, SharedDomainType,
     behaviour::BehaviourError::Gossipsub,
     discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS},
     handshake,
@@ -92,6 +92,7 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
+        domain_type: SharedDomainType,
     ) -> Result<Self, BehaviourError> {
         let identify = {
             let local_public_key = local_keypair.public();
@@ -155,7 +156,8 @@ impl AnchorBehaviour {
 
         let discovery = {
             // Build and start the discovery sub-behaviour
-            let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
+            let mut discovery =
+                Discovery::new(local_keypair.clone(), network_config, domain_type.clone()).await?;
             // start searching for peers
             discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
             discovery
@@ -169,17 +171,13 @@ impl AnchorBehaviour {
         };
 
         let handshake = {
-            let domain_type: String = network_config.domain_type.into();
-            let node_info = handshake::node_info::NodeInfo::new(
-                domain_type,
-                Some(handshake::node_info::NodeMetadata {
-                    node_version: version_with_platform(),
-                    execution_node: "geth/v1.10.8".to_string(),
-                    consensus_node: "lighthouse/v1.5.0".to_string(),
-                    subnets: "00000000000000000000000000000000".to_string(),
-                }),
-            );
-            handshake::Behaviour::new(local_keypair, node_info)
+            let metadata = handshake::node_info::NodeMetadata {
+                node_version: version_with_platform(),
+                execution_node: "geth/v1.10.8".to_string(),
+                consensus_node: "lighthouse/v1.5.0".to_string(),
+                subnets: "00000000000000000000000000000000".to_string(),
+            };
+            handshake::Behaviour::new(local_keypair, domain_type, metadata)
         };
 
         let upnp = Toggle::from(

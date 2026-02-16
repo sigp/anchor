@@ -18,7 +18,10 @@ use libp2p::{
 };
 use tracing::{debug, trace};
 
-use crate::handshake::{codec::Codec, node_info::NodeInfo};
+use crate::{
+    SharedDomainType,
+    handshake::{codec::Codec, node_info::NodeInfo},
+};
 
 /// Event emitted on handshake completion or failure.
 #[derive(Debug)]
@@ -37,7 +40,8 @@ pub enum Event {
 /// Automatically initiates handshakes on outbound connections.
 pub struct Behaviour {
     inner: RequestResponseBehaviour<Codec>,
-    node_info: NodeInfo,
+    domain_type: SharedDomainType,
+    metadata: node_info::NodeMetadata,
     events: VecDeque<Event>,
 }
 
@@ -56,7 +60,11 @@ pub enum Error {
 impl Behaviour {
     /// Create a new handshake Behaviour.
     /// The behaviour automatically initiates handshakes on outbound connections.
-    pub fn new(keypair: Keypair, node_info: NodeInfo) -> Self {
+    pub fn new(
+        keypair: Keypair,
+        domain_type: SharedDomainType,
+        metadata: node_info::NodeMetadata,
+    ) -> Self {
         let protocol = StreamProtocol::new("/ssv/info/0.0.1");
         let inner = RequestResponseBehaviour::with_codec(
             Codec::new(keypair),
@@ -65,34 +73,43 @@ impl Behaviour {
         );
         Self {
             inner,
-            node_info,
+            domain_type,
+            metadata,
             events: VecDeque::new(),
         }
     }
 
+    /// Construct our [`NodeInfo`] from the current shared domain type and metadata.
+    fn our_node_info(&self) -> NodeInfo {
+        NodeInfo {
+            domain_type: self.domain_type.get().into(),
+            metadata: Some(self.metadata.clone()),
+        }
+    }
+
     fn verify_and_emit_event(&mut self, peer_id: PeerId, their_info: NodeInfo) {
-        match verify_node_info(&self.node_info, &their_info) {
+        let our_info = self.our_node_info();
+        match verify_node_info(&our_info, &their_info) {
             Ok(()) => {
                 // Log handshake completion and record metrics
                 if let Some(metadata) = &their_info.metadata {
-                    if let Some(our_metadata) = self.node_metadata() {
-                        let matching_count =
-                            count_matching_subnets(&our_metadata.subnets, &metadata.subnets);
-                        debug!(
-                            %peer_id,
-                            our_subnets = %our_metadata.subnets,
-                            their_subnets = %metadata.subnets,
-                            node_version = %metadata.node_version,
-                            matching_subnets = matching_count,
-                            "Handshake completed"
-                        );
+                    let our_metadata = self.node_metadata();
+                    let matching_count =
+                        count_matching_subnets(&our_metadata.subnets, &metadata.subnets);
+                    debug!(
+                        %peer_id,
+                        our_subnets = %our_metadata.subnets,
+                        their_subnets = %metadata.subnets,
+                        node_version = %metadata.node_version,
+                        matching_subnets = matching_count,
+                        "Handshake completed"
+                    );
 
-                        // Record subnet match count metric
-                        if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
-                            let label = &matching_count.to_string();
-                            if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
-                                gauge.inc();
-                            }
+                    // Record subnet match count metric
+                    if let Ok(gauge_vec) = crate::metrics::HANDSHAKE_SUBNET_MATCHES.as_ref() {
+                        let label = &matching_count.to_string();
+                        if let Ok(gauge) = gauge_vec.get_metric_with_label_values(&[label]) {
+                            gauge.inc();
                         }
                     }
                 } else {
@@ -123,7 +140,7 @@ impl Behaviour {
         // Send our info back to the peer
         if self
             .inner
-            .send_response(channel, self.node_info.clone())
+            .send_response(channel, self.our_node_info())
             .is_err()
         {
             trace!(
@@ -162,12 +179,12 @@ impl Behaviour {
         }
     }
 
-    pub fn node_metadata(&self) -> &Option<node_info::NodeMetadata> {
-        &self.node_info.metadata
+    pub fn node_metadata(&self) -> &node_info::NodeMetadata {
+        &self.metadata
     }
 
-    pub fn node_metadata_mut(&mut self) -> &mut Option<node_info::NodeMetadata> {
-        &mut self.node_info.metadata
+    pub fn node_metadata_mut(&mut self) -> &mut node_info::NodeMetadata {
+        &mut self.metadata
     }
 }
 
@@ -192,10 +209,10 @@ fn count_matching_subnets(our_subnets: &str, their_subnets: &str) -> usize {
 }
 
 fn verify_node_info(ours: &NodeInfo, theirs: &NodeInfo) -> Result<(), Error> {
-    if ours.network_id != theirs.network_id {
+    if ours.domain_type != theirs.domain_type {
         return Err(Error::NetworkMismatch {
-            ours: ours.network_id.clone(),
-            theirs: theirs.network_id.clone(),
+            ours: ours.domain_type.clone(),
+            theirs: theirs.domain_type.clone(),
         });
     }
     Ok(())
@@ -245,7 +262,7 @@ impl NetworkBehaviour for Behaviour {
                 ?peer_id,
                 "Auto-initiating handshake on first outbound connection"
             );
-            self.inner.send_request(peer_id, self.node_info.clone());
+            self.inner.send_request(peer_id, self.our_node_info());
         }
         self.inner.on_swarm_event(event);
     }
@@ -335,24 +352,31 @@ mod tests {
     use discv5::libp2p_identity::Keypair;
     use libp2p::swarm::Swarm;
     use libp2p_swarm_test::{SwarmExt, drive};
+    use ssv_types::domain_type::DomainType;
 
     use super::*;
-    use crate::handshake::node_info::NodeMetadata;
+    use crate::{SharedDomainType, handshake::node_info::NodeMetadata};
 
-    fn node_info(network: &str, version: &str) -> NodeInfo {
-        NodeInfo {
-            network_id: network.to_string(),
-            metadata: Some(NodeMetadata {
-                node_version: version.to_string(),
-                execution_node: "".to_string(),
-                consensus_node: "".to_string(),
-                subnets: "".to_string(),
-            }),
+    const DOMAIN_A: DomainType = DomainType([0, 0, 0, 1]);
+    const DOMAIN_B: DomainType = DomainType([0, 0, 0, 2]);
+
+    fn test_metadata(version: &str) -> NodeMetadata {
+        NodeMetadata {
+            node_version: version.to_string(),
+            execution_node: "".to_string(),
+            consensus_node: "".to_string(),
+            subnets: "".to_string(),
         }
     }
 
-    fn create_test_swarm(keypair: Keypair, node_info: NodeInfo) -> Swarm<Behaviour> {
-        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, node_info))
+    fn create_test_swarm(
+        keypair: Keypair,
+        domain_type: DomainType,
+        version: &str,
+    ) -> Swarm<Behaviour> {
+        let shared = SharedDomainType::new(domain_type);
+        let metadata = test_metadata(version);
+        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, shared, metadata))
     }
 
     fn assert_completed(event: Event, expected_peer: PeerId, expected_version: &str) {
@@ -393,10 +417,8 @@ mod tests {
     async fn handshake_success() {
         *DEBUG;
 
-        let mut local_swarm =
-            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "local"));
-        let mut remote_swarm =
-            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "remote"));
+        let mut local_swarm = create_test_swarm(Keypair::generate_ed25519(), DOMAIN_A, "local");
+        let mut remote_swarm = create_test_swarm(Keypair::generate_ed25519(), DOMAIN_A, "remote");
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
@@ -421,10 +443,8 @@ mod tests {
     async fn concurrent_dials_only_one_handshake() {
         *DEBUG;
 
-        let mut local_swarm =
-            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "local"));
-        let mut remote_swarm =
-            create_test_swarm(Keypair::generate_ed25519(), node_info("test", "remote"));
+        let mut local_swarm = create_test_swarm(Keypair::generate_ed25519(), DOMAIN_A, "local");
+        let mut remote_swarm = create_test_swarm(Keypair::generate_ed25519(), DOMAIN_A, "remote");
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
@@ -465,10 +485,11 @@ mod tests {
     async fn mismatched_networks_handshake_failed() {
         *DEBUG;
 
-        let mut local_swarm =
-            create_test_swarm(Keypair::generate_ed25519(), node_info("test1", "local"));
-        let mut remote_swarm =
-            create_test_swarm(Keypair::generate_ed25519(), node_info("test2", "remote"));
+        let mut local_swarm = create_test_swarm(Keypair::generate_ed25519(), DOMAIN_A, "local");
+        let mut remote_swarm = create_test_swarm(Keypair::generate_ed25519(), DOMAIN_B, "remote");
+
+        let domain_a_hex: String = DOMAIN_A.into();
+        let domain_b_hex: String = DOMAIN_B.into();
 
         tokio::spawn(async move {
             local_swarm.listen().with_memory_addr_external().await;
@@ -477,8 +498,171 @@ mod tests {
             let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
                 drive(&mut local_swarm, &mut remote_swarm).await;
 
-            assert_network_mismatch(local_event, *remote_swarm.local_peer_id(), "test1", "test2");
-            assert_network_mismatch(remote_event, *local_swarm.local_peer_id(), "test2", "test1");
+            assert_network_mismatch(
+                local_event,
+                *remote_swarm.local_peer_id(),
+                &domain_a_hex,
+                &domain_b_hex,
+            );
+            assert_network_mismatch(
+                remote_event,
+                *local_swarm.local_peer_id(),
+                &domain_b_hex,
+                &domain_a_hex,
+            );
+        })
+        .await
+        .expect("test completed");
+    }
+
+    fn create_test_swarm_with_shared_domain(
+        keypair: Keypair,
+        shared: SharedDomainType,
+        version: &str,
+    ) -> Swarm<Behaviour> {
+        let metadata = test_metadata(version);
+        Swarm::new_ephemeral_tokio(|_| Behaviour::new(keypair, shared, metadata))
+    }
+
+    /// Tests that updates to `SharedDomainType` propagate to subsequent handshakes.
+    ///
+    /// This validates the core fix from PR #814: when a fork activates and updates the
+    /// shared domain type, all future handshakes use the new value. The test runs through
+    /// three phases:
+    /// 1. Both peers on DOMAIN_A - handshake succeeds
+    /// 2. Only local updates to DOMAIN_B - handshake fails with NetworkMismatch
+    /// 3. Both peers update to DOMAIN_B - handshake succeeds again
+    #[tokio::test]
+    async fn shared_domain_type_updates_propagate_to_handshakes() {
+        use futures::future::Either;
+        use libp2p::swarm::SwarmEvent;
+
+        *DEBUG;
+
+        let domain_a_hex: String = DOMAIN_A.into();
+        let domain_b_hex: String = DOMAIN_B.into();
+
+        // Arrange: Create SharedDomainType instances externally so we can update them
+        let local_shared = SharedDomainType::new(DOMAIN_A);
+        let remote_shared = SharedDomainType::new(DOMAIN_A);
+
+        let local_keypair = Keypair::generate_ed25519();
+        let remote_keypair = Keypair::generate_ed25519();
+
+        let mut local_swarm =
+            create_test_swarm_with_shared_domain(local_keypair, local_shared.clone(), "local");
+        let mut remote_swarm =
+            create_test_swarm_with_shared_domain(remote_keypair, remote_shared.clone(), "remote");
+
+        tokio::spawn(async move {
+            // ==================== Phase 1: Both on DOMAIN_A - handshake succeeds
+            // ====================
+
+            local_swarm.listen().with_memory_addr_external().await;
+            remote_swarm.listen().with_memory_addr_external().await;
+            remote_swarm.connect(&mut local_swarm).await;
+
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
+
+            assert_completed(local_event, *remote_swarm.local_peer_id(), "remote");
+            assert_completed(remote_event, *local_swarm.local_peer_id(), "local");
+
+            // ==================== Phase 2: Only local updates to DOMAIN_B - mismatch
+            // ====================
+
+            // Act: Update only the local shared domain type
+            local_shared.set(DOMAIN_B);
+
+            // Disconnect both peers
+            let remote_peer = *remote_swarm.local_peer_id();
+            let local_peer = *local_swarm.local_peer_id();
+            local_swarm
+                .disconnect_peer_id(remote_peer)
+                .expect("disconnect remote from local");
+            remote_swarm
+                .disconnect_peer_id(local_peer)
+                .expect("disconnect local from remote");
+
+            // Wait for ConnectionClosed on both sides
+            let mut local_closed = false;
+            let mut remote_closed = false;
+            loop {
+                match futures::future::select(
+                    local_swarm.next_swarm_event(),
+                    remote_swarm.next_swarm_event(),
+                )
+                .await
+                {
+                    Either::Left((SwarmEvent::ConnectionClosed { .. }, _)) => {
+                        local_closed = true;
+                    }
+                    Either::Right((SwarmEvent::ConnectionClosed { .. }, _)) => {
+                        remote_closed = true;
+                    }
+                    _ => {} // keep polling
+                }
+                if local_closed && remote_closed {
+                    break;
+                }
+            }
+
+            // Reconnect: remote connects to local to trigger outbound handshake
+            remote_swarm.connect(&mut local_swarm).await;
+
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
+
+            // Assert: Both sides detect network mismatch
+            assert_network_mismatch(local_event, remote_peer, &domain_b_hex, &domain_a_hex);
+            assert_network_mismatch(remote_event, local_peer, &domain_a_hex, &domain_b_hex);
+
+            // ==================== Phase 3: Both update to DOMAIN_B - handshake succeeds
+            // ====================
+
+            // Act: Update remote's shared domain type to match
+            remote_shared.set(DOMAIN_B);
+
+            // Disconnect both peers again
+            local_swarm
+                .disconnect_peer_id(remote_peer)
+                .expect("disconnect remote from local");
+            remote_swarm
+                .disconnect_peer_id(local_peer)
+                .expect("disconnect local from remote");
+
+            // Wait for ConnectionClosed on both sides
+            let mut local_closed = false;
+            let mut remote_closed = false;
+            loop {
+                match futures::future::select(
+                    local_swarm.next_swarm_event(),
+                    remote_swarm.next_swarm_event(),
+                )
+                .await
+                {
+                    Either::Left((SwarmEvent::ConnectionClosed { .. }, _)) => {
+                        local_closed = true;
+                    }
+                    Either::Right((SwarmEvent::ConnectionClosed { .. }, _)) => {
+                        remote_closed = true;
+                    }
+                    _ => {} // keep polling
+                }
+                if local_closed && remote_closed {
+                    break;
+                }
+            }
+
+            // Reconnect
+            remote_swarm.connect(&mut local_swarm).await;
+
+            let ([local_event], [remote_event]): ([Event; 1], [Event; 1]) =
+                drive(&mut local_swarm, &mut remote_swarm).await;
+
+            // Assert: Both sides complete successfully on the new domain
+            assert_completed(local_event, remote_peer, "remote");
+            assert_completed(remote_event, local_peer, "local");
         })
         .await
         .expect("test completed");

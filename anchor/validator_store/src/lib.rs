@@ -16,6 +16,7 @@ use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
+use futures::future::join_all;
 use lru::LruCache;
 use openssl::{
     pkey::Private,
@@ -24,15 +25,15 @@ use openssl::{
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
-    AggregatorCommitteeInstanceId, CommitteeInstanceId, QbftError, QbftManager, TimeoutMode,
-    ValidatorDutyKind, ValidatorInstanceId,
+    AggregatorCommitteeInstanceId, CommitteeInstanceId, ProposerInstanceId, QbftError, QbftManager,
+    TimeoutMode, ValidatorDutyKind,
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
     CollectionError, SignatureCollectorManager, SignatureMetadata, SignatureRequester,
     ValidatorSigningData,
 };
-use slashing_protection::{NotSafe, Safe, SlashingDatabase};
+use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
@@ -40,7 +41,7 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        QbftData, SelectionProofBatchId, ValidatorConsensusData, ValidatorConsensusDataValidator,
+        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
         ValidatorDuty,
     },
     msgid::Role,
@@ -48,6 +49,7 @@ use ssv_types::{
     try_to_variable_list,
 };
 use ssz::{Decode, DecodeError, Encode};
+use task_executor::TaskExecutor;
 use tokio::{
     select,
     sync::{Barrier, RwLock, watch},
@@ -80,7 +82,6 @@ const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
 
 const RANDAO_REVEAL_LOG_NAME: &str = "RANDAO reveal";
 const BLOCK_LOG_NAME: &str = "block";
-const ATTESTATION_LOG_NAME: &str = "attestation";
 const VALIDATOR_REGISTRATION_LOG_NAME: &str = "validator registration";
 const AGGREGATE_LOG_NAME: &str = "aggregate";
 const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
@@ -113,6 +114,7 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     prefer_builder_proposals: bool,
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
+    task_executor: TaskExecutor,
 }
 
 impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
@@ -133,6 +135,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         prefer_builder_proposals: bool,
         strict_mfp: bool,
         is_synced: watch::Receiver<bool>,
+        task_executor: TaskExecutor,
     ) -> Arc<AnchorValidatorStore<T, E>> {
         Arc::new(Self {
             database,
@@ -155,6 +158,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             prefer_builder_proposals,
             strict_mfp,
             is_synced,
+            task_executor,
         })
     }
 
@@ -323,8 +327,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             current_round_start_time: self.get_instant_in_slot(slot, Duration::ZERO)?,
         };
 
-        // Define the validator instance identity for QBFT consensus
-        let instance_id = ValidatorInstanceId {
+        // Define the proposer instance identity for QBFT consensus
+        let instance_id = ProposerInstanceId {
             validator: validator.public_key,
             duty: ValidatorDutyKind::Proposal,
             instance_height: slot.as_usize().into(),
@@ -350,7 +354,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         // Package the consensus data
-        let consensus_data = ValidatorConsensusData {
+        let consensus_data = ProposerConsensusData {
             duty: validator_duty,
             version: block_version,
             data_ssz: try_to_variable_list(signable_block.as_ssz_bytes(), |provided, max| {
@@ -361,7 +365,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             })?,
         };
 
-        let data_validator = self.create_validator_consensus_data_validator(validator.public_key);
+        let data_validator = self.create_proposer_consensus_data_validator(validator.public_key);
 
         // Initiate QBFT consensus for this block proposal
         let completed = self
@@ -642,11 +646,11 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok(signed_exit)
     }
 
-    fn create_validator_consensus_data_validator(
+    fn create_proposer_consensus_data_validator(
         &self,
         validator_pubkey: PublicKeyBytes,
-    ) -> Box<ValidatorConsensusDataValidator<E>> {
-        Box::new(ValidatorConsensusDataValidator::new(
+    ) -> Box<ProposerConsensusDataValidator<E>> {
+        Box::new(ProposerConsensusDataValidator::new(
             Arc::clone(&self.slashing_protection),
             self.disable_slashing_protection,
             self.spec.clone(),
@@ -905,12 +909,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let completed = self
             .qbft_manager
             .decide_instance(
-                ValidatorInstanceId {
+                ProposerInstanceId {
                     validator: validator_pubkey,
                     duty: ValidatorDutyKind::Aggregator,
                     instance_height: message.aggregate().data().slot.as_usize().into(),
                 },
-                ValidatorConsensusData {
+                ProposerConsensusData {
                     duty: ValidatorDuty {
                         r#type: BEACON_ROLE_AGGREGATOR,
                         pub_key: validator_pubkey,
@@ -932,7 +936,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         )))
                     })?,
                 },
-                self.create_validator_consensus_data_validator(validator_pubkey),
+                self.create_proposer_consensus_data_validator(validator_pubkey),
                 timeout_mode,
                 &cluster,
             )
@@ -1203,12 +1207,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         let completed = self
             .qbft_manager
             .decide_instance(
-                ValidatorInstanceId {
+                ProposerInstanceId {
                     validator: aggregator_pubkey,
                     duty: ValidatorDutyKind::SyncCommitteeAggregator,
                     instance_height: slot.as_usize().into(),
                 },
-                ValidatorConsensusData {
+                ProposerConsensusData {
                     duty: ValidatorDuty {
                         r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
                         pub_key: aggregator_pubkey,
@@ -1228,7 +1232,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         )))
                     })?,
                 },
-                self.create_validator_consensus_data_validator(aggregator_pubkey),
+                self.create_proposer_consensus_data_validator(aggregator_pubkey),
                 timeout_mode,
                 &cluster,
             )
@@ -1276,6 +1280,186 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         )
         .await
         .map(|signature| SignedContributionAndProof { message, signature })
+    }
+
+    async fn sign_attestation(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        validator_committee_position: usize,
+        attestation: &mut Attestation<E>,
+        current_epoch: Epoch,
+    ) -> Result<(), Error> {
+        if !*self.is_synced.borrow() {
+            return Err(Error::SpecificError(SpecificError::NotSynced));
+        }
+
+        let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+        let voting_context_tx = self.get_voting_context(attestation.data().slot).await?;
+
+        let validator_attestation_committees =
+            self.get_attesting_validators_in_committee(&voting_context_tx, cluster.committee_id());
+
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                attestation.data().slot,
+                Duration::from_secs(self.spec.seconds_per_slot) / 3,
+            )?,
+        };
+        let completed = self
+            .qbft_manager
+            .decide_instance(
+                CommitteeInstanceId {
+                    committee: cluster.committee_id(),
+                    instance_height: attestation.data().slot.as_usize().into(),
+                },
+                BeaconVote {
+                    block_root: attestation.data().beacon_block_root,
+                    source: attestation.data().source,
+                    target: attestation.data().target,
+                },
+                self.create_beacon_vote_validator(
+                    attestation.data().slot,
+                    validator_attestation_committees,
+                ),
+                timeout_mode,
+                &cluster,
+            )
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        let data = match completed {
+            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => data,
+        };
+        let data_hash = data.hash();
+        attestation.data_mut().beacon_block_root = data.block_root;
+        attestation.data_mut().source = data.source;
+        attestation.data_mut().target = data.target;
+
+        // yay - we agree! let's sign the att we agreed on
+        let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
+
+        // Calculate signature count for post-consensus committee collection
+        let committee_validator_indices =
+            self.get_committee_validator_indices(&cluster.committee_id());
+
+        // Use `voting_message_count_for_committee` for post-consensus (flat counting)
+        let num_signatures_to_collect = voting_context_tx
+            .voting_assignments
+            .voting_message_count_for_committee(|idx| committee_validator_indices.contains(idx));
+
+        let signing_root = attestation.data().signing_root(domain_hash);
+        let signature = self
+            .collect_signature(
+                PartialSignatureKind::PostConsensus,
+                Role::Committee,
+                CollectionMode::Committee {
+                    num_signatures_to_collect,
+                    base_hash: data_hash,
+                },
+                &validator,
+                &cluster,
+                signing_root,
+                attestation.data().slot,
+            )
+            .await?;
+        attestation
+            .add_signature(&signature, validator_committee_position)
+            .map_err(Error::UnableToSignAttestation)?;
+
+        Ok(())
+    }
+
+    /// Provide slashing protection for attestations, safely updating the slashing protection DB.
+    ///
+    /// Returns a vec of safe attestations which have passed slashing protection. Unsafe
+    /// attestations will be dropped and result in warning logs.
+    fn slashing_protection_attestations(
+        &self,
+        attestations: Vec<(u64, Attestation<E>, PublicKeyBytes)>,
+    ) -> Result<Vec<(u64, Attestation<E>)>, Error> {
+        let mut safe_attestations = Vec::with_capacity(attestations.len());
+        let mut attestations_to_check = Vec::with_capacity(attestations.len());
+
+        for (_, attestation, validator_pubkey) in &attestations {
+            let domain_hash =
+                self.get_domain(attestation.data().target.epoch, Domain::BeaconAttester);
+            attestations_to_check.push((
+                attestation.data(),
+                validator_pubkey,
+                domain_hash,
+                if self.disable_slashing_protection {
+                    CheckSlashability::No
+                } else {
+                    CheckSlashability::Yes
+                },
+            ))
+        }
+
+        // Batch check the attestations against the slashing protection DB while preserving the
+        // order so we can zip the results against the original vec.
+        //
+        // If the DB transaction fails then we consider the entire batch slashable and discard it.
+        let results: Vec<Result<(), Error>> = self
+            .slashing_protection
+            .check_and_insert_attestations(&attestations_to_check)
+            .map_err(Error::Slashable)?
+            .into_iter()
+            .map(convert_slashing_result)
+            .collect();
+
+        for ((validator_index, attestation, validator_pubkey), slashing_status) in
+            attestations.into_iter().zip(results.into_iter())
+        {
+            match slashing_status {
+                Ok(()) => {
+                    safe_attestations.push((validator_index, attestation));
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+                        &[validator_metrics::SUCCESS],
+                    );
+                }
+                Err(Error::SameData) => {
+                    warn!("Skipping previously signed attestation");
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+                        &[validator_metrics::SAME_DATA],
+                    );
+                }
+                Err(Error::Slashable(NotSafe::UnregisteredValidator(pk))) => {
+                    error!(
+                        ?pk,
+                        "Internal error: validator was not properly registered for slashing protection",
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+                        &[validator_metrics::UNREGISTERED],
+                    );
+                }
+                Err(Error::Slashable(err)) => {
+                    error!(?err, "Not signing slashable attestation");
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+                        &[validator_metrics::SLASHABLE],
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        error = ?e,
+                        public_key = ?validator_pubkey,
+                        "Unexpected error during slashing protection check"
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+                        &[metrics::OTHER_ERROR],
+                    );
+                }
+            }
+        }
+
+        Ok(safe_attestations)
     }
 }
 
@@ -1831,125 +2015,6 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         .await
     }
 
-    async fn sign_attestation(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        validator_committee_position: usize,
-        attestation: &mut Attestation<E>,
-        current_epoch: Epoch,
-    ) -> Result<(), Error> {
-        let future = async {
-            if !*self.is_synced.borrow() {
-                return Err(Error::SpecificError(SpecificError::NotSynced));
-            }
-
-            // Make sure the target epoch is not higher than the current epoch to avoid potential
-            // attacks.
-            if attestation.data().target.epoch > current_epoch {
-                return Err(Error::GreaterThanCurrentEpoch {
-                    epoch: attestation.data().target.epoch,
-                    current_epoch,
-                });
-            }
-
-            let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
-            let voting_context_tx = self.get_voting_context(attestation.data().slot).await?;
-
-            let validator_attestation_committees = self
-                .get_attesting_validators_in_committee(&voting_context_tx, cluster.committee_id());
-
-            let timer =
-                metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-            let timeout_mode = TimeoutMode::SlotTime {
-                instance_start_time: self.get_instant_in_slot(
-                    attestation.data().slot,
-                    Duration::from_secs(self.spec.seconds_per_slot) / 3,
-                )?,
-            };
-            let completed = self
-                .qbft_manager
-                .decide_instance(
-                    CommitteeInstanceId {
-                        committee: cluster.committee_id(),
-                        instance_height: attestation.data().slot.as_usize().into(),
-                    },
-                    BeaconVote {
-                        block_root: attestation.data().beacon_block_root,
-                        source: attestation.data().source,
-                        target: attestation.data().target,
-                    },
-                    self.create_beacon_vote_validator(
-                        attestation.data().slot,
-                        validator_attestation_committees,
-                    ),
-                    timeout_mode,
-                    &cluster,
-                )
-                .await
-                .map_err(SpecificError::from)?;
-            drop(timer);
-
-            let data = match completed {
-                Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-                Completed::Success(data) => data,
-            };
-            let data_hash = data.hash();
-            attestation.data_mut().beacon_block_root = data.block_root;
-            attestation.data_mut().source = data.source;
-            attestation.data_mut().target = data.target;
-
-            // yay - we agree! let's sign the att we agreed on
-            let domain_hash = self.get_domain(current_epoch, Domain::BeaconAttester);
-
-            if !self.disable_slashing_protection {
-                convert_slashing_result(self.slashing_protection.check_and_insert_attestation(
-                    &validator_pubkey,
-                    attestation.data(),
-                    domain_hash,
-                ))?;
-            }
-
-            // Calculate signature count for post-consensus committee collection
-            let committee_validator_indices =
-                self.get_committee_validator_indices(&cluster.committee_id());
-
-            // Use `voting_message_count_for_committee` for post-consensus (flat counting)
-            let num_signatures_to_collect = voting_context_tx
-                .voting_assignments
-                .voting_message_count_for_committee(|idx| {
-                    committee_validator_indices.contains(idx)
-                });
-
-            let signing_root = attestation.data().signing_root(domain_hash);
-            let signature = self
-                .collect_signature(
-                    PartialSignatureKind::PostConsensus,
-                    Role::Committee,
-                    CollectionMode::Committee {
-                        num_signatures_to_collect,
-                        base_hash: data_hash,
-                    },
-                    &validator,
-                    &cluster,
-                    signing_root,
-                    attestation.data().slot,
-                )
-                .await?;
-            attestation
-                .add_signature(&signature, validator_committee_position)
-                .map_err(Error::UnableToSignAttestation)?;
-
-            Ok(())
-        };
-
-        run_and_update_metrics(
-            ATTESTATION_LOG_NAME,
-            &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-            future,
-        )
-        .await
-    }
-
     async fn sign_validator_registration_data(
         &self,
         validator_registration_data: ValidatorRegistrationData,
@@ -2492,6 +2557,69 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             gas_limit: self.gas_limit,
             builder_proposals: true,
         })
+    }
+
+    async fn sign_attestations(
+        self: &Arc<Self>,
+        mut attestations: Vec<(u64, PublicKeyBytes, usize, Attestation<E>)>,
+    ) -> Result<Vec<(u64, Attestation<E>)>, Error> {
+        if !*self.is_synced.borrow() {
+            return Err(Error::SpecificError(SpecificError::NotSynced));
+        }
+
+        let signing_futures = attestations.iter_mut().map(
+            |(_, pubkey, validator_committee_index, attestation)| async move {
+                self.sign_attestation(
+                    *pubkey,
+                    *validator_committee_index,
+                    attestation,
+                    attestation.data().target.epoch,
+                )
+                .await
+            },
+        );
+
+        let results = join_all(signing_futures).await;
+
+        let mut signed_attestations = Vec::with_capacity(results.len());
+        for (result, (validator_index, pubkey, _, attestation)) in
+            results.into_iter().zip(attestations.into_iter())
+        {
+            match result {
+                Ok(()) => {
+                    signed_attestations.push((validator_index, attestation, pubkey));
+                }
+                Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
+                    warn!(
+                        info = "a validator may have recently been removed from this VC",
+                        ?pubkey,
+                        "Missing pubkey for attestation"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        error = ?e,
+                        "Failed to sign attestation"
+                    );
+                }
+            }
+        }
+
+        if signed_attestations.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Check slashing protection and insert into database. Use a dedicated blocking thread
+        // to avoid clogging the async executor with blocking database I/O.
+        let validator_store = self.clone();
+        self.task_executor
+            .spawn_blocking_handle(
+                move || validator_store.slashing_protection_attestations(signed_attestations),
+                "slashing_protect_attestations",
+            )
+            .ok_or(Error::ExecutorError)?
+            .await
+            .map_err(|_| Error::ExecutorError)?
     }
 }
 

@@ -11,7 +11,7 @@ use global_config::{GlobalConfig, GlobalFlags};
 use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{
-    AnchorFormatter, CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
+    AnchorFormatter, CountLayer, FileFields, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
     init_file_logging, utils::build_workspace_filter,
 };
 use task_executor::ShutdownReason;
@@ -115,7 +115,7 @@ fn main() -> Result<(), String> {
         }
         AnchorSubcommands::Keygen(keygen) => {
             keygen::run_keygen(keygen, &global_config.data_dir)
-                .map_err(|e| format!("Keygen error: {e:?}"))?;
+                .map_err(|e| format!("Keygen error: {e}"))?;
             Ok(())
         }
     }
@@ -282,6 +282,7 @@ pub fn enable_logging(
             logging_layers.push(
                 fmt::layer()
                     .event_format(anchor_formatter_log)
+                    .fmt_fields(FileFields)
                     .with_writer(file_logging_layer.non_blocking_writer)
                     .with_ansi(file_logging_flags.logfile_color)
                     .with_filter(
