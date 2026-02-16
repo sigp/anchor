@@ -57,6 +57,9 @@ fn run_types_tests() {
             "beaconvote.EncodingTest" => {
                 run_test::<types::BeaconVoteEncodingTest>(&path, &contents)
             }
+            "partialsigmessage.EncodingTest" => {
+                run_test::<types::PartialSigMessageEncodingTest>(&path, &contents)
+            }
 
             // TODO(spec-tests): Add more test types here as they are implemented.
             // This arm will be replaced with panic!() once all test types are added.
