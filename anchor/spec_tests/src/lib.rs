@@ -60,6 +60,9 @@ fn run_types_tests() {
             "partialsigmessage.EncodingTest" => {
                 run_test::<types::PartialSigMessageEncodingTest>(&path, &contents)
             }
+            "signedssvmsg.EncodingTest" => {
+                run_test::<types::SignedSSVMessageEncodingTest>(&path, &contents)
+            }
 
             // TODO(spec-tests): Add more test types here as they are implemented.
             // This arm will be replaced with panic!() once all test types are added.
