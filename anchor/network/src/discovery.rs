@@ -579,7 +579,6 @@ impl NetworkBehaviour for Discovery {
     ) {
     }
 
-    #[allow(clippy::single_match)]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,

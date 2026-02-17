@@ -489,7 +489,7 @@ impl ConnectionManager {
     }
 
     /// Handle established outbound connection with priority peer logic
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn handle_established_outbound_connection(
         &mut self,
         connection_id: ConnectionId,

@@ -219,7 +219,6 @@ fn validate_justification_list<N: Unsigned>(
     })
 }
 
-#[allow(clippy::comparison_chain)]
 pub(crate) fn validate_qbft_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
