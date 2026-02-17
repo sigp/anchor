@@ -1800,6 +1800,7 @@ version = "1.2.0"
 dependencies = [
  "anchor_validator_store",
  "async-broadcast",
+ "axum",
  "beacon_node_fallback",
  "clap",
  "database",
@@ -1834,6 +1835,7 @@ dependencies = [
  "subnet_service",
  "task_executor",
  "tokio",
+ "tower-http",
  "tracing",
  "types",
  "validator_metrics",
@@ -3705,6 +3707,7 @@ dependencies = [
  "ssv_types",
  "task_executor",
  "tokio",
+ "tower-http",
  "tracing",
  "version",
 ]

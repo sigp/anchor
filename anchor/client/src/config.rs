@@ -12,6 +12,7 @@ use network_utils::unused_port::{
 };
 use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
+use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
 
 use crate::cli::Node;
@@ -134,7 +135,7 @@ impl Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, String> {
+pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Config, String> {
     let mut config = Config::new(global_config);
 
     config.key_file = cli_args.key_file.clone();
@@ -156,7 +157,7 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.listen_addresses = parse_listening_addresses(cli_args)?;
+    config.network.listen_addresses = parse_listening_addresses(&cli_args)?;
 
     for addr in cli_args.boot_nodes.clone() {
         match addr.parse() {
@@ -248,13 +249,8 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         config.http_api.listen_port = port;
     }
 
-    if let Some(allow_origin) = &cli_args.http_allow_origin {
-        // Pre-validate the config value to give feedback to the user on node startup, instead of
-        // as late as when the first API response is produced.
-        hyper::header::HeaderValue::from_str(allow_origin)
-            .map_err(|_| "Invalid allow-origin value")?;
-
-        config.http_api.allow_origin = Some(allow_origin.to_string());
+    if let Some(allow_origin) = cli_args.http_allow_origin.take() {
+        config.http_api.allow_origin = Some(AllowOrigin::exact(allow_origin));
     }
 
     // Prometheus metrics HTTP server
@@ -269,6 +265,10 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
 
     if let Some(port) = cli_args.metrics_port {
         config.http_metrics.listen_port = port;
+    }
+
+    if let Some(allow_origin) = cli_args.metrics_allow_origin.take() {
+        config.http_metrics.allow_origin = Some(AllowOrigin::exact(allow_origin));
     }
 
     config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;

@@ -21,5 +21,6 @@ slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
+tower-http = { workspace = true }
 tracing = { workspace = true }
 version = { workspace = true }
