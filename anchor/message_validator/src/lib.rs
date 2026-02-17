@@ -334,9 +334,8 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     fork_schedule: Arc<ForkSchedule>,
 }
 
-#[allow(clippy::too_many_arguments)]
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
