@@ -1,6 +1,16 @@
-pub mod metadata_service;
+pub mod aggregator_consensus_builder;
+pub mod duty_input_publisher;
 mod metrics;
 pub mod registration_service;
+
+/// Backwards compatibility: re-export DutyInputPublisher as MetadataService
+#[deprecated(
+    since = "0.1.0",
+    note = "Use duty_input_publisher::DutyInputPublisher instead"
+)]
+pub mod metadata_service {
+    pub use crate::duty_input_publisher::DutyInputPublisher as MetadataService;
+}
 
 use std::{
     collections::{HashMap, HashSet},
@@ -1540,11 +1550,14 @@ fn decrypt_key_share(
         .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
 }
 
-struct VotingContext {
+/// Context for voting duties at 1/3 slot.
+///
+/// Contains cached voting assignments and the beacon_vote fetched from the beacon node.
+pub struct VotingContext {
     /// Cached voting assignments (computed at slot start, reused here)
-    voting_assignments: Arc<VotingAssignments>,
+    pub voting_assignments: Arc<VotingAssignments>,
     /// The `BeaconVote` (only available at 1/3 slot from beacon node)
-    beacon_vote: BeaconVote,
+    pub beacon_vote: BeaconVote,
 }
 
 /// Cached validator voting assignments for a slot.

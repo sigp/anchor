@@ -15,7 +15,7 @@ use std::{
 };
 
 use anchor_validator_store::{
-    AnchorValidatorStore, metadata_service::MetadataService,
+    AnchorValidatorStore, duty_input_publisher::DutyInputPublisher,
     registration_service::RegistrationService,
 };
 use beacon_node_fallback::{
@@ -701,7 +701,7 @@ impl Client {
             executor.clone(),
         );
 
-        let metadata_service = MetadataService::new(
+        let duty_input_publisher = DutyInputPublisher::new(
             duties_service.clone(),
             validator_store.clone(),
             slot_clock.clone(),
@@ -731,9 +731,9 @@ impl Client {
             .start_update_service(&spec)
             .map_err(|e| format!("Unable to start sync committee service: {e}"))?;
 
-        metadata_service
+        duty_input_publisher
             .start_update_service()
-            .map_err(|e| format!("Unable to start metadata service: {e}"))?;
+            .map_err(|e| format!("Unable to start duty input publisher: {e}"))?;
 
         preparation_service
             .start_proposer_prepare_service(&spec)

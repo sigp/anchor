@@ -1,3 +1,21 @@
+//! Aggregator Consensus Data Builder
+//!
+//! This module handles fetching aggregated attestations and sync contributions from beacon nodes,
+//! and building `AggregatorCommitteeConsensusData` for QBFT consensus (Boole+ fork).
+//!
+//! # Responsibilities
+//!
+//! - Fetch aggregated attestations from beacon node (deduplicated by committee index)
+//! - Fetch sync committee contributions from beacon node (deduplicated by subnet ID)
+//! - Build `AggregatorCommitteeConsensusData` per SSV committee
+//! - Sort aggregators/contributors deterministically for consensus compatibility with SSV-Go
+//!
+//! # Separation of Concerns
+//!
+//! This module is intentionally separated from `DutyInputPublisher` (formerly `MetadataService`)
+//! which handles the timing and publishing of duty inputs. This module focuses purely on
+//! the data fetching and consensus data construction logic.
+
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -7,7 +25,6 @@ use std::{
 use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
 use eth2::types::SyncContributionData;
-use fork::{Fork, ForkSchedule};
 use futures::stream::{FuturesUnordered, StreamExt};
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -15,464 +32,81 @@ use ssv_types::{
     consensus::{AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion},
 };
 use ssz::Encode;
-use task_executor::TaskExecutor;
-use tokio::time::{Instant, sleep, sleep_until};
-use tracing::{Instrument, error, info, info_span, trace, warn};
+use tokio::time::{Instant, sleep_until};
+use tracing::{Instrument, info_span, warn};
 use tree_hash::TreeHash;
 use types::{
     Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, Slot,
     SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
-use validator_services::duties_service::{DutiesService, DutyAndProof};
+use validator_services::duties_service::DutyAndProof;
 
-use crate::{
-    AggregationAssignments, AnchorValidatorStore, ContributionWaiter, VotingAssignments,
-    VotingContext, metrics,
-};
+use crate::{AnchorValidatorStore, VotingContext, metrics};
 
 /// Data for sync committee aggregators.
-struct SyncAggregatorData {
-    validator_index: u64,
-    pubkey: PublicKeyBytes,
-    selection_proof: SyncSelectionProof,
+pub struct SyncAggregatorData {
+    pub validator_index: u64,
+    pub pubkey: PublicKeyBytes,
+    pub selection_proof: SyncSelectionProof,
 }
 
 /// Map from SSV committee to its sync aggregators grouped by subnet.
-type SyncByCommitteeMap = HashMap<CommitteeId, Vec<(SyncSubnetId, SyncAggregatorData)>>;
+pub type SyncByCommitteeMap = HashMap<CommitteeId, Vec<(SyncSubnetId, SyncAggregatorData)>>;
 
-/// Maximum time to wait for beacon node API calls to fetch aggregated attestations
-/// and sync contributions. After this timeout, we return whatever partial results
-/// have been collected. This is shorter than the standard 3-second Lighthouse timeout
-/// because SSV has additional latency for QBFT consensus and P2P propagation.
-const BEACON_API_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Clone)]
-pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
-    duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
-    validator_store: Arc<AnchorValidatorStore<T, E>>,
-    slot_clock: T,
-    beacon_nodes: Arc<BeaconNodeFallback<T>>,
-    executor: TaskExecutor,
-    spec: Arc<ChainSpec>,
-    fork_schedule: Arc<ForkSchedule>,
+/// Builder for `AggregatorCommitteeConsensusData`.
+///
+/// Handles fetching aggregated data from beacon nodes and constructing consensus data
+/// structures that all SSV operators must agree on.
+pub struct AggregatorConsensusBuilder<'a, E: EthSpec, T: SlotClock + 'static> {
+    validator_store: &'a Arc<AnchorValidatorStore<T, E>>,
+    beacon_nodes: &'a Arc<BeaconNodeFallback<T>>,
+    spec: &'a Arc<ChainSpec>,
 }
 
-impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
+impl<'a, E: EthSpec, T: SlotClock + 'static> AggregatorConsensusBuilder<'a, E, T> {
+    /// Create a new builder with references to required services.
     pub fn new(
-        duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
-        validator_store: Arc<AnchorValidatorStore<T, E>>,
-        slot_clock: T,
-        beacon_nodes: Arc<BeaconNodeFallback<T>>,
-        executor: TaskExecutor,
-        spec: Arc<ChainSpec>,
-        fork_schedule: Arc<ForkSchedule>,
+        validator_store: &'a Arc<AnchorValidatorStore<T, E>>,
+        beacon_nodes: &'a Arc<BeaconNodeFallback<T>>,
+        spec: &'a Arc<ChainSpec>,
     ) -> Self {
         Self {
-            duties_service,
             validator_store,
-            slot_clock,
             beacon_nodes,
-            executor,
             spec,
-            fork_schedule,
         }
-    }
-
-    pub fn start_update_service(self) -> Result<(), String> {
-        let slot_duration = Duration::from_secs(self.spec.seconds_per_slot);
-        let duration_to_next_slot = self
-            .slot_clock
-            .duration_to_next_slot()
-            .ok_or("Unable to determine duration to next slot")?;
-
-        info!(
-            next_update_millis = duration_to_next_slot.as_millis(),
-            "Metadata service started"
-        );
-
-        let executor = self.executor.clone();
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 1: VotingAssignments (slot start)
-        // Caches voting assignments for use by both selection proofs AND voting context.
-        // Reads directly from DutiesService cache which is populated on startup and
-        // refreshed each slot.
-        // ═══════════════════════════════════════════════════════════════════════
-        let self_clone_phase1 = self.clone();
-        executor.spawn(
-            async move {
-                loop {
-                    if let Some(duration_to_next_slot) =
-                        self_clone_phase1.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until slot start
-                        sleep(duration_to_next_slot).await;
-
-                        if let Err(err) = self_clone_phase1.update_voting_assignments() {
-                            error!(err, "Failed to update validator voting assignments");
-                        }
-                    } else {
-                        error!("Failed to read slot clock");
-                        sleep(slot_duration).await;
-                    }
-                }
-            },
-            "voting_assignments_service",
-        );
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 2: VotingContext (1/3 slot)
-        // Gets cached voting assignments, fetches beacon_vote, builds VotingContext.
-        // ═══════════════════════════════════════════════════════════════════════
-        let self_clone_phase2 = self.clone();
-        executor.spawn(
-            async move {
-                loop {
-                    if let Some(duration_to_next_slot) =
-                        self_clone_phase2.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until 1/3 into slot
-                        sleep(duration_to_next_slot + slot_duration / 3).await;
-
-                        if let Err(err) = self_clone_phase2.update_voting_context().await {
-                            error!(err, "Failed to update voting context")
-                        } else {
-                            trace!("Updated voting context");
-                        }
-                    } else {
-                        error!("Failed to read slot clock");
-                        sleep(slot_duration).await;
-                    }
-                }
-            },
-            "voting_context_service",
-        );
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 3: AggregationAssignments (2/3 slot)
-        // Re-fetches `duties_service.attesters()` after selection proofs are computed.
-        // At this point, `DutyAndProof.selection_proof.is_some()` accurately indicates
-        // `is_aggregator` for attestation duties.
-        // ═══════════════════════════════════════════════════════════════════════
-        let self_clone_phase3 = self.clone();
-        executor.spawn(
-            async move {
-                loop {
-                    if let Some(duration_to_next_slot) =
-                        self_clone_phase3.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until 2/3 into slot
-                        sleep(duration_to_next_slot + slot_duration * 2 / 3).await;
-
-                        if let Err(err) = self_clone_phase3.update_aggregation_assignments().await {
-                            error!(err, "Failed to update aggregator voting assignments");
-                        }
-                    } else {
-                        error!("Failed to read slot clock");
-                        sleep(slot_duration).await;
-                    }
-                }
-            },
-            "aggregation_assignments_service",
-        );
-
-        Ok(())
-    }
-
-    /// Phase 1: Build and publish `VotingAssignments` at slot start.
-    fn update_voting_assignments(&self) -> Result<(), String> {
-        let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
-
-        // Get attestation validators
-        let (attesting_validators, attesting_committees): (Vec<_>, HashMap<_, _>) = self
-            .duties_service
-            .attesters(slot)
-            .into_iter()
-            .map(|duty| {
-                (
-                    ValidatorIndex(duty.duty.validator_index as usize),
-                    (duty.duty.pubkey, duty.duty.committee_index),
-                )
-            })
-            .unzip();
-
-        // Get sync validators by subnet
-        let sync_validators_by_subnet = self
-            .duties_service
-            .sync_duties
-            .get_duties_for_slot::<E>(slot, &self.spec)
-            .as_ref()
-            .map(|sync_duties| {
-                let mut map = HashMap::<ValidatorIndex, HashSet<SyncSubnetId>>::new();
-                sync_duties
-                    .duties
-                    .iter()
-                    .filter_map(|duty| {
-                        SyncSubnetId::compute_subnets_for_sync_committee::<E>(
-                            &duty.validator_sync_committee_indices,
-                        )
-                        .map_err(|e| {
-                            tracing::warn!(
-                                "Failed to compute sync subnets for validator {}: {e:?}",
-                                duty.validator_index
-                            );
-                        })
-                        .ok()
-                        .map(|subnet_ids| {
-                            (ValidatorIndex(duty.validator_index as usize), subnet_ids)
-                        })
-                    })
-                    .for_each(|(validator_index, subnet_ids)| {
-                        map.entry(validator_index).or_default().extend(subnet_ids);
-                    });
-                map
-            })
-            .unwrap_or_default();
-
-        let attester_count = attesting_validators.len();
-        let sync_count = sync_validators_by_subnet.len();
-
-        let voting_assignments = VotingAssignments {
-            slot,
-            attesting_validators,
-            attesting_committees,
-            sync_validators_by_subnet,
-        };
-
-        self.validator_store
-            .update_voting_assignments(voting_assignments);
-
-        // Record validator count metrics
-        metrics::set_gauge(
-            &metrics::METADATA_SERVICE_ATTESTING_VALIDATORS,
-            attester_count as i64,
-        );
-        metrics::set_gauge(
-            &metrics::METADATA_SERVICE_SYNC_VALIDATORS,
-            sync_count as i64,
-        );
-        if attester_count == 0 && sync_count == 0 {
-            metrics::inc_counter(&metrics::METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL);
-        }
-
-        trace!(%slot, attester_count, sync_count, "Published VotingAssignments at slot start");
-        Ok(())
-    }
-
-    /// Phase 2: Build and publish `VotingContext` at 1/3 slot.
-    async fn update_voting_context(&self) -> Result<(), String> {
-        let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
-
-        let voting_assignments = self
-            .validator_store
-            .get_voting_assignments(slot)
-            .await
-            .map_err(|e| format!("Failed to get cached voting assignments: {:?}", e))?;
-
-        // Fetch beacon_vote from beacon node
-        let attestation_data = self
-            .beacon_nodes
-            .first_success(|beacon_node| async move {
-                let _timer = validator_metrics::start_timer_vec(
-                    &validator_metrics::ATTESTATION_SERVICE_TIMES,
-                    &[validator_metrics::ATTESTATIONS_HTTP_GET],
-                );
-                beacon_node
-                    .get_validator_attestation_data(slot, 0)
-                    .await
-                    .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
-                    .map(|result| result.data)
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let beacon_vote = BeaconVote {
-            block_root: attestation_data.beacon_block_root,
-            source: attestation_data.source,
-            target: attestation_data.target,
-        };
-
-        let voting_context = VotingContext {
-            voting_assignments,
-            beacon_vote,
-        };
-
-        self.validator_store.update_voting_context(voting_context);
-
-        trace!(%slot, "Published VotingContext at 1/3 slot");
-        Ok(())
-    }
-
-    /// Phase 3: Build and publish `AggregationAssignments` at 2/3 slot.
-    ///
-    /// Uses single-pass data transformation to minimize iterations:
-    /// - ONE pass over attesters (those with `selection_proof`) to build all attester-related data
-    /// - ONE pass over `sync_aggregators` to build all sync-related data
-    /// - Then beacon fetches and consensus data building
-    async fn update_aggregation_assignments(&self) -> Result<(), String> {
-        let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
-
-        // Get selection proofs from `duties_service`
-        let attesters = self.duties_service.attesters(slot);
-        let sync_duties = self
-            .duties_service
-            .sync_duties
-            .get_duties_for_slot::<E>(slot, &self.spec);
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // SINGLE PASS over attesters with `selection_proof`
-        // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: `aggregator_committees`, `attesters_by_ssv_committee`,
-        //           `attestation_committee_indexes`
-        // ═══════════════════════════════════════════════════════════════════════
-        let mut aggregator_committees: HashMap<PublicKeyBytes, u64> =
-            HashMap::with_capacity(attesters.len());
-        let mut attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>> =
-            HashMap::new();
-        let mut attestation_committee_indexes: HashSet<u64> =
-            HashSet::with_capacity(attesters.len());
-
-        for attester in attesters.iter().filter(|d| d.selection_proof.is_some()) {
-            // Only process validators with valid, non-liquidated SSV committees
-            if let Some(ssv_committee_id) = self
-                .validator_store
-                .get_validator_and_cluster(attester.duty.pubkey)
-                .ok()
-                .map(|(_, cluster)| cluster.committee_id())
-            {
-                // For AggregationAssignments output
-                aggregator_committees.insert(attester.duty.pubkey, attester.duty.committee_index);
-
-                // For consensus data building - group by SSV committee
-                attesters_by_ssv_committee
-                    .entry(ssv_committee_id)
-                    .or_default()
-                    .push(attester);
-                attestation_committee_indexes.insert(attester.duty.committee_index);
-            }
-        }
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // SINGLE PASS over `sync_aggregators`
-        // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: `validator_subnet_counts` (for multi_sync), `sync_by_ssv_committee`,
-        //           `all_subnet_ids`
-        // ═══════════════════════════════════════════════════════════════════════
-        let sync_aggregators = sync_duties.as_ref().map(|duties| &duties.aggregators);
-
-        let mut validator_subnet_counts: HashMap<PublicKeyBytes, usize> = HashMap::new();
-        let mut sync_by_ssv_committee: SyncByCommitteeMap = HashMap::new();
-        let mut all_subnet_ids: HashSet<SyncSubnetId> =
-            HashSet::with_capacity(sync_aggregators.map(|a| a.len()).unwrap_or(0));
-
-        if let Some(aggregators) = sync_aggregators {
-            for (subnet_id, subnet_aggregators) in aggregators {
-                for (validator_index, pubkey, selection_proof) in subnet_aggregators {
-                    let sync_aggregator = SyncAggregatorData {
-                        validator_index: *validator_index,
-                        pubkey: *pubkey,
-                        selection_proof: selection_proof.clone(),
-                    };
-
-                    // Only process validators with valid, non-liquidated SSV committees
-                    if let Some(ssv_committee_id) = self
-                        .validator_store
-                        .get_validator_and_cluster(sync_aggregator.pubkey)
-                        .ok()
-                        .map(|(_, cluster)| cluster.committee_id())
-                    {
-                        // For AggregationAssignments output
-                        *validator_subnet_counts
-                            .entry(sync_aggregator.pubkey)
-                            .or_insert(0) += 1;
-
-                        // For consensus data building - group by SSV committee
-                        sync_by_ssv_committee
-                            .entry(ssv_committee_id)
-                            .or_default()
-                            .push((*subnet_id, sync_aggregator));
-                        all_subnet_ids.insert(*subnet_id);
-                    }
-                }
-            }
-        }
-
-        // Derive multi_sync_aggregators from validator_subnet_counts
-        // (validators aggregating on multiple subnets need coordination)
-        let multi_sync_aggregators: HashMap<PublicKeyBytes, ContributionWaiter<E>> =
-            validator_subnet_counts
-                .into_iter()
-                .filter(|(_, count)| *count > 1)
-                .map(|(pubkey, count)| (pubkey, ContributionWaiter::new(count)))
-                .collect();
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // Build consensus data for Boole+ forks
-        // ═══════════════════════════════════════════════════════════════════════
-        let epoch = slot.epoch(E::slots_per_epoch());
-
-        let consensus_data_by_ssv_committee =
-            if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
-                self.build_consensus_data_for_all_committees(
-                    slot,
-                    attesters_by_ssv_committee,
-                    sync_by_ssv_committee,
-                    attestation_committee_indexes,
-                    all_subnet_ids,
-                )
-                .await?
-            } else {
-                HashMap::new()
-            };
-
-        let aggregator_info = AggregationAssignments {
-            slot,
-            aggregator_committees,
-            multi_sync_aggregators,
-            consensus_data_by_ssv_committee,
-        };
-
-        self.validator_store
-            .update_aggregation_assignments(aggregator_info);
-
-        trace!(%slot, "Published AggregationAssignments at 2/3 slot");
-        Ok(())
     }
 
     /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
     ///
-    /// Takes pre-grouped data from `update_aggregation_assignments` to avoid redundant iteration.
-    async fn build_consensus_data_for_all_committees(
+    /// Takes pre-grouped data from `DutyInputPublisher` to avoid redundant iteration.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_consensus_data_for_all_committees(
         &self,
         slot: Slot,
         attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>>,
         sync_by_ssv_committee: SyncByCommitteeMap,
         attestation_committee_indexes: HashSet<u64>,
         all_subnet_ids: HashSet<SyncSubnetId>,
+        voting_context: &VotingContext,
+        timeout: Duration,
     ) -> Result<HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>, String> {
-        // Get `VotingContext` for `beacon_vote` (cached at 1/3 slot)
-        let voting_context = self
-            .validator_store
-            .get_voting_context(slot)
-            .await
-            .map_err(|e| format!("Failed to get voting context: {:?}", e))?;
-
         // Parallel fetch from beacon node with timeout for partial results.
         // Uses `FuturesUnordered` internally to collect results as they complete.
-        // After BEACON_API_FETCH_TIMEOUT (2s), returns whatever has been collected.
+        // After timeout, returns whatever has been collected.
         // This ensures we don't block on slow beacon nodes while still getting partial data.
         let (aggregated_attestations, sync_contributions) = tokio::join!(
             self.fetch_aggregated_attestations(
                 slot,
                 &voting_context.beacon_vote,
                 &attestation_committee_indexes,
-                BEACON_API_FETCH_TIMEOUT,
+                timeout,
             ),
             self.fetch_sync_contributions(
                 slot,
                 voting_context.beacon_vote.block_root,
                 &all_subnet_ids,
-                BEACON_API_FETCH_TIMEOUT,
+                timeout,
             ),
         );
 
@@ -876,7 +510,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                             );
                         }
                         Err(e) => {
-                            error!(
+                            tracing::error!(
                                 %slot,
                                 ?beacon_block_root,
                                 ?subnet_id,
@@ -927,9 +561,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 // Pure Helper Functions for Consensus Data Building
 // ═══════════════════════════════════════════════════════════════════════════════════════
 //
-// These functions are extracted from `build_consensus_data_for_committee` to enable
-// unit testing of the sorting and filtering logic without requiring beacon node mocks.
-// The sorting order MUST match SSV-Go exactly for consensus compatibility.
+// These functions are extracted to enable unit testing of the sorting and filtering logic
+// without requiring beacon node mocks. The sorting order MUST match SSV-Go exactly for
+// consensus compatibility.
 
 /// Sort aggregators by `validator_index` ascending.
 ///
@@ -1078,7 +712,7 @@ mod tests {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════���════════════════════════════════════════════════
     // P0 Tests: Wire Compatibility
     // ═══════════════════════════════════════════════════════════════════════════════════
 
