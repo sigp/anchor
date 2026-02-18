@@ -12,6 +12,8 @@ use tree_hash_derive::TreeHash;
 use typenum::{Prod, Sum, U8, U13, U256, U388, U726, U836, U932, U1000, U1000000, Unsigned};
 use types::{Hash256, Slot};
 
+#[cfg(feature = "serde")]
+use crate::deserializers::*;
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
     consensus::{PrepareJustificationLength, QbftMessage, RoundChangeJustificationLength},
@@ -117,6 +119,15 @@ impl TryFrom<u64> for MsgType {
     }
 }
 
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for MsgType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <u64 as serde::Deserialize>::deserialize(deserializer)?;
+        MsgType::try_from(value)
+            .map_err(|_| serde::de::Error::custom(format!("Invalid MsgType value: {value}")))
+    }
+}
+
 const U64_SIZE: usize = 8; // u64 is 8 bytes
 
 impl Encode for MsgType {
@@ -174,9 +185,19 @@ pub enum SSVMessageError {
 /// Represents a bare SSVMessage with a type, ID, and data.
 #[derive(Encode, Decode, Clone, PartialEq, Eq, TreeHash)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct SSVMessage {
+    #[cfg_attr(feature = "serde", serde(rename = "MsgType"))]
     msg_type: MsgType,
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "MsgID", deserialize_with = "deserialize_hex_message_id")
+    )]
     msg_id: MessageId,
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "Data", deserialize_with = "deserialize_base64_message_data")
+    )]
     data: VariableList<u8, SSVMessageDataLen>,
 }
 

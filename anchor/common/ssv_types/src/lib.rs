@@ -15,6 +15,9 @@ mod share;
 mod sql_conversions;
 pub mod test_utils;
 
+#[cfg(feature = "serde")]
+pub mod deserializers;
+
 pub use indexmap::IndexSet;
 pub use round::Round;
 pub use share::ENCRYPTED_KEY_LENGTH;

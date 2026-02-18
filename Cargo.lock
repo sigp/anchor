@@ -7210,6 +7210,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ssv_types",
+ "ssz_types",
  "tree_hash",
  "types",
 ]
@@ -7261,6 +7262,7 @@ dependencies = [
  "openssl",
  "operator_key",
  "rusqlite",
+ "serde",
  "sha2",
  "slashing_protection",
  "ssz_types",

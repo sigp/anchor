@@ -25,6 +25,7 @@ use types::Address;
 )]
 #[ssz(struct_behaviour = "transparent")]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct OperatorId(pub u64);
 impl TreeHash for OperatorId {
     fn tree_hash_type() -> TreeHashType {

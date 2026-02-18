@@ -44,6 +44,15 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::SkippedKnown
         }
 
+        // Validation tests
+        "signedssvmsg.SignedSSVMessageTest" => {
+            Some(run_test::<types::SignedSSVMessageTest>(path, contents))
+        }
+        "ssvmsg.SSVMessageTest" => Some(run_test::<types::SSVMessageTest>(path, contents)),
+        "partialsigmessage.MsgSpecTest" => {
+            Some(run_test::<types::PartialSigMsgSpecTest>(path, contents))
+        }
+
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.
         _ => {

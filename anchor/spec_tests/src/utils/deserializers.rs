@@ -1,6 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
-use ssv_types::msgid::MessageId;
+use ssv_types::{deserializers::deserialize_hex_message_id, msgid::MessageId};
 use types::Hash256;
 
 /// Deserializes a base64-encoded string into `Vec<u8>`.
@@ -29,6 +29,7 @@ pub fn deserialize_base64_list<'de, D: serde::Deserializer<'de>>(
 }
 
 /// Deserializes an optional vector of base64 strings into `Option<Vec<Vec<u8>>>`.
+#[expect(dead_code)]
 pub fn deserialize_base64_list_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<Vec<u8>>>, D::Error> {
@@ -107,21 +108,18 @@ pub fn deserialize_hash256_list_option<'de, D: serde::Deserializer<'de>>(
 /// Deserializes a vector of hex strings into `Vec<MessageId>`.
 ///
 /// Each hex string is decoded to 56 bytes and converted to a `MessageId`.
+/// Reuses `ssv_types::deserializers::deserialize_hex_message_id` via `StrDeserializer`.
 pub fn deserialize_hex_message_id_list<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<MessageId>, D::Error> {
     let hex_strings: Vec<String> = Vec::deserialize(deserializer)?;
-    hex_strings
-        .into_iter()
-        .map(|hex_str| {
-            let bytes = hex::decode(&hex_str)
-                .map_err(|e| serde::de::Error::custom(format!("Failed to decode hex: {e}")))?;
-            MessageId::try_from(bytes.as_slice()).map_err(|_| {
-                serde::de::Error::custom(format!(
-                    "Invalid MessageId: expected 56 bytes, got {}",
-                    bytes.len()
-                ))
-            })
-        })
-        .collect()
+    let mut result = Vec::with_capacity(hex_strings.len());
+
+    for hex_str in hex_strings {
+        result.push(deserialize_hex_message_id(
+            serde::de::value::StrDeserializer::<D::Error>::new(&hex_str),
+        )?);
+    }
+
+    Ok(result)
 }

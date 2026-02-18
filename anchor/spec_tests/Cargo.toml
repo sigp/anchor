@@ -10,10 +10,11 @@ bls = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
 hex = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-ssv_types = { workspace = true }
 openssl = { workspace = true }
 operator_key = { path = "../common/operator_key" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ssv_types = { workspace = true, features = ["serde"] }
+ssz_types = { workspace = true }
 tree_hash = { workspace = true }
 types = { workspace = true }

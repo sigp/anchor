@@ -6,6 +6,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [features]
 arbitrary-fuzz = ["arbitrary"]
+serde = ["dep:serde"]
 
 [dependencies]
 arbitrary = { workspace = true, optional = true }
@@ -20,6 +21,7 @@ indexmap = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
 rusqlite = { workspace = true }
+serde = { workspace = true, optional = true }
 sha2 = { workspace = true }
 slashing_protection = { workspace = true }
 ssz_types = { workspace = true }
