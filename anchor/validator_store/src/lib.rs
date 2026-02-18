@@ -377,7 +377,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 consensus_data,
                 data_validator,
                 timeout_mode,
-                cluster,
+                &cluster.cluster_members,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -745,7 +745,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 (*our_consensus_data).clone(),
                 Box::new(AggregatorCommitteeDataValidator::new()),
                 timeout_mode,
-                &cluster,
+                &cluster.cluster_members,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -940,7 +940,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 },
                 self.create_proposer_consensus_data_validator(validator_pubkey),
                 timeout_mode,
-                &cluster,
+                &cluster.cluster_members,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -1035,7 +1035,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 (*our_consensus_data).clone(),
                 Box::new(AggregatorCommitteeDataValidator::new()),
                 timeout_mode,
-                &cluster,
+                &cluster.cluster_members,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -1236,7 +1236,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 },
                 self.create_proposer_consensus_data_validator(aggregator_pubkey),
                 timeout_mode,
-                &cluster,
+                &cluster.cluster_members,
             )
             .await;
         drop(timer);
@@ -1325,7 +1325,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     validator_attestation_committees,
                 ),
                 timeout_mode,
-                &cluster,
+                &cluster.cluster_members,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -1452,7 +1452,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                         validator_attestation_committees,
                     ),
                     timeout_mode,
-                    &cluster,
+                    &cluster.cluster_members,
                 )
                 .await
                 .map_err(SpecificError::from)?;
