@@ -1325,7 +1325,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     validator_attestation_committees,
                 ),
                 timeout_mode,
-                &cluster.cluster_members,
+                &cluster_members,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -1927,6 +1927,8 @@ pub enum SpecificError {
     KeyShareDecryptionFailed,
     DataTooLarge(String),
     ClusterLiquidated,
+    /// No cluster found for the given committee ID
+    UnknownCommittee(CommitteeId),
     /// Requested slot has already passed the current cached slot in `VotingAssignments`
     MetadataSlotPassed,
     /// Watch channel for `VotingAssignments` has been closed
