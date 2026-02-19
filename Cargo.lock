@@ -7197,6 +7197,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "spec_tests"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ethereum_ssz",
+ "ethereum_ssz_derive",
+ "hex",
+ "serde",
+ "serde_json",
+ "ssv_types",
+ "tree_hash",
+ "types",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
