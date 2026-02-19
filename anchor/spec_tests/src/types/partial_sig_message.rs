@@ -1,5 +1,8 @@
 use serde::Deserialize;
-use ssv_types::{OperatorId, ValidatorIndex, partial_sig::PartialSignatureKind};
+use ssv_types::{
+    OperatorId, ValidatorIndex,
+    partial_sig::{PartialSignatureKind, PartialSignatureMessagesError},
+};
 use ssz::{Decode, Encode};
 use ssz_types::VariableList;
 use tree_hash::TreeHash;
@@ -134,33 +137,33 @@ impl SpecTest for PartialSigMsgSpecTest {
 }
 
 impl PartialSigMsgSpecTest {
-    /// Local validation — mirrors Go's `PartialSignatureMessages.Validate()`.
+    /// Validate using Anchor's production `PartialSignatureMessages::validate()`.
     ///
-    /// Anchor's `PartialSignatureMessages` has no `validate()` method (validation lives in
-    /// `message_validator`), so we implement the validation checks locally.
-    ///
-    /// Go's validation order: empty check → for each message: inconsistent signer → m.Validate()
-    /// where m.Validate() checks signer ID 0. We must match this order for error code parity.
+    /// Builds a production type from the test fixture (with placeholder BLS data,
+    /// since validation only inspects signer fields) and calls `validate()`.
     fn validate_message(msg: &TestPartialSignatureMessages) -> Result<(), i64> {
-        if msg.messages.is_empty() {
-            return Err(error_codes::NO_PARTIAL_SIG_MESSAGES);
-        }
+        let messages: Vec<ssv_types::partial_sig::PartialSignatureMessage> = msg
+            .messages
+            .iter()
+            .map(|m| ssv_types::partial_sig::PartialSignatureMessage {
+                partial_signature: bls::Signature::empty(),
+                signing_root: Hash256::default(),
+                signer: m.signer,
+                validator_index: ValidatorIndex(0),
+            })
+            .collect();
 
-        let first_signer = msg.messages[0].signer;
+        let production_msg = ssv_types::partial_sig::PartialSignatureMessages {
+            kind: msg.kind,
+            slot: types::Slot::new(0),
+            messages: VariableList::new(messages).expect("test fixture within bounds"),
+        };
 
-        for m in &msg.messages {
-            // Check signer consistency first (Go checks this before m.Validate())
-            if first_signer != m.signer {
-                return Err(error_codes::INCONSISTENT_SIGNERS);
-            }
-
-            // Then check signer ID 0 (Go's m.Validate())
-            if m.signer == OperatorId(0) {
-                return Err(error_codes::ZERO_SIGNER_NOT_ALLOWED);
-            }
-        }
-
-        Ok(())
+        production_msg.validate().map_err(|e| match e {
+            PartialSignatureMessagesError::Empty => error_codes::NO_PARTIAL_SIG_MESSAGES,
+            PartialSignatureMessagesError::InconsistentSigners => error_codes::INCONSISTENT_SIGNERS,
+            PartialSignatureMessagesError::ZeroSigner => error_codes::ZERO_SIGNER_NOT_ALLOWED,
+        })
     }
 
     /// Build an Anchor `PartialSignatureMessages` from the test intermediate struct.

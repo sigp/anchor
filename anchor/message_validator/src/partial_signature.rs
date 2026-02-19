@@ -5,7 +5,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
     msgid::Role,
-    partial_sig::{PartialSignatureKind, PartialSignatureMessages},
+    partial_sig::{PartialSignatureKind, PartialSignatureMessages, PartialSignatureMessagesError},
 };
 use ssz::Decode;
 use types::consts::altair::SYNC_COMMITTEE_SUBNET_COUNT;
@@ -105,18 +105,23 @@ fn validate_partial_signature_message_semantics(
         return Err(ValidationFailure::PartialSignatureTypeRoleMismatch);
     }
 
-    // Rule: Partial signature message must have at least one signature
-    if partial_signature_messages.messages.is_empty() {
-        return Err(ValidationFailure::NoPartialSignatureMessages);
+    // Structural validation: empty, internal signer consistency, zero signer.
+    partial_signature_messages.validate().map_err(|e| match e {
+        PartialSignatureMessagesError::Empty => ValidationFailure::NoPartialSignatureMessages,
+        PartialSignatureMessagesError::InconsistentSigners => {
+            ValidationFailure::InconsistentSigners
+        }
+        PartialSignatureMessagesError::ZeroSigner => ValidationFailure::ZeroSigner,
+    })?;
+
+    // Rule: Partial signature signer must match the signed message's signer.
+    // validate() ensures all inner signers are the same, so check one.
+    if partial_signature_messages.messages[0].signer != signer {
+        return Err(ValidationFailure::InconsistentSigners);
     }
 
-    // Validate each individual message
+    // Validate validator indices for non-committee duties
     for message in &partial_signature_messages.messages {
-        // Rule: Partial signature signer must be consistent
-        if message.signer != signer {
-            return Err(ValidationFailure::InconsistentSigners);
-        }
-
         // Rule: (only for Validator duties) Validator index must match with validatorPK
         // For Committee duties (Committee and AggregatorCommittee), we don't assume that
         // operators are synced on the validators set, so we skip this check.

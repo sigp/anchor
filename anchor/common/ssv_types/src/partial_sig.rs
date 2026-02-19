@@ -2,6 +2,7 @@ use bls::Signature;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
+use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use typenum::{Prod, Sum, U3, U4, U512, U1000};
@@ -93,15 +94,7 @@ impl Decode for PartialSignatureKind {
                 expected: U64_SIZE,
             });
         }
-        let value =
-            u64::from_le_bytes(
-                bytes
-                    .try_into()
-                    .map_err(|_| DecodeError::InvalidByteLength {
-                        len: bytes.len(),
-                        expected: U64_SIZE,
-                    })?,
-            );
+        let value = u64::from_le_bytes(bytes.try_into().unwrap());
         value.try_into().map_err(|_| DecodeError::NoMatchingVariant)
     }
 }
@@ -173,6 +166,45 @@ pub struct PartialSignatureMessage {
         )
     )]
     pub validator_index: ValidatorIndex,
+}
+
+/// Errors from `PartialSignatureMessages::validate()`.
+///
+/// Mirrors Go's `PartialSignatureMessages.Validate()` error conditions.
+#[derive(Debug, Error)]
+pub enum PartialSignatureMessagesError {
+    #[error("no partial signature messages")]
+    Empty,
+    #[error("inconsistent signers")]
+    InconsistentSigners,
+    #[error("signer ID 0 not allowed")]
+    ZeroSigner,
+}
+
+impl PartialSignatureMessages {
+    /// Validate the message structure.
+    ///
+    /// Mirrors Go's `PartialSignatureMessages.Validate()`:
+    /// 1. Messages must not be empty
+    /// 2. All message signers must be the same
+    /// 3. No signer may have ID 0
+    pub fn validate(&self) -> Result<(), PartialSignatureMessagesError> {
+        let first = self
+            .messages
+            .first()
+            .ok_or(PartialSignatureMessagesError::Empty)?;
+
+        for m in self.messages.iter() {
+            if m.signer != first.signer {
+                return Err(PartialSignatureMessagesError::InconsistentSigners);
+            }
+            if m.signer == OperatorId(0) {
+                return Err(PartialSignatureMessagesError::ZeroSigner);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
