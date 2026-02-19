@@ -22,10 +22,9 @@ use axum::{
 use libp2p::metrics::Registry;
 use parking_lot::RwLock;
 use prometheus_client::encoding::text::encode;
-use serde::{Deserialize, Serialize};
 use slot_clock::{SlotClock, SystemTimeSlotClock};
 use tokio::net::TcpListener;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::error;
 use types::EthSpec;
 use validator_services::duties_service::DutiesService;
@@ -41,12 +40,12 @@ pub struct Shared<E: EthSpec> {
 }
 
 /// Configuration for the HTTP server.
-#[derive(PartialEq, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub enabled: bool,
     pub listen_addr: IpAddr,
     pub listen_port: u16,
-    pub allow_origin: Option<String>,
+    pub allow_origin: Option<AllowOrigin>,
 }
 
 impl Default for Config {
@@ -60,12 +59,26 @@ impl Default for Config {
     }
 }
 
-fn create_router<E: EthSpec>(shared_state: Arc<RwLock<Shared<E>>>) -> Router {
+impl Config {
+    /// Returns the configured `AllowOrigin`, or falls back to the listen address and port.
+    pub fn allow_origin(&self) -> AllowOrigin {
+        self.allow_origin.clone().unwrap_or_else(|| {
+            AllowOrigin::exact(
+                format!("http://{}:{}", self.listen_addr, self.listen_port)
+                    .parse()
+                    .expect("listen address and port should produce a valid header value"),
+            )
+        })
+    }
+}
+
+fn create_router<E: EthSpec>(
+    shared_state: Arc<RwLock<Shared<E>>>,
+    allow_origin: AllowOrigin,
+) -> Router {
     let cors = CorsLayer::new()
-        // allow `GET` and `POST` when accessing the resource
         .allow_methods([Method::GET, Method::POST])
-        // allow requests from any origin
-        .allow_origin(Any);
+        .allow_origin(allow_origin);
 
     Router::new()
         .route("/metrics", get(metrics_handler))
@@ -148,10 +161,11 @@ async fn metrics_handler<E: EthSpec>(
 pub async fn serve<E: EthSpec>(
     listener: TcpListener,
     shared_state: Arc<RwLock<Shared<E>>>,
+    allow_origin: AllowOrigin,
     shutdown: impl Future<Output = ()> + Send + Sync + 'static,
 ) {
     // Generate the axum routes
-    let router = create_router(shared_state);
+    let router = create_router(shared_state, allow_origin);
 
     // Start the http api server
     if let Err(e) = axum::serve(listener, router)
