@@ -314,6 +314,75 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
     }
 
+    /// Collect signatures for multiple validators in a batch.
+    /// This is more efficient than calling collect_signature multiple times because:
+    /// 1. All partial signatures are sent in a single network message
+    /// 2. No risk of deadlock from sequential processing in Committee mode
+    async fn collect_committee_signatures(
+        &self,
+        signature_kind: PartialSignatureKind,
+        role: Role,
+        slot: Slot,
+        committee_id: CommitteeId,
+        cluster: &Cluster,
+        validators: Vec<(ValidatorMetadata, Hash256)>,
+    ) -> Result<HashMap<ValidatorIndex, Signature>, Error> {
+        let metadata = SignatureMetadata {
+            kind: signature_kind,
+            role,
+            threshold: cluster
+                .get_f()
+                .safe_mul(2)
+                .and_then(|x| x.safe_add(1))
+                .map_err(SpecificError::from)?,
+            slot,
+            committee_id,
+        };
+
+        let mut validator_data = Vec::with_capacity(validators.len());
+        for (validator, signing_root) in validators {
+            let decrypted_key_share = if let Some(operator_key) = &self.private_key {
+                let encrypted_private_key = self
+                    .database
+                    .state()
+                    .shares()
+                    .get_by(&validator.public_key)
+                    .ok_or(Error::UnknownPubkey(validator.public_key))?
+                    .encrypted_private_key;
+
+                let key = self
+                    .decrypted_keys
+                    .lock()
+                    .try_get_or_insert(encrypted_private_key, || {
+                        decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
+                            .map_err(|_| SpecificError::KeyShareDecryptionFailed)
+                    })
+                    .cloned()?;
+                Some(key)
+            } else {
+                // We are in imposter mode and cannot decrypt the share.
+                None
+            };
+
+            validator_data.push(ValidatorSigningData {
+                root: signing_root,
+                index: validator.index.ok_or(SpecificError::MissingIndex)?,
+                share: decrypted_key_share,
+            });
+        }
+
+        let signatures = self
+            .signature_collector
+            .sign_and_collect_batch(metadata, validator_data)
+            .await
+            .map_err(SpecificError::from)?;
+
+        Ok(signatures
+            .into_iter()
+            .map(|(k, v)| (k, (*v).clone()))
+            .collect())
+    }
+
     async fn decide_abstract_block(
         &self,
         validator: &ValidatorMetadata,
@@ -1556,6 +1625,175 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         .await
     }
 
+    /// Sign attestations for all validators in a single SSV committee.
+    ///
+    /// Runs QBFT consensus once for the committee, then collects signatures for each validator.
+    async fn sign_committee_attestations(
+        &self,
+        committee_id: CommitteeId,
+        attestations: Vec<AttestationEntry<E>>,
+    ) -> Result<Vec<(u64, Attestation<E>, PublicKeyBytes)>, Error> {
+        // Early return for empty attestations to avoid index out of bounds
+        let first_attestation = attestations
+            .first()
+            .ok_or(Error::SpecificError(SpecificError::NoAttestationsProvided))?;
+        let slot = first_attestation.3.data().slot;
+        let first_att_data = first_attestation.3.data();
+
+        // All validators grouped by the same CommitteeId are managed by the same set of operators
+        let cluster_members = self
+            .database
+            .state()
+            .get_cluster_members(&committee_id)
+            .ok_or(Error::SpecificError(SpecificError::UnknownCommittee(
+                committee_id,
+            )))?;
+
+        let voting_context_tx = self.get_voting_context(slot).await?;
+        let validator_attestation_committees =
+            self.get_attesting_validators_in_committee(&voting_context_tx, committee_id);
+
+        // Run QBFT consensus once for the entire committee
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self
+                .get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?,
+        };
+
+        let completed = self
+            .qbft_manager
+            .decide_instance(
+                CommitteeInstanceId {
+                    committee: committee_id,
+                    instance_height: slot.as_usize().into(),
+                },
+                BeaconVote {
+                    block_root: first_att_data.beacon_block_root,
+                    source: first_att_data.source,
+                    target: first_att_data.target,
+                },
+                self.create_beacon_vote_validator(slot, validator_attestation_committees),
+                timeout_mode,
+                &cluster_members,
+            )
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        let data = match completed {
+            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => data,
+        };
+
+        // Shared values for all validators in this committee
+        let domain_hash = self.get_domain(data.target.epoch, Domain::BeaconAttester);
+
+        // Prepare all validators and apply consensus results upfront
+        let mut prepared: Vec<(
+            u64,
+            PublicKeyBytes,
+            usize,
+            Attestation<E>,
+            ValidatorMetadata,
+            Hash256,
+        )> = Vec::with_capacity(attestations.len());
+        let mut cluster_for_signing: Option<Cluster> = None;
+
+        for (validator_index, pubkey, validator_committee_position, mut attestation) in attestations
+        {
+            let (validator, cluster) = match self.get_validator_and_cluster(pubkey) {
+                Ok((v, c)) => (v, c),
+                Err(Error::UnknownPubkey(pk)) => {
+                    warn!(?pk, "Unknown pubkey while signing attestation, skipping");
+                    continue;
+                }
+                Err(e) => {
+                    error!(error = ?e, ?pubkey, "Failed to get validator metadata, skipping");
+                    continue;
+                }
+            };
+
+            if cluster_for_signing.is_none() {
+                cluster_for_signing = Some(cluster);
+            }
+
+            // Apply consensus result to this attestation
+            attestation.data_mut().beacon_block_root = data.block_root;
+            attestation.data_mut().source = data.source;
+            attestation.data_mut().target = data.target;
+
+            let signing_root = attestation.data().signing_root(domain_hash);
+            prepared.push((
+                validator_index,
+                pubkey,
+                validator_committee_position,
+                attestation,
+                validator,
+                signing_root,
+            ));
+        }
+
+        // Early return if no validators were prepared (cluster_for_signing is also None in this
+        // case)
+        let Some(cluster) = cluster_for_signing else {
+            return Ok(Vec::new());
+        };
+
+        // Batch sign all validators at once
+        let validators_for_signing: Vec<(ValidatorMetadata, Hash256)> = prepared
+            .iter()
+            .map(|(_, _, _, _, validator, signing_root)| (validator.clone(), *signing_root))
+            .collect();
+
+        let signatures = self
+            .collect_committee_signatures(
+                PartialSignatureKind::PostConsensus,
+                Role::Committee,
+                slot,
+                committee_id,
+                &cluster,
+                validators_for_signing,
+            )
+            .await?;
+
+        // Assemble results by mapping signatures back to attestations
+        let mut results = Vec::with_capacity(prepared.len());
+        for (
+            validator_index,
+            pubkey,
+            validator_committee_position,
+            mut attestation,
+            validator,
+            _,
+        ) in prepared
+        {
+            let index = match validator.index {
+                Some(idx) => idx,
+                None => {
+                    warn!(?pubkey, "Validator missing index, skipping");
+                    continue;
+                }
+            };
+
+            let signature = match signatures.get(&index) {
+                Some(sig) => sig,
+                None => {
+                    warn!(?pubkey, "Missing signature for validator, skipping");
+                    continue;
+                }
+            };
+
+            if let Err(e) = attestation.add_signature(signature, validator_committee_position) {
+                error!(error = ?e, ?pubkey, "Failed to add signature to attestation, skipping");
+                continue;
+            }
+
+            results.push((validator_index, attestation, pubkey));
+        }
+
+        Ok(results)
+    }
+
     /// Provide slashing protection for attestations, safely updating the slashing protection DB.
     ///
     /// Returns a vec of safe attestations which have passed slashing protection. Unsafe
@@ -1927,6 +2165,8 @@ pub enum SpecificError {
     KeyShareDecryptionFailed,
     DataTooLarge(String),
     ClusterLiquidated,
+    /// Empty attestations list provided to sign_committee_attestations
+    NoAttestationsProvided,
     /// No cluster found for the given committee ID
     UnknownCommittee(CommitteeId),
     /// Requested slot has already passed the current cached slot in `VotingAssignments`
