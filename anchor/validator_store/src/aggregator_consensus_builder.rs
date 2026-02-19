@@ -80,7 +80,7 @@ impl<'a, E: EthSpec, T: SlotClock + 'static> AggregatorConsensusBuilder<'a, E, T
     /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
     ///
     /// Takes pre-grouped data from `DutyInputPublisher` to avoid redundant iteration.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn build_consensus_data_for_all_committees(
         &self,
         slot: Slot,
