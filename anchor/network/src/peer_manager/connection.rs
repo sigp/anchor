@@ -41,17 +41,35 @@ pub enum PeerConnectionError {
     MissingNeededSubnets,
 }
 
+/// Observed gossipsub subnet state for a peer.
+///
+/// This distinguishes "no observed evidence yet" from "observed and empty", which
+/// controls whether ENR fallback is allowed.
+#[derive(Debug, Clone)]
+enum ObservedPeerSubnets {
+    /// No gossipsub subscription events observed for this peer yet.
+    Unknown,
+    /// At least one subscription event observed and currently no subnet bits are set.
+    KnownEmpty,
+    /// At least one subnet bit observed as set (tracked per fork).
+    Known(HashMap<Fork, Bitfield<Fixed<U128>>>),
+}
+
 /// Manages peer connections and connection limits
 pub struct ConnectionManager {
     pub connection_limits: connection_limits::Behaviour,
     pub connected: HashSet<PeerId>,
     pub target_peers: usize,
     pub max_with_priority_peers: usize,
-    // Per-fork observed gossipsub subscriptions per peer. Prefer this over ENR claims.
-    // Tracked per fork so that unsubscribing from one fork's topic doesn't clear the
-    // bit for the same subnet on another fork's topic.
+    // Observed gossipsub subscriptions per peer with explicit state:
+    // - Unknown: no observed subscription evidence yet (ENR fallback allowed)
+    // - KnownEmpty: observed but currently no subscribed subnets
+    // - Known: per-fork bitmaps
+    //
+    // Per-fork tracking prevents unsubscribing from one fork's topic from clearing
+    // the bit for the same subnet on another fork's topic.
     // See: https://github.com/sigp/anchor/issues/818
-    observed_peer_subnets: HashMap<PeerId, HashMap<Fork, Bitfield<Fixed<U128>>>>,
+    observed_peer_subnets: HashMap<PeerId, ObservedPeerSubnets>,
     // Shared fork lifecycle state for fork-aware peer selection.
     // After the grace period ends, only peers on the current fork are considered useful.
     fork_lifecycle: SharedForkLifecycle,
@@ -137,27 +155,52 @@ impl ConnectionManager {
         subscribed: bool,
     ) {
         let idx = *subnet.deref() as usize;
-        let fork_map = self.observed_peer_subnets.entry(peer).or_default();
-        let bitfield = fork_map.entry(fork).or_default();
+        let bitfield_len = Bitfield::<Fixed<U128>>::default().len();
 
-        if idx < bitfield.len() {
-            let _ = bitfield.set(idx, subscribed);
-        } else {
+        if idx >= bitfield_len {
             tracing::warn!(
                 %peer,
                 subnet = idx,
-                max = bitfield.len(),
+                max = bitfield_len,
                 "Subnet ID exceeds bitfield capacity"
             );
+            return;
         }
 
-        // Clean up empty entries to keep maps small
-        if !subscribed {
-            if bitfield.is_zero() {
-                fork_map.remove(&fork);
+        let state = self
+            .observed_peer_subnets
+            .entry(peer)
+            .or_insert(ObservedPeerSubnets::Unknown);
+
+        if subscribed {
+            if !matches!(state, ObservedPeerSubnets::Known(_)) {
+                *state = ObservedPeerSubnets::Known(HashMap::new());
             }
-            if fork_map.is_empty() {
-                self.observed_peer_subnets.remove(&peer);
+
+            if let ObservedPeerSubnets::Known(fork_map) = state {
+                let bitfield = fork_map.entry(fork).or_default();
+                let _ = bitfield.set(idx, true);
+            }
+            return;
+        }
+
+        match state {
+            ObservedPeerSubnets::Unknown => {
+                // We have now observed explicit subscription state, but no positive bits.
+                *state = ObservedPeerSubnets::KnownEmpty;
+            }
+            ObservedPeerSubnets::KnownEmpty => {}
+            ObservedPeerSubnets::Known(fork_map) => {
+                if let Some(bitfield) = fork_map.get_mut(&fork) {
+                    let _ = bitfield.set(idx, false);
+                    if bitfield.is_zero() {
+                        fork_map.remove(&fork);
+                    }
+                }
+
+                if fork_map.is_empty() {
+                    *state = ObservedPeerSubnets::KnownEmpty;
+                }
             }
         }
     }
@@ -315,12 +358,20 @@ impl ConnectionManager {
         peer: &PeerId,
         lifecycle: &ForkLifecycle,
     ) -> Option<Bitfield<Fixed<U128>>> {
-        let fork_map = self.observed_peer_subnets.get(peer)?;
-        match lifecycle {
-            ForkLifecycle::Normal { current, .. } => fork_map.get(current).cloned(),
-            ForkLifecycle::WarmUp { .. } | ForkLifecycle::GracePeriod { .. } => {
-                Some(Self::aggregate_fork_bitmaps(fork_map))
-            }
+        match self.observed_peer_subnets.get(peer)? {
+            ObservedPeerSubnets::Unknown => None,
+            ObservedPeerSubnets::KnownEmpty => Some(Bitfield::default()),
+            ObservedPeerSubnets::Known(fork_map) => match lifecycle {
+                ForkLifecycle::Normal { current, .. } => Some(
+                    fork_map
+                        .get(current)
+                        .cloned()
+                        .unwrap_or_else(Bitfield::default),
+                ),
+                ForkLifecycle::WarmUp { .. } | ForkLifecycle::GracePeriod { .. } => {
+                    Some(Self::aggregate_fork_bitmaps(fork_map))
+                }
+            },
         }
     }
 
@@ -351,9 +402,10 @@ impl ConnectionManager {
 
     /// Handle connection established event
     pub fn on_connection_established(&mut self, peer_id: PeerId, is_outbound: bool) -> bool {
-        // Initialize with empty fork map to indicate we're now observing this peer.
-        // If they never subscribe to anything, we'll know they offer no subnets.
-        self.observed_peer_subnets.entry(peer_id).or_default();
+        // Initialize as Unknown: no observed gossipsub evidence yet.
+        self.observed_peer_subnets
+            .entry(peer_id)
+            .or_insert(ObservedPeerSubnets::Unknown);
 
         // Track connection direction counter
         let is_new = self.connected.insert(peer_id);
@@ -585,8 +637,8 @@ mod tests {
         ConnectionManager::new(TARGET_PEERS, SharedForkLifecycle::new(lifecycle))
     }
 
-    /// Connects a peer to the manager (adds to `connected` set and initializes
-    /// `observed_peer_subnets`), returning the generated `PeerId`.
+    /// Connects a peer to the manager (adds to `connected` and marks observed
+    /// subscription state as Unknown), returning the generated `PeerId`.
     fn connect_random_peer(mgr: &mut ConnectionManager) -> PeerId {
         let peer = PeerId::random();
         mgr.on_connection_established(peer, /* is_outbound = */ true);
@@ -729,10 +781,10 @@ mod tests {
         );
     }
 
-    // ==================== Cleanup on full unsubscribe ====================
+    // ==================== Explicit observed-state transitions ====================
 
     #[test]
-    fn test_full_unsubscribe_removes_peer_entry() {
+    fn test_full_unsubscribe_marks_peer_known_empty() {
         // Arrange
         let mut mgr = create_test_manager();
         let peer = connect_random_peer(&mut mgr);
@@ -743,11 +795,17 @@ mod tests {
         mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), false);
         mgr.set_peer_subscribed(peer, Fork::Boole, subnet(SUBNET_E), false);
 
-        // Assert: the peer should be completely removed from observed_peer_subnets
+        // Assert: the peer remains tracked as explicitly known-empty (not Unknown)
         assert!(
-            !mgr.observed_peer_subnets.contains_key(&peer),
-            "Peer entry must be removed from observed_peer_subnets when all \
-             per-fork bitmaps are empty"
+            matches!(
+                mgr.observed_peer_subnets.get(&peer),
+                Some(ObservedPeerSubnets::KnownEmpty)
+            ),
+            "Peer should transition to KnownEmpty after unsubscribing from all observed subnets"
+        );
+        assert!(
+            aggregated_bitfield(&mgr, &peer).is_some(),
+            "KnownEmpty peers should return an explicit zero bitfield"
         );
     }
 
@@ -766,6 +824,51 @@ mod tests {
         assert!(
             mgr.observed_peer_subnets.contains_key(&peer),
             "Peer entry must remain while at least one fork bitmap is non-empty"
+        );
+    }
+
+    #[test]
+    fn test_newly_connected_peer_is_unknown_and_returns_none_in_transition() {
+        // Arrange: WarmUp state
+        let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::WarmUp {
+            current: Fork::Alan,
+            upcoming: Fork::Boole,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+        });
+        let peer = connect_random_peer(&mut mgr);
+
+        // Assert: Unknown state yields None (allows ENR fallback)
+        assert!(
+            aggregated_bitfield(&mgr, &peer).is_none(),
+            "Newly connected peers should start in Unknown state"
+        );
+    }
+
+    #[test]
+    fn test_known_empty_blocks_enr_fallback_path() {
+        // Arrange: WarmUp state with no peer ENR available in store
+        let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::WarmUp {
+            current: Fork::Alan,
+            upcoming: Fork::Boole,
+            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+        });
+        let peer = connect_random_peer(&mut mgr);
+        let peer_store = MemoryStore::new(peer_store::memory_store::Config::default());
+        let needed = HashSet::from([subnet(SUBNET_A)]);
+
+        // Unknown -> no observed evidence yet, so fallback path is lenient
+        assert!(
+            mgr.peer_offers_needed_subnets_with_enr_fallback(&peer, &peer_store, &needed),
+            "Unknown peers should be treated as no-observation-yet in fallback path"
+        );
+
+        // Act: observe explicit unsubscribe, transitioning to KnownEmpty
+        mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), false);
+
+        // Assert: KnownEmpty returns explicit zero bitfield and no fallback is applied
+        assert!(
+            !mgr.peer_offers_needed_subnets_with_enr_fallback(&peer, &peer_store, &needed),
+            "KnownEmpty peers should not use ENR fallback"
         );
     }
 
@@ -981,10 +1084,12 @@ mod tests {
 
         mgr.set_peer_subscribed(peer, Fork::Alan, subnet(SUBNET_A), true);
 
-        // Assert: peer is invisible (returns None since no Boole subscriptions)
+        // Assert: observed state is known, but no current-fork bits are set
+        let bf = aggregated_bitfield(&mgr, &peer)
+            .expect("Peer with known old-fork subscriptions should return zero bitfield");
         assert!(
-            aggregated_bitfield(&mgr, &peer).is_none(),
-            "Peer with only Alan subscriptions should return None in Normal(Boole) state"
+            !bf.get(SUBNET_A as usize).unwrap_or(false),
+            "Alan-only subscriptions should not be visible in Normal(Boole) state"
         );
 
         // Also verify it doesn't offer needed subnets
