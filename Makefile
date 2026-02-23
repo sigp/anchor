@@ -131,7 +131,8 @@ test-full: cargo-fmt test-release test-debug
 # Clippy lints are opt-in per-crate for now. By default, everything is allowed except for performance and correctness lints.
 lint:
 	cargo clippy --workspace --tests $(EXTRA_CLIPPY_OPTS) --features "$(TEST_FEATURES)" -- \
-		-D warnings
+		-D warnings \
+		-D clippy::allow_attributes
 
 # Lints the code using Clippy and automatically fix some simple compiler warnings.
 lint-fix:

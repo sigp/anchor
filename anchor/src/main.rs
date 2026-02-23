@@ -107,7 +107,7 @@ fn main() -> Result<(), String> {
     let environment = Environment::default();
 
     match cli.subcommand {
-        AnchorSubcommands::Node(node) => start_anchor(&node, global_config, environment),
+        AnchorSubcommands::Node(node) => start_anchor(*node, global_config, environment),
         AnchorSubcommands::Keysplit(keysplit) => {
             keysplit::run_keysplitter(keysplit, global_config)
                 .map_err(|e| format!("Keysplit error: {e:?}"))?;
@@ -115,14 +115,14 @@ fn main() -> Result<(), String> {
         }
         AnchorSubcommands::Keygen(keygen) => {
             keygen::run_keygen(keygen, &global_config.data_dir)
-                .map_err(|e| format!("Keygen error: {e:?}"))?;
+                .map_err(|e| format!("Keygen error: {e}"))?;
             Ok(())
         }
     }
 }
 
 fn start_anchor(
-    anchor_config: &Node,
+    anchor_config: Node,
     global_config: GlobalConfig,
     mut environment: Environment,
 ) -> Result<(), String> {

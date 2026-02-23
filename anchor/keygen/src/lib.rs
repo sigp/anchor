@@ -7,6 +7,7 @@ use operator_key::{
     ConversionError,
     encrypted::{EncryptedKey, EncryptionError},
     public, unencrypted,
+    util::FileReadError,
 };
 use thiserror::Error;
 use tracing::{error, info};
@@ -34,6 +35,9 @@ pub enum KeygenError {
 
     #[error("Key file(s) already exist in {0}")]
     Exists(String),
+
+    #[error("Failed to read existing key for conversion: {0}")]
+    ReadError(#[from] FileReadError),
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -58,16 +62,38 @@ pub struct Keygen {
 
     #[clap(
         long,
-        help = "Path to a file containing the password to use",
-        requires = "encrypt"
+        help = "Path to a file containing the password to use for the new key file",
+        requires = "encrypt",
+        value_name = "PATH"
     )]
     pub password_file: Option<PathBuf>,
+
+    #[clap(
+        long,
+        help = "Path to an existing key file to use instead of generating a new one. If encrypted, \
+            the password is read from terminal or via --password-file-for-existing. The existing \
+            file is NOT automatically removed.",
+        value_name = "PATH"
+    )]
+    pub use_existing: Option<PathBuf>,
+
+    #[clap(
+        long,
+        help = "Path to a file containing the password to use for the EXISTING key file",
+        requires = "use_existing",
+        value_name = "PATH"
+    )]
+    pub password_file_for_existing: Option<PathBuf>,
 }
 
 // Run RSA keygeneration
 pub fn run_keygen(keygen: Keygen, data_dir: &DataDir) -> Result<Rsa<Private>, KeygenError> {
-    // Generate the new rsa private key
-    let private_key = Rsa::generate(2048)?;
+    let private_key = if let Some(path) = keygen.use_existing {
+        operator_key::util::try_read_from_file(&path, keygen.password_file_for_existing.as_deref())?
+    } else {
+        // Generate a new rsa private key
+        Rsa::generate(2048)?
+    };
 
     let public_key = public::to_base64(&private_key)?;
 
@@ -90,11 +116,8 @@ pub fn run_keygen(keygen: Keygen, data_dir: &DataDir) -> Result<Rsa<Private>, Ke
     // If the user would like to password encrypt the key
     if keygen.encrypt {
         let password = if let Some(password_file) = keygen.password_file {
-            // Zeroize the original allocation
-            let full =
-                Zeroizing::new(fs::read_to_string(password_file).map_err(KeygenError::Password)?);
-            // Zeroize the allocation with the trimmed string
-            Zeroizing::new(full.trim().to_string())
+            operator_key::util::read_password_from_file(&password_file)
+                .map_err(KeygenError::Password)?
         } else {
             read_password_from_user(true)?
         };
