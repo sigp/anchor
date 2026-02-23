@@ -3,15 +3,6 @@ pub mod duty_input_publisher;
 mod metrics;
 pub mod registration_service;
 
-/// Backwards compatibility: re-export DutyInputPublisher as MetadataService
-#[deprecated(
-    since = "0.1.0",
-    note = "Use duty_input_publisher::DutyInputPublisher instead"
-)]
-pub mod metadata_service {
-    pub use crate::duty_input_publisher::DutyInputPublisher as MetadataService;
-}
-
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -22,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+pub(crate) use aggregator_consensus_builder::VotingContext;
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
@@ -518,7 +510,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         }
     }
 
-    /// Update validator voting assignments (called by `MetadataService` at slot start).
+    /// Update validator voting assignments (called by `DutyInputPublisher` at slot start).
     ///
     /// This publishes the `VotingAssignments` to all subscribers via the watch channel.
     pub fn update_voting_assignments(&self, voting_assignments: VotingAssignments) {
@@ -559,7 +551,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         }
     }
 
-    /// Update aggregator voting assignments (called by `MetadataService` Phase 3 at 2/3 slot).
+    /// Update aggregation assignments (called by `DutyInputPublisher` at 2/3 slot).
     ///
     /// This publishes the `AggregationAssignments` to all subscribers via the watch channel.
     /// At 2/3 slot, selection proofs have been computed by Lighthouse, so
@@ -1548,16 +1540,6 @@ fn decrypt_key_share(
 
     SecretKey::deserialize(&secret_key)
         .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
-}
-
-/// Context for voting duties at 1/3 slot.
-///
-/// Contains cached voting assignments and the beacon_vote fetched from the beacon node.
-pub struct VotingContext {
-    /// Cached voting assignments (computed at slot start, reused here)
-    pub voting_assignments: Arc<VotingAssignments>,
-    /// The `BeaconVote` (only available at 1/3 slot from beacon node)
-    pub beacon_vote: BeaconVote,
 }
 
 /// Cached validator voting assignments for a slot.
