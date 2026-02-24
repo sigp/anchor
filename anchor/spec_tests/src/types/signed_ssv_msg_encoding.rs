@@ -17,6 +17,7 @@ pub struct SignedSSVMessageEncodingTest {
 
 impl SpecTest for SignedSSVMessageEncodingTest {
     fn run(&self) -> Result<(), String> {
-        check_roundtrip::<ssv_types::message::SignedSSVMessage>(&self.data)
+        check_roundtrip::<ssv_types::message::SignedSSVMessage>(&self.data)?;
+        Ok(())
     }
 }
