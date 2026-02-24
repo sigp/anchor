@@ -5,8 +5,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 edition = { workspace = true }
 
 [dependencies]
-async-broadcast = { workspace = true }
-parking_lot = { workspace = true }
 serde = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }

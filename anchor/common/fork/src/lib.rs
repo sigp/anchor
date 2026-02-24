@@ -5,7 +5,7 @@
 //! - [`Fork`]: Enum representing SSV protocol versions (Alan, Boole)
 //! - [`ForkSchedule`]: Manages fork activation epochs and transition timing
 //! - [`ForkConfig`]: Complete configuration for a fork including topic prefix
-//! - [`ForkPhase`]: Fork transition events for components
+//! - [`ForkLifecycle`]: Fork lifecycle state distributed via `tokio::sync::watch`
 //!
 //! # Fork Transitions
 //!
@@ -25,6 +25,5 @@ pub mod monitor;
 mod schedule;
 
 pub use fork::{ALAN_TOPIC_PREFIX, Fork};
-pub use lifecycle::{ForkLifecycle, SharedForkLifecycle};
-pub use monitor::{ForkPhase, ForkPhaseSender};
+pub use lifecycle::ForkLifecycle;
 pub use schedule::{FORK_PREPARATION_EPOCHS, ForkConfig, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};

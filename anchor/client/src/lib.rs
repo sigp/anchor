@@ -89,7 +89,7 @@ pub struct Client {}
 
 impl Client {
     /// Runs the Anchor Client
-    pub async fn run<E: EthSpec>(executor: TaskExecutor, mut config: Config) -> Result<(), String> {
+    pub async fn run<E: EthSpec>(executor: TaskExecutor, config: Config) -> Result<(), String> {
         // Attempt to raise soft fd limit. The behavior is OS specific:
         // `linux` - raise soft fd limit to hard
         // `macos` - raise soft fd limit to `min(kernel limit, hard fd limit)`
@@ -350,18 +350,6 @@ impl Client {
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
 
-        // Get current epoch for fork context initialization
-        let current_epoch = slot_clock
-            .now_or_genesis()
-            .ok_or("Unable to get current slot for fork context")?
-            .epoch(E::slots_per_epoch());
-
-        // Get the initial fork config for the current active fork
-        let initial_fork_config = fork_schedule.active_fork_config(current_epoch);
-
-        // Ensure network domain type matches the active fork at startup (needed for handshake/ENR)
-        config.network.domain_type = initial_fork_config.domain_type;
-
         // Get network name for database isolation (stable across forks)
         let network_name = config.global_config.ssv_network.network_name.as_str();
 
@@ -383,25 +371,14 @@ impl Client {
             .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
-        // Create fork phase channel for fork transition events
-        let (fork_phase_tx, fork_phase_rx) = async_broadcast::broadcast(16);
-
-        // Create shared fork lifecycle state for cross-component fork awareness
-        let fork_lifecycle = fork::SharedForkLifecycle::new(fork::ForkLifecycle::Normal {
-            current: initial_fork_config.fork,
-            domain_type: initial_fork_config.domain_type,
-        });
-
-        // Start fork monitor to log fork transitions and send ForkPhase events
-        fork::monitor::spawn(
+        // Start fork monitor to update lifecycle state on fork transitions
+        let lifecycle_rx = fork::monitor::spawn(
             fork_schedule.clone(),
             slot_clock.clone(),
             E::slots_per_epoch(),
             spec.seconds_per_slot,
             executor.clone(),
-            fork_phase_tx,
-            fork_lifecycle.clone(),
-        );
+        )?;
 
         // Start validator index syncer
         let index_sync_tx =
@@ -487,7 +464,7 @@ impl Client {
             slot_clock.clone(),
             spec.clone(),
             fork_schedule.clone(),
-            fork_phase_rx.clone(),
+            lifecycle_rx.clone(),
         );
 
         // Create message validator after subnet_service (depends on it for fork-aware validation)
@@ -566,8 +543,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
-            fork_phase_rx,
-            fork_lifecycle,
+            lifecycle_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;

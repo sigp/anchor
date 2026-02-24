@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use fork::SharedForkLifecycle;
+use fork::ForkLifecycle;
 use futures::StreamExt;
 use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
@@ -24,11 +24,10 @@ use libp2p::{
 };
 use message_receiver::{MessageReceiver, Outcome, TopicContext};
 use prometheus_client::registry::Registry;
-use ssv_network_config::ForkPhase;
 use subnet_service::{SUBNET_COUNT, SubnetId, TopicEvent, topic};
 use task_executor::TaskExecutor;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, trace, warn};
 use types::{ChainSpec, EthSpec};
 
@@ -81,9 +80,9 @@ pub struct Network<R: MessageReceiver> {
     spec: Arc<ChainSpec>,
     is_dynamic_target_peers: bool,
     subnet_subscription_counts: HashMap<SubnetId, usize>,
-    /// Receiver for fork phase transition events.
+    /// Receiver for fork lifecycle state changes.
     /// Used to update ENR domain type on fork activation.
-    fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
+    lifecycle_rx: watch::Receiver<ForkLifecycle>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -98,8 +97,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
-        fork_lifecycle: SharedForkLifecycle,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -116,7 +114,7 @@ impl<R: MessageReceiver> Network<R> {
             config,
             &mut metrics_registry,
             &spec,
-            fork_lifecycle,
+            lifecycle_rx.clone(),
         )
         .await
         .map_err(|e| Box::new(NetworkError::Behaviour(e)))?;
@@ -140,7 +138,7 @@ impl<R: MessageReceiver> Network<R> {
             spec,
             is_dynamic_target_peers,
             subnet_subscription_counts: HashMap::new(),
-            fork_phase_rx,
+            lifecycle_rx,
         };
 
         info!(%peer_id, "Network starting");
@@ -195,8 +193,8 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 }
 
-                Ok(phase) = self.fork_phase_rx.recv() => {
-                    self.on_fork_phase(phase);
+                Ok(()) = self.lifecycle_rx.changed() => {
+                    self.on_fork_lifecycle_change();
                 }
             }
         }
@@ -423,18 +421,16 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    /// Handle fork phase transition events.
+    /// Handle fork lifecycle state changes.
     ///
-    /// Domain type updates are handled by `SharedForkLifecycle` (updated by ForkMonitor).
-    /// This method only handles ENR updates that require direct discv5 interaction.
-    fn on_fork_phase(&mut self, phase: ForkPhase) {
-        if let ForkPhase::Activated { current, .. } = phase {
-            info!(current_fork = %current.fork, "Fork activated, updating ENR");
-
-            // Update ENR so other nodes can discover us with the new fork's domain
-            if let Err(e) = self.discovery().update_enr_domain_type(current.domain_type) {
-                error!(?e, "Failed to update ENR domain type after fork activation");
-            }
+    /// When a fork activates (entering GracePeriod), update the ENR domain type
+    /// so other nodes can discover us with the new fork's domain.
+    fn on_fork_lifecycle_change(&mut self) {
+        let lifecycle = self.lifecycle_rx.borrow_and_update().clone();
+        let domain_type = lifecycle.current_fork_config().domain_type;
+        // Update ENR so other nodes can discover us with the new fork's domain
+        if let Err(e) = self.discovery().update_enr_domain_type(domain_type) {
+            error!(?e, "Failed to update ENR domain type after fork activation");
         }
     }
 

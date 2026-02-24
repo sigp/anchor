@@ -1,6 +1,6 @@
 use std::{hash::Hasher, time::Duration};
 
-use fork::SharedForkLifecycle;
+use fork::ForkLifecycle;
 use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
 use libp2p::{
     identify, ping,
@@ -9,6 +9,7 @@ use libp2p::{
 };
 use prometheus_client::registry::Registry;
 use thiserror::Error;
+use tokio::sync::watch;
 use twox_hash::XxHash64;
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -93,7 +94,7 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
-        fork_lifecycle: SharedForkLifecycle,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Self, BehaviourError> {
         let identify = {
             let local_public_key = local_keypair.public();
@@ -157,12 +158,8 @@ impl AnchorBehaviour {
 
         let discovery = {
             // Build and start the discovery sub-behaviour
-            let mut discovery = Discovery::new(
-                local_keypair.clone(),
-                network_config,
-                fork_lifecycle.clone(),
-            )
-            .await?;
+            let mut discovery =
+                Discovery::new(local_keypair.clone(), network_config, lifecycle_rx.clone()).await?;
             // start searching for peers
             discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
             discovery
@@ -172,7 +169,7 @@ impl AnchorBehaviour {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
-            PeerManager::new(network_config, one_epoch_duration, fork_lifecycle.clone())
+            PeerManager::new(network_config, one_epoch_duration, lifecycle_rx.clone())
         };
 
         let handshake = {
@@ -182,7 +179,7 @@ impl AnchorBehaviour {
                 consensus_node: "lighthouse/v1.5.0".to_string(),
                 subnets: "00000000000000000000000000000000".to_string(),
             };
-            handshake::Behaviour::new(local_keypair, fork_lifecycle, metadata)
+            handshake::Behaviour::new(local_keypair, lifecycle_rx, metadata)
         };
 
         let upnp = Toggle::from(

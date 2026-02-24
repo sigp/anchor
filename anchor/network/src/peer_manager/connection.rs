@@ -4,7 +4,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
-use fork::{Fork, ForkLifecycle, SharedForkLifecycle};
+use fork::{Fork, ForkLifecycle};
 use libp2p::{
     Multiaddr,
     connection_limits::{self, ConnectionLimits},
@@ -15,6 +15,7 @@ use peer_store::memory_store::MemoryStore;
 use ssz_types::{Bitfield, length::Fixed, typenum::U128};
 use subnet_service::SubnetId;
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::{ClientType, PeerInfo, discovery, metrics::PEERS_CONNECTED};
 
@@ -70,9 +71,9 @@ pub struct ConnectionManager {
     // the bit for the same subnet on another fork's topic.
     // See: https://github.com/sigp/anchor/issues/818
     observed_peer_subnets: HashMap<PeerId, ObservedPeerSubnets>,
-    // Shared fork lifecycle state for fork-aware peer selection.
+    // Fork lifecycle receiver for fork-aware peer selection.
     // After the grace period ends, only peers on the current fork are considered useful.
-    fork_lifecycle: SharedForkLifecycle,
+    lifecycle_rx: watch::Receiver<ForkLifecycle>,
     // Track inbound vs outbound connection counts
     inbound_count: usize,
     outbound_count: usize,
@@ -99,8 +100,8 @@ impl ConnectionManager {
         connection_limits::Behaviour::new(limits)
     }
 
-    /// Initialize ConnectionManager with a target peer count and shared fork lifecycle.
-    pub fn new(target_peers: usize, fork_lifecycle: SharedForkLifecycle) -> Self {
+    /// Initialize ConnectionManager with a target peer count and fork lifecycle receiver.
+    pub fn new(target_peers: usize, lifecycle_rx: watch::Receiver<ForkLifecycle>) -> Self {
         let connection_limits = Self::create_connection_limits(target_peers);
 
         let max_priority_peers = (target_peers as f32
@@ -113,7 +114,7 @@ impl ConnectionManager {
             target_peers,
             max_with_priority_peers: max_priority_peers,
             observed_peer_subnets: HashMap::new(),
-            fork_lifecycle,
+            lifecycle_rx,
             inbound_count: 0,
             outbound_count: 0,
         }
@@ -264,7 +265,7 @@ impl ConnectionManager {
     /// Used for making decisions about existing connections and subnet health.
     pub fn count_observed_peers_for_subnets(&self, subnet_ids: &[SubnetId]) -> Vec<usize> {
         // Read the fork lifecycle once for the entire iteration rather than per-peer.
-        let lifecycle = self.fork_lifecycle.get();
+        let lifecycle = self.lifecycle_rx.borrow().clone();
         let mut peer_subnet_counts = vec![0; subnet_ids.len()];
         for peer in self.connected.iter() {
             let Some(subnets) = self.get_peer_subnets_for_lifecycle(peer, &lifecycle) else {
@@ -343,7 +344,7 @@ impl ConnectionManager {
     /// operations over many peers, prefer [`get_peer_subnets_for_lifecycle`] with
     /// a pre-read lifecycle value to avoid repeated lock acquisition.
     fn get_peer_subnets_observed_only(&self, peer: &PeerId) -> Option<Bitfield<Fixed<U128>>> {
-        let lifecycle = self.fork_lifecycle.get();
+        let lifecycle = self.lifecycle_rx.borrow().clone();
         self.get_peer_subnets_for_lifecycle(peer, &lifecycle)
     }
 
@@ -364,7 +365,7 @@ impl ConnectionManager {
             ObservedPeerSubnets::Known(fork_map) => match lifecycle {
                 ForkLifecycle::Normal { current, .. } => Some(
                     fork_map
-                        .get(current)
+                        .get(&current.fork)
                         .cloned()
                         .unwrap_or_else(Bitfield::default),
                 ),
@@ -603,11 +604,26 @@ impl ConnectionManager {
 
 #[cfg(test)]
 mod tests {
+    use fork::ForkConfig;
+    use types::Epoch;
+
     use super::*;
 
     // ==================== Test constants ====================
 
     const TARGET_PEERS: usize = 50;
+    const ALAN_DOMAIN: ssv_types::domain_type::DomainType =
+        ssv_types::domain_type::DomainType([0, 0, 0, 1]);
+    const BOOLE_DOMAIN: ssv_types::domain_type::DomainType =
+        ssv_types::domain_type::DomainType([0, 0, 0, 2]);
+
+    fn alan_config() -> ForkConfig {
+        ForkConfig::new(Fork::Alan, Epoch::new(0), ALAN_DOMAIN)
+    }
+
+    fn boole_config() -> ForkConfig {
+        ForkConfig::new(Fork::Boole, Epoch::new(100), BOOLE_DOMAIN)
+    }
 
     // Subnet IDs used across tests. Each has a distinct role to aid readability.
     const SUBNET_A: u64 = 5;
@@ -627,14 +643,14 @@ mod tests {
     /// Defaults to `ForkLifecycle::Normal { current: Alan }` for backward compatibility.
     fn create_test_manager() -> ConnectionManager {
         create_test_manager_with_lifecycle(ForkLifecycle::Normal {
-            current: Fork::Alan,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+            current: alan_config(),
         })
     }
 
     /// Creates a `ConnectionManager` with a specific fork lifecycle state.
     fn create_test_manager_with_lifecycle(lifecycle: ForkLifecycle) -> ConnectionManager {
-        ConnectionManager::new(TARGET_PEERS, SharedForkLifecycle::new(lifecycle))
+        let (_tx, rx) = watch::channel(lifecycle);
+        ConnectionManager::new(TARGET_PEERS, rx)
     }
 
     /// Connects a peer to the manager (adds to `connected` and marks observed
@@ -703,9 +719,8 @@ mod tests {
     /// Creates a `ConnectionManager` in GracePeriod lifecycle for multi-fork tests.
     fn create_grace_period_manager() -> ConnectionManager {
         create_test_manager_with_lifecycle(ForkLifecycle::GracePeriod {
-            current: Fork::Boole,
-            previous: Fork::Alan,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 2]),
+            current: boole_config(),
+            previous: alan_config(),
         })
     }
 
@@ -831,9 +846,8 @@ mod tests {
     fn test_newly_connected_peer_is_unknown_and_returns_none_in_transition() {
         // Arrange: WarmUp state
         let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::WarmUp {
-            current: Fork::Alan,
-            upcoming: Fork::Boole,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+            current: alan_config(),
+            upcoming: boole_config(),
         });
         let peer = connect_random_peer(&mut mgr);
 
@@ -848,9 +862,8 @@ mod tests {
     fn test_known_empty_blocks_enr_fallback_path() {
         // Arrange: WarmUp state with no peer ENR available in store
         let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::WarmUp {
-            current: Fork::Alan,
-            upcoming: Fork::Boole,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+            current: alan_config(),
+            upcoming: boole_config(),
         });
         let peer = connect_random_peer(&mut mgr);
         let peer_store = MemoryStore::new(peer_store::memory_store::Config::default());
@@ -1025,9 +1038,8 @@ mod tests {
     fn test_warmup_aggregates_both_forks() {
         // Arrange: WarmUp state (preparing for Boole)
         let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::WarmUp {
-            current: Fork::Alan,
-            upcoming: Fork::Boole,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 1]),
+            current: alan_config(),
+            upcoming: boole_config(),
         });
         let peer = connect_random_peer(&mut mgr);
 
@@ -1057,8 +1069,7 @@ mod tests {
     fn test_normal_boole_only_shows_boole_bitmap() {
         // Arrange: Normal state on Boole (post-grace-period)
         let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::Normal {
-            current: Fork::Boole,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 2]),
+            current: boole_config(),
         });
         let peer = connect_random_peer(&mut mgr);
 
@@ -1077,8 +1088,7 @@ mod tests {
     fn test_peer_only_on_alan_becomes_invisible_after_boole_normal() {
         // Arrange: peer only subscribed to Alan subnets
         let mut mgr = create_test_manager_with_lifecycle(ForkLifecycle::Normal {
-            current: Fork::Boole,
-            domain_type: ssv_types::domain_type::DomainType([0, 0, 0, 2]),
+            current: boole_config(),
         });
         let peer = connect_random_peer(&mut mgr);
 

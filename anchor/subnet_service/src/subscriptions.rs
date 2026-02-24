@@ -5,10 +5,10 @@ use std::{
 };
 
 use database::{NetworkState, UniqueIndex};
-use fork::{Fork, ForkConfig, ForkPhase};
+use fork::{Fork, ForkConfig, ForkLifecycle};
 use slot_clock::SlotClock;
 use ssv_types::OperatorId;
-use tokio::time::sleep;
+use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, warn};
 use types::EthSpec;
 
@@ -20,6 +20,21 @@ use crate::{
 pub(crate) struct ServiceState {
     pub(crate) forks: HashMap<Fork, ForkSubscriptions>,
     pub(crate) fork_to_score: Fork,
+}
+
+impl ServiceState {
+    fn set_subscribed_forks<const N: usize>(&mut self, forks: [ForkConfig; N]) {
+        // Remove forks that we should no longer be subscribed to.
+        self.forks
+            .retain(|fork, _| forks.iter().any(|f| f.fork == *fork));
+        // Ensure we track subscriptions for all forks that we should be subscribed to.
+        for fork in forks {
+            self.forks.entry(fork.fork).or_insert(ForkSubscriptions {
+                config: fork.clone(),
+                currently_subscribed: HashSet::new(),
+            });
+        }
+    }
 }
 
 pub(crate) struct ForkSubscriptions {
@@ -66,15 +81,10 @@ impl<S: SlotClock> SubnetService<S> {
     /// This method takes `Arc<Self>` to allow the service to be shared while running.
     pub async fn run<E: EthSpec>(
         self: Arc<Self>,
-        mut fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
+        mut lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) {
         let mut db = self.db.clone();
-        let Ok(mut service_state) = self.initial_service_state() else {
-            error!("Failed to create initial subnet service state");
-            return;
-        };
-
-        self.handle_subnet_changes::<E>(&mut service_state).await;
+        let mut service_state = self.initial_service_state::<E>(&mut lifecycle_rx).await;
 
         loop {
             let delay = calculate_duration_to_next_epoch::<E>(&*self.slot_clock);
@@ -85,80 +95,53 @@ impl<S: SlotClock> SubnetService<S> {
                 _ = sleep(delay), if !self.disable_gossipsub_topic_scoring => {
                     self.send_scoring_rate_updates::<E>(&service_state).await;
                 }
-                Ok(phase) = fork_phase_rx.recv() => {
-                    match phase {
-                        ForkPhase::Preparing { upcoming } => {
-                            service_state.forks.insert(upcoming.fork, ForkSubscriptions {
-                                config: upcoming,
-                                currently_subscribed: HashSet::new(),
-                            });
-                        }
-                        ForkPhase::Activated { current, .. } => {
-                            service_state.fork_to_score = current.fork;
-                            service_state.forks.entry(current.fork).or_insert_with(|| ForkSubscriptions {
-                                config: current,
-                                currently_subscribed: HashSet::new(),
-                            });
-                        }
-                        ForkPhase::GracePeriodEnded { previous, .. } => {
-                            if let Some(fork) = service_state.forks.remove(&previous.fork)
-                                && let Err(err) = self.send_unsubscribes(
-                                    &fork.config,
-                                    fork.currently_subscribed
-                                ).await
-                            {
-                                error!(
-                                    fork = ?previous.fork,
-                                    ?err,
-                                    "Failed to unsubscribe from forks of older fork"
-                                )
-                            }
-                        },
-                    };
-
-                    self.handle_subnet_changes::<E>(&mut service_state).await;
+                Ok(()) = lifecycle_rx.changed() => {
+                    let new_lifecycle = lifecycle_rx.borrow_and_update().clone();
+                    self.on_lifecycle_transition(new_lifecycle, &mut service_state);
                 }
             }
         }
     }
 
-    fn initial_service_state(&self) -> Result<ServiceState, ()> {
-        let schedule = self.router().fork_schedule();
-        let epoch = self
-            .slot_clock
-            .now_or_genesis()
-            .ok_or(())?
-            .epoch(self.router().slots_per_epoch());
-
-        let mut forks = HashMap::new();
-
-        // The current fork will be subscribed to and scored
-        let current_fork_config = schedule.active_fork_config(epoch).clone();
-        let current_fork = current_fork_config.fork;
-        forks.insert(
-            current_fork,
-            ForkSubscriptions {
-                config: current_fork_config,
-                currently_subscribed: HashSet::new(),
-            },
-        );
-
-        // The fork within the preparation period will be subscribed to but not scored
-        let preparation_fork = schedule.active_fork_config(epoch + fork::FORK_PREPARATION_EPOCHS);
-        if preparation_fork.fork != current_fork {
-            forks.insert(
-                preparation_fork.fork,
-                ForkSubscriptions {
-                    config: preparation_fork.clone(),
-                    currently_subscribed: HashSet::new(),
-                },
-            );
+    /// Handle a lifecycle state transition by updating the service's fork subscriptions.
+    ///
+    /// Compares the previous and new lifecycle states and performs the corresponding
+    /// subscription management:
+    /// - Normal → WarmUp: insert upcoming fork (subscribe to new topics)
+    /// - WarmUp/Normal → GracePeriod: update fork_to_score, insert current fork
+    /// - GracePeriod → Normal: remove & unsubscribe previous fork
+    /// - GracePeriod → WarmUp: remove previous + insert upcoming (overlapping transition)
+    fn on_lifecycle_transition(&self, new: ForkLifecycle, service_state: &mut ServiceState) {
+        service_state.fork_to_score = new.current_fork_config().fork;
+        match new {
+            ForkLifecycle::Normal { current } => {
+                service_state.set_subscribed_forks([current]);
+            }
+            ForkLifecycle::WarmUp { current, upcoming } => {
+                service_state.set_subscribed_forks([current, upcoming]);
+            }
+            ForkLifecycle::GracePeriod { current, previous } => {
+                service_state.set_subscribed_forks([current, previous]);
+            }
         }
+    }
 
-        Ok(ServiceState {
-            forks,
-            fork_to_score: current_fork,
-        })
+    async fn initial_service_state<E: EthSpec>(
+        &self,
+        lifecycle_rx: &mut watch::Receiver<ForkLifecycle>,
+    ) -> ServiceState {
+        let mut service_state = ServiceState {
+            forks: HashMap::new(),
+            // This will be updated by the `on_lifecycle_transition` call below.
+            fork_to_score: Fork::Alan,
+        };
+
+        let initial_lifecycle = lifecycle_rx.borrow_and_update().clone();
+        self.on_lifecycle_transition(initial_lifecycle, &mut service_state);
+
+        self.handle_subnet_changes::<E>(&mut service_state).await;
+
+        service_state
     }
 
     /// Compare current and previous subnets, emitting subscribe/unsubscribe events.
