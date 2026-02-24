@@ -46,11 +46,13 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
 
         // Validation tests
         "signedssvmsg.SignedSSVMessageTest" => {
-            Some(run_test::<types::SignedSSVMessageTest>(path, contents))
+            DispatchOutcome::Executed(run_test::<types::SignedSSVMessageTest>(path, contents))
         }
-        "ssvmsg.SSVMessageTest" => Some(run_test::<types::SSVMessageTest>(path, contents)),
+        "ssvmsg.SSVMessageTest" => {
+            DispatchOutcome::Executed(run_test::<types::SSVMessageTest>(path, contents))
+        }
         "partialsigmessage.MsgSpecTest" => {
-            Some(run_test::<types::PartialSigMsgSpecTest>(path, contents))
+            DispatchOutcome::Executed(run_test::<types::PartialSigMsgSpecTest>(path, contents))
         }
 
         // TODO(spec-tests): Add more test types here as they are implemented.

@@ -1,7 +1,10 @@
 use serde::Deserialize;
 use ssv_types::{
     OperatorId, ValidatorIndex,
-    partial_sig::{PartialSignatureKind, PartialSignatureMessagesError},
+    partial_sig::{
+        PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
+        PartialSignatureMessagesError,
+    },
 };
 use ssz::{Decode, Encode};
 use ssz_types::VariableList;
@@ -10,16 +13,12 @@ use types::Hash256;
 
 use crate::{
     SpecTest,
-    utils::deserializers::{deserialize_hash256_list_option, deserialize_hex_option},
+    utils::{
+        decode_base64,
+        deserializers::{deserialize_hash256_list_option, deserialize_hex_option},
+        error_codes,
+    },
 };
-
-/// Go error codes from ssv-spec `types/error.go` relevant to PartialSignatureMessages validation.
-mod error_codes {
-    pub const NO_ERROR: i64 = 0;
-    pub const ZERO_SIGNER_NOT_ALLOWED: i64 = 17;
-    pub const INCONSISTENT_SIGNERS: i64 = 18;
-    pub const NO_PARTIAL_SIG_MESSAGES: i64 = 19;
-}
 
 /// Intermediate struct for deserializing individual partial signature messages from JSON.
 ///
@@ -58,8 +57,7 @@ struct TestPartialSignatureMessages {
 
 /// Top-level test fixture for `MsgSpecTest`.
 ///
-/// Uses local validation (Anchor's `PartialSignatureMessages` has no `validate()` method —
-/// validation lives in `message_validator` in production). Maps validation errors to Go
+/// Calls `PartialSignatureMessages::validate()` and maps validation errors to Go
 /// integer error codes.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -74,21 +72,37 @@ pub struct PartialSigMsgSpecTest {
 
 impl SpecTest for PartialSigMsgSpecTest {
     fn run(&self) -> Result<(), String> {
+        // Go's MsgSpecTest checks all messages and keeps the last error code.
+        // This differs from `SignedSSVMessageTest` which checks per-message.
         let mut last_error_code: i64 = error_codes::NO_ERROR;
 
         for (i, msg) in self.messages.iter().enumerate() {
-            // Validate the message (local validation — mirrors Go's msg.Validate())
             match Self::validate_message(msg) {
                 Ok(()) => {}
                 Err(code) => last_error_code = code,
             }
 
+            // Build the Anchor type once if encoding or root checks are needed
+            let anchor_msg = if self.encoded_messages.is_some() || self.expected_roots.is_some() {
+                Some(
+                    Self::build_anchor_message(msg)
+                        .map_err(|e| format!("Failed to build message {i}: {e}"))?,
+                )
+            } else {
+                None
+            };
+
             // Test encoding/decoding if encoded messages are provided
             if let Some(ref encoded_messages) = self.encoded_messages {
-                let anchor_msg = Self::build_anchor_message(msg)
-                    .map_err(|e| format!("Failed to build message {i}: {e}"))?;
+                let anchor_msg = anchor_msg.as_ref().expect("built above when Some");
 
-                let encoded_bytes = Self::base64_decode(&encoded_messages[i])
+                let expected = encoded_messages.get(i).ok_or_else(|| {
+                    format!(
+                        "Message index {i} out of range for encoded_messages (len {})",
+                        encoded_messages.len()
+                    )
+                })?;
+                let encoded_bytes = decode_base64(expected)
                     .map_err(|e| format!("Failed to decode base64 for message {i}: {e}"))?;
 
                 let actual_encoded = anchor_msg.as_ssz_bytes();
@@ -100,10 +114,8 @@ impl SpecTest for PartialSigMsgSpecTest {
                     ));
                 }
 
-                let decoded = ssv_types::partial_sig::PartialSignatureMessages::from_ssz_bytes(
-                    &actual_encoded,
-                )
-                .map_err(|e| format!("Roundtrip decode failed for message {i}: {e:?}"))?;
+                let decoded = PartialSignatureMessages::from_ssz_bytes(&actual_encoded)
+                    .map_err(|e| format!("Roundtrip decode failed for message {i}: {e:?}"))?;
 
                 if decoded.tree_hash_root() != anchor_msg.tree_hash_root() {
                     return Err(format!("Root mismatch after roundtrip for message {i}"));
@@ -112,14 +124,18 @@ impl SpecTest for PartialSigMsgSpecTest {
 
             // Check expected roots if provided
             if let Some(ref expected_roots) = self.expected_roots {
-                let anchor_msg = Self::build_anchor_message(msg)
-                    .map_err(|e| format!("Failed to build message {i}: {e}"))?;
+                let anchor_msg = anchor_msg.as_ref().expect("built above when Some");
 
+                let expected_root = expected_roots.get(i).ok_or_else(|| {
+                    format!(
+                        "Message index {i} out of range for expected_roots (len {})",
+                        expected_roots.len()
+                    )
+                })?;
                 let root = anchor_msg.tree_hash_root();
-                if root != expected_roots[i] {
+                if root != *expected_root {
                     return Err(format!(
-                        "Root mismatch for message {i}: expected {}, got {root}",
-                        expected_roots[i],
+                        "Root mismatch for message {i}: expected {expected_root}, got {root}",
                     ));
                 }
             }
@@ -142,10 +158,10 @@ impl PartialSigMsgSpecTest {
     /// Builds a production type from the test fixture (with placeholder BLS data,
     /// since validation only inspects signer fields) and calls `validate()`.
     fn validate_message(msg: &TestPartialSignatureMessages) -> Result<(), i64> {
-        let messages: Vec<ssv_types::partial_sig::PartialSignatureMessage> = msg
+        let messages: Vec<PartialSignatureMessage> = msg
             .messages
             .iter()
-            .map(|m| ssv_types::partial_sig::PartialSignatureMessage {
+            .map(|m| PartialSignatureMessage {
                 partial_signature: bls::Signature::empty(),
                 signing_root: Hash256::default(),
                 signer: m.signer,
@@ -153,7 +169,7 @@ impl PartialSigMsgSpecTest {
             })
             .collect();
 
-        let production_msg = ssv_types::partial_sig::PartialSignatureMessages {
+        let production_msg = PartialSignatureMessages {
             kind: msg.kind,
             slot: types::Slot::new(0),
             messages: VariableList::new(messages).expect("test fixture within bounds"),
@@ -171,7 +187,7 @@ impl PartialSigMsgSpecTest {
     /// Only used for encoding/root tests where we need the actual Anchor type.
     fn build_anchor_message(
         msg: &TestPartialSignatureMessages,
-    ) -> Result<ssv_types::partial_sig::PartialSignatureMessages, String> {
+    ) -> Result<PartialSignatureMessages, String> {
         let slot = msg
             .slot
             .parse::<u64>()
@@ -188,14 +204,13 @@ impl PartialSigMsgSpecTest {
                 .map_err(|e| format!("Invalid BLS signature: {e:?}"))?;
 
             let root_bytes = m.signing_root.as_ref().ok_or("Missing signing_root")?;
-            let signing_root = if root_bytes.len() == 32 {
-                Hash256::from_slice(root_bytes)
-            } else {
+            if root_bytes.len() != 32 {
                 return Err(format!(
                     "Invalid signing_root length: expected 32, got {}",
                     root_bytes.len()
                 ));
-            };
+            }
+            let signing_root = Hash256::from_slice(root_bytes);
 
             let validator_index = m
                 .validator_index
@@ -204,7 +219,7 @@ impl PartialSigMsgSpecTest {
                 .parse::<usize>()
                 .map_err(|e| format!("Invalid validator_index: {e}"))?;
 
-            messages.push(ssv_types::partial_sig::PartialSignatureMessage {
+            messages.push(PartialSignatureMessage {
                 partial_signature,
                 signing_root,
                 signer: m.signer,
@@ -212,18 +227,11 @@ impl PartialSigMsgSpecTest {
             });
         }
 
-        Ok(ssv_types::partial_sig::PartialSignatureMessages {
+        Ok(PartialSignatureMessages {
             kind: msg.kind,
             slot: types::Slot::new(slot),
             messages: VariableList::new(messages)
                 .map_err(|_| "Too many partial signature messages".to_string())?,
         })
-    }
-
-    fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        STANDARD
-            .decode(s)
-            .map_err(|e| format!("base64 decode error: {e}"))
     }
 }

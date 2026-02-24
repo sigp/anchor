@@ -6,23 +6,10 @@ use ssv_types::{
 };
 use ssz::Encode;
 
-use crate::{SpecTest, utils::deserializers::deserialize_base64_list};
-
-/// Go error codes from ssv-spec `types/error.go` (iota + 1).
-/// Only those relevant to `SignedSSVMessage.Validate()` and RSA verification.
-mod error_codes {
-    pub const NO_ERROR: i64 = 0;
-    pub const NON_UNIQUE_SIGNER: i64 = 9;
-    pub const INCORRECT_NUMBER_OF_SIGNATURES: i64 = 12;
-    pub const EMPTY_SIGNATURE: i64 = 13;
-    pub const NIL_SSV_MESSAGE: i64 = 14;
-    pub const NO_SIGNATURES: i64 = 15;
-    pub const NO_SIGNERS: i64 = 16;
-    pub const ZERO_SIGNER_NOT_ALLOWED: i64 = 17;
-    pub const SSV_MESSAGE_HAS_INVALID_SIGNATURE: i64 = 46;
-    /// Sentinel for Anchor-specific errors without Go equivalents.
-    pub const UNMAPPED_ERROR_CODE: i64 = -1;
-}
+use crate::{
+    SpecTest,
+    utils::{deserializers::deserialize_base64_list, error_codes},
+};
 
 /// Intermediate struct for a single signed message from the fixture.
 ///
@@ -101,7 +88,7 @@ impl SignedSSVMessageTest {
             .ok_or(error_codes::NIL_SSV_MESSAGE)?;
 
         // Pad signatures to [u8; 256] for Anchor's type requirement
-        let signatures = Self::prepare_signatures(&msg.signatures);
+        let signatures = Self::prepare_signatures(&msg.signatures)?;
 
         // Use Anchor's actual validation via SignedSSVMessage::new()
         let signed_msg = SignedSSVMessage::new(
@@ -116,15 +103,20 @@ impl SignedSSVMessageTest {
         self.verify_rsa_signatures(&signed_msg, ssv_message)
     }
 
-    /// Pad variable-length signatures to `[u8; 256]` arrays for Anchor's type requirement.
-    fn prepare_signatures(signatures: &[Vec<u8>]) -> Vec<[u8; 256]> {
+    /// Pad or truncate variable-length signatures to `[u8; 256]` arrays for Anchor's type.
+    ///
+    /// Returns `Err` if any signature exceeds 256 bytes, since truncation would silently
+    /// alter the signature data.
+    fn prepare_signatures(signatures: &[Vec<u8>]) -> Result<Vec<[u8; 256]>, i64> {
         signatures
             .iter()
             .map(|sig| {
+                if sig.len() > 256 {
+                    return Err(error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE);
+                }
                 let mut arr = [0u8; 256];
-                let len = sig.len().min(256);
-                arr[..len].copy_from_slice(&sig[..len]);
-                arr
+                arr[..sig.len()].copy_from_slice(sig);
+                Ok(arr)
             })
             .collect()
     }
@@ -140,8 +132,12 @@ impl SignedSSVMessageTest {
         };
 
         let encoded_msg = ssv_message.as_ssz_bytes();
+        let signatures = signed_msg.signatures();
 
         for (i, pk_b64) in pk_strings.iter().enumerate() {
+            let sig: &[u8] = signatures
+                .get(i)
+                .ok_or(error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
             let rsa_key = operator_key::public::from_base64(pk_b64.as_bytes())
                 .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
 
@@ -155,7 +151,6 @@ impl SignedSSVMessageTest {
                 .update(&encoded_msg)
                 .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
 
-            let sig: &[u8] = &signed_msg.signatures()[i];
             let valid = verifier
                 .verify(sig)
                 .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;

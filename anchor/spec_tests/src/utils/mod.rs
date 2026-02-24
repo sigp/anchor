@@ -4,8 +4,9 @@ use bls::PublicKeyBytes;
 
 pub mod deserializers;
 pub mod encoding_helpers;
+pub mod error_codes;
 
-pub use encoding_helpers::{check_roundtrip, check_roundtrip_with_root};
+pub use encoding_helpers::{check_roundtrip, check_roundtrip_with_root, decode_base64};
 
 pub static TESTING_VALIDATOR_PUBKEY: LazyLock<PublicKeyBytes> = LazyLock::new(|| {
     PublicKeyBytes::from_str(
