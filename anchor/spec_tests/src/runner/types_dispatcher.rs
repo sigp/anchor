@@ -38,6 +38,7 @@ fn dispatch_fixture_by_prefix(
         // Anchor's `Share` is architecturally different from Go spec's `Share`
         // (different fields, decomposed across multiple types). Not applicable.
         "share.EncodingTest" => {
+            eprintln!("SKIP (known-inapplicable): {prefix}");
             *skipped_known_count += 1;
             None
         }
@@ -105,6 +106,10 @@ pub fn run_all_type_fixtures() {
         executed_count > 0,
         "No type spec test fixtures found in {}",
         dir.display()
+    );
+
+    eprintln!(
+        "{executed_count} executed, {skipped_known_count} skipped (known-inapplicable), {skipped_unknown_count} skipped (not yet implemented)"
     );
 
     if !failures.is_empty() {
