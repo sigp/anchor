@@ -6,10 +6,7 @@ use crate::{
     utils::{TESTING_VALIDATOR_PUBKEY, deserializers::deserialize_hex_message_id_list},
 };
 
-/// SSVMessageTest checks if message IDs belong to the testing validator.
-///
-/// Go reference: `ssvmsg/test.go` -> for each MessageID, checks
-/// `ValidatorPubKey.MessageIDBelongs(msgID)` against `BelongsToValidator`.
+/// Checks if message IDs belong to the testing validator.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SSVMessageTest {

@@ -115,8 +115,14 @@ fn validate_partial_signature_message_semantics(
     })?;
 
     // Rule: Partial signature signer must match the signed message's signer.
-    // validate() ensures all inner signers are the same, so check one.
-    if partial_signature_messages.messages[0].signer != signer {
+    // validate() ensures all inner signers are the same, so checking one suffices.
+    if partial_signature_messages
+        .messages
+        .first()
+        .expect("validate() ensures non-empty")
+        .signer
+        != signer
+    {
         return Err(ValidationFailure::InconsistentSigners);
     }
 

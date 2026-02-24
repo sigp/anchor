@@ -33,37 +33,31 @@ pub fn deserialize_base64_list<'de, D: serde::Deserializer<'de>>(
 pub fn deserialize_base64_list_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<Vec<u8>>>, D::Error> {
-    let opt: Option<Vec<String>> = Option::deserialize(deserializer)?;
-    match opt {
-        None => Ok(None),
-        Some(strings) => {
-            let result: Result<Vec<Vec<u8>>, _> = strings
+    Option::<Vec<String>>::deserialize(deserializer)?
+        .map(|strings| {
+            strings
                 .into_iter()
                 .map(|s| {
                     STANDARD.decode(&s).map_err(|e| {
                         serde::de::Error::custom(format!("Failed to decode base64: {e}"))
                     })
                 })
-                .collect();
-            result.map(Some)
-        }
-    }
+                .collect()
+        })
+        .transpose()
 }
 
 /// Deserializes an optional hex string (with or without `0x` prefix) into `Option<Vec<u8>>`.
 pub fn deserialize_hex_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<u8>>, D::Error> {
-    let opt: Option<String> = Option::deserialize(deserializer)?;
-    match opt {
-        None => Ok(None),
-        Some(hex_str) => {
+    Option::<String>::deserialize(deserializer)?
+        .map(|hex_str| {
             let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
             hex::decode(hex_str)
-                .map(Some)
                 .map_err(|e| serde::de::Error::custom(format!("Failed to decode hex: {e}")))
-        }
-    }
+        })
+        .transpose()
 }
 
 /// Deserializes a JSON byte array (array of 32 u8 values) into `Hash256`.
@@ -84,11 +78,9 @@ pub fn deserialize_bytes_to_hash256<'de, D: serde::Deserializer<'de>>(
 pub fn deserialize_hash256_list_option<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Vec<Hash256>>, D::Error> {
-    let opt: Option<Vec<Vec<u8>>> = Option::deserialize(deserializer)?;
-    match opt {
-        None => Ok(None),
-        Some(byte_arrays) => {
-            let result: Result<Vec<Hash256>, _> = byte_arrays
+    Option::<Vec<Vec<u8>>>::deserialize(deserializer)?
+        .map(|byte_arrays| {
+            byte_arrays
                 .into_iter()
                 .map(|bytes| {
                     if bytes.len() != 32 {
@@ -99,10 +91,9 @@ pub fn deserialize_hash256_list_option<'de, D: serde::Deserializer<'de>>(
                     }
                     Ok(Hash256::from_slice(&bytes))
                 })
-                .collect();
-            result.map(Some)
-        }
-    }
+                .collect()
+        })
+        .transpose()
 }
 
 /// Deserializes a vector of hex strings into `Vec<MessageId>`.
@@ -112,14 +103,10 @@ pub fn deserialize_hash256_list_option<'de, D: serde::Deserializer<'de>>(
 pub fn deserialize_hex_message_id_list<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<MessageId>, D::Error> {
-    let hex_strings: Vec<String> = Vec::deserialize(deserializer)?;
-    let mut result = Vec::with_capacity(hex_strings.len());
-
-    for hex_str in hex_strings {
-        result.push(deserialize_hex_message_id(
-            serde::de::value::StrDeserializer::<D::Error>::new(&hex_str),
-        )?);
-    }
-
-    Ok(result)
+    Vec::<String>::deserialize(deserializer)?
+        .iter()
+        .map(|hex_str| {
+            deserialize_hex_message_id(serde::de::value::StrDeserializer::<D::Error>::new(hex_str))
+        })
+        .collect()
 }

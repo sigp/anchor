@@ -11,10 +11,7 @@ use crate::{
     utils::{deserializers::deserialize_base64_list, error_codes},
 };
 
-/// Intermediate struct for a single signed message from the fixture.
-///
-/// `SSVMessage` is `Option` because Go uses a pointer (can be null in error fixtures).
-/// `SSVMessage` deserialization is handled by the feature-gated serde support in `ssv_types`.
+/// Test fixture shim. `SSVMessage` is `Option` because Go uses a pointer (null in error fixtures).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct TestSignedSSVMessage {
@@ -33,9 +30,6 @@ struct TestSignedSSVMessage {
 }
 
 /// Top-level test fixture for `SignedSSVMessageTest`.
-///
-/// Uses Anchor's `SignedSSVMessage::new()` + `validate()` to exercise actual
-/// validation code, then maps `SignedSSVMessageError` variants to Go error codes.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SignedSSVMessageTest {
@@ -65,32 +59,15 @@ impl SpecTest for SignedSSVMessageTest {
 }
 
 impl SignedSSVMessageTest {
-    /// Validate a signed SSV message using Anchor's actual validation code.
-    ///
-    /// Two pre-checks are needed before calling `SignedSSVMessage::new()`:
-    /// 1. Empty signatures — `new()` requires `[u8; 256]` per signature
-    /// 2. Null SSVMessage — `new()` requires an `SSVMessage` parameter
-    ///
-    /// After construction, `new()` calls `validate()` internally, catching all
-    /// other validation errors which we map to Go error codes.
+    /// Validate via `SignedSSVMessage::new()` (which calls `validate()` internally).
     fn validate_message(&self, msg: &TestSignedSSVMessage) -> Result<(), i64> {
-        // Pre-check: empty signatures (Anchor requires [u8; 256], can't represent 0 bytes)
-        for sig in &msg.signatures {
-            if sig.is_empty() {
-                return Err(error_codes::EMPTY_SIGNATURE);
-            }
-        }
-
-        // Pre-check: null SSVMessage (Anchor's new() requires an SSVMessage parameter)
         let ssv_message = msg
             .ssv_message
             .as_ref()
             .ok_or(error_codes::NIL_SSV_MESSAGE)?;
 
-        // Pad signatures to [u8; 256] for Anchor's type requirement
         let signatures = Self::prepare_signatures(&msg.signatures)?;
 
-        // Use Anchor's actual validation via SignedSSVMessage::new()
         let signed_msg = SignedSSVMessage::new(
             signatures,
             msg.operator_ids.clone(),
@@ -99,18 +76,17 @@ impl SignedSSVMessageTest {
         )
         .map_err(|e| Self::error_code_for(&e))?;
 
-        // Verify RSA signatures if public keys are provided
         self.verify_rsa_signatures(&signed_msg, ssv_message)
     }
 
-    /// Pad or truncate variable-length signatures to `[u8; 256]` arrays for Anchor's type.
-    ///
-    /// Returns `Err` if any signature exceeds 256 bytes, since truncation would silently
-    /// alter the signature data.
+    /// Normalize signatures to `[u8; 256]`: reject empty/oversized, zero-pad short ones.
     fn prepare_signatures(signatures: &[Vec<u8>]) -> Result<Vec<[u8; 256]>, i64> {
         signatures
             .iter()
             .map(|sig| {
+                if sig.is_empty() {
+                    return Err(error_codes::EMPTY_SIGNATURE);
+                }
                 if sig.len() > 256 {
                     return Err(error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE);
                 }
@@ -121,7 +97,7 @@ impl SignedSSVMessageTest {
             .collect()
     }
 
-    /// Verify RSA signatures against the SSZ-encoded SSVMessage.
+    /// Verify RSA signatures against the SSZ-encoded `SSVMessage`.
     fn verify_rsa_signatures(
         &self,
         signed_msg: &SignedSSVMessage,
@@ -131,35 +107,34 @@ impl SignedSSVMessageTest {
             return Ok(());
         };
 
-        let encoded_msg = ssv_message.as_ssz_bytes();
+        let ssz_bytes = ssv_message.as_ssz_bytes();
         let signatures = signed_msg.signatures();
 
         for (i, pk_b64) in pk_strings.iter().enumerate() {
             let sig: &[u8] = signatures
                 .get(i)
                 .ok_or(error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
-            let rsa_key = operator_key::public::from_base64(pk_b64.as_bytes())
-                .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
 
-            let pkey = PKey::from_rsa(rsa_key)
+            Self::verify_single_rsa(sig, &ssz_bytes, pk_b64)
                 .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
-
-            let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey)
-                .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
-
-            verifier
-                .update(&encoded_msg)
-                .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
-
-            let valid = verifier
-                .verify(sig)
-                .map_err(|_| error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE)?;
-
-            if !valid {
-                return Err(error_codes::SSV_MESSAGE_HAS_INVALID_SIGNATURE);
-            }
         }
 
+        Ok(())
+    }
+
+    /// Verify a single RSA-PKCS1v15-SHA256 signature.
+    fn verify_single_rsa(
+        sig: &[u8],
+        msg: &[u8],
+        pk_b64: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let rsa_key = operator_key::public::from_base64(pk_b64.as_bytes())?;
+        let pkey = PKey::from_rsa(rsa_key)?;
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey)?;
+        verifier.update(msg)?;
+        if !verifier.verify(sig)? {
+            return Err("RSA signature verification failed".into());
+        }
         Ok(())
     }
 
@@ -173,15 +148,15 @@ impl SignedSSVMessageTest {
             SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
                 error_codes::INCORRECT_NUMBER_OF_SIGNATURES
             }
+            // Unreachable: `prepare_signatures()` pads all sigs to exactly `[u8; 256]`
+            // before `new()` runs, so the size check inside `new()` always passes.
             SignedSSVMessageError::WrongRSASignatureSize { .. } => error_codes::EMPTY_SIGNATURE,
             SignedSSVMessageError::TooManySignatures { .. }
             | SignedSSVMessageError::TooManyOperatorIDs { .. }
             | SignedSSVMessageError::FullDataTooLong { .. }
             | SignedSSVMessageError::SignersNotSorted
             | SignedSSVMessageError::SSVMessageError(_) => {
-                // These don't have direct Go error code equivalents in the current fixtures.
-                // Using a sentinel value — if a fixture hits this, the test will fail with
-                // a clear mismatch, surfacing the discrepancy.
+                // No Go error code equivalent —> sentinel forces test failure on mismatch.
                 error_codes::UNMAPPED_ERROR_CODE
             }
         }
