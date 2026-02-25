@@ -693,6 +693,7 @@ impl Client {
             executor.clone(),
             spec.clone(),
             fork_schedule.clone(),
+            config.with_weighted_attestation_data,
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
