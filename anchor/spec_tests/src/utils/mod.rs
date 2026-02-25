@@ -3,6 +3,7 @@ use std::{str::FromStr, sync::LazyLock};
 use bls::PublicKeyBytes;
 
 pub mod deserializers;
+pub mod dtos;
 pub mod encoding_helpers;
 pub mod error_codes;
 

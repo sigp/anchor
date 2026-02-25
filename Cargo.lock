@@ -7262,7 +7262,6 @@ dependencies = [
  "openssl",
  "operator_key",
  "rusqlite",
- "serde",
  "sha2",
  "slashing_protection",
  "ssz_types",

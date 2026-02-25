@@ -8,8 +8,6 @@ use tree_hash_derive::TreeHash;
 use typenum::{Prod, Sum, U3, U4, U512, U1000};
 use types::{Hash256, Slot};
 
-#[cfg(feature = "serde")]
-use crate::deserializers::*;
 use crate::{OperatorId, ValidatorIndex};
 
 /// Maximum number of `PartialSignatureMessage`s: 5048
@@ -121,50 +119,17 @@ impl TreeHash for PartialSignatureKind {
 
 // A partial signature specific message
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct PartialSignatureMessages {
-    #[cfg_attr(
-        feature = "serde",
-        serde(
-            rename = "Type",
-            deserialize_with = "deserialize_partial_signature_kind"
-        )
-    )]
     pub kind: PartialSignatureKind,
-    #[cfg_attr(
-        feature = "serde",
-        serde(rename = "Slot", deserialize_with = "deserialize_slot")
-    )]
     pub slot: Slot,
-    #[cfg_attr(feature = "serde", serde(rename = "Messages"))]
     pub messages: VariableList<PartialSignatureMessage, PartialSignatureMessagesLen>,
 }
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct PartialSignatureMessage {
-    #[cfg_attr(
-        feature = "serde",
-        serde(
-            rename = "PartialSignature",
-            deserialize_with = "deserialize_signature"
-        )
-    )]
     pub partial_signature: Signature,
-    #[cfg_attr(
-        feature = "serde",
-        serde(rename = "SigningRoot", deserialize_with = "deserialize_hash256")
-    )]
     pub signing_root: Hash256,
-    #[cfg_attr(feature = "serde", serde(rename = "Signer"))]
     pub signer: OperatorId,
-    #[cfg_attr(
-        feature = "serde",
-        serde(
-            rename = "ValidatorIndex",
-            deserialize_with = "deserialize_validator_index"
-        )
-    )]
     pub validator_index: ValidatorIndex,
 }
 

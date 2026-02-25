@@ -2,8 +2,7 @@ use serde::Deserialize;
 use ssv_types::{
     OperatorId, ValidatorIndex,
     partial_sig::{
-        PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
-        PartialSignatureMessagesError,
+        PartialSignatureMessage, PartialSignatureMessages, PartialSignatureMessagesError,
     },
 };
 use ssz::{Decode, Encode};
@@ -14,80 +13,16 @@ use types::Hash256;
 use crate::{
     SpecTest,
     utils::{
-        decode_base64,
-        deserializers::{deserialize_hash256_list_option, deserialize_hex_option},
-        error_codes,
+        decode_base64, deserializers::deserialize_hash256_list_option,
+        dtos::RawPartialSignatureMessages, error_codes,
     },
 };
-
-/// Test fixture shim -> needed because error fixtures contain invalid BLS data that can't
-/// deserialize into `bls::Signature`.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct TestPartialSignatureMessage {
-    #[serde(deserialize_with = "deserialize_hex_option", default)]
-    partial_signature: Option<Vec<u8>>,
-    signer: OperatorId,
-    #[serde(deserialize_with = "deserialize_hex_option", default)]
-    signing_root: Option<Vec<u8>>,
-    #[serde(default)]
-    validator_index: Option<String>,
-}
-
-impl TryFrom<&TestPartialSignatureMessage> for PartialSignatureMessage {
-    type Error = String;
-
-    fn try_from(m: &TestPartialSignatureMessage) -> Result<Self, String> {
-        let sig_bytes = m
-            .partial_signature
-            .as_ref()
-            .ok_or("Missing partial_signature")?;
-        let partial_signature = bls::Signature::deserialize(sig_bytes)
-            .map_err(|e| format!("Invalid BLS signature: {e:?}"))?;
-
-        let root_bytes = m.signing_root.as_ref().ok_or("Missing signing_root")?;
-        if root_bytes.len() != 32 {
-            return Err(format!(
-                "Invalid signing_root length: expected 32, got {}",
-                root_bytes.len()
-            ));
-        }
-        let signing_root = Hash256::from_slice(root_bytes);
-
-        let validator_index = m
-            .validator_index
-            .as_ref()
-            .ok_or("Missing validator_index")?
-            .parse::<usize>()
-            .map_err(|e| format!("Invalid validator_index: {e}"))?;
-
-        Ok(PartialSignatureMessage {
-            partial_signature,
-            signing_root,
-            signer: m.signer,
-            validator_index: ValidatorIndex(validator_index),
-        })
-    }
-}
-
-/// Test fixture shim — wraps `TestPartialSignatureMessage` shims.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct TestPartialSignatureMessages {
-    #[serde(
-        rename = "Type",
-        deserialize_with = "ssv_types::deserializers::deserialize_partial_signature_kind"
-    )]
-    kind: PartialSignatureKind,
-    slot: String,
-    messages: Vec<TestPartialSignatureMessage>,
-}
 
 /// Top-level test fixture for `MsgSpecTest`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PartialSigMsgSpecTest {
-    messages: Vec<TestPartialSignatureMessages>,
+    messages: Vec<RawPartialSignatureMessages>,
     #[serde(default)]
     encoded_messages: Option<Vec<String>>,
     #[serde(deserialize_with = "deserialize_hash256_list_option", default)]
@@ -192,14 +127,14 @@ impl PartialSigMsgSpecTest {
     }
 
     /// Validate via `PartialSignatureMessages::validate()` with placeholder BLS data.
-    fn validate_message(msg: &TestPartialSignatureMessages) -> Result<(), i64> {
+    fn validate_message(msg: &RawPartialSignatureMessages) -> Result<(), i64> {
         let messages: Vec<PartialSignatureMessage> = msg
             .messages
             .iter()
             .map(|m| PartialSignatureMessage {
                 partial_signature: bls::Signature::empty(),
                 signing_root: Hash256::default(),
-                signer: m.signer,
+                signer: OperatorId(m.signer),
                 validator_index: ValidatorIndex(0),
             })
             .collect();
@@ -219,7 +154,7 @@ impl PartialSigMsgSpecTest {
 
     /// Build a `PartialSignatureMessages` from the test fixture (for encoding/root tests).
     fn build_message(
-        msg: &TestPartialSignatureMessages,
+        msg: &RawPartialSignatureMessages,
     ) -> Result<PartialSignatureMessages, String> {
         let slot = msg
             .slot

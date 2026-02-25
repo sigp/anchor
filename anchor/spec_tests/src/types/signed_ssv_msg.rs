@@ -8,19 +8,20 @@ use ssz::Encode;
 
 use crate::{
     SpecTest,
-    utils::{deserializers::deserialize_base64_list, error_codes},
+    utils::{deserializers::deserialize_base64_list, dtos::RawSSVMessage, error_codes},
 };
 
-/// Test fixture shim. `SSVMessage` is `Option` because Go uses a pointer (null in error fixtures).
+/// Fixture container for a single signed message in the `Messages` array.
+/// Holds raw test data that gets assembled with error code mapping.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct TestSignedSSVMessage {
+struct SignedSSVMessageFixture {
     #[serde(deserialize_with = "deserialize_base64_list")]
     signatures: Vec<Vec<u8>>,
     #[serde(rename = "OperatorIDs")]
-    operator_ids: Vec<OperatorId>,
+    operator_ids: Vec<u64>,
     #[serde(rename = "SSVMessage")]
-    ssv_message: Option<SSVMessage>,
+    ssv_message: Option<RawSSVMessage>,
     #[serde(
         rename = "FullData",
         deserialize_with = "crate::utils::deserializers::deserialize_hex_option",
@@ -33,7 +34,7 @@ struct TestSignedSSVMessage {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SignedSSVMessageTest {
-    messages: Vec<TestSignedSSVMessage>,
+    messages: Vec<SignedSSVMessageFixture>,
     expected_error_code: i64,
     #[serde(rename = "RSAPublicKey", default)]
     rsa_public_key: Option<Vec<String>>,
@@ -60,23 +61,29 @@ impl SpecTest for SignedSSVMessageTest {
 
 impl SignedSSVMessageTest {
     /// Validate via `SignedSSVMessage::new()` (which calls `validate()` internally).
-    fn validate_message(&self, msg: &TestSignedSSVMessage) -> Result<(), i64> {
+    fn validate_message(&self, msg: &SignedSSVMessageFixture) -> Result<(), i64> {
         let ssv_message = msg
             .ssv_message
             .as_ref()
             .ok_or(error_codes::NIL_SSV_MESSAGE)?;
 
+        let ssv_message: SSVMessage = ssv_message
+            .try_into()
+            .map_err(|_: String| error_codes::UNMAPPED_ERROR_CODE)?;
+
         let signatures = Self::prepare_signatures(&msg.signatures)?;
+        let operator_ids: Vec<OperatorId> =
+            msg.operator_ids.iter().copied().map(OperatorId).collect();
 
         let signed_msg = SignedSSVMessage::new(
             signatures,
-            msg.operator_ids.clone(),
+            operator_ids,
             ssv_message.clone(),
             msg.full_data.clone().unwrap_or_default(),
         )
         .map_err(|e| Self::error_code_for(&e))?;
 
-        self.verify_rsa_signatures(&signed_msg, ssv_message)
+        self.verify_rsa_signatures(&signed_msg, &ssv_message)
     }
 
     /// Normalize signatures to `[u8; 256]`: reject empty/oversized, zero-pad short ones.
