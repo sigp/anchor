@@ -17,6 +17,7 @@ use tracing::{debug, error, info, trace, warn};
 pub type Tx = UnboundedSender<PublicKeyBytes>;
 
 const INDEX_SYNCER_NAME: &str = "validator_index_syncer";
+const INDEX_SYNCER_STORE_NAME: &str = "validator_index_syncer_store";
 
 const MAX_BATCH_SIZE: usize = 512;
 const BATCHING_DELAY: Duration = Duration::from_secs(1);
@@ -28,7 +29,10 @@ pub fn start_validator_index_syncer(
     executor: TaskExecutor,
 ) -> Tx {
     let (tx, rx) = unbounded_channel();
-    executor.spawn(validator_index_syncer(nodes, db, rx), INDEX_SYNCER_NAME);
+    executor.spawn(
+        validator_index_syncer(nodes, db, rx, executor.clone()),
+        INDEX_SYNCER_NAME,
+    );
     tx
 }
 
@@ -36,12 +40,17 @@ async fn validator_index_syncer(
     nodes: Arc<BeaconNodeFallback<impl SlotClock>>,
     db: Arc<NetworkDatabase>,
     mut validator_queue_rx: UnboundedReceiver<PublicKeyBytes>,
+    executor: TaskExecutor,
 ) {
     info!("Starting validator index syncer");
 
     // counter to remember where we are in the sorted validator list
     // not perfect, as removed/added validators shift the list itself, but good enough for this
     let mut db_sweep = 0;
+
+    // Track if there are store tasks waiting. If there are any waiting tasks, we do not fill up
+    // batches from the database to avoid redundant work.
+    let waiting_store_tasks = Arc::new(());
 
     loop {
         let mut batch = vec![];
@@ -77,7 +86,9 @@ async fn validator_index_syncer(
         // next, fill up the rest of the batch with older validators that are unknown from the
         // database
         let space = MAX_BATCH_SIZE - batch.len();
-        if space > 0 {
+        // Only do this if we have any space remaining and there are no store tasks that might wait
+        // to write missing indices. If the count is 1, only we hold the Arc (no other tasks).
+        if space > 0 && Arc::strong_count(&waiting_store_tasks) == 1 {
             let state = db.state();
             let clusters = state.clusters();
             let mut from_database = state
@@ -127,9 +138,25 @@ async fn validator_index_syncer(
                 .map(|v| (v.validator.pubkey, ValidatorIndex(v.index as usize)))
                 .collect::<HashMap<_, _>>();
             trace!(len = map.len(), "Got validators from BN");
-            if let Err(err) = db.set_validator_indices(map) {
-                error!(?err, "Failed to update validator indices");
-            }
+
+            // `set_validator_indices` may block as it start a database transaction and updates the
+            // in memory database. We do not want to do that on the async runtime, so we
+            // spawn a blocking task.
+            let db = db.clone();
+            // Hold this Arc until the task completes.
+            let waiting_store_task_handle = waiting_store_tasks.clone();
+            executor.spawn_blocking(
+                move || {
+                    let len = map.len();
+                    if let Err(err) = db.set_validator_indices(map) {
+                        error!(?err, "Failed to update validator indices");
+                    } else {
+                        trace!(len, "Stored indices from BN");
+                    }
+                    drop(waiting_store_task_handle);
+                },
+                INDEX_SYNCER_STORE_NAME,
+            );
         }
     }
 }
