@@ -93,7 +93,8 @@ jobs:
               run: |
                   {
                     echo "content<<PROMPT_EOF"
-                    cat .github/prompts/review.md
+                    git fetch origin stable --depth=1
+                    git show origin/stable:.github/prompts/review.md
                     echo "PROMPT_EOF"
                   } >> "$GITHUB_OUTPUT"
 
