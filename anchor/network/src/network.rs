@@ -83,6 +83,9 @@ pub struct Network<R: MessageReceiver> {
     /// Receiver for fork lifecycle state changes.
     /// Used to update ENR domain type on fork activation.
     lifecycle_rx: watch::Receiver<ForkLifecycle>,
+    /// Previous lifecycle state, used to detect actual domain type changes
+    /// and avoid redundant ENR updates.
+    prev_lifecycle: ForkLifecycle,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -97,7 +100,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        lifecycle_rx: watch::Receiver<ForkLifecycle>,
+        mut lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -121,6 +124,7 @@ impl<R: MessageReceiver> Network<R> {
 
         let peer_id = local_keypair.public().to_peer_id();
 
+        let prev_lifecycle = lifecycle_rx.borrow_and_update().clone();
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -139,6 +143,7 @@ impl<R: MessageReceiver> Network<R> {
             is_dynamic_target_peers,
             subnet_subscription_counts: HashMap::new(),
             lifecycle_rx,
+            prev_lifecycle,
         };
 
         info!(%peer_id, "Network starting");
@@ -194,7 +199,9 @@ impl<R: MessageReceiver> Network<R> {
                 }
 
                 Ok(()) = self.lifecycle_rx.changed() => {
-                    self.on_fork_lifecycle_change();
+                    let new = self.lifecycle_rx.borrow_and_update().clone();
+                    self.apply_fork_transition(&new);
+                    self.prev_lifecycle = new;
                 }
             }
         }
@@ -423,14 +430,22 @@ impl<R: MessageReceiver> Network<R> {
 
     /// Handle fork lifecycle state changes.
     ///
-    /// When a fork activates (entering GracePeriod), update the ENR domain type
-    /// so other nodes can discover us with the new fork's domain.
-    fn on_fork_lifecycle_change(&mut self) {
-        let lifecycle = self.lifecycle_rx.borrow_and_update().clone();
-        let domain_type = lifecycle.current_fork_config().domain_type;
-        // Update ENR so other nodes can discover us with the new fork's domain
-        if let Err(e) = self.discovery().update_enr_domain_type(domain_type) {
-            error!(?e, "Failed to update ENR domain type after fork activation");
+    /// Only updates the ENR when the domain type actually changes between
+    /// lifecycle states. Transition logging is owned by the fork monitor.
+    fn apply_fork_transition(&mut self, new: &ForkLifecycle) {
+        let prev_domain = self.prev_lifecycle.current_fork_config().domain_type;
+        let new_domain = new.current_fork_config().domain_type;
+
+        // Only update ENR when the domain type actually changed.
+        if new_domain != prev_domain {
+            info!(
+                ?prev_domain,
+                ?new_domain,
+                "Updating ENR domain type after fork transition"
+            );
+            if let Err(e) = self.discovery().update_enr_domain_type(new_domain) {
+                error!(?e, "Failed to update ENR domain type after fork transition");
+            }
         }
     }
 
