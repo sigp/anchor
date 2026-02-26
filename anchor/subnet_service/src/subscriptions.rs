@@ -23,10 +23,17 @@ pub(crate) struct ServiceState {
 }
 
 impl ServiceState {
-    fn set_subscribed_forks<const N: usize>(&mut self, forks: [ForkConfig; N]) {
+    /// Make sure we only track the passed forks. Returns any forks that were removed.
+    fn set_subscribed_forks<const N: usize>(
+        &mut self,
+        forks: [ForkConfig; N],
+    ) -> Vec<ForkSubscriptions> {
         // Remove forks that we should no longer be subscribed to.
-        self.forks
-            .retain(|fork, _| forks.iter().any(|f| f.fork == *fork));
+        let removed = self
+            .forks
+            .extract_if(|fork, _| !forks.iter().any(|f| f.fork == *fork))
+            .map(|(_, v)| v)
+            .collect();
         // Ensure we track subscriptions for all forks that we should be subscribed to.
         for fork in forks {
             self.forks.entry(fork.fork).or_insert(ForkSubscriptions {
@@ -34,6 +41,7 @@ impl ServiceState {
                 currently_subscribed: HashSet::new(),
             });
         }
+        removed
     }
 }
 
@@ -97,7 +105,8 @@ impl<S: SlotClock> SubnetService<S> {
                 }
                 Ok(()) = lifecycle_rx.changed() => {
                     let new_lifecycle = lifecycle_rx.borrow_and_update().clone();
-                    self.on_lifecycle_transition(new_lifecycle, &mut service_state);
+                    self.on_lifecycle_transition(new_lifecycle, &mut service_state).await;
+                    self.handle_subnet_changes::<E>(&mut service_state).await;
                 }
             }
         }
@@ -111,17 +120,26 @@ impl<S: SlotClock> SubnetService<S> {
     /// - WarmUp/Normal → GracePeriod: update fork_to_score, insert current fork
     /// - GracePeriod → Normal: remove & unsubscribe previous fork
     /// - GracePeriod → WarmUp: remove previous + insert upcoming (overlapping transition)
-    fn on_lifecycle_transition(&self, new: ForkLifecycle, service_state: &mut ServiceState) {
+    async fn on_lifecycle_transition(&self, new: ForkLifecycle, service_state: &mut ServiceState) {
         service_state.fork_to_score = new.current_fork_config().fork;
-        match new {
-            ForkLifecycle::Normal { current } => {
-                service_state.set_subscribed_forks([current]);
-            }
+        let removed = match new {
+            ForkLifecycle::Normal { current } => service_state.set_subscribed_forks([current]),
             ForkLifecycle::WarmUp { current, upcoming } => {
-                service_state.set_subscribed_forks([current, upcoming]);
+                service_state.set_subscribed_forks([current, upcoming])
             }
             ForkLifecycle::GracePeriod { current, previous } => {
-                service_state.set_subscribed_forks([current, previous]);
+                service_state.set_subscribed_forks([current, previous])
+            }
+        };
+        for removed in removed {
+            if let Err(err) = self
+                .send_unsubscribes(
+                    &removed.config,
+                    removed.currently_subscribed, // uses the set before dropping it
+                )
+                .await
+            {
+                error!("Failed to unsubscribe from fork: {:?}", err);
             }
         }
     }
@@ -137,7 +155,8 @@ impl<S: SlotClock> SubnetService<S> {
         };
 
         let initial_lifecycle = lifecycle_rx.borrow_and_update().clone();
-        self.on_lifecycle_transition(initial_lifecycle, &mut service_state);
+        self.on_lifecycle_transition(initial_lifecycle, &mut service_state)
+            .await;
 
         self.handle_subnet_changes::<E>(&mut service_state).await;
 
