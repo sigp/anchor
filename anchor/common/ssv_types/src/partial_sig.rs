@@ -134,8 +134,6 @@ pub struct PartialSignatureMessage {
 }
 
 /// Errors from `PartialSignatureMessages::validate()`.
-///
-/// Mirrors Go's `PartialSignatureMessages.Validate()` error conditions.
 #[derive(Debug, Error)]
 pub enum PartialSignatureMessagesError {
     #[error("no partial signature messages")]
@@ -147,28 +145,25 @@ pub enum PartialSignatureMessagesError {
 }
 
 impl PartialSignatureMessages {
-    /// Validate the message structure.
-    ///
-    /// Mirrors Go's `PartialSignatureMessages.Validate()`:
-    /// 1. Messages must not be empty
-    /// 2. All message signers must be the same
-    /// 3. No signer may have ID 0
-    pub fn validate(&self) -> Result<(), PartialSignatureMessagesError> {
+    /// Validate that the messages list is non-empty, all signers are identical,
+    /// and the signer is non-zero. Returns the common signer on success.
+    pub fn validate(&self) -> Result<OperatorId, PartialSignatureMessagesError> {
         let first = self
             .messages
             .first()
             .ok_or(PartialSignatureMessagesError::Empty)?;
 
-        for m in self.messages.iter() {
+        if first.signer == OperatorId(0) {
+            return Err(PartialSignatureMessagesError::ZeroSigner);
+        }
+
+        for m in self.messages.iter().skip(1) {
             if m.signer != first.signer {
                 return Err(PartialSignatureMessagesError::InconsistentSigners);
             }
-            if m.signer == OperatorId(0) {
-                return Err(PartialSignatureMessagesError::ZeroSigner);
-            }
         }
 
-        Ok(())
+        Ok(first.signer)
     }
 }
 

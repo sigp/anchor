@@ -145,11 +145,16 @@ impl PartialSigMsgSpecTest {
             messages: VariableList::new(messages).expect("test fixture within bounds"),
         };
 
-        partial_sig_msgs.validate().map_err(|e| match e {
-            PartialSignatureMessagesError::Empty => error_codes::NO_PARTIAL_SIG_MESSAGES,
-            PartialSignatureMessagesError::InconsistentSigners => error_codes::INCONSISTENT_SIGNERS,
-            PartialSignatureMessagesError::ZeroSigner => error_codes::ZERO_SIGNER_NOT_ALLOWED,
-        })
+        partial_sig_msgs
+            .validate()
+            .map(|_| ())
+            .map_err(|e| match e {
+                PartialSignatureMessagesError::Empty => error_codes::NO_PARTIAL_SIG_MESSAGES,
+                PartialSignatureMessagesError::InconsistentSigners => {
+                    error_codes::INCONSISTENT_SIGNERS
+                }
+                PartialSignatureMessagesError::ZeroSigner => error_codes::ZERO_SIGNER_NOT_ALLOWED,
+            })
     }
 
     /// Build a `PartialSignatureMessages` from the test fixture (for encoding/root tests).

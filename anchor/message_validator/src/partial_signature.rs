@@ -106,7 +106,7 @@ fn validate_partial_signature_message_semantics(
     }
 
     // Structural validation: empty, internal signer consistency, zero signer.
-    partial_signature_messages.validate().map_err(|e| match e {
+    let inner_signer = partial_signature_messages.validate().map_err(|e| match e {
         PartialSignatureMessagesError::Empty => ValidationFailure::NoPartialSignatureMessages,
         PartialSignatureMessagesError::InconsistentSigners => {
             ValidationFailure::InconsistentSigners
@@ -115,13 +115,7 @@ fn validate_partial_signature_message_semantics(
     })?;
 
     // Rule: Partial signature signer must match the signed message's signer.
-    // validate() ensures all inner signers are the same, so checking one suffices.
-    let first_signer = partial_signature_messages
-        .messages
-        .first()
-        .ok_or(ValidationFailure::NoPartialSignatureMessages)?
-        .signer;
-    if first_signer != signer {
+    if inner_signer != signer {
         return Err(ValidationFailure::InconsistentSigners);
     }
 
