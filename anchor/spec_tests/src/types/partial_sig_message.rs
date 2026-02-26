@@ -142,7 +142,7 @@ impl PartialSigMsgSpecTest {
         let partial_sig_msgs = PartialSignatureMessages {
             kind: msg.kind,
             slot: types::Slot::new(0),
-            messages: VariableList::new(messages).expect("test fixture within bounds"),
+            messages: VariableList::new(messages).map_err(|_| error_codes::UNMAPPED_ERROR_CODE)?,
         };
 
         partial_sig_msgs
