@@ -2,6 +2,7 @@ use bls::Signature;
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
+use thiserror::Error;
 use tree_hash::{PackedEncoding, TreeHash, TreeHashType};
 use tree_hash_derive::TreeHash;
 use typenum::{Prod, Sum, U3, U4, U512, U1000};
@@ -130,6 +131,40 @@ pub struct PartialSignatureMessage {
     pub signing_root: Hash256,
     pub signer: OperatorId,
     pub validator_index: ValidatorIndex,
+}
+
+/// Errors from `PartialSignatureMessages::validate()`.
+#[derive(Debug, Error)]
+pub enum PartialSignatureMessagesError {
+    #[error("no partial signature messages")]
+    Empty,
+    #[error("inconsistent signers")]
+    InconsistentSigners,
+    #[error("signer ID 0 not allowed")]
+    ZeroSigner,
+}
+
+impl PartialSignatureMessages {
+    /// Validate that the messages list is non-empty, all signers are identical,
+    /// and the signer is non-zero. Returns the common signer on success.
+    pub fn validate(&self) -> Result<OperatorId, PartialSignatureMessagesError> {
+        let first = self
+            .messages
+            .first()
+            .ok_or(PartialSignatureMessagesError::Empty)?;
+
+        if first.signer == OperatorId(0) {
+            return Err(PartialSignatureMessagesError::ZeroSigner);
+        }
+
+        for m in self.messages.iter().skip(1) {
+            if m.signer != first.signer {
+                return Err(PartialSignatureMessagesError::InconsistentSigners);
+            }
+        }
+
+        Ok(first.signer)
+    }
 }
 
 #[cfg(test)]
