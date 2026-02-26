@@ -7201,12 +7201,16 @@ name = "spec_tests"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bls",
  "ethereum_ssz",
  "ethereum_ssz_derive",
  "hex",
+ "openssl",
+ "operator_key",
  "serde",
  "serde_json",
  "ssv_types",
+ "ssz_types",
  "tree_hash",
  "types",
 ]

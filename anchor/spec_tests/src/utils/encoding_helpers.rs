@@ -1,6 +1,14 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 use types::Hash256;
+
+/// Decode a base64 string into bytes.
+pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
+    STANDARD
+        .decode(s)
+        .map_err(|e| format!("base64 decode error: {e}"))
+}
 
 /// SSZ roundtrip: decode → encode → compare bytes. Returns decoded value.
 pub fn check_roundtrip<T: Decode + Encode>(data: &[u8]) -> Result<T, String> {
