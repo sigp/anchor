@@ -44,19 +44,28 @@ pub(crate) struct ForkMonitor {
 impl ForkMonitor {
     /// Create a new fork monitor by pre-computing all transition points.
     ///
-    /// Generates transitions for each non-genesis fork (epoch > 0):
-    /// - `WarmUp` at the preparation window start
-    /// - `GracePeriod` at fork activation
-    /// - `Normal` after the grace period (suppressed if the next fork's preparation overlaps)
+    /// For each non-genesis fork (epoch > 0), three transitions are generated:
+    /// - `WarmUp` at the preparation window start (`fork_epoch - 1` epochs)
+    /// - `GracePeriod` at fork activation (`fork_epoch`)
+    /// - `Normal` after the grace period (`fork_epoch + SUBSEQUENT_WINDOW_SLOTS` slots)
     ///
-    /// Transitions at or before `current_slot` become the `immediate` value;
-    /// future transitions are stored for the run loop.
+    /// All transitions are sorted by slot, then split at `current_slot`:
+    /// - The last transition at or before `current_slot` becomes the initial state.
+    /// - Remaining future transitions are stored for the run loop.
+    ///
+    /// This handles all restart scenarios uniformly — whether the node starts
+    /// before any fork, during a warm-up window, during a grace period, or
+    /// after all forks have activated.
     fn new(schedule: &ForkSchedule, current_slot: Slot, slots_per_epoch: u64) -> Self {
         let current_epoch = current_slot.epoch(slots_per_epoch);
         let current_fork_config = schedule.active_fork_config(current_epoch);
         info!(fork = %current_fork_config.fork, epoch = %current_epoch, "Fork monitor started");
 
-        // Generate all transitions for every non-genesis fork.
+        // Step 1: Generate all transitions for every non-genesis fork.
+        //
+        // Each fork produces three transitions at deterministic slots:
+        //   prep_slot ──────> activation ──────> grace_end
+        //   [WarmUp]          [GracePeriod]      [Normal]
         let mut all_transitions: Vec<ScheduledTransition> = Vec::new();
 
         for &fork in Fork::all() {
@@ -64,24 +73,27 @@ impl ForkMonitor {
                 continue;
             };
             let fork_epoch = fork_config.epoch.as_u64();
-            // Skip genesis forks — they have no transition points.
+            // Genesis forks (epoch 0) are active from the start — no transitions needed.
             if fork_epoch == 0 {
                 continue;
             }
 
+            // The fork active just before this one (safe: fork_epoch > 0).
             let prev_fork = schedule.active_fork_config(Epoch::new(fork_epoch - 1));
 
+            // Compute the three transition slots for this fork.
             let prep_slot = fork_epoch.saturating_sub(FORK_PREPARATION_EPOCHS) * slots_per_epoch;
             let activation = fork_epoch * slots_per_epoch;
             let grace_end = activation + SUBSEQUENT_WINDOW_SLOTS;
 
-            // Validate: warmup must not overlap with the previous fork's grace period.
+            // Guard: the previous fork's grace period must not overlap this fork's warmup.
             let prev_activation = prev_fork.epoch.as_u64() * slots_per_epoch;
             let prev_grace_end = prev_activation + SUBSEQUENT_WINDOW_SLOTS;
             if prev_activation != 0 && prev_grace_end > prep_slot {
                 error!("Fork preparation overlaps with previous's grace period");
             }
 
+            // WarmUp: dual-subscribe to current + upcoming fork topics.
             all_transitions.push(ScheduledTransition {
                 slot: Slot::new(prep_slot),
                 lifecycle: ForkLifecycle::WarmUp {
@@ -89,6 +101,7 @@ impl ForkMonitor {
                     upcoming: fork_config.clone(),
                 },
             });
+            // GracePeriod: fork activates, keep old subscriptions for late messages.
             all_transitions.push(ScheduledTransition {
                 slot: Slot::new(activation),
                 lifecycle: ForkLifecycle::GracePeriod {
@@ -96,6 +109,7 @@ impl ForkMonitor {
                     previous: prev_fork.clone(),
                 },
             });
+            // Normal: grace period ends, drop old fork subscriptions.
             all_transitions.push(ScheduledTransition {
                 slot: Slot::new(grace_end),
                 lifecycle: ForkLifecycle::Normal {
@@ -104,8 +118,16 @@ impl ForkMonitor {
             });
         }
 
-        // Sort by slot, then split into past and future at current_slot.
-        // The last past transition determines the initial lifecycle state.
+        // Step 2: Sort by slot, then partition into past and future at current_slot.
+        //
+        // The half-open split [past: slot <= current] [future: slot > current] means:
+        // - A transition exactly at current_slot is considered "already happened".
+        // - The last past transition determines what state we should be in right now.
+        // - If no transitions are past, we're in Normal (pre-fork or genesis-only).
+        //
+        // Example: Boole at epoch 100, restart at activation + 5:
+        //   past:   [WarmUp@ep99, GracePeriod@ep100]  → initial = GracePeriod
+        //   future: [Normal@ep100+32slots]             → run loop sends this later
         all_transitions.sort_by_key(|t| t.slot);
         let split = all_transitions.partition_point(|t| t.slot <= current_slot);
 
@@ -412,6 +434,34 @@ mod tests {
             &monitor.transitions[1].lifecycle,
             ForkLifecycle::Normal { .. }
         ));
+    }
+
+    #[test]
+    fn test_new_restart_at_exact_prep_slot_emits_warmup() {
+        // Arrange: Start exactly at the preparation slot (lower boundary of warm-up window)
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let spe = slots_per_epoch();
+        let prep_slot = Slot::new(PREPARATION_EPOCH * spe);
+
+        // Act
+        let monitor = ForkMonitor::new(&schedule, prep_slot, spe);
+
+        // Assert: initial is WarmUp{Alan, Boole} (exact prep slot is "already happened")
+        assert!(
+            matches!(
+                &monitor.initial,
+                ForkLifecycle::WarmUp { current, upcoming }
+                    if current.fork == Fork::Alan && upcoming.fork == Fork::Boole
+            ),
+            "Should emit WarmUp when restarting at exact preparation slot"
+        );
+
+        // Assert: 2 future transitions remain (GracePeriod + Normal)
+        assert_eq!(
+            monitor.transitions.len(),
+            2,
+            "Expected GracePeriod + Normal"
+        );
     }
 
     #[test]
