@@ -20,7 +20,9 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use types::{Epoch, Slot};
 
-use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkLifecycle, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
+use crate::{
+    FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkLifecycle, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS,
+};
 
 /// A pre-computed fork transition at a specific slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +63,16 @@ impl ForkMonitor {
         };
 
         let mut transitions: Vec<ScheduledTransition> = Vec::new();
+
+        if let Some((grace_initial, grace_transition)) = Self::detect_grace_period_restart(
+            schedule,
+            current_fork_config,
+            current_slot,
+            slots_per_epoch,
+        ) {
+            initial = grace_initial;
+            transitions.push(grace_transition);
+        }
 
         for &fork in Fork::all() {
             // Only consider scheduled forks.
@@ -133,6 +145,42 @@ impl ForkMonitor {
             initial,
             transitions,
         }
+    }
+
+    /// If the node restarts during the grace period of the current fork, return
+    /// the correct initial lifecycle and the scheduled Normal transition at grace end.
+    ///
+    /// The main loop in `new()` only considers future forks (`fork_epoch > current_epoch`),
+    /// so an already-activated fork's grace period would be missed without this check.
+    fn detect_grace_period_restart(
+        schedule: &ForkSchedule,
+        current_fork_config: &ForkConfig,
+        current_slot: Slot,
+        slots_per_epoch: u64,
+    ) -> Option<(ForkLifecycle, ScheduledTransition)> {
+        let current_fork_epoch = current_fork_config.epoch.as_u64();
+        if current_fork_epoch == 0 {
+            return None;
+        }
+
+        let activation_slot = current_fork_epoch * slots_per_epoch;
+        let grace_end_slot = activation_slot + SUBSEQUENT_WINDOW_SLOTS;
+        if current_slot.as_u64() < activation_slot || current_slot.as_u64() >= grace_end_slot {
+            return None;
+        }
+
+        let prev = schedule.active_fork_config(Epoch::new(current_fork_epoch - 1));
+        let initial = ForkLifecycle::GracePeriod {
+            current: current_fork_config.clone(),
+            previous: prev.clone(),
+        };
+        let transition = ScheduledTransition {
+            slot: Slot::new(grace_end_slot),
+            lifecycle: ForkLifecycle::Normal {
+                current: current_fork_config.clone(),
+            },
+        };
+        Some((initial, transition))
     }
 }
 
@@ -434,23 +482,92 @@ mod tests {
     }
 
     #[test]
-    fn test_new_at_fork_activation_epoch_emits_normal() {
-        // Arrange: Start at the fork activation epoch (fork_epoch <= current_epoch).
-        // The fork is considered already activated — no grace period tracking on restart.
+    fn test_new_restart_during_grace_period_emits_grace_period() {
+        // Arrange: Start 1 slot after fork activation — inside the grace period window.
         let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
         let grace_slot = Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + 1);
 
         // Act
         let monitor = ForkMonitor::new(&schedule, grace_slot, slots_per_epoch());
 
-        // Assert: Fork already activated this epoch, initial is Normal{Boole}
-        assert!(monitor.transitions.is_empty());
+        // Assert: Restart during grace period emits GracePeriod{Boole, Alan}
         assert!(
             matches!(
                 &monitor.initial,
-                ForkLifecycle::Normal { current, .. } if current.fork == Fork::Boole
+                ForkLifecycle::GracePeriod { current, previous }
+                    if current.fork == Fork::Boole && previous.fork == Fork::Alan
             ),
-            "Should emit Normal when starting at or after fork activation epoch"
+            "Should emit GracePeriod when restarting inside the grace window"
+        );
+
+        // Assert: Exactly 1 scheduled transition — Normal at grace end
+        assert_eq!(
+            monitor.transitions.len(),
+            1,
+            "Expected exactly 1 transition (Normal at grace end)"
+        );
+        assert!(
+            matches!(
+                &monitor.transitions[0].lifecycle,
+                ForkLifecycle::Normal { current } if current.fork == Fork::Boole
+            ),
+            "Scheduled transition should be Normal{{Boole}}"
+        );
+        assert_eq!(
+            monitor.transitions[0].slot,
+            Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + SUBSEQUENT_WINDOW_SLOTS),
+            "Normal transition should be scheduled at grace end slot"
+        );
+    }
+
+    #[test]
+    fn test_new_restart_at_exact_activation_emits_grace_period() {
+        // Arrange: Start exactly at the fork activation slot (lower boundary of grace window).
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let activation_slot = Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch());
+
+        // Act
+        let monitor = ForkMonitor::new(&schedule, activation_slot, slots_per_epoch());
+
+        // Assert: Restart at exact activation emits GracePeriod{Boole, Alan}
+        assert!(
+            matches!(
+                &monitor.initial,
+                ForkLifecycle::GracePeriod { current, previous }
+                    if current.fork == Fork::Boole && previous.fork == Fork::Alan
+            ),
+            "Should emit GracePeriod when restarting at exact activation slot"
+        );
+        assert_eq!(
+            monitor.transitions.len(),
+            1,
+            "Expected exactly 1 transition (Normal at grace end)"
+        );
+    }
+
+    #[test]
+    fn test_new_restart_at_grace_end_emits_normal() {
+        // Arrange: Start exactly at grace end slot — grace period has expired.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let grace_end_slot =
+            Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + SUBSEQUENT_WINDOW_SLOTS);
+
+        // Act
+        let monitor = ForkMonitor::new(&schedule, grace_end_slot, slots_per_epoch());
+
+        // Assert: Grace period expired, initial is Normal{Boole}
+        assert!(
+            matches!(
+                &monitor.initial,
+                ForkLifecycle::Normal { current } if current.fork == Fork::Boole
+            ),
+            "Should emit Normal when starting at or after grace end slot"
+        );
+
+        // Assert: No transitions remaining
+        assert!(
+            monitor.transitions.is_empty(),
+            "No transitions should be scheduled after grace period ends"
         );
     }
 
