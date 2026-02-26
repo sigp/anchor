@@ -20,9 +20,7 @@ use tokio::sync::watch;
 use tracing::{debug, error, info};
 use types::{Epoch, Slot};
 
-use crate::{
-    FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkLifecycle, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS,
-};
+use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkLifecycle, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
 
 /// A pre-computed fork transition at a specific slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,30 +56,16 @@ impl ForkMonitor {
         let current_fork_config = schedule.active_fork_config(current_epoch);
         info!(fork = %current_fork_config.fork, epoch = %current_epoch, "Fork monitor started");
 
-        let mut initial = ForkLifecycle::Normal {
-            current: current_fork_config.clone(),
-        };
-
-        let mut transitions: Vec<ScheduledTransition> = Vec::new();
-
-        if let Some((grace_initial, grace_transition)) = Self::detect_grace_period_restart(
-            schedule,
-            current_fork_config,
-            current_slot,
-            slots_per_epoch,
-        ) {
-            initial = grace_initial;
-            transitions.push(grace_transition);
-        }
+        // Generate all transitions for every non-genesis fork.
+        let mut all_transitions: Vec<ScheduledTransition> = Vec::new();
 
         for &fork in Fork::all() {
-            // Only consider scheduled forks.
             let Some(fork_config) = schedule.config(fork) else {
                 continue;
             };
             let fork_epoch = fork_config.epoch.as_u64();
-            // Only consider future forks. This check also ensures that `fork_epoch` is non-zero.
-            if fork_epoch <= current_epoch.as_u64() {
+            // Skip genesis forks — they have no transition points.
+            if fork_epoch == 0 {
                 continue;
             }
 
@@ -90,46 +74,50 @@ impl ForkMonitor {
             let prep_slot = fork_epoch.saturating_sub(FORK_PREPARATION_EPOCHS) * slots_per_epoch;
             let activation = fork_epoch * slots_per_epoch;
             let grace_end = activation + SUBSEQUENT_WINDOW_SLOTS;
+
+            // Validate: warmup must not overlap with the previous fork's grace period.
             let prev_activation = prev_fork.epoch.as_u64() * slots_per_epoch;
             let prev_grace_end = prev_activation + SUBSEQUENT_WINDOW_SLOTS;
-
-            // If the previous fork is not a genesis fork, we should make sure that the warmup of
-            // the later fork does not overlap with the grace period of the previous fork.
             if prev_activation != 0 && prev_grace_end > prep_slot {
-                error!("Fork preparation overlaps with previous's grace period")
+                error!("Fork preparation overlaps with previous's grace period");
             }
 
-            // WarmUp: start dual-subscribing.
-            let warm_up = ForkLifecycle::WarmUp {
-                current: prev_fork.clone(),
-                upcoming: fork_config.clone(),
-            };
-            // Start warmup immediately if the slot has already passed.
-            if current_slot.as_u64() >= prep_slot {
-                initial = warm_up;
-            } else {
-                transitions.push(ScheduledTransition {
-                    slot: Slot::new(prep_slot),
-                    lifecycle: warm_up,
-                });
-            }
-
-            // GracePeriod: fork activates, keep old subscriptions.
-            transitions.push(ScheduledTransition {
+            all_transitions.push(ScheduledTransition {
+                slot: Slot::new(prep_slot),
+                lifecycle: ForkLifecycle::WarmUp {
+                    current: prev_fork.clone(),
+                    upcoming: fork_config.clone(),
+                },
+            });
+            all_transitions.push(ScheduledTransition {
                 slot: Slot::new(activation),
                 lifecycle: ForkLifecycle::GracePeriod {
                     current: fork_config.clone(),
                     previous: prev_fork.clone(),
                 },
             });
-
-            transitions.push(ScheduledTransition {
+            all_transitions.push(ScheduledTransition {
                 slot: Slot::new(grace_end),
                 lifecycle: ForkLifecycle::Normal {
                     current: fork_config.clone(),
                 },
             });
         }
+
+        // Sort by slot, then split into past and future at current_slot.
+        // The last past transition determines the initial lifecycle state.
+        all_transitions.sort_by_key(|t| t.slot);
+        let split = all_transitions.partition_point(|t| t.slot <= current_slot);
+
+        let initial = if split > 0 {
+            all_transitions[split - 1].lifecycle.clone()
+        } else {
+            ForkLifecycle::Normal {
+                current: current_fork_config.clone(),
+            }
+        };
+
+        let transitions = all_transitions.split_off(split);
 
         // Log upcoming fork.
         if let Some((fork, fork_epoch)) = schedule.next_fork_after(current_epoch) {
@@ -145,42 +133,6 @@ impl ForkMonitor {
             initial,
             transitions,
         }
-    }
-
-    /// If the node restarts during the grace period of the current fork, return
-    /// the correct initial lifecycle and the scheduled Normal transition at grace end.
-    ///
-    /// The main loop in `new()` only considers future forks (`fork_epoch > current_epoch`),
-    /// so an already-activated fork's grace period would be missed without this check.
-    fn detect_grace_period_restart(
-        schedule: &ForkSchedule,
-        current_fork_config: &ForkConfig,
-        current_slot: Slot,
-        slots_per_epoch: u64,
-    ) -> Option<(ForkLifecycle, ScheduledTransition)> {
-        let current_fork_epoch = current_fork_config.epoch.as_u64();
-        if current_fork_epoch == 0 {
-            return None;
-        }
-
-        let activation_slot = current_fork_epoch * slots_per_epoch;
-        let grace_end_slot = activation_slot + SUBSEQUENT_WINDOW_SLOTS;
-        if current_slot.as_u64() < activation_slot || current_slot.as_u64() >= grace_end_slot {
-            return None;
-        }
-
-        let prev = schedule.active_fork_config(Epoch::new(current_fork_epoch - 1));
-        let initial = ForkLifecycle::GracePeriod {
-            current: current_fork_config.clone(),
-            previous: prev.clone(),
-        };
-        let transition = ScheduledTransition {
-            slot: Slot::new(grace_end_slot),
-            lifecycle: ForkLifecycle::Normal {
-                current: current_fork_config.clone(),
-            },
-        };
-        Some((initial, transition))
     }
 }
 
