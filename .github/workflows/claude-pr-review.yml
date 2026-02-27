@@ -87,6 +87,16 @@ jobs:
                   role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
                   aws-region: us-west-2
 
+            - name: Read review prompt
+              if: steps.check.outputs.is_member == 'true'
+              id: review-prompt
+              run: |
+                  {
+                    echo "content<<PROMPT_EOF"
+                    cat .github/prompts/review.md
+                    echo "PROMPT_EOF"
+                  } >> "$GITHUB_OUTPUT"
+
             - name: Run Claude Code Action
               if: steps.check.outputs.is_member == 'true'
               timeout-minutes: 15
@@ -108,28 +118,7 @@ jobs:
                       "No actionable issues found."
                       and stop. Do not elaborate, summarize, or praise.
 
-                      Only comment on issues you are CONFIDENT are real problems:
-
-                      1. **Security** — vulnerabilities, unsafe code, input validation, auth logic
-                      2. **Correctness** — logic errors, race conditions, edge cases, off-by-one errors
-                      3. **Performance** — bottlenecks, unnecessary allocations, resource leaks
-                      4. **Error Handling** — missing error paths, unwrap/expect in non-test code, silent failures
-                      5. **Rust Idioms** — non-idiomatic patterns, unnecessary clones, misuse of ownership/borrowing
-                      6. **Design** — incorrect abstractions, module boundary violations, missing trait bounds
-                      7. **Testing** — missing coverage for new code paths, untested edge cases
-
-                      Do NOT comment on:
-                      - Style, formatting, naming (handled by rustfmt/clippy)
-                      - Documentation, TODOs, FIXMEs
-                      - Pre-existing issues not introduced by this PR
-                      - Nice-to-have suggestions or minor improvements
-                      - Rust idiom preferences that don't affect correctness
-                      - Code with lint suppression comments (already acknowledged)
-
-                      When you DO find issues:
-                      - Use inline comments with concrete fix suggestions
-                      - Post a brief summary comment ONLY listing the issues found
-                      - No preamble, no praise, no filler
+                      ${{ steps.review-prompt.outputs.content }}
                   claude_args: |
                       --max-turns 50
                       --model us.anthropic.claude-opus-4-6-v1
