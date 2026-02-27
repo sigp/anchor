@@ -75,6 +75,16 @@ jobs:
                   role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
                   aws-region: us-west-2
 
+            - name: Read review prompt
+              if: steps.check.outputs.is_member == 'true'
+              id: review-prompt
+              run: |
+                  {
+                    echo "content<<PROMPT_EOF"
+                    cat .github/prompts/review.md
+                    echo "PROMPT_EOF"
+                  } >> "$GITHUB_OUTPUT"
+
             - name: Run Claude Code Action
               if: steps.check.outputs.is_member == 'true'
               timeout-minutes: 15
@@ -82,33 +92,7 @@ jobs:
               with:
                   github_token: ${{ steps.app-token.outputs.token }}
                   use_bedrock: "true"
-                  prompt: |
-                      REPO: ${{ github.repository }}
-
-                      Be precise and concise. No praise. Focus on actionable issues only.
-                      Review ONLY the PR diff. Do not flag pre-existing issues.
-                      If no significant issues are found, say so briefly and move on.
-
-                      When reviewing PRs, focus on these areas in priority order:
-
-                      1. **Security** — vulnerabilities, unsafe code, input validation, auth logic
-                      2. **Correctness** — logic errors, race conditions, edge cases, off-by-one errors
-                      3. **Performance** — bottlenecks, unnecessary allocations, resource leaks
-                      4. **Error Handling** — missing error paths, unwrap/expect in non-test code, silent failures
-                      5. **Rust Idioms** — non-idiomatic patterns, unnecessary clones, misuse of ownership/borrowing
-                      6. **Design** — incorrect abstractions, module boundary violations, missing trait bounds
-                      7. **Testing** — missing coverage for new code paths, untested edge cases
-
-                      Do NOT comment on:
-                      - Style or formatting (handled by rustfmt/clippy)
-                      - Minor naming preferences
-                      - TODOs, FIXMEs, or documentation formatting
-                      - Code with lint suppression comments (already acknowledged)
-                      - Pre-existing issues not introduced by this PR
-                      - Suggestions that are nice-to-have but not required for correctness
-
-                      Use inline comments for specific issues with concrete suggestions.
-                      Use a single top-level comment for summary only if there are findings.
                   claude_args: |
                       --max-turns 50
                       --model us.anthropic.claude-opus-4-6-v1
+                      --append-system-prompt "${{ steps.review-prompt.outputs.content }}"

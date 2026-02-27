@@ -217,38 +217,6 @@ impl ForkSchedule {
             .min_by_key(|(_, config)| config.epoch.as_u64())
             .map(|(fork, config)| (*fork, config.epoch))
     }
-
-    /// Get the most recent fork scheduled before the given epoch.
-    pub fn fork_before_epoch(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
-        self.configs
-            .iter()
-            .filter(|&(_, config)| config.epoch < epoch)
-            .max_by_key(|(_, config)| config.fork)
-            .map(|(fork, config)| (*fork, config.epoch))
-    }
-
-    /// Get the epoch when preparation for a fork should begin.
-    ///
-    /// Returns `fork_epoch - FORK_PREPARATION_EPOCHS`, or `None` if the fork
-    /// is not scheduled.
-    pub fn preparation_start_epoch(&self, fork: Fork) -> Option<Epoch> {
-        self.fork_epoch(fork)
-            .map(|epoch| Epoch::new(epoch.as_u64().saturating_sub(FORK_PREPARATION_EPOCHS)))
-    }
-
-    /// Check if we are in the preparation window for a fork.
-    ///
-    /// The preparation window starts `FORK_PREPARATION_EPOCHS` before the fork
-    /// and ends when the fork activates.
-    pub fn in_preparation_window(&self, fork: Fork, epoch: Epoch) -> bool {
-        if let (Some(prep_start), Some(fork_epoch)) =
-            (self.preparation_start_epoch(fork), self.fork_epoch(fork))
-        {
-            epoch >= prep_start && epoch < fork_epoch
-        } else {
-            false
-        }
-    }
 }
 
 #[cfg(test)]
@@ -313,23 +281,6 @@ mod tests {
         // After Boole - should still return Boole config
         let config = schedule.active_fork_config(Epoch::new(200));
         assert_eq!(config.fork, Fork::Boole);
-    }
-
-    #[test]
-    fn test_preparation_window() {
-        let schedule = schedule_with_boole(100);
-
-        // Before preparation window
-        assert!(!schedule.in_preparation_window(Fork::Boole, Epoch::new(98)));
-
-        // In preparation window (100 - 1 = 99)
-        assert!(schedule.in_preparation_window(Fork::Boole, Epoch::new(99)));
-
-        // At fork (no longer in preparation)
-        assert!(!schedule.in_preparation_window(Fork::Boole, Epoch::new(100)));
-
-        // After fork
-        assert!(!schedule.in_preparation_window(Fork::Boole, Epoch::new(101)));
     }
 
     #[test]

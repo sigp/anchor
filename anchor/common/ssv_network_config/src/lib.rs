@@ -9,10 +9,7 @@ use alloy::primitives::Address;
 use enr::{CombinedKey, Enr};
 use eth2_network_config::Eth2NetworkConfig;
 // Re-export fork types for convenience
-pub use fork::{
-    ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkPhase, ForkPhaseSender,
-    ForkSchedule,
-};
+pub use fork::{ALAN_TOPIC_PREFIX, FORK_PREPARATION_EPOCHS, Fork, ForkConfig, ForkSchedule};
 use serde::Deserialize;
 use ssv_types::domain_type::DomainType;
 use types::Epoch;
