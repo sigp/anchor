@@ -1,7 +1,9 @@
 // Metadata
-pub const INSERT_METADATA: &str = r#"INSERT INTO metadata (domain_type) VALUES (?1)"#;
-pub const GET_METADATA: &str = r#"SELECT schema_version, domain_type FROM metadata"#;
+pub const INSERT_METADATA: &str = r#"INSERT INTO metadata (network_name) VALUES (?1)"#;
+pub const GET_METADATA: &str = r#"SELECT schema_version FROM metadata"#;
 pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
+pub const GET_MAX_OPERATOR_ID_SEEN: &str = r#"SELECT max_operator_id_seen FROM metadata"#;
+pub const SET_MAX_OPERATOR_ID_SEEN: &str = r#"UPDATE metadata SET max_operator_id_seen = ?1"#;
 
 // Operator
 pub const INSERT_OPERATOR: &str = r#"
@@ -10,10 +12,15 @@ pub const INSERT_OPERATOR: &str = r#"
     VALUES
         (?1, ?2, ?3)
 "#;
+pub const MARK_OPERATOR_REMOVED: &str =
+    r#"UPDATE operators SET removed = TRUE WHERE operator_id = ?1"#;
 pub const DELETE_OPERATOR: &str = r#"DELETE FROM operators WHERE operator_id = ?1"#;
-pub const GET_OPERATOR_ID: &str = r#"SELECT operator_id FROM operators WHERE public_key = ?1"#;
-pub const GET_OPERATOR_KEY: &str = r#"SELECT public_key FROM operators WHERE operator_id = ?1"#;
-pub const GET_ALL_OPERATORS: &str = r#"SELECT * FROM operators"#;
+pub const GET_OPERATOR_STATUS: &str = r#"SELECT removed FROM operators WHERE operator_id = ?1"#;
+pub const GET_OPERATOR_ID: &str =
+    r#"SELECT operator_id FROM operators WHERE public_key = ?1 AND removed = FALSE"#;
+pub const GET_OPERATOR_KEY: &str =
+    r#"SELECT public_key FROM operators WHERE operator_id = ?1 AND removed = FALSE"#;
+pub const GET_ALL_OPERATORS: &str = r#"SELECT * FROM operators WHERE removed = FALSE"#;
 
 // Cluster
 pub const INSERT_CLUSTER: &str = r#"

@@ -5,6 +5,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
+use fork::ForkLifecycle;
 use libp2p::{
     Multiaddr,
     core::{Endpoint, transport::PortUse},
@@ -16,9 +17,10 @@ use libp2p::{
 };
 use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
+use tokio::sync::watch;
 use tracing::info;
 
-use crate::{Config, Enr};
+use crate::{ClientType, Config, Enr, peer_manager::types::PeerInfo};
 
 pub mod blocking;
 pub mod connection;
@@ -34,18 +36,59 @@ pub use types::{ConnectActions, Event};
 
 /// Main peer manager that coordinates all peer management functionality
 pub struct PeerManager {
-    peer_store: peer_store::Behaviour<MemoryStore<Enr>>,
+    peer_store: peer_store::Behaviour<MemoryStore<PeerInfo>>,
     connection_manager: ConnectionManager,
     heartbeat_manager: HeartbeatManager,
     blocking_manager: BlockingManager,
     needed_subnets: HashSet<SubnetId>,
 }
 
+/// Base number of peers to maintain when no subnets are active.
+/// This value is copied from the go-ssv implementation.
+const BASE_PEER_COUNT: usize = 60;
+
+/// Additional peers to add for each active subnet.
+/// This value is copied from the go-ssv implementation.
+const PEERS_PER_SUBNET: usize = 3;
+
+/// Maximum number of peers to maintain, regardless of subnet count.
+/// This value is copied from the go-ssv implementation.
+const MAX_PEER_COUNT: usize = 150;
+
 impl PeerManager {
-    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
+    /// Calculate target peer count based on active subnet count.
+    ///
+    /// Formula: base 60 peers + 3 peers per active subnet, capped at 150 maximum.
+    /// This calculation is arbitrary and copied from the go-ssv implementation for
+    /// compatibility with the existing network.
+    pub fn calculate_target_peers(active_subnet_count: usize) -> usize {
+        use std::cmp::min;
+        min(
+            BASE_PEER_COUNT + active_subnet_count * PEERS_PER_SUBNET,
+            MAX_PEER_COUNT,
+        )
+    }
+
+    /// Create a new PeerManager with the given configuration.
+    ///
+    /// # Arguments
+    /// * `config` - Network configuration (may contain user-provided target_peers)
+    /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
+    /// * `fork_lifecycle` - Shared fork lifecycle for fork-aware peer selection
+    pub fn new(
+        config: &Config,
+        one_epoch_duration: Duration,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
+    ) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
-        let connection_manager = ConnectionManager::new(config);
+
+        // Determine target_peers: use user's value if provided, otherwise start with base count.
+        // When dynamic (None), target_peers will be updated as subnets are joined via
+        // subnet_service.
+        let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
+
+        let connection_manager = ConnectionManager::new(target_peers, lifecycle_rx);
         let heartbeat_manager = HeartbeatManager::new();
         let blocking_manager = BlockingManager::new(one_epoch_duration);
 
@@ -70,19 +113,35 @@ impl PeerManager {
     }
 
     /// Join subnet and dial peers for it
-    pub fn join_subnet(&mut self, subnet_id: SubnetId) -> ConnectActions {
-        PeerDiscovery::track_subnet_peers(
+    pub fn join_subnet(
+        &mut self,
+        subnet_id: SubnetId,
+        is_dynamic_target_peers: bool,
+    ) -> ConnectActions {
+        let actions = PeerDiscovery::track_subnet_peers(
             subnet_id,
             &mut self.needed_subnets,
             self.peer_store.store(),
             &self.connection_manager,
             self.blocking_manager.blocked_peers(),
-        )
+        );
+
+        if is_dynamic_target_peers {
+            let new_target = Self::calculate_target_peers(self.needed_subnets.len());
+            self.connection_manager.set_target_peers(new_target);
+        }
+
+        actions
     }
 
     /// Leave subnet
-    pub fn leave_subnet(&mut self, subnet_id: SubnetId) {
+    pub fn leave_subnet(&mut self, subnet_id: SubnetId, is_dynamic_target_peers: bool) {
         self.needed_subnets.remove(&subnet_id);
+
+        if is_dynamic_target_peers {
+            let new_target = Self::calculate_target_peers(self.needed_subnets.len());
+            self.connection_manager.set_target_peers(new_target);
+        }
     }
 
     /// Perform heartbeat and return actions if needed
@@ -90,6 +149,8 @@ impl PeerManager {
         info!(
             subnets = self.needed_subnets.len(),
             peers = self.connection_manager.connected.len(),
+            inbound = self.connection_manager.inbound_count(),
+            outbound = self.connection_manager.outbound_count(),
             blocked_peers = self.blocking_manager.blocked_peers_count(),
             "Network status"
         );
@@ -126,10 +187,63 @@ impl PeerManager {
         self.connection_manager.target_peers
     }
 
-    /// Update observed gossipsub subscription state for a peer
-    pub fn set_peer_subscription(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
+    /// Get the current number of connected peers
+    pub fn connected_peers(&self) -> usize {
+        self.connection_manager.connected.len()
+    }
+
+    /// Get the number of active subnets we're subscribed to
+    pub fn active_subnet_count(&self) -> usize {
+        self.needed_subnets.len()
+    }
+
+    /// Get the number of inbound connections
+    pub fn inbound_peers(&self) -> usize {
+        self.connection_manager.inbound_count()
+    }
+
+    /// Get the number of outbound connections
+    pub fn outbound_peers(&self) -> usize {
+        self.connection_manager.outbound_count()
+    }
+
+    /// Get the set of subnets we need peers for
+    pub fn needed_subnets(&self) -> &HashSet<SubnetId> {
+        &self.needed_subnets
+    }
+
+    /// Update observed gossipsub subscription state for a peer on a specific fork.
+    pub fn set_peer_subscription(
+        &mut self,
+        peer: PeerId,
+        fork: fork::Fork,
+        subnet: SubnetId,
+        subscribed: bool,
+    ) {
         self.connection_manager
-            .set_peer_subscribed(peer, subnet, subscribed);
+            .set_peer_subscribed(peer, fork, subnet, subscribed);
+    }
+
+    /// Handle a completed handshake by updating peer client type and triggering metrics update.
+    pub fn handle_handshake_completed(&mut self, peer_id: PeerId, node_version: String) {
+        let client_type = ClientType::from(node_version);
+
+        // Update client type in peer store
+        if let Some(peer_info) = self.peer_store.store_mut().get_custom_data_mut(&peer_id) {
+            peer_info.set_client_type(client_type);
+        } else {
+            self.peer_store.store_mut().insert_custom_data(
+                &peer_id,
+                PeerInfo {
+                    enr: None,
+                    client_type: Some(client_type),
+                },
+            );
+        }
+
+        // Trigger metric recalculation
+        self.connection_manager
+            .update_metrics_if_changed(true, self.peer_store.store());
     }
 
     /// Returns true if a connected peer should be disconnected because it doesn't offer any needed
@@ -293,18 +407,26 @@ impl NetworkBehaviour for PeerManager {
     fn on_swarm_event(&mut self, event: FromSwarm) {
         // Handle connection state changes
         let changed_connected = match event {
-            FromSwarm::ConnectionEstablished(ConnectionEstablished { peer_id, .. }) => {
-                self.connection_manager.on_connection_established(peer_id)
+            FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id, endpoint, ..
+            }) => {
+                let is_outbound = endpoint.is_dialer();
+                self.connection_manager
+                    .on_connection_established(peer_id, is_outbound)
             }
-            FromSwarm::ConnectionClosed(ConnectionClosed { peer_id, .. }) => {
-                self.connection_manager.on_connection_closed(&peer_id)
+            FromSwarm::ConnectionClosed(ConnectionClosed {
+                peer_id, endpoint, ..
+            }) => {
+                let was_outbound = endpoint.is_dialer();
+                self.connection_manager
+                    .on_connection_closed(&peer_id, was_outbound)
             }
             _ => false,
         };
 
         // Update metrics if connection state changed
         self.connection_manager
-            .update_metrics_if_changed(changed_connected);
+            .update_metrics_if_changed(changed_connected, self.peer_store.store());
 
         // Delegate to sub-components
         self.blocking_manager.on_swarm_event(event);
@@ -353,5 +475,44 @@ impl NetworkBehaviour for PeerManager {
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that calculate_target_peers correctly implements the formula:
+    /// BASE_PEER_COUNT + PEERS_PER_SUBNET * subnets, capped at MAX_PEER_COUNT
+    #[test]
+    fn test_calculate_target_peers_formula() {
+        // Base case: 0 subnets
+        assert_eq!(PeerManager::calculate_target_peers(0), BASE_PEER_COUNT);
+
+        // Linear growth: BASE_PEER_COUNT + PEERS_PER_SUBNET * subnets
+        assert_eq!(
+            PeerManager::calculate_target_peers(1),
+            BASE_PEER_COUNT + PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(5),
+            BASE_PEER_COUNT + 5 * PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(10),
+            BASE_PEER_COUNT + 10 * PEERS_PER_SUBNET
+        );
+        assert_eq!(
+            PeerManager::calculate_target_peers(20),
+            BASE_PEER_COUNT + 20 * PEERS_PER_SUBNET
+        );
+
+        // At cap boundary (60 + 30 * 3 = 150)
+        assert_eq!(PeerManager::calculate_target_peers(30), MAX_PEER_COUNT);
+
+        // Above cap - should be capped at MAX_PEER_COUNT
+        assert_eq!(PeerManager::calculate_target_peers(31), MAX_PEER_COUNT);
+        assert_eq!(PeerManager::calculate_target_peers(50), MAX_PEER_COUNT);
+        assert_eq!(PeerManager::calculate_target_peers(100), MAX_PEER_COUNT);
     }
 }

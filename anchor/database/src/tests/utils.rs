@@ -1,114 +1,223 @@
 use std::path::PathBuf;
 
+use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
-use ssv_types::domain_type::DomainType;
+use ssv_types::{
+    Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,
+    ValidatorIndex, ValidatorMetadata,
+};
 use tempfile::TempDir;
-use types::test_utils::{SeedableRng, TestRandom, XorShiftRng};
+use types::{
+    Address, Graffiti,
+    test_utils::{SeedableRng, XorShiftRng},
+};
 
-use super::test_prelude::*;
+use crate::{NetworkDatabase, multi_index::UniqueIndex};
 
-const DEFAULT_NUM_OPERATORS: u64 = 4;
+/// Default number of operators for test clusters
+/// 4 operators allows for QBFT quorum (3) with 1 fault tolerance (f=1, n=3f+1=4)
+pub const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
 const DEFAULT_SEED: [u8; 16] = [42; 16];
-pub const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
+/// Test network name for database isolation
+pub const TEST_NETWORK: &str = "test";
 
-// Test fixture for common scnearios
+// Common data shared by all test fixtures
 #[derive(Debug)]
-pub struct TestFixture {
+pub struct TestFixtureData {
     pub db: NetworkDatabase,
     pub cluster: Cluster,
     pub validator: ValidatorMetadata,
     pub shares: Vec<Share>,
     pub operators: Vec<Operator>,
-    pub path: PathBuf,
     pub pubkey: Rsa<Public>,
+}
+
+// In-memory test fixture for fast tests that don't need persistence
+#[derive(Debug)]
+pub struct InMemoryTestFixture {
+    pub data: TestFixtureData,
+}
+
+impl Default for InMemoryTestFixture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// File-based test fixture for tests that need persistence or restart scenarios
+#[derive(Debug)]
+pub struct FileTestFixture {
+    pub data: TestFixtureData,
+    pub path: PathBuf,
     _temp_dir: TempDir,
 }
 
-impl TestFixture {
-    // Generate a database that is populated with a full cluster. This operator is a part of the
-    // cluster, so membership data should be saved
+impl Default for FileTestFixture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InMemoryTestFixture {
+    // Create a populated test fixture with in-memory database
     pub fn new() -> Self {
-        // generate the operators and pick the first one to be us
-        let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
-            .map(generators::operator::with_id)
-            .collect();
-        let us = operators
-            .first()
-            .expect("Failed to get operator")
-            .rsa_pubkey
-            .clone();
+        let (operators, pubkey) = generate_default_operators();
 
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = temp_dir.path().join("test.db");
-        let db = NetworkDatabase::new(&db_path, &us, TEST_DOMAIN).expect("Failed to create DB");
-
-        let mut conn = db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
-
-        // Insert all of the operators
-        operators.iter().for_each(|op| {
-            db.insert_operator(op, &tx)
-                .expect("Failed to insert operator");
-        });
-
-        // Build a cluster with all of the operators previously inserted
-        let cluster = generators::cluster::with_operators(&operators);
-
-        // Generate one validator that will delegate to this cluster
-        let validator = generators::validator::random_metadata(cluster.cluster_id);
-
-        // Generate shares for the validator. Each operator will have one share
-        let shares: Vec<Share> = operators
-            .iter()
-            .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
-            .collect();
-
-        db.insert_validator(cluster.clone(), &validator, shares.clone(), &tx)
-            .expect("Failed to insert cluster");
-
-        tx.commit().unwrap();
-
-        // End state:
-        // There are DEFAULT_NUM_OPERATORS operators in the network
-        // There is a single cluster with a single validator
-        // The operators acting on behalf of the validator are all of the operators in the network
-        // Each operator has a piece of the keyshare for the validator
+        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK)
+            .expect("Failed to create in-memory database");
 
         Self {
-            db,
-            cluster,
-            operators,
-            validator,
-            shares,
+            data: build_populated_fixture(db, operators, pubkey),
+        }
+    }
+
+    // Create an empty test fixture with in-memory database
+    pub fn new_empty() -> Self {
+        let pubkey = generators::pubkey::random_rsa();
+
+        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK)
+            .expect("Failed to create in-memory database");
+
+        Self {
+            data: build_empty_fixture(db, pubkey),
+        }
+    }
+}
+
+impl FileTestFixture {
+    // Create a populated test fixture with file-based database
+    pub fn new() -> Self {
+        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+        let (operators, pubkey) = generate_default_operators();
+
+        let db_path = temp_dir.path().join("test.db");
+        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_NETWORK)
+            .expect("Failed to create file-based database");
+
+        Self {
+            data: build_populated_fixture(db, operators, pubkey),
             path: db_path,
-            pubkey: us,
             _temp_dir: temp_dir,
         }
     }
 
-    // Generate an empty database and pick a random public key to be us
+    // Create an empty test fixture with file-based database
     pub fn new_empty() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
-        let db_path = temp_dir.path().join("test.db");
         let pubkey = generators::pubkey::random_rsa();
 
-        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)
-            .expect("Failed to create test database");
-        let cluster = generators::cluster::random(0);
+        let db_path = temp_dir.path().join("test.db");
+        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_NETWORK)
+            .expect("Failed to create file-based database");
 
         Self {
-            db,
-            validator: generators::validator::random_metadata(cluster.cluster_id),
-            cluster,
-            operators: Vec::new(),
-            shares: Vec::new(),
+            data: build_empty_fixture(db, pubkey),
             path: db_path,
-            pubkey,
             _temp_dir: temp_dir,
         }
+    }
+}
+
+// Implement Deref for convenient field access
+impl std::ops::Deref for InMemoryTestFixture {
+    type Target = TestFixtureData;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl std::ops::DerefMut for InMemoryTestFixture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl std::ops::Deref for FileTestFixture {
+    type Target = TestFixtureData;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl std::ops::DerefMut for FileTestFixture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+// === Modular fixture building blocks ===
+
+// Generate default set of operators with pubkey for testing
+fn generate_default_operators() -> (Vec<Operator>, Rsa<Public>) {
+    let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
+        .map(generators::operator::with_id)
+        .collect();
+    let pubkey = operators[0].rsa_pubkey.clone();
+    (operators, pubkey)
+}
+
+// Build a populated fixture: database with operators, cluster, validator, and shares
+// End state:
+// - There are DEFAULT_NUM_OPERATORS operators in the network
+// - There is a single cluster with a single validator
+// - The operators acting on behalf of the validator are all of the operators in the network
+// - Each operator has a piece of the keyshare for the validator
+fn build_populated_fixture(
+    db: NetworkDatabase,
+    operators: Vec<Operator>,
+    pubkey: Rsa<Public>,
+) -> TestFixtureData {
+    let mut conn = db.connection().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    // Insert operators into database
+    operators.iter().for_each(|op| {
+        db.insert_operator(op, &tx)
+            .expect("Failed to insert operator");
+    });
+
+    // Create cluster with these operators
+    let cluster = generators::cluster::with_operators(&operators);
+
+    // Generate validator for this cluster
+    let validator = generators::validator::random_metadata(cluster.cluster_id);
+
+    // Generate shares - one per operator
+    let shares: Vec<Share> = operators
+        .iter()
+        .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
+        .collect();
+
+    // Insert validator with cluster and shares
+    db.insert_validator(cluster.clone(), &validator, shares.clone(), &tx)
+        .expect("Failed to insert validator");
+
+    tx.commit().unwrap();
+
+    TestFixtureData {
+        db,
+        cluster,
+        operators,
+        validator,
+        shares,
+        pubkey,
+    }
+}
+
+// Build an empty fixture: database with no data
+fn build_empty_fixture(db: NetworkDatabase, pubkey: Rsa<Public>) -> TestFixtureData {
+    let cluster = generators::cluster::random(0);
+
+    TestFixtureData {
+        db,
+        validator: generators::validator::random_metadata(cluster.cluster_id),
+        cluster,
+        operators: Vec::new(),
+        shares: Vec::new(),
+        pubkey,
     }
 }
 
@@ -181,7 +290,8 @@ pub mod generators {
     }
 
     pub mod pubkey {
-        use types::PublicKeyBytes;
+        use bls::PublicKeyBytes;
+        use types::test_utils::TestRandom;
 
         use super::*;
 
@@ -222,14 +332,14 @@ pub mod generators {
 pub mod queries {
     use std::str::FromStr;
 
+    use bls::PublicKeyBytes;
     use rusqlite::Connection;
-    use types::PublicKeyBytes;
+    use ssv_types::{ClusterId, OperatorId};
 
     use super::*;
 
     // Single selection query statements
-    const GET_OPERATOR: &str =
-        "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1";
+    const GET_OPERATOR: &str = "SELECT operator_id, public_key, owner_address FROM operators WHERE operator_id = ?1 AND removed = false";
     const GET_CLUSTER: &str = "SELECT c.cluster_id, c.owner, o.fee_recipient, c.liquidated
                  FROM clusters c
                  LEFT JOIN owners o ON c.owner = o.owner
@@ -237,7 +347,7 @@ pub mod queries {
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
-    const GET_METADATA: &str = "SELECT schema_version, domain_type, block_number FROM metadata";
+    const GET_METADATA: &str = "SELECT schema_version, network_name, block_number FROM metadata";
 
     // Get an operator from the database
     pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
@@ -336,7 +446,7 @@ pub mod queries {
 
     pub struct Metadata {
         pub schema_version: u64,
-        pub domain: DomainType,
+        pub network_name: String,
         pub block_number: u64,
     }
 
@@ -344,7 +454,7 @@ pub mod queries {
         conn.query_row(GET_METADATA, [], |row| {
             Ok(Metadata {
                 schema_version: row.get("schema_version")?,
-                domain: row.get("domain_type")?,
+                network_name: row.get("network_name")?,
                 block_number: row.get("block_number")?,
             })
         })
@@ -358,6 +468,8 @@ pub mod assertions {
 
     // Assertions on operator information fetches from in memory and the database
     pub mod operator {
+        use ssv_types::OperatorId;
+
         use super::*;
 
         // Asserts data between the two operators is the same
@@ -446,6 +558,8 @@ pub mod assertions {
 
     // Cluster assetions
     pub mod cluster {
+        use ssv_types::ClusterId;
+
         use super::*;
         fn data(c1: &Cluster, c2: &Cluster) {
             assert_eq!(c1.cluster_id, c2.cluster_id);
@@ -492,7 +606,7 @@ pub mod assertions {
 
     //
     pub mod share {
-        use types::PublicKeyBytes;
+        use bls::PublicKeyBytes;
 
         use super::*;
         fn data(s1: &Share, s2: &Share) {
@@ -523,7 +637,7 @@ pub mod assertions {
             assert!(stored_share.is_none());
         }
 
-        // Verifies that all of the shares for a validator are in the database
+        // Verifies that all the shares for a validator are in the database
         pub fn exists_in_db(validator_pubkey: &PublicKeyBytes, s: &[Share], tx: &Transaction<'_>) {
             let db_shares =
                 queries::get_shares(validator_pubkey, tx).expect("Shares should exist in db");
@@ -538,7 +652,7 @@ pub mod assertions {
                 .for_each(|(share, share2)| data(share, share2));
         }
 
-        // Verifies that all of the shares for a validator are not in the database
+        // Verifies that all the shares for a validator are not in the database
         pub fn exists_not_in_db(validator_pubkey: &PublicKeyBytes, tx: &Transaction<'_>) {
             let shares = queries::get_shares(validator_pubkey, tx);
             assert!(shares.is_none());

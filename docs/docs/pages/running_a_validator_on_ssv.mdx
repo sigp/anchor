@@ -1,0 +1,23 @@
+# Running a Validator on SSV
+
+Validators can be created to run on the SSV network or can be migrated from a currently running
+validator client to an SSV cluster. This section provides a simple guide of the process of
+running a validator on the SSV network.
+
+## New Validator
+
+As described in the [SSV New Validator Documentation](https://docs.ssv.network/stakers/validator-management/creating-a-new-validator/), the general procedure is a two step process:
+1. Generate validator keys and deposit ETH (minimum 32 ETH for a validator)
+2. Register the validator to SSV and split the validator key
+
+The first step follows the standard process for creating an Ethereum validator. The general approach is to use the [ethstaker-deposit-cli](https://github.com/ethstaker/ethstaker-deposit-cli) to generate keys and create a deposit json, then use the [Staking Launchpad](https://launchpad.ethereum.org/en/) to deposit the Ethereum.
+
+The second step is the same process as migrating a validator and is covered in the next section.
+
+## Migrating a Validator
+
+The steps involved in migrating a running validator are covered in the [Migrating a validator](https://docs.ssv.network/stakers/validator-management/distributing-a-validator) SSV documentation.
+
+The procedure involves connecting to the [SSV Webapp](https://app.ssv.network/) and choosing a set of operators that you would like to run your validator. This will form an SSV cluster. Once a set of operators are chosen you then need to split your validator's private key into shards specific to each operator.
+
+SSV offers a distributed key splitting mechanism which is outlined in their documentation. Anchor offers key splitting functionality also, which can be done via the [anchor keysplit](/cli-keysplit) command.

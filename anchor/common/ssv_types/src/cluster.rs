@@ -1,9 +1,10 @@
 use std::fmt::Debug;
 
-use derive_more::{Deref, From};
+use bls::PublicKeyBytes;
+use derive_more::{Deref, Display, From};
 use indexmap::IndexSet;
 use ssz_derive::{Decode, Encode};
-use types::{Address, Graffiti, PublicKeyBytes};
+use types::{Address, Graffiti};
 
 use crate::{OperatorId, committee::CommitteeId};
 
@@ -66,7 +67,9 @@ pub struct ClusterMember {
 }
 
 /// Index of the validator in the validator registry.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode)]
+#[derive(
+    Clone, Copy, Display, Debug, Default, Eq, PartialEq, Hash, From, Deref, Encode, Decode,
+)]
 #[ssz(struct_behaviour = "transparent")]
 pub struct ValidatorIndex(pub usize);
 

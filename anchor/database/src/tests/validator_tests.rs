@@ -1,15 +1,15 @@
-use super::test_prelude::*;
-
 #[cfg(test)]
 mod validator_database_tests {
-    use super::*;
+    use types::Graffiti;
+
+    use crate::test_utils::{InMemoryTestFixture, assertions};
 
     #[test]
     /// Test updating the graffiti of a validator
     fn test_update_graffiti() {
-        let fixture = TestFixture::new();
+        let fixture = InMemoryTestFixture::new();
         let new_graffiti = Graffiti::default();
-        let mut validator = fixture.validator;
+        let mut validator = fixture.validator.clone();
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();

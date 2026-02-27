@@ -11,7 +11,10 @@ use libp2p::{
 };
 use tracing::debug;
 
-use crate::scoring::peer_score_config::RETAIN_SCORE_EPOCH_MULTIPLIER;
+use crate::{
+    metrics::{PEER_BLOCKED_INBOUND_CONNECTIONS, PEERS_BLOCKED},
+    scoring::peer_score_config::RETAIN_SCORE_EPOCH_MULTIPLIER,
+};
 
 /// Manages peer blocking functionality
 pub struct BlockingManager {
@@ -38,6 +41,7 @@ impl BlockingManager {
             self.blocked_peers_timestamps
                 .insert(peer_id, tokio::time::Instant::now());
             debug!(?peer_id, "Blocked peer");
+            metrics::inc_gauge(&PEERS_BLOCKED);
             true
         } else {
             false
@@ -50,6 +54,12 @@ impl BlockingManager {
         if was_removed {
             self.blocked_peers_timestamps.remove(&peer_id);
             debug!(?peer_id, "Unblocked peer after retain_score duration");
+            metrics::dec_gauge(&PEERS_BLOCKED);
+            metrics::set_gauge_vec(
+                &PEER_BLOCKED_INBOUND_CONNECTIONS,
+                &[&peer_id.to_base58()],
+                0,
+            );
         }
         was_removed
     }
@@ -103,6 +113,9 @@ impl BlockingManager {
         local_addr: &Multiaddr,
         remote_addr: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
+        if self.blocked_peers().contains(&peer) {
+            metrics::inc_gauge_vec(&PEER_BLOCKED_INBOUND_CONNECTIONS, &[&peer.to_base58()]);
+        }
         self.block_list
             .handle_established_inbound_connection(connection_id, peer, local_addr, remote_addr)
             .map(|_| ()) // Discard the handler, we just want to know if connection is allowed

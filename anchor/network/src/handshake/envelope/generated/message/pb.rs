@@ -12,7 +12,7 @@ use quick_protobuf::{MessageInfo, MessageRead, MessageWrite, BytesReader, Writer
 use quick_protobuf::sizeofs::*;
 use super::*;
 
-#[allow(clippy::derive_partial_eq_without_eq)]
+#[expect(clippy::derive_partial_eq_without_eq)]
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct Envelope {
     pub public_key: Vec<u8>,

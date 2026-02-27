@@ -34,7 +34,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v0.3.1',
+      text: 'v1.1.0',
       items: [
         {
           text: 'Releases',
@@ -56,11 +56,13 @@ export default defineConfig({
           { text: 'Introduction', link: '/introduction' },
           { text: 'Installation', link: '/installation' },
           { text: 'Running an Operator', link: '/running_an_operator' },
+          { text: 'Running a Validator on SSV', link: '/running_a_validator_on_ssv' },
         ]
       },
       {
         text: 'Usage & Configuration',
         items: [
+          { text: 'Migrate to Anchor', link: '/migrate_to_anchor' },
           {
             text: 'CLI Reference', link: '/cli', collapsed: true,
             items: [
@@ -99,9 +101,4 @@ export default defineConfig({
       link: 'https://x.com/sigp_io',
     },
   ],
-
-  editLink: {
-    pattern: "https://github.com/sigp/anchor/edit/unstable/book/docs/pages/:path",
-    text: "Edit this page"
-  },
 })

@@ -17,15 +17,14 @@ pub const VERSION: &str = git_version!(
         // NOTE: using --match instead of --exclude for compatibility with old Git
         "--match=thiswillnevermatchlol"
     ],
-    prefix = "Anchor/v0.3.1-",
-    fallback = "Anchor/v0.3.1"
+    prefix = "Anchor/v1.2.1-",
+    fallback = "Anchor/v1.2.1"
 );
 
 /// Returns the first eight characters of the latest commit hash for this build.
 ///
 /// No indication is given if the tree is dirty. This is part of the standard
 /// for reporting the client version to the execution engine.
-#[allow(dead_code)]
 pub const COMMIT_PREFIX: &str = git_version!(
     args = [
         "--always",

@@ -4,23 +4,23 @@ use std::{
     time::Duration,
 };
 
+use bls::PublicKeyBytes;
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
+use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Transaction, params};
-use ssv_types::{
-    Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata,
-    domain_type::DomainType,
-};
+use rusqlite::{Connection, Transaction, params};
+use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
 };
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},
+    slashing::SlashingProtection,
     state::NetworkState,
 };
 
@@ -31,12 +31,21 @@ mod multi_index;
 mod operator_operations;
 mod schema;
 mod share_operations;
+pub mod slashing;
 mod sql_operations;
 mod state;
 mod validator_operations;
 
-#[cfg(test)]
+// Compile tests module for crate tests or when the feature is enabled, but keep it private.
+#[cfg(any(test, feature = "test-utils"))]
 mod tests;
+
+// Public, narrow re-export of just the test utilities when the feature is enabled.
+#[cfg(feature = "test-utils")]
+#[doc(hidden)]
+pub mod test_utils {
+    pub use super::{slashing::NoOpSlashingProtection, tests::utils::*};
+}
 
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -114,6 +123,8 @@ struct SingleState {
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
+    /// Monotonically increasing OperatorId count. None indicates a migrated database.
+    max_operator_id_seen: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -139,9 +150,23 @@ impl NetworkDatabase {
     pub fn new(
         path: &Path,
         pubkey: &Rsa<Public>,
-        domain: DomainType,
+        network_name: &str,
     ) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path, domain)?;
+        let conn_pool = Self::open_or_create(path, network_name)?;
+        let operator = PubkeyOrId::Pubkey(pubkey.clone());
+        let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
+        Ok(Self {
+            operator,
+            state,
+            conn_pool,
+        })
+    }
+
+    /// Construct a new NetworkDatabase using an in-memory database (test-only)
+    /// This is more explicit than passing ":memory:" as a path
+    #[cfg(feature = "test-utils")]
+    pub fn new_in_memory(pubkey: &Rsa<Public>, network_name: &str) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_in_memory(network_name)?;
         let operator = PubkeyOrId::Pubkey(pubkey.clone());
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -155,9 +180,9 @@ impl NetworkDatabase {
     pub fn new_as_impostor(
         path: &Path,
         operator: &OperatorId,
-        domain: DomainType,
+        network_name: &str,
     ) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path, domain)?;
+        let conn_pool = Self::open_or_create(path, network_name)?;
         let operator = PubkeyOrId::Id(*operator);
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -189,19 +214,47 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Update the largest seen OperatorId in the database
+    pub fn set_max_operator_id_seen(
+        &self,
+        operator_id: u64,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+            .execute(params![operator_id])?;
+        self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
+
+        Ok(())
+    }
+
     // Open an existing database at the given `path`, or create one if none exists.
-    fn open_or_create(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
-        schema::ensure_up_to_date(path, domain)?;
+    fn open_or_create(path: &Path, network_name: &str) -> Result<Pool, DatabaseError> {
+        schema::ensure_up_to_date(path, network_name)?;
         Self::open_conn_pool(path)
     }
 
-    // Build a new connection pool
+    // Build a new connection pool for file-based databases
     fn open_conn_pool(path: &Path) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::file(path);
-        // some other args here
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
+            .connection_customizer(Box::new(AnchorCustomizeConnection))
+            .build(manager)?;
+        Ok(conn_pool)
+    }
+
+    // Build a new connection pool for in-memory databases (test-only)
+    // In-memory databases bypass schema migrations and are initialized via connection customizer
+    #[cfg(feature = "test-utils")]
+    fn open_in_memory(network_name: &str) -> Result<Pool, DatabaseError> {
+        let manager = SqliteConnectionManager::memory();
+        let conn_pool = Pool::builder()
+            .max_size(POOL_SIZE)
+            .connection_timeout(CONNECTION_TIMEOUT)
+            .connection_customizer(Box::new(InMemoryCustomizeConnection {
+                network_name: network_name.to_string(),
+            }))
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -218,6 +271,31 @@ impl NetworkDatabase {
             f(state);
             false
         });
+    }
+}
+
+#[derive(Debug)]
+struct AnchorCustomizeConnection;
+
+impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnection {
+    fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        conn.pragma_update(None, "journal_mode", "wal")?;
+        conn.pragma_update(None, "locking_mode", "exclusive")
+    }
+}
+
+#[cfg(feature = "test-utils")]
+#[derive(Debug)]
+struct InMemoryCustomizeConnection {
+    network_name: String,
+}
+
+#[cfg(feature = "test-utils")]
+impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
+    fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
+        // For in-memory databases, create schema on each connection
+        let _ = schema::create_initial_schema(conn, &self.network_name);
+        Ok(())
     }
 }
 

@@ -1,6 +1,8 @@
-use std::{convert::Into, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Into, sync::Arc, time::Duration};
 
 use duties_tracker::DutiesProvider;
+use fork::{Fork, ForkSchedule};
+use openssl::{pkey::Public, rsa::Rsa};
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
@@ -9,11 +11,13 @@ use ssv_types::{
     msgid::Role,
 };
 use ssz::Decode;
+use typenum::{U13, Unsigned};
+use types::Epoch;
 
 use crate::{
     FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
     duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
-    validate_slot_time, verify_message_signatures,
+    validate_role_for_fork, validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -29,11 +33,16 @@ pub(crate) fn validate_consensus_message(
         Err(err) => return Err(ValidationFailure::UndecodableMessageData(err)),
     };
 
+    // Validate role is allowed for the fork active at this slot
+    let slot = Slot::new(consensus_message.height);
+    validate_role_for_fork(slot, &validation_context)?;
+
     // Call the existing semantic validation
     validate_consensus_message_semantics(
         validation_context.signed_ssv_message,
         &consensus_message,
         validation_context.committee_info,
+        validation_context.operator_pub_keys,
     )?;
 
     validate_qbft_logic(&validation_context, &consensus_message, duty_state)?;
@@ -47,7 +56,7 @@ pub(crate) fn validate_consensus_message(
 
     verify_message_signatures(
         validation_context.signed_ssv_message,
-        validation_context.operators_pk,
+        validation_context.operator_pub_keys,
     )?;
 
     duty_state.update_for_consensus_message(
@@ -64,6 +73,7 @@ pub(crate) fn validate_consensus_message_semantics(
     signed_ssv_message: &SignedSSVMessage,
     consensus_message: &QbftMessage,
     committee_info: &CommitteeInfo,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
 ) -> Result<(), ValidationFailure> {
     let signers = signed_ssv_message.operator_ids().len();
 
@@ -139,13 +149,15 @@ pub(crate) fn validate_consensus_message_semantics(
         });
     }
 
-    validate_justifications(consensus_message)?;
+    validate_justifications(consensus_message, operator_pub_keys, true)?;
 
     Ok(())
 }
 
 pub(crate) fn validate_justifications(
     consensus_message: &QbftMessage,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
+    check_inner_justifications: bool,
 ) -> Result<(), ValidationFailure> {
     // Rule: Can only exist for Proposal messages
     let prepare_justifications = &consensus_message.prepare_justification;
@@ -164,10 +176,49 @@ pub(crate) fn validate_justifications(
         return Err(ValidationFailure::UnexpectedRoundChangeJustifications);
     }
 
+    // Validate prepare justifications
+    validate_justification_list(
+        prepare_justifications,
+        operator_pub_keys,
+        check_inner_justifications,
+    )?;
+
+    // Validate round change justifications
+    validate_justification_list(
+        round_change_justifications,
+        operator_pub_keys,
+        check_inner_justifications,
+    )?;
+
     Ok(())
 }
 
-#[allow(clippy::comparison_chain)]
+/// Helper function to validate a list of justifications with generic length parameter
+fn validate_justification_list<N: Unsigned>(
+    justifications: &VariableList<VariableList<u8, N>, U13>,
+    operator_pub_keys: &HashMap<OperatorId, Rsa<Public>>,
+    check_inner_justifications: bool,
+) -> Result<(), ValidationFailure> {
+    justifications.iter().try_for_each(|signed_message_bytes| {
+        // Parse the SignedSSVMessage from bytes
+        let signed_message = SignedSSVMessage::from_ssz_bytes(signed_message_bytes)
+            .map_err(|_| ValidationFailure::MalformedJustifications)?;
+
+        verify_message_signatures(&signed_message, operator_pub_keys)?;
+
+        // Also check the justifications' justifications
+        if check_inner_justifications {
+            validate_justifications(
+                &QbftMessage::from_ssz_bytes(signed_message.ssv_message().data())
+                    .map_err(|_| ValidationFailure::MalformedJustifications)?,
+                operator_pub_keys,
+                false,
+            )?;
+        }
+        Ok(())
+    })
+}
+
 pub(crate) fn validate_qbft_logic(
     validation_context: &ValidationContext<impl SlotClock>,
     consensus_message: &QbftMessage,
@@ -182,10 +233,13 @@ pub(crate) fn validate_qbft_logic(
             return Err(ValidationFailure::NoSigners);
         };
 
+        let mut committee = validation_context.committee_info.committee_members.clone();
         let leader = round_robin_proposer(
             consensus_message.height,
             consensus_message.round.into(),
-            &validation_context.committee_info.committee_members,
+            &mut committee,
+            validation_context.slots_per_epoch,
+            &validation_context.fork_schedule,
         )?;
 
         if signer != leader {
@@ -263,16 +317,30 @@ const MAX_ALLOWED_ROUNDS_FUTURE: u64 = 3;
 fn round_robin_proposer(
     height: u64,
     round: Round,
-    committee: &IndexSet<OperatorId>,
+    committee: &mut IndexSet<OperatorId>,
+    slots_per_epoch: u64,
+    fork_schedule: &ForkSchedule,
 ) -> Result<OperatorId, ValidationFailure> {
     if committee.is_empty() {
         return Err(ValidationFailure::NonExistentCommitteeID);
     }
 
+    // Sort the committee to ensure deterministic leader selection
+    committee.sort_unstable();
+
     let first_round_index = height % committee.len() as u64;
 
+    let epoch = Epoch::new(height / slots_per_epoch);
+
+    // Include epoch to shift leader rotation across epoch boundaries
+    let eth_epoch = if fork_schedule.active_fork(epoch) >= Fork::Boole {
+        epoch.into()
+    } else {
+        0
+    };
+
     let round: u64 = round.into();
-    let index = (first_round_index + round - FIRST_ROUND) % committee.len() as u64;
+    let index = (first_round_index + round - FIRST_ROUND + eth_epoch) % committee.len() as u64;
 
     // Get the operator at the calculated index
     Ok(committee[index as usize])
@@ -299,7 +367,8 @@ fn validate_round_in_allowed_spread(
     };
 
     let lowest_allowed = FIRST_ROUND;
-    let highest_allowed = estimated_round + MAX_ALLOWED_ROUNDS_FUTURE;
+    let highest_allowed =
+        (estimated_round + MAX_ALLOWED_ROUNDS_FUTURE).ok_or(ValidationFailure::RoundOverflow)?;
 
     // Check if the round is within allowed spread
     if consensus_message.round < lowest_allowed || consensus_message.round > highest_allowed.into()
@@ -363,7 +432,8 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     let signed_ssv_message = validation_context.signed_ssv_message;
 
     // Rule: Height must not be "old". I.e., signer must not have already advanced to a later slot.
-    if role != Role::Committee {
+    // Skip for committee roles
+    if !role.is_committee_role() {
         for &signer in signed_ssv_message.operator_ids() {
             let signer_state = duty_state.get_or_create_operator(&signer);
             let max_slot = signer_state.max_slot();
@@ -407,15 +477,18 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        collections::BTreeMap,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        OperatorId,
+        OperatorId, RSA_SIGNATURE_SIZE, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
-        message::{MsgType, RSA_SIGNATURE_SIZE, SSVMessage, SignedSSVMessage},
+        message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
     };
     use ssz::Encode;
@@ -425,7 +498,7 @@ mod tests {
         LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, ValidatedSSVMessage, duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            generate_random_rsa_public_keys,
+            create_operator_pub_keys, generate_random_rsa_public_keys,
         },
         validate_ssv_message,
     };
@@ -449,6 +522,17 @@ mod tests {
         }
     }
 
+    fn assert_qbft_message_accepted(
+        result: Result<ValidatedSSVMessage, ValidationFailure>,
+        context: &str,
+    ) {
+        match result {
+            Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
+            Err(e) => panic!("{context}: Expected QbftMessage to be accepted, got error: {e:?}"),
+            Ok(other) => panic!("{context}: Expected QbftMessage variant, got: {other:?}"),
+        }
+    }
+
     // Extract common key generation into a helper
     fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
         let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
@@ -460,6 +544,14 @@ mod tests {
         (private_key, public_key)
     }
 
+    fn generate_fork_schedule() -> Arc<ForkSchedule> {
+        Arc::new(ForkSchedule::new(
+            Fork::Alan,
+            DomainType::default(),
+            "testing",
+        ))
+    }
+
     // ---------------------------------------------------------------------
     // validate_ssv_message tests
     // ---------------------------------------------------------------------
@@ -467,8 +559,13 @@ mod tests {
     #[test]
     fn test_validate_ssv_message_consensus_success() {
         // Generate a key pair
-        let (private_key, public_key) = generate_test_key_pair();
+        let (_private_key, public_key) = generate_test_key_pair();
+        let (private_key2, public_key2) = generate_test_key_pair();
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let map = create_operator_pub_keys(
+            committee_info.committee_members.clone(),
+            vec![public_key, public_key2],
+        );
 
         let qbft_message =
             QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
@@ -476,7 +573,7 @@ mod tests {
             qbft_message,
             vec![OperatorId(2)],
             vec![],
-            vec![private_key],
+            vec![private_key2],
         );
 
         let now = SystemTime::now();
@@ -494,11 +591,12 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: now + slot_duration,
-            operators_pk: &[public_key],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
         };
 
         let expected_duty_count = 5;
@@ -510,18 +608,7 @@ mod tests {
             }),
         );
 
-        match result {
-            Ok(ValidatedSSVMessage::QbftMessage(_)) => {} // success
-            Err(e) => panic!("Expected successful validation, got: {e:?}"),
-            _ => {}
-        }
-
-        assert!(result.is_ok(), "Expected successful validation");
-
-        match result.unwrap() {
-            ValidatedSSVMessage::QbftMessage(_) => {} // success
-            _ => panic!("Expected QbftMessage variant"),
-        }
+        assert_qbft_message_accepted(result, "Expected successful validation");
     }
 
     #[test]
@@ -553,11 +640,12 @@ mod tests {
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: now,
-            operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
+            operator_pub_keys: &HashMap::new(),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -607,11 +695,12 @@ mod tests {
                 .unwrap()
                 .checked_add(LATE_MESSAGE_MARGIN)
                 .unwrap(),
-            operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock,
+            operator_pub_keys: &HashMap::new(),
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -639,19 +728,21 @@ mod tests {
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, invalid_data)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
         )
         .expect("SignedSSVMessage should be created");
 
+        let public_keys = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), public_keys);
+
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::Committee,
             received_at: SystemTime::now(),
-            operators_pk: &generate_random_rsa_public_keys(signed_msg.operator_ids().len()),
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
@@ -660,6 +751,8 @@ mod tests {
                 SystemTime::now().duration_since(UNIX_EPOCH).unwrap(),
                 Duration::from_secs(1),
             ),
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
         };
 
         let result = validate_ssv_message(
@@ -694,8 +787,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert!(
             result.is_ok(),
@@ -714,8 +809,10 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -735,8 +832,10 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers.clone(), vec![], vec![]);
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -759,8 +858,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -783,8 +884,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -807,8 +910,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -832,22 +937,25 @@ mod tests {
             identifier: (&msg_id_b).into(), // Mismatched ID
             root: Hash256::from([0u8; 32]),
             data_round: 1,
-            round_change_justification: vec![],
-            prepare_justification: vec![],
+            round_change_justification: VariableList::empty(),
+            prepare_justification: VariableList::empty(),
         };
 
         let qbft_bytes = qbft_msg.as_ssz_bytes();
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id_a, qbft_bytes)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(42)],
             ssv_msg,
             vec![],
         )
         .expect("SignedSSVMessage should be created");
 
-        let result = validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info);
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_msg, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -876,15 +984,17 @@ mod tests {
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
             .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
         )
         .expect("SignedSSVMessage should be created");
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -914,8 +1024,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -945,8 +1057,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -978,8 +1092,10 @@ mod tests {
             vec![],
         );
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert_validation_error(
             result,
@@ -1009,8 +1125,10 @@ mod tests {
         let signed_msg =
             create_signed_consensus_message(qbft_message.clone(), signers, full_data, vec![]);
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info);
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
 
         assert!(
             result.is_ok(),
@@ -1019,37 +1137,194 @@ mod tests {
     }
 
     #[test]
-    fn test_round_robin_proposer() {
-        let committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+    fn test_round_robin_proposer_alan_fork() {
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
             .into_iter()
             .collect();
+        let slots_per_epoch = 32;
+        // Alan fork: eth_epoch is not included in calculation
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
 
-        // Test basic round robin
+        // Test basic round robin at height 0
         assert_eq!(
-            round_robin_proposer(0, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(1)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 1).into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                (FIRST_ROUND + 1).into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(2)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 2).into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                (FIRST_ROUND + 2).into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(3)
         );
         assert_eq!(
-            round_robin_proposer(0, (FIRST_ROUND + 3).into(), &committee).unwrap(),
+            round_robin_proposer(
+                0,
+                (FIRST_ROUND + 3).into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(1)
-        ); // Wraps around
+        );
 
-        // Test with different heights
+        // Test with different heights within same epoch
         assert_eq!(
-            round_robin_proposer(1, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(
+                1,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(2)
         );
         assert_eq!(
-            round_robin_proposer(2, FIRST_ROUND.into(), &committee).unwrap(),
+            round_robin_proposer(
+                2,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
             OperatorId(3)
+        );
+
+        // Test epoch boundaries (without epoch shift in Alan fork)
+        assert_eq!(
+            round_robin_proposer(
+                31,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2) // last slot of epoch 0
+        );
+        assert_eq!(
+            round_robin_proposer(
+                32,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(3) // first slot of epoch 1 (no epoch shift in Alan)
+        );
+        assert_eq!(
+            round_robin_proposer(
+                64,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2) // first slot of epoch 2 (no epoch shift in Alan)
+        );
+    }
+
+    #[test]
+    fn test_round_robin_proposer_boole_fork() {
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+            .into_iter()
+            .collect();
+        let slots_per_epoch = 32;
+        // Boole fork: eth_epoch IS included in calculation
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "testing"); // Boole active from epoch 0
+
+        // Test basic round robin at height 0, epoch 0
+        // index = (0 + 1 - 1 + 0) % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                0,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Test epoch boundaries WITH epoch shift in Boole fork
+        // Slot 31, epoch 0: index = (31 + 1 - 1 + 0) % 3 = 31 % 3 = 1 -> OperatorId(2)
+        assert_eq!(
+            round_robin_proposer(
+                31,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2)
+        );
+
+        // Slot 32, epoch 1: index = (32 + 1 - 1 + 1) % 3 = 33 % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                32,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Slot 64, epoch 2: index = (64 + 1 - 1 + 2) % 3 = 66 % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                64,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Slot 65, epoch 2: index = (65 + 1 - 1 + 2) % 3 = 67 % 3 = 1 -> OperatorId(2)
+        assert_eq!(
+            round_robin_proposer(
+                65,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2)
         );
     }
 
@@ -1096,12 +1371,14 @@ mod tests {
     // Signature verification tests
     // ---------------------------------------------------------------------
 
+    use fork::ForkSchedule;
     use openssl::{
         pkey::{PKey, Private, Public},
         rsa::Rsa,
         sign::Signer,
     };
     use slot_clock::ManualSlotClock;
+    use types::Epoch;
 
     use crate::{
         ValidationFailure::{EarlySlotMessage, LateSlotMessage},
@@ -1135,11 +1412,13 @@ mod tests {
 
         // Pad signature to RSA_SIGNATURE_SIZE if needed
         let padded_signature = if signature.len() < RSA_SIGNATURE_SIZE {
-            let mut padded = vec![0; RSA_SIGNATURE_SIZE];
+            let mut padded = [0; RSA_SIGNATURE_SIZE];
             padded[..signature.len()].copy_from_slice(&signature);
             padded
         } else {
             signature
+                .try_into()
+                .expect("Signature should not be longer than RSA_SIGNATURE_SIZE bytes")
         };
 
         // Create signed message
@@ -1147,8 +1426,12 @@ mod tests {
             SignedSSVMessage::new(vec![padded_signature], vec![OperatorId(1)], ssv_msg, vec![])
                 .expect("SignedSSVMessage should be created");
 
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        let map = create_operator_pub_keys(committee, vec![public_key]);
+
         // Verify signatures
-        let result = verify_message_signatures(&signed_msg, &[public_key]);
+        let result = verify_message_signatures(&signed_msg, &map);
         assert!(result.is_ok(), "Expected successful signature verification");
     }
 
@@ -1166,16 +1449,22 @@ mod tests {
         // Provide only one key when we have two signatures
         let rsa_keys = generate_random_rsa_public_keys(1);
 
-        let result = verify_message_signatures(&signed_msg, &rsa_keys);
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        committee.insert(OperatorId(2));
+        let map = create_operator_pub_keys(committee, rsa_keys);
+
+        let result = verify_message_signatures(&signed_msg, &map);
 
         assert_validation_error(
             result,
             |failure| {
-                if let ValidationFailure::SignatureVerificationFailed { reason } = failure {
-                    reason.contains("Signature count doesn't match operator count")
-                } else {
-                    false
-                }
+                matches!(
+                    failure,
+                    ValidationFailure::OperatorNotFound {
+                        operator_id: OperatorId(2)
+                    }
+                )
             },
             "SignatureVerificationFailed: count mismatch",
         );
@@ -1195,7 +1484,7 @@ mod tests {
             .expect("SSVMessage should be created");
 
         // Create an invalid signature (just random bytes)
-        let invalid_signature = vec![0xBB; RSA_SIGNATURE_SIZE];
+        let invalid_signature = [0xBB; RSA_SIGNATURE_SIZE];
 
         // Create signed message with invalid signature
         let signed_msg = SignedSSVMessage::new(
@@ -1206,8 +1495,12 @@ mod tests {
         )
         .expect("SignedSSVMessage should be created");
 
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        let map = create_operator_pub_keys(committee, vec![public_key]);
+
         // Verify should fail
-        let result = verify_message_signatures(&signed_msg, &[public_key]);
+        let result = verify_message_signatures(&signed_msg, &map);
 
         assert!(result.is_err(), "Expected signature verification to fail");
         assert_validation_error(
@@ -1239,9 +1532,123 @@ mod tests {
         )
         .expect("Failed to create invalid key");
 
-        let result = verify_message_signatures(&signed_msg, &[invalid_key]);
+        let mut committee = IndexSet::new();
+        committee.insert(OperatorId(1));
+        let map = create_operator_pub_keys(committee, vec![invalid_key]);
+
+        let result = verify_message_signatures(&signed_msg, &map);
 
         assert!(result.is_err(), "Expected PKey creation to fail");
+    }
+
+    #[test]
+    fn test_aggregator_committee_skips_height_advancement_check() {
+        // Test that AggregatorCommittee role skips the height advancement check
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        // Create a consensus message for height 1
+        let qbft_message =
+            QbftMessageBuilder::new(Role::AggregatorCommittee, QbftMessageType::Prepare).build();
+        // Note: height defaults to 1 in QbftMessageBuilder
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1), // Current slot is 1 (which matches the qbft_message height)
+            now.duration_since(UNIX_EPOCH).unwrap(), // Slot 1 starts now
+            Duration::from_secs(12),
+        );
+
+        // Create fork schedule with Boole at epoch 0 (active from start)
+        let mut fork_epochs = BTreeMap::new();
+        fork_epochs.insert(Fork::Alan, (Epoch::new(0), DomainType([0, 0, 0, 42])));
+        fork_epochs.insert(Fork::Boole, (Epoch::new(0), DomainType([0, 0, 0, 43])));
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_configs(fork_epochs, "testing")
+                .expect("test fork schedule creation should succeed"),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::AggregatorCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        // Create a duty state where the operator has already advanced to slot 10
+        let mut duty_state = DutyState::new(64);
+        // Process a dummy consensus message for slot 10 to advance the operator's max_slot
+        let mut dummy_qbft =
+            QbftMessageBuilder::new(Role::AggregatorCommittee, QbftMessageType::Prepare).build();
+        dummy_qbft.height = 10; // Set height after building
+        let dummy_signed_msg = create_signed_consensus_message(
+            dummy_qbft.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
+        duty_state.update_for_consensus_message(&dummy_signed_msg, &dummy_qbft, 32);
+
+        // Now validate a consensus message for height 1 (which is "old")
+        let result = validate_qbft_message_by_duty_logic(
+            &validation_context,
+            &qbft_message,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Should succeed because AggregatorCommittee skips the height advancement check
+        assert!(
+            result.is_ok(),
+            "Expected AggregatorCommittee to skip height advancement check, but got: {:?}",
+            result
+        );
+
+        // Now test with a non-committee role to verify the check is still active for other roles
+        let validation_context_proposer = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Proposer, // Proposer role should NOT skip the check
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: validation_context.slot_clock.clone(),
+            operator_pub_keys: &map,
+            fork_schedule: validation_context.fork_schedule.clone(),
+        };
+
+        let result = validate_qbft_message_by_duty_logic(
+            &validation_context_proposer,
+            &qbft_message,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Should fail for non-committee roles
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::SlotAlreadyAdvanced { .. }),
+            "SlotAlreadyAdvanced",
+        );
     }
 
     #[test]
@@ -1270,7 +1677,7 @@ mod tests {
 
         // Create a signed SSV message
         let signed_msg = SignedSSVMessage::new(
-            vec![vec![0xAA; RSA_SIGNATURE_SIZE]],
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],
             ssv_msg,
             vec![],
@@ -1286,17 +1693,20 @@ mod tests {
             voluntary_exit_duty_count: expected_duty_count,
         });
 
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
         // Create the validation context with voluntary exit role
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::VoluntaryExit,
             received_at: now,
-            operators_pk: &[],
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
             slot_clock: slot_clock.clone(),
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
         };
 
         let slot = slot_clock.now().unwrap();
@@ -1304,5 +1714,111 @@ mod tests {
         let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
 
         assert_eq!(result, Ok(Some(expected_duty_count)));
+    }
+
+    /// Helper function for testing role validation against fork schedules.
+    ///
+    /// Tests whether a consensus message for a given role is properly accepted or rejected
+    /// based on the fork schedule. Used to verify that deprecated roles (Aggregator and
+    /// SyncCommittee) are rejected after the Boole fork but accepted before it.
+    fn test_role_fork_validation(role: Role, is_after_boole: bool, should_be_rejected: bool) {
+        // Arrange: Set up test data and validation context
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let qbft_message = QbftMessageBuilder::new(role, QbftMessageType::Prepare).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(12);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        slot_clock.advance_slot();
+        slot_clock.advance_time(slot_duration);
+
+        let fork_schedule = if is_after_boole {
+            Arc::new(ForkSchedule::new(
+                Fork::Boole,
+                DomainType::default(),
+                "testing",
+            ))
+        } else {
+            generate_fork_schedule()
+        };
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role,
+            received_at: now + slot_duration,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        // Act: Validate the message
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert: Verify the expected outcome
+        if should_be_rejected {
+            assert_validation_error(
+                result,
+                |failure| {
+                    matches!(
+                        failure,
+                        ValidationFailure::RoleNotActiveAfterFork {
+                            role: r,
+                            deprecated_since_fork: Fork::Boole,
+                            ..
+                        } if *r == role
+                    )
+                },
+                &format!("RoleNotActiveAfterFork for {role:?}"),
+            );
+        } else {
+            assert_qbft_message_accepted(
+                result,
+                &format!("Expected {role:?} to be accepted before Boole fork"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_aggregator_consensus_message_rejected_after_boole() {
+        test_role_fork_validation(Role::Aggregator, true, true);
+    }
+
+    #[test]
+    fn test_aggregator_consensus_message_accepted_before_boole() {
+        test_role_fork_validation(Role::Aggregator, false, false);
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_accepted_before_boole() {
+        test_role_fork_validation(Role::SyncCommittee, false, false);
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_rejected_after_boole() {
+        test_role_fork_validation(Role::SyncCommittee, true, true);
     }
 }

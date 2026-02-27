@@ -1,4 +1,4 @@
-# Keysplit Command
+## Keysplit Command
 
 The `keysplit` command is used to split validator keys for distributed validation on the SSV network.
 
@@ -6,75 +6,73 @@ The `keysplit` command is used to split validator keys for distributed validatio
 anchor keysplit <SUBCOMMAND> [OPTIONS]
 ```
 
-## Subcommands
+Where `<SUBCOMMAND>` is one of:
 
 - `manual` - Split keys with manually provided operator data
 - `onchain` - Split keys using operator data from the blockchain
 
-### Shared Options
+Both subcommands share these Options
 
 | Option | Description | Default |
-| --- | --- | --- |
-| `--keystore-path <PATH>` | Path to the validator keystore file | None |
-| `--password <VALUE>` | Password for the validator keystore | None |
-| `--owner <VALUE>` | EOA address that owns the validator | None |
-| `--output-path <PATH>` | Path for output | None |
-| `--operators <VALUE>` | Operators to split key among | None |
+| --- | --- | ---|
+| `--keystore-path <PATH>` | Path to validator keystore file | Required |
+| `--password-file <PATH>` | Path to a file containing the password for the validator keystore (if omitted, password will be prompted) | None |
+| `--owner <ADDRESS>` | EOA address that owns the validator | Required |
+| `--output-path <OUTPUT PATH>` | Path for output file | Required |
+| `--operators <IDS>` | Comma-separated list of operator IDs | Required|
+| `-d, --data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
+| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `hoodi` |
+| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None |
+| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
+| `-h, --help` | Display help information | |
 
-## Manual Keysplit Subcommand
+### Manual Keysplit Subcommand
 
 ```bash
 anchor keysplit manual [OPTIONS]
 ```
 
-### Manual-specific Options
+Additional Options:
 
 | Option | Description | Default |
-| --- | --- | --- |
-| `--keystore-path <PATH>` | Path to the validator keystore file | None |
-| `--password <VALUE>` | Password for the validator keystore | None |
-| `--owner <VALUE>` | EOA address that owns the validator | None |
-| `--output-path <PATH>` | Path for output | None |
-| `--operators <VALUE>` | Operators to split key among | None |
-| `--nonce <VALUE>` | Nonce for the owner address | None |
-| `--public-keys <VALUE>` | RSA public keys for the operators | None |
+| --- | --- | ---|
+| `--nonce <NONCE>` | Nonce for the owner address | Required |
+| `--public-keys <KEYS>...` | RSA public keys for the operators | Required|
 
-### Example
-
-```bash
-anchor keysplit manual \
-  --keystore-path /path/to/validator_keystore.json \
-  --password "your_keystore_password" \
-  --owner 0x123abc... \
-  --operators 1,2,3,4 \
-  --output-path /path/to/output.json \
-  --nonce 0 \
-  --public-keys key1,key2,key3,key4
-```
-
-## Onchain Keysplit Subcommand
+### Onchain Keysplit Subcommand
 
 ```bash
 anchor keysplit onchain [OPTIONS]
 ```
 
-### Onchain-specific Options
+Additional Options:
 
 | Option | Description | Default |
-| --- | --- | --- |
-| `--keystore-path <PATH>` | Path to the validator keystore file | None |
-| `--password <VALUE>` | Password for the validator keystore | None |
-| `--owner <VALUE>` | EOA address that owns the validator | None |
-| `--output-path <PATH>` | Path for output | None |
-| `--operators <VALUE>` | Operators to split key among | None |
-| `--rpc <VALUE>` | RPC endpoint to access L1 data | None |
+| --- | --- | ---|
+| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required|
 
-### Example
+#### Examples
+
+Manual key splitting
+
+```bash
+anchor keysplit manual \
+  --keystore-path /path/to/validator_keystore.json \
+  --password-file /path/to/password.txt \
+  --owner 0x123abc... \
+  --operators 1,2,3,4 \
+  --output-path /path/to/output.json \
+  --nonce 0 \
+  --public-keys key1 key2 key3 key4 \
+  --network hoodi
+```
+
+Onchain key splitting
 
 ```bash
 anchor keysplit onchain \
   --keystore-path /path/to/validator_keystore.json \
-  --password "your_keystore_password" \
+  --password-file /path/to/password.txt \
   --owner 0x123abc... \
   --operators 1,2,3,4 \
   --output-path /path/to/output.json \
@@ -82,6 +80,5 @@ anchor keysplit onchain \
   --network mainnet
 ```
 
-## Output
-
-These commands will generate a JSON file to be uploaded to the SSV network webapp when registering a validator.
+These commands will generate a json file to be uploaded to the SSV network webapp when
+registering a validator.

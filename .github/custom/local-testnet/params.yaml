@@ -1,0 +1,60 @@
+network:
+  participants:
+  - el_type: geth
+    el_image: ethereum/client-go:v1.16.8
+    cl_type: lighthouse
+    cl_image: sigp/lighthouse:v8.0.1
+    validator_count: 10
+    count: 2
+    supernode: true
+
+  additional_services:
+    - assertoor
+
+  network_params:
+    # this is 'kurtosis' network ID, which is a default network. With this configuration CL /spec endpoint will return CONFIG_NAME=testnet
+    network_id: "3151908"
+    deneb_fork_epoch: 0
+    electra_fork_epoch: 0
+    fulu_fork_epoch: 0
+    perfect_peerdas_enabled: false
+
+    # 40 = 10 validators * 2(number of el/cl nodes) + 20 (running on SSV/Anchor nodes)
+    # aligns with validator_count configuration under participants section
+    preregistered_validator_count: 40
+    # NOTE: changes the number of slots in the epoch and potentially some other network settings.
+    # docs: https://github.com/ethpandaops/ethereum-package/blob/main/README.md#configuration
+    # Supported by Anchor.
+    #preset: minimal
+    seconds_per_slot: 6
+
+  port_publisher:
+    cl:
+      enabled: false
+
+  # Assertoor can only load from URLs here (for some reason). The placeholder is replaced in the workflow.
+  assertoor_params:
+    tests:
+      - https://raw.githubusercontent.com/sigp/anchor/<<COMMIT>>/.github/custom/local-testnet/test_anchor_proposal.yaml
+
+
+monitor:
+  enabled: false
+
+nodes:
+  ssv:
+    count: 0
+  anchor:
+    count: 4
+
+boole_epoch: 3
+
+# Docker images configuration
+images:
+  ssv: "ssv-node:v2.3.9"
+  anchor: "node/anchor:latest"
+  monitor: "monitor"
+  redis: "redis:7.4.2"
+  postgres: "postgres:15"
+  foundry: "localssv/ssv-network"
+

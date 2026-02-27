@@ -225,6 +225,16 @@ When contributing to Anchor, follow these Rust best practices:
 6. **Simplicity First**: Always choose the simplest solution that elegantly solves the problem, follows existing patterns, maintains performance, and uses basic constructs over complex data structures
 7. **Check Requirements First**: Before implementing or creating anything (PRs, commits, code), always read and follow existing templates, guidelines, and requirements in the codebase
 
+### Architecture and Design
+
+1. **Question Intermediaries**: If data flows A → B with no transformation, question why A → intermediate → B exists. Each layer should provide clear value (logging, transformation, validation, etc.). Ask: "What problem does this solve that direct communication doesn't?"
+
+2. **Separation Through Interfaces, Not Layers**: Clean boundaries come from well-defined APIs, not intermediary components. A component receiving a `Sender<Event>` achieves separation without needing forwarding tasks or wrapper channels.
+
+3. **Simplification is Always Valid**: Refactoring working code for simplicity is encouraged. Question architectural decisions even after tests pass. Fewer lines and fewer components often indicates better design.
+
+4. **Challenge Complexity**: Every abstraction should justify its existence. "We might need it later" or "it provides separation" aren't sufficient reasons. Complexity must solve specific, current problems.
+
 ### Specific Guidelines
 
 1. **Naming**:
@@ -259,21 +269,72 @@ When contributing to Anchor, follow these Rust best practices:
 
 ## Testing
 
-**ALWAYS use the tester-subagent when creating tests.** It has expert knowledge of:
-- Anchor codebase architecture and testing patterns
-- QBFT consensus testing and message construction
-- Bug reproduction methodology (tests that fail when bugs exist)
-- API learning strategies and compilation debugging
-- All crate-specific testing requirements
+**MANDATORY: Always use the `tester-subagent` via the Task tool when creating or modifying tests.** Do not write tests directly - spawn the agent first. This ensures proper AAA structure, naming conventions, and avoids common mistakes.
 
-The tester agent includes detailed knowledge of testing best practices, common pitfalls, and Anchor-specific patterns for creating reliable tests.
+### Database Testing Patterns
+
+Anchor uses two types of test fixtures for database testing:
+
+1. **InMemoryTestFixture**: Fast tests using SQLite in-memory databases (`:memory:`)
+   - Use for unit tests and fast integration tests
+   - No file I/O overhead
+   - Data is lost when connection closes
+
+2. **FileTestFixture**: Tests requiring persistence or restart simulation
+   - Use for testing database migrations, restarts, or cross-process scenarios
+   - Uses temporary files that are automatically cleaned up
+   - Data persists until TempDir is dropped
+
+## Universal Code Quality Principles
+
+All agents and contributors must follow these fundamental principles:
+
+### Evidence and Verification
+- **Behavioral claims require evidence**: before asserting language/runtime behavior or performance implications, check authoritative docs/source or run a minimal reproduction; if not verified, label it as a hypothesis or ask.
+
+### Production Safety Requirements 
+- **Never use `.unwrap()` or `.expect()` without clear safety justification** - always use proper Result/Option handling
+- **Validate all user inputs** and handle potential failure cases gracefully
+- **No secrets or sensitive data** in logs, error messages, or debug output
+- **Memory safety first** - leverage Rust's ownership system, avoid unsafe code without justification
+
+### API and Dependency Management
+
+**Critical Principle**: Never suggest functionality that doesn't exist in dependencies.
+
+- **Check `Cargo.toml` for exact versions** before suggesting any dependency APIs
+- **Verify methods exist** in the specific versions used - never assume latest documentation applies
+- **Read dependency public APIs carefully** before recommending features or methods
+- **Search existing codebase** for established patterns, but prioritize best practices over bad existing patterns
+- **Don't assume capabilities** - external dependencies may have architectural constraints that prevent certain patterns
+- **Check implementation details** - if you don't see a method in the public API, don't suggest creating or using it
+- **When uncertain, verify** - check the dependency's source code or ask the user before suggesting
+- **Don't extrapolate** - don't assume dependencies support common patterns if they have different design requirements
+
+### Incremental Improvement Strategy
+- **Fix bad practices in code being modified** - if you're touching it, improve it
+- **Use best practices for all new code** - never add to technical debt
+- **Create GitHub issues for technical debt found elsewhere** - don't fix unrelated code in current PR
+- **Prioritize safety fixes** over performance optimizations over style improvements
+
+### Agent Usage Requirements  
+- **Use specialized agents immediately** when their expertise applies - don't wait for users to ask
+- **Follow the principle hierarchy**: Safety → Best Practices → Existing Patterns → Consistency
+- **Validate suggestions** before implementing - agents should verify their recommendations work
 
 ## Specialized Agents
 
-Use these agents proactively for their specific domains:
-- **tester-subagent**: Use immediately when creating any tests
-- **code-reviewer-subagent**: Use immediately after writing or modifying Rust code
-- **qbft-subagent**: Use for any QBFT specification compliance questions
+Use these agents proactively to prevent errors and enforce quality standards:
+
+- **tester-subagent**: **MANDATORY - Spawn via Task tool before creating or modifying ANY tests.** Do not write test code directly. Expert in AAA structure, naming conventions, and Anchor-specific testing patterns.
+
+- **code-reviewer-subagent**: **Use immediately after writing or modifying Rust code.** Reviews for safety, memory management, idiomatic patterns, and performance.
+
+- **logging-subagent**: **Use for any logging/tracing task.** Improves structured logging, reduces noise, and enforces performance patterns in Anchor's tracing infrastructure.
+
+- **qbft-subagent**: **Use for QBFT specification questions.** Expert on EEA QBFT v1 Dafny L1 specification, predicates, events, and invariants.
+
+Proactive agent usage prevents compilation errors from incorrect APIs, catches safety issues like `.unwrap()` before production, and saves debugging time by catching problems early.
 
 ## Contribution Workflow
 
@@ -363,14 +424,38 @@ When writing PR descriptions, follow these guidelines for maintainable and revie
 
 - **Keep "Proposed Changes" section high-level** - focus on what components were changed and why
 - **Avoid line-by-line documentation** - reviewers can see specific changes in the diff
-- **Use component-level summaries** rather than file-by-file breakdowns  
+- **Use component-level summaries** rather than file-by-file breakdowns
 - **Emphasize the principles** being applied and operational impact
 - **Be concise but complete** - provide context without overwhelming detail
+- **Don't mention implementation details** - avoid specifying exact files, line numbers, or function names
+- **Don't state the obvious** - don't mention that tests pass (CI will verify this)
+- **Avoid redundancy** - don't repeat information already in the title or commit message
+- **Focus on the "why"** - explain the motivation and impact, not the mechanics
+
+### Code Review Culture
+
+Effective code reviews question "why" architectural decisions exist:
+
+**Questions to Ask:**
+- "Why does this intermediary layer exist?"
+- "What problem does this abstraction solve?"
+- "Could components communicate directly?"
+- "Is this complexity providing clear value?"
+
+**Encourage Simplification:**
+- Working code can still be improved
+- Refactoring for clarity is valuable
+- Fewer components usually means better architecture
+- Test passing ≠ design complete
+
+**Balance:**
+- Question complexity, but respect existing patterns that solve real problems
+- Not every layer is unnecessary - some provide genuine value
+- Focus on "why" over "what"
 
 ## Development Tips
 
 - This is a Rust project that follows standard Rust development practices
-- The project is currently under active development and not ready for production
 - Sigma Prime maintains two permanent branches:
     - `stable`: Always points to the latest stable release, ideal for most users
     - `unstable`: Used for development, contains the latest PRs, base branch for contributions

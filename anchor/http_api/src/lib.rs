@@ -3,12 +3,14 @@ mod router;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
+use axum::http::Method;
 pub use config::Config;
 use database::NetworkState;
 use parking_lot::RwLock;
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
 use tokio::{net::TcpListener, sync::watch};
+use tower_http::cors::CorsLayer;
 use tracing::info;
 /// A wrapper around all the items required to spawn the HTTP server.
 ///
@@ -38,11 +40,14 @@ pub async fn run(config: Config, shared_state: Arc<RwLock<Shared>>) -> Result<()
         return Ok(());
     }
 
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_origin(config.allow_origin());
+
     // Generate the axum routes
-    let router = router::new(shared_state);
+    let router = router::new(shared_state).layer(cors);
 
     // Set up a listening address
-
     let socket = SocketAddr::new(config.listen_addr, config.listen_port);
     let listener = TcpListener::bind(socket).await.map_err(|e| e.to_string())?;
 

@@ -1,17 +1,15 @@
 [package]
 name = "keygen"
-version = "0.3.1"
+version = "1.2.1"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
-base64 = { workspace = true }
 clap = { workspace = true }
 global_config = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
-rpassword = "7.4.0"
-serde = { workspace = true }
+rpassword = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

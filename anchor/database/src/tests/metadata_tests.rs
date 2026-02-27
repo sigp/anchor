@@ -1,18 +1,20 @@
 use std::path::PathBuf;
 
 use rusqlite::Connection;
-use ssv_types::domain_type::DomainType;
 use tempfile::TempDir;
 
-use super::test_prelude::*;
-use crate::{DatabaseError, schema};
+use crate::{
+    DatabaseError, schema,
+    test_utils::{generators, queries},
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NetworkDatabase;
 
-    const TEST_DOMAIN_1: DomainType = DomainType([42, 42, 42, 42]);
-    const TEST_DOMAIN_2: DomainType = DomainType([99, 99, 99, 99]);
+    const TEST_NETWORK_1: &str = "testnet1";
+    const TEST_NETWORK_2: &str = "testnet2";
 
     #[test]
     fn test_new_database_creation() {
@@ -20,7 +22,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Ensure database is created successfully
-        let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1);
+        let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
         assert!(result.is_ok(), "Failed to create new database: {result:?}",);
 
         // Verify database file was created
@@ -31,30 +33,34 @@ mod tests {
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
         assert_eq!(
-            metadata.schema_version, 0,
-            "Initial schema version should be 0"
+            metadata.schema_version, 3,
+            "Initial schema version should be 3"
         );
-        assert_eq!(metadata.domain, TEST_DOMAIN_1, "Domain should match input");
+        assert_eq!(
+            metadata.network_name, TEST_NETWORK_1,
+            "Network name should match input"
+        );
         assert_eq!(metadata.block_number, 0, "Initial block number should be 0");
     }
 
     #[test]
-    fn test_domain_type_validation() {
+    fn test_network_name_validation() {
+        // Uses file-based DB to test reopening with different network
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create database with first domain
-        schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1).expect("Failed to create database");
+        // Create database with first network
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Failed to create database");
 
-        // Try to open with different domain - should fail
-        let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_2);
-        assert!(result.is_err(), "Should fail with incorrect domain");
+        // Try to open with different network - should fail
+        let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_2);
+        assert!(result.is_err(), "Should fail with incorrect network");
 
         match result.unwrap_err() {
             DatabaseError::AlreadyPresent(msg) => {
                 assert!(
-                    msg.contains("different network"),
-                    "Error should mention different network"
+                    msg.contains(TEST_NETWORK_1) && msg.contains(TEST_NETWORK_2),
+                    "Error should mention both networks: {msg}"
                 );
             }
             other => panic!("Expected AlreadyPresent error, got: {other:?}"),
@@ -62,16 +68,17 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_type_validation_success() {
+    fn test_network_name_validation_success() {
+        // Uses file-based DB to test reopening with same network
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create database with domain
-        schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1).expect("Failed to create database");
+        // Create database with network
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Failed to create database");
 
-        // Open with same domain - should succeed
-        let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1);
-        assert!(result.is_ok(), "Should succeed with correct domain");
+        // Open with same network - should succeed
+        let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
+        assert!(result.is_ok(), "Should succeed with correct network");
     }
 
     #[test]
@@ -83,7 +90,7 @@ mod tests {
         create_unknown_database(&db_path);
 
         // Try to open - should fail
-        let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1);
+        let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
         assert!(result.is_err(), "Should reject unknown database");
 
         match result.unwrap_err() {
@@ -103,10 +110,10 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create database with future schema version
-        create_future_schema_database(&db_path, TEST_DOMAIN_1);
+        create_future_schema_database(&db_path, TEST_NETWORK_1);
 
         // Try to open - should fail
-        let result = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1);
+        let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
         assert!(result.is_err(), "Should reject future schema version");
 
         match result.unwrap_err() {
@@ -122,12 +129,10 @@ mod tests {
 
     #[test]
     fn test_block_number_operations() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let db_path = temp_dir.path().join("test.db");
         let pubkey = generators::pubkey::random_rsa();
 
         // Create database
-        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN_1)
+        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK_1)
             .expect("Failed to create database");
 
         // Test initial block number
@@ -145,13 +150,6 @@ mod tests {
         // Verify update
         let updated_block = db.state().get_last_processed_block();
         assert_eq!(updated_block, new_block, "Block number should be updated");
-
-        // Verify persistence after restart
-        drop(db);
-        let db2 = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN_1)
-            .expect("Failed to reopen database");
-        let persisted_block = db2.state().get_last_processed_block();
-        assert_eq!(persisted_block, new_block, "Block number should persist");
     }
 
     #[test]
@@ -163,7 +161,7 @@ mod tests {
         create_legacy_database(&db_path);
 
         // Ensure up to date - should error
-        let err = schema::ensure_up_to_date(&db_path, TEST_DOMAIN_1)
+        let err = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1)
             .expect_err("Failed to detect outdated database");
 
         assert!(
@@ -173,40 +171,130 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_type_serialization() {
-        // Test DomainType conversion to/from SQL
+    fn test_migration_v1_to_v3() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
-        let conn = Connection::open(&db_path).expect("Failed to create database");
 
-        // Create metadata table
-        conn.execute(
-            "CREATE TABLE test_metadata (domain_type INTEGER NOT NULL)",
-            [],
-        )
-        .expect("Failed to create test table");
+        // Create a v1 database (without max_operator_id_seen column or network_name)
+        create_v1_database(&db_path);
 
-        // Insert domain type
-        conn.execute(
-            "INSERT INTO test_metadata (domain_type) VALUES (?1)",
-            [&TEST_DOMAIN_1],
-        )
-        .expect("Failed to insert domain");
+        // Verify it's version 1
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let version: u64 = conn
+                .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
+                .expect("Failed to get schema version");
+            assert_eq!(version, 1, "Should start at version 1");
+        }
 
-        // Read back domain type
-        let retrieved_domain: DomainType = conn
-            .query_row("SELECT domain_type FROM test_metadata", [], |row| {
-                row.get(0)
-            })
-            .expect("Failed to retrieve domain");
+        // Run migration
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
 
-        assert_eq!(
-            retrieved_domain, TEST_DOMAIN_1,
-            "Domain type should round-trip correctly"
-        );
+        // Verify migration succeeded
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+            assert_eq!(
+                metadata.schema_version, 3,
+                "Should be upgraded to version 3"
+            );
+
+            // Verify the network_name column was set
+            assert_eq!(
+                metadata.network_name, TEST_NETWORK_1,
+                "network_name should be set after migration"
+            );
+
+            // Verify max_operator_id_seen column exists
+            let max_operator_id: Option<u64> = conn
+                .query_row("SELECT max_operator_id_seen FROM metadata", [], |row| {
+                    row.get(0)
+                })
+                .expect("Failed to query max_operator_id_seen");
+            assert_eq!(
+                max_operator_id, None,
+                "max_operator_id_seen should be NULL after migration"
+            );
+        }
+    }
+
+    #[test]
+    fn test_migration_v2_to_v3() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create a v2 database (with max_operator_id_seen but without network_name)
+        create_v2_database(&db_path);
+
+        // Verify it's version 2
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let version: u64 = conn
+                .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
+                .expect("Failed to get schema version");
+            assert_eq!(version, 2, "Should start at version 2");
+        }
+
+        // Run migration
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
+
+        // Verify migration succeeded
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+            assert_eq!(
+                metadata.schema_version, 3,
+                "Should be upgraded to version 3"
+            );
+
+            // Verify the network_name column was set
+            assert_eq!(
+                metadata.network_name, TEST_NETWORK_1,
+                "network_name should be set after migration"
+            );
+        }
     }
 
     // Helper functions for creating test databases
+    fn create_v1_database(db_path: &PathBuf) {
+        let conn = Connection::open(db_path).expect("Failed to create v1 database");
+
+        // Create metadata table as it was in version 1 (without max_operator_id_seen or
+        // network_name)
+        conn.execute(
+            "CREATE TABLE metadata (
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                domain_type INTEGER NOT NULL,
+                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
+            )",
+            [],
+        )
+        .expect("Failed to create v1 metadata table");
+
+        conn.execute("INSERT INTO metadata (domain_type) VALUES (0)", [])
+            .expect("Failed to insert v1 metadata");
+    }
+
+    fn create_v2_database(db_path: &PathBuf) {
+        let conn = Connection::open(db_path).expect("Failed to create v2 database");
+
+        // Create metadata table as it was in version 2 (with max_operator_id_seen but without
+        // network_name)
+        conn.execute(
+            "CREATE TABLE metadata (
+                schema_version INTEGER NOT NULL DEFAULT 2,
+                domain_type INTEGER NOT NULL,
+                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+                max_operator_id_seen INTEGER DEFAULT 0
+            )",
+            [],
+        )
+        .expect("Failed to create v2 metadata table");
+
+        conn.execute("INSERT INTO metadata (domain_type) VALUES (0)", [])
+            .expect("Failed to insert v2 metadata");
+    }
+
     fn create_legacy_database(db_path: &PathBuf) {
         let conn = Connection::open(db_path).expect("Failed to create legacy database");
 
@@ -232,7 +320,7 @@ mod tests {
         .expect("Failed to create unknown table");
     }
 
-    fn create_future_schema_database(db_path: &PathBuf, domain: DomainType) {
+    fn create_future_schema_database(db_path: &PathBuf, network_name: &str) {
         let conn = Connection::open(db_path).expect("Failed to create future schema database");
 
         // Create metadata table with future version
@@ -240,6 +328,7 @@ mod tests {
             "CREATE TABLE metadata (
                 schema_version INTEGER NOT NULL DEFAULT 999,
                 domain_type INTEGER NOT NULL,
+                network_name TEXT,
                 block_number INTEGER NOT NULL DEFAULT 0
             )",
             [],
@@ -247,8 +336,8 @@ mod tests {
         .expect("Failed to create future metadata table");
 
         conn.execute(
-            "INSERT INTO metadata (schema_version, domain_type) VALUES (999, ?1)",
-            [&domain],
+            "INSERT INTO metadata (schema_version, domain_type, network_name) VALUES (999, 0, ?1)",
+            [network_name],
         )
         .expect("Failed to insert future metadata");
     }

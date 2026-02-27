@@ -59,13 +59,13 @@ async function updateVersionAndStatsInFiles(version, stats) {
   
   // Replace download URL version
   indexContent = indexContent.replace(
-    /wget https:\/\/github\.com\/sigp\/anchor\/releases\/download\/v[\d.]+\//g,
+    /wget https:\/\/github\.com\/sigp\/anchor\/releases\/download\/v[\d.]+(?:-[\w.]+)?\//g,
     `wget https://github.com/sigp/anchor/releases/download/${vVersion}/`
   );
   
   // Replace stats section version
   indexContent = indexContent.replace(
-    /<div className="stat-number">v[\d.]+<\/div>/g,
+    /<div className="stat-number">v[\d.]+(?:-[\w.]+)?<\/div>/g,
     `<div className="stat-number">${vVersion}</div>`
   );
   
@@ -83,12 +83,30 @@ async function updateVersionAndStatsInFiles(version, stats) {
   
   writeFileSync(indexPath, indexContent);
   
+  // Update installation.mdx
+  const installationPath = join(__dirname, 'docs/pages/installation.mdx');
+  let installationContent = readFileSync(installationPath, 'utf8');
+  
+  // Replace download URL versions
+  installationContent = installationContent.replace(
+    /wget https:\/\/github\.com\/sigp\/anchor\/releases\/download\/v[\d.]+(?:-[\w.]+)?\/anchor-v[\d.]+(?:-[\w.]+)?-/g,
+    `wget https://github.com/sigp/anchor/releases/download/${vVersion}/anchor-${vVersion}-`
+  );
+  
+  // Replace tar extraction versions
+  installationContent = installationContent.replace(
+    /tar -xvf anchor-v[\d.]+(?:-[\w.]+)?-/g,
+    `tar -xvf anchor-${vVersion}-`
+  );
+  
+  writeFileSync(installationPath, installationContent);
+  
   // Update vocs.config.ts
   const vocsPath = join(__dirname, 'vocs.config.ts');
   let vocsContent = readFileSync(vocsPath, 'utf8');
   
   vocsContent = vocsContent.replace(
-    /text: 'v[\d.]+'/g,
+    /text: 'v[\d.]+(?:-[\w.]+)?'/g,
     `text: '${vVersion}'`
   );
   
@@ -96,6 +114,7 @@ async function updateVersionAndStatsInFiles(version, stats) {
   
   console.log(`✅ Updated version to ${vVersion}, stars to ${stats.stars}, and contributors to ${stats.contributors} in:
   - docs/pages/index.mdx
+  - docs/pages/installation.mdx
   - vocs.config.ts`);
 }
 

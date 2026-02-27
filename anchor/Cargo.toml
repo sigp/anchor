@@ -1,9 +1,9 @@
 [package]
 name = "anchor"
-version = "0.3.1"
+version = "1.2.1"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
-rust-version = "1.89.0"
+rust-version = "1.91.0"
 default-run = "anchor"
 
 [features]
@@ -19,19 +19,21 @@ async-channel = { workspace = true }
 bls = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
-dirs = { workspace = true }
+ethereum_hashing = "0.7.0"
 futures = { workspace = true }
 global_config = { workspace = true }
 keygen = { workspace = true }
 keysplit = { workspace = true }
 logging = { workspace = true }
-metrics = { workspace = true }
-serde = { workspace = true }
-ssv_network_config = { workspace = true }
-strum = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
+version = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.12"

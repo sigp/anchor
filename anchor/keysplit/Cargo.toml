@@ -1,12 +1,13 @@
 [package]
 name = "keysplit"
-version = "0.3.1"
+version = "1.2.1"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 alloy = { workspace = true }
 base64 = { workspace = true }
+bls = { workspace = true }
 bls_lagrange = { workspace = true }
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { workspace = true }
@@ -17,9 +18,14 @@ global_config = { workspace = true }
 hex = { workspace = true }
 openssl = { workspace = true }
 operator_key = { workspace = true }
+rayon = "1.10.0"
+rpassword = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ssv_types = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.14.0"

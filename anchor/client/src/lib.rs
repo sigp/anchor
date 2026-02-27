@@ -2,20 +2,25 @@ pub mod cli;
 pub mod config;
 pub mod docs;
 mod key;
+mod metrics;
 mod notifier;
 
 use std::{
     fs::File,
     io::Read,
     net::SocketAddr,
+    num::NonZeroU64,
     path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anchor_validator_store::{AnchorValidatorStore, metadata_service::MetadataService};
+use anchor_validator_store::{
+    AnchorValidatorStore, metadata_service::MetadataService,
+    registration_service::RegistrationService,
+};
 use beacon_node_fallback::{
-    ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
+    BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
 pub use cli::Node;
 use config::Config;
@@ -33,13 +38,14 @@ use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMess
 use message_validator::Validator;
 use network::Network;
 use openssl::rsa::Rsa;
+use operator_doppelganger::OperatorDoppelgangerService;
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
 use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
 use slot_clock::{SlotClock, SystemTimeSlotClock};
-use subnet_service::{SUBNET_COUNT, SubnetId, start_subnet_service};
+use subnet_service::start_subnet_service;
 use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
@@ -77,8 +83,8 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
-
-const MAINNET_GENESIS_FORK_VERSION: [u8; 4] = [0, 0, 0, 0];
+// Generally the timeout for events should be longer than a slot.
+const HTTP_GET_EVENTS_TIMEOUT_MULTIPLIER: u32 = 50;
 
 pub struct Client {}
 
@@ -103,10 +109,11 @@ impl Client {
         };
 
         info!(
-            beacon_nodes = format!("{:?}", &config.beacon_nodes),
-            execution_nodes = format!("{:?}", &config.execution_nodes),
-            execution_nodes_websocket = format!("{:?}", &config.execution_nodes_websocket),
-            data_dir = format!("{:?}", config.global_config.data_dir),
+            beacon_nodes = ?config.beacon_nodes,
+            execution_nodes = ?config.execution_nodes,
+            execution_nodes_websocket = ?config.execution_nodes_websocket,
+            data_dir = %config.global_config.data_dir,
+            version = version::VERSION,
             "Starting the Anchor client"
         );
 
@@ -118,11 +125,8 @@ impl Client {
                 .chain_spec::<E>()?,
         );
 
-        if spec.genesis_fork_version == MAINNET_GENESIS_FORK_VERSION {
-            return Err(
-                "Mainnet is not supported. Please use a testnet configuration.".to_string(),
-            );
-        }
+        // Create shared fork schedule for fork-aware components
+        let fork_schedule = Arc::new(config.global_config.ssv_network.fork_schedule.clone());
 
         let key = read_or_generate_private_key(
             &config.global_config.data_dir,
@@ -158,9 +162,18 @@ impl Client {
                 .await
                 .map_err(|e| format!("Unable to bind to metrics server port: {e}"))?;
 
-            let metrics_future = http_metrics::serve(listener, shared_state.clone(), exit);
+            let metrics_future = http_metrics::serve(
+                listener,
+                shared_state.clone(),
+                config.http_metrics.allow_origin(),
+                exit,
+            );
 
             executor.spawn_without_exit(metrics_future, "metrics-http");
+
+            metrics::expose_anchor_version();
+            metrics::expose_process_start_time();
+
             Some(shared_state)
         } else {
             info!("HTTP metrics server is disabled");
@@ -180,24 +193,6 @@ impl Client {
                 }
             },
             "http_api_server",
-        );
-
-        // Open database
-        let database = Arc::new(
-            if let Some(impostor) = &config.impostor {
-                NetworkDatabase::new_as_impostor(
-                    &config.global_config.data_dir.database_file(),
-                    impostor,
-                    config.global_config.ssv_network.ssv_domain_type,
-                )
-            } else {
-                NetworkDatabase::new(
-                    &config.global_config.data_dir.database_file(),
-                    &pubkey,
-                    config.global_config.ssv_network.ssv_domain_type,
-                )
-            }
-            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
         );
 
         // Initialize slashing protection.
@@ -256,6 +251,7 @@ impl Client {
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
                     get_deposit_snapshot: slot_duration / HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT,
                     get_validator_block: slot_duration / HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT,
+                    events: HTTP_GET_EVENTS_TIMEOUT_MULTIPLIER * slot_duration,
                     default: slot_duration / HTTP_DEFAULT_TIMEOUT_QUOTIENT,
                 }
             } else {
@@ -317,19 +313,17 @@ impl Client {
         // Initialize the number of connected, available beacon nodes to 0.
         set_gauge(&validator_metrics::AVAILABLE_BEACON_NODES_COUNT, 0);
 
-        // TODO: make beacon_node_fallback::Config and broadcast_topics configurable
-        // https://github.com/sigp/anchor/issues/248
         let mut beacon_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             candidates,
-            beacon_node_fallback::Config::default(),
-            vec![ApiTopic::Subscriptions],
+            config.beacon_node_fallback,
+            config.broadcast_topics.clone(),
             spec.clone(),
         );
 
         let mut proposer_nodes: BeaconNodeFallback<_> = BeaconNodeFallback::new(
             proposer_candidates,
-            beacon_node_fallback::Config::default(),
-            vec![ApiTopic::Subscriptions],
+            config.beacon_node_fallback,
+            config.broadcast_topics.clone(),
             spec.clone(),
         );
 
@@ -356,6 +350,36 @@ impl Client {
 
         // Wait until genesis has occurred.
         wait_for_genesis(genesis_time).await?;
+
+        // Get network name for database isolation (stable across forks)
+        let network_name = config.global_config.ssv_network.network_name.as_str();
+
+        // Open database using network name for network isolation
+        let database = Arc::new(
+            if let Some(impostor) = &config.impostor {
+                NetworkDatabase::new_as_impostor(
+                    &config.global_config.data_dir.database_file(),
+                    impostor,
+                    network_name,
+                )
+            } else {
+                NetworkDatabase::new(
+                    &config.global_config.data_dir.database_file(),
+                    &pubkey,
+                    network_name,
+                )
+            }
+            .map_err(|e| format!("Unable to open Anchor database: {e}"))?,
+        );
+
+        // Start fork monitor to update lifecycle state on fork transitions
+        let lifecycle_rx = fork::monitor::spawn(
+            fork_schedule.clone(),
+            slot_clock.clone(),
+            E::slots_per_epoch(),
+            spec.seconds_per_slot,
+            executor.clone(),
+        )?;
 
         // Start validator index syncer
         let index_sync_tx =
@@ -394,10 +418,15 @@ impl Client {
             "syncer",
         );
 
+        // Create operator ID wrapper that watches the database for our operator ID.
+        // Follows the common pattern: pass OwnOperatorId to components, they call .get() only when
+        // needed. This allows initialization before sync completes (which populates the ID from
+        // chain).
         let operator_id = OwnOperatorId::new(database.watch());
 
-        // Network sender/receiver
-        let (network_tx, network_rx) = mpsc::channel::<(SubnetId, Vec<u8>)>(9001);
+        // Network sender/receiver - topic string and message bytes
+        // The message sender determines the full topic string based on message slot (per SIP-43)
+        let (network_tx, network_rx) = mpsc::channel::<(String, Vec<u8>)>(9001);
 
         let duties_tracker = Arc::new(DutiesTracker::new(
             voluntary_exit_tracker.clone(),
@@ -409,6 +438,37 @@ impl Client {
         ));
         duties_tracker.clone().start(executor.clone());
 
+        // Create operator doppelgänger protection if enabled (will be started after sync)
+        let doppelganger_service = if config.operator_dg && config.impostor.is_none() {
+            // Get current slot for slot-based detection baseline
+            let startup_slot = slot_clock.now().ok_or_else(|| {
+                "Failed to get current slot for doppelgänger protection".to_string()
+            })?;
+
+            Some(Arc::new(OperatorDoppelgangerService::new(
+                operator_id.clone(),
+                startup_slot,
+                E::slots_per_epoch(),
+                Duration::from_secs(spec.seconds_per_slot),
+            )))
+        } else {
+            None
+        };
+
+        // Start the subnet service now that we have slot_clock
+        // This returns Arc<SubnetService> for message routing and topic event receiver for network
+        let (subnet_service, topic_event_rx) = start_subnet_service::<_, E>(
+            database.watch(),
+            config.network.subscribe_all_subnets,
+            config.network.disable_gossipsub_topic_scoring,
+            &executor,
+            slot_clock.clone(),
+            spec.clone(),
+            fork_schedule.clone(),
+            lifecycle_rx.clone(),
+        );
+
+        // Create message validator after subnet_service (depends on it for fork-aware validation)
         let message_validator = Validator::new(
             database.watch(),
             E::slots_per_epoch(),
@@ -416,57 +476,55 @@ impl Client {
             E::sync_committee_size(),
             duties_tracker.clone(),
             slot_clock.clone(),
+            subnet_service.clone(),
+            fork_schedule.clone(),
             &executor,
         );
 
         let message_sender: Arc<dyn MessageSender> = if config.impostor.is_none() {
             Arc::new(NetworkMessageSender::new(
-                processor_senders.clone(),
-                network_tx.clone(),
-                key.clone(),
-                operator_id.clone(),
-                Some(message_validator.clone()),
-                SUBNET_COUNT,
-                is_synced.clone(),
+                message_sender::NetworkMessageSenderConfig {
+                    processor: processor_senders.clone(),
+                    network_tx: network_tx.clone(),
+                    private_key: key.clone(),
+                    operator_id: operator_id.clone(),
+                    validator: Some(message_validator.clone()),
+                    is_synced: is_synced.clone(),
+                    subnet_service: subnet_service.clone(),
+                },
             )?)
         } else {
-            Arc::new(ImpostorMessageSender::new(network_tx.clone(), SUBNET_COUNT))
+            Arc::new(ImpostorMessageSender::new(
+                network_tx.clone(),
+                subnet_service.clone(),
+            ))
         };
 
         // Create the signature collector
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
-            config.global_config.ssv_network.ssv_domain_type,
+            fork_schedule.clone(),
+            E::slots_per_epoch(),
             message_sender.clone(),
             slot_clock.clone(),
         )
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 
         // Create the qbft manager
-        let qbft_manager = QbftManager::new(
+        let qbft_manager = QbftManager::<E, _>::new(
             processor_senders.clone(),
             operator_id.clone(),
             slot_clock.clone(),
             message_sender,
-            config.global_config.ssv_network.ssv_domain_type,
+            NonZeroU64::new(E::slots_per_epoch()).expect("slots_per_epoch is non-zero"),
+            fork_schedule.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 
-        // Start the subnet service now that we have slot_clock
-        let subnet_service = start_subnet_service::<E>(
-            database.watch(),
-            SUBNET_COUNT,
-            config.network.subscribe_all_subnets,
-            config.network.disable_gossipsub_topic_scoring,
-            &executor,
-            slot_clock.clone(),
-            spec.clone(),
-        );
-
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        let message_receiver = NetworkMessageReceiver::new(
+        let message_receiver = NetworkMessageReceiver::<E, _, _>::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
@@ -474,17 +532,19 @@ impl Client {
             is_synced.clone(),
             outcome_tx,
             message_validator,
+            doppelganger_service.clone(),
         );
 
         // Start the p2p network
         let mut network = Network::try_new::<E>(
             &config.network,
-            subnet_service,
+            topic_event_rx,
             network_rx,
             Arc::new(message_receiver),
             outcome_rx,
             executor.clone(),
             spec.clone(),
+            lifecycle_rx,
         )
         .await
         .map_err(|e| format!("Unable to start network: {e}"))?;
@@ -507,11 +567,13 @@ impl Client {
             spec.clone(),
             genesis_validators_root,
             config.impostor.is_none().then_some(key),
+            fork_schedule.clone(),
             config.gas_limit,
-            config.builder_proposals,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+            config.strict_mfp,
             is_synced.clone(),
+            executor.clone(),
         );
 
         start_exit_processor(
@@ -560,6 +622,7 @@ impl Client {
             duties_service.clone(),
             database.watch(),
             is_synced.clone(),
+            doppelganger_service.clone(),
             executor.clone(),
             &spec,
         );
@@ -572,6 +635,15 @@ impl Client {
             .await
             .map_err(|_| "Sync watch channel closed")?;
         info!("Sync complete, starting services...");
+
+        // Block client startup during operator doppelgänger monitoring period (now that sync
+        // is complete and operator ID available). During this period, incoming messages are
+        // checked for twins and duties services won't start until monitoring completes.
+        if let Some(service) = &doppelganger_service {
+            service
+                .monitor_blocking(config.operator_dg_wait_epochs)
+                .await?;
+        }
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
@@ -604,6 +676,13 @@ impl Client {
             .validator_registration_batch_size(500)
             .build()?;
 
+        let registration_service = RegistrationService::new(
+            validator_store.clone(),
+            slot_clock.clone(),
+            beacon_nodes.clone(),
+            executor.clone(),
+        );
+
         let sync_committee_service = SyncCommitteeService::new(
             duties_service.clone(),
             validator_store.clone(),
@@ -619,6 +698,7 @@ impl Client {
             beacon_nodes.clone(),
             executor.clone(),
             spec.clone(),
+            fork_schedule.clone(),
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
@@ -646,8 +726,12 @@ impl Client {
             .map_err(|e| format!("Unable to start metadata service: {e}"))?;
 
         preparation_service
-            .start_update_service(&spec)
+            .start_proposer_prepare_service(&spec)
             .map_err(|e| format!("Unable to start preparation service: {e}"))?;
+
+        registration_service
+            .start_validator_registration_service(&spec)
+            .map_err(|e| format!("Unable to start validator registration service: {e}"))?;
 
         http_api_shared_state.write().database_state = Some(database.watch());
 

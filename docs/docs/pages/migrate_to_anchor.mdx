@@ -1,0 +1,40 @@
+# Migrating to Anchor
+
+Anchor is designed to be interoperable with the go-ssv's key formats. This means the process of migrating from go-ssv to Anchor is fairly straight forward. We simply need to move the operator key from the go-ssv directory into the Anchor data directory.
+
+## Precautions
+
+There are a host of issues that can arise if two identical operators are running at the same time. It is important to stop the go-ssv node before running the Anchor node. For safety, we strongly recommend **moving** the keys rather than copying them, to prevent multiple instances of the same operator id running at the same time.
+
+
+## Moving to Anchor
+
+Firstly, ensure Anchor is installed and working by following the steps in [Installation](/installation). To check, ensure the expected version of Anchor can be run:
+```bash
+anchor --version
+```
+
+The next step to move the operator key from the go-ssv node to Anchor. By default, go-ssv stores the operator encrypted private key at:
+```
+~/ssv-stack/ssv-node-data/encrypted_private_key.json
+```
+
+By default, Anchor expects the operator key in the path:
+```
+~/.anchor/<network>/encrypted_private_key.json
+```
+
+Here `<network>` represents the network the operator is going to run on, for example `hoodi` or `mainnet`.
+
+To migrate from go-ssv to Anchor, we simply need to move the operator private key. If using the default values, for mainnet, this would look like:
+```bash
+mv ~/ssv-stack/ssv-node-data/encrypted_private_key.json ~/.anchor/mainnet/encrypted_private_key.json
+```
+
+Once this key is moved, Anchor should be able to be run. See the [Running an Operator](/running_an_operator) for how to fully run the Anchor node as an operator.
+
+You will need to put the password that decrypts the operator key into a file and reference it in Anchor's CLI via the `--password-file <PATH>` parameter.
+
+:::warning
+If Anchor fails to start with the message `Unable to parse key: unknown field pubkey, expected one of pubKey (...)`, please change "pubkey" to "pubKey" in the encrypted_private_key.json file. This is a known issue and will be fixed in a future release.
+:::

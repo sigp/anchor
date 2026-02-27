@@ -1,0 +1,16 @@
+[package]
+name = "operator_doppelganger"
+version = "0.1.0"
+edition = { workspace = true }
+
+[dependencies]
+database = { workspace = true }
+message_validator = { workspace = true }
+ssv_types = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+types = { workspace = true }

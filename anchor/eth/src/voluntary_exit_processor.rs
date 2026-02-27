@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anchor_validator_store::AnchorValidatorStore;
 use beacon_node_fallback::BeaconNodeFallback;
+use bls::PublicKeyBytes;
 use duties_tracker::voluntary_exit_tracker::{ExitDuty, VoluntaryExitTracker};
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
@@ -11,7 +12,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug, error, info};
-use types::{EthSpec, PublicKeyBytes, voluntary_exit};
+use types::{EthSpec, VoluntaryExit};
 
 use crate::EXECUTION_EVENTS_PROCESSED;
 
@@ -204,7 +205,7 @@ async fn process_single_exit<E: EthSpec, T: SlotClock + 'static>(
 
     let epoch = target_slot.epoch(slots_per_epoch);
 
-    let voluntary_exit = voluntary_exit::VoluntaryExit {
+    let voluntary_exit = VoluntaryExit {
         epoch,
         validator_index: validator_index.0 as u64,
     };

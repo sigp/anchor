@@ -3,12 +3,13 @@ use std::collections::HashSet;
 use tracing_subscriber::filter::FilterFn;
 use workspace_members::workspace_crates;
 
-const WORKSPACE_CRATES: &[&str] = workspace_crates!();
-const LIGHTHOUSE_CRATES: &[&str] = &[
+pub(crate) const WORKSPACE_CRATES: &[&str] = workspace_crates!();
+pub(crate) const LIGHTHOUSE_CRATES: &[&str] = &[
     "beacon_node_fallback",
     "slashing_protection",
     "task_executor",
     "validator_services",
+    "fork",
 ];
 
 /// Constructs a filter which only permits logging from crates which are members of the workspace.

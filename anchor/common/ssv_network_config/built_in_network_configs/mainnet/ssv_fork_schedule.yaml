@@ -1,0 +1,8 @@
+# SSV Fork Schedule for Mainnet
+# Maps fork names directly to their configuration.
+# Note: Alan fork (genesis) is always at epoch 0 and should not be specified here.
+#
+# Example:
+# boole:
+#   epoch: 12500
+#   domain_type: "00000002"

@@ -13,8 +13,27 @@ pub mod partial_sig;
 mod round;
 mod share;
 mod sql_conversions;
+pub mod test_utils;
 
 pub use indexmap::IndexSet;
 pub use round::Round;
 pub use share::ENCRYPTED_KEY_LENGTH;
-pub use types::{Epoch, Slot, VariableList};
+pub use ssz_types::{VariableList, typenum};
+use typenum::Unsigned;
+pub use types::{Epoch, Slot};
+
+// Shared constants used across message types
+pub const RSA_SIGNATURE_SIZE: usize = 256;
+pub const MAX_SIGNATURES: usize = 13;
+
+/// Converts a Vec to VariableList, returning a custom error on failure.
+pub fn try_to_variable_list<T, N, E, F>(vec: Vec<T>, error_fn: F) -> Result<VariableList<T, N>, E>
+where
+    N: Unsigned + Clone,
+    F: FnOnce(usize, usize) -> E,
+{
+    let vec_len = vec.len();
+    let max_len = N::to_usize();
+
+    VariableList::new(vec).map_err(|_| error_fn(vec_len, max_len))
+}

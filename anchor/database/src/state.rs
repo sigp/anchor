@@ -4,13 +4,14 @@ use std::{
 };
 
 use base64::prelude::*;
+use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::{Error as SqlError, OptionalExtension, params, types::Type};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
 };
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
@@ -36,6 +37,9 @@ impl NetworkState {
 
         // Get the last processed block from the database
         let last_processed_block = Self::get_last_processed_block_from_db(&conn)?;
+
+        // Get number of joined operators from the database
+        let max_operator_id_seen = Self::get_max_operator_id_seen_from_db(&conn)?;
 
         // Without an ID, we have no idea who we are. Check to see if an operator with our public
         // key is stored the database. If it does not exist, that means the operator still
@@ -71,6 +75,7 @@ impl NetworkState {
                 .map(|m| m.keys().copied().collect())
                 .unwrap_or_default(),
             nonces,
+            max_operator_id_seen,
         };
 
         // Populate all multi-index maps in a single pass through clusters
@@ -131,6 +136,12 @@ impl NetworkState {
     // Get the last block that was processed and saved to db
     fn get_last_processed_block_from_db(conn: &PoolConn) -> Result<u64, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_BLOCK_NUMBER)?
+            .query_row(params![], |row| row.get(0))
+            .map_err(DatabaseError::from)
+    }
+
+    fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<Option<u64>, DatabaseError> {
+        conn.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
             .query_row(params![], |row| row.get(0))
             .map_err(DatabaseError::from)
     }
@@ -321,6 +332,11 @@ impl NetworkState {
         self.single_state.operators.contains_key(id)
     }
 
+    /// Get all operators from in-memory store
+    pub fn get_all_operators(&self) -> Vec<Operator> {
+        self.single_state.operators.values().cloned().collect()
+    }
+
     /// Check if we are a member of a specific cluster
     pub fn member_of_cluster(&self, id: &ClusterId) -> bool {
         self.single_state.clusters.contains(id)
@@ -334,6 +350,10 @@ impl NetworkState {
     /// Get the last block that has been fully processed by the database
     pub fn get_last_processed_block(&self) -> u64 {
         self.single_state.last_processed_block
+    }
+
+    pub fn get_max_operator_id_seen(&self) -> Option<u64> {
+        self.single_state.max_operator_id_seen
     }
 
     pub fn get_committee_info_by_committee_id(
