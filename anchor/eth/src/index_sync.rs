@@ -1,4 +1,11 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
@@ -50,7 +57,7 @@ async fn validator_index_syncer(
 
     // Track if there are store tasks waiting. If there are any waiting tasks, we do not fill up
     // batches from the database to avoid redundant work.
-    let waiting_store_tasks = Arc::new(());
+    let waiting_store_tasks = Arc::new(AtomicUsize::new(0));
 
     loop {
         let mut batch = vec![];
@@ -88,7 +95,7 @@ async fn validator_index_syncer(
         let space = MAX_BATCH_SIZE - batch.len();
         // Only do this if we have any space remaining and there are no store tasks that might wait
         // to write missing indices. If the count is 1, only we hold the Arc (no other tasks).
-        if space > 0 && Arc::strong_count(&waiting_store_tasks) == 1 {
+        if space > 0 && waiting_store_tasks.load(Ordering::Relaxed) == 1 {
             let state = db.state();
             let clusters = state.clusters();
             let mut from_database = state
@@ -139,12 +146,12 @@ async fn validator_index_syncer(
                 .collect::<HashMap<_, _>>();
             trace!(len = map.len(), "Got validators from BN");
 
-            // `set_validator_indices` may block as it start a database transaction and updates the
+            // `set_validator_indices` may block as it starts a database transaction and updates the
             // in memory database. We do not want to do that on the async runtime, so we
             // spawn a blocking task.
             let db = db.clone();
-            // Hold this Arc until the task completes.
-            let waiting_store_task_handle = waiting_store_tasks.clone();
+            let waiting_store_tasks = waiting_store_tasks.clone();
+            waiting_store_tasks.fetch_add(1, Ordering::Relaxed);
             executor.spawn_blocking(
                 move || {
                     let len = map.len();
@@ -153,7 +160,7 @@ async fn validator_index_syncer(
                     } else {
                         trace!(len, "Stored indices from BN");
                     }
-                    drop(waiting_store_task_handle);
+                    waiting_store_tasks.fetch_sub(1, Ordering::Relaxed);
                 },
                 INDEX_SYNCER_STORE_NAME,
             );
