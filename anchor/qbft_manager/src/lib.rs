@@ -214,11 +214,6 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
         let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
 
-        // Calculate fault tolerance: f = (n - 1) / 3, quorum = n - f
-        let n = committee_members.len();
-        let f = (n.saturating_sub(1) / 3) as u64;
-        let quorum_size = n - f as usize;
-
         // Generate the qbft configuration
         let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
@@ -227,7 +222,6 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             leader_fn,
         );
         let config = config
-            .with_quorum_size(quorum_size)
             .with_max_rounds(
                 message_id
                     .role()

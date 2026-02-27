@@ -100,6 +100,7 @@ alloy = { version = "1.2.1", features = [
 ] }
 arbitrary = "1.4.1"
 async-channel = "1.9"
+async-stream = "0.3.6"
 axum = "0.8.1"
 base64 = "0.22.1"
 blst = "0.3.14"
@@ -151,6 +152,7 @@ tokio = { version = "1.39.2", features = [
     "sync",
     "macros",
 ] }
+tokio-stream = "0.1.18"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1.40"
 tracing-appender = "0.2"

@@ -16,7 +16,7 @@ use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
-use futures::{Stream, future::join_all, stream};
+use futures::{Stream, StreamExt, future::join_all, stream, stream::FuturesUnordered};
 use lru::LruCache;
 use openssl::{
     pkey::Private,
@@ -314,6 +314,53 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
     }
 
+    /// Resolve and decrypt the key share for a validator.
+    ///
+    /// Returns `None` in impostor mode (no private key configured).
+    fn resolve_decrypted_share(
+        &self,
+        validator: &ValidatorMetadata,
+    ) -> Result<Option<SecretKey>, Error> {
+        let Some(operator_key) = &self.private_key else {
+            // We are in impostor mode and cannot decrypt the share.
+            return Ok(None);
+        };
+
+        let encrypted_private_key = self
+            .database
+            .state()
+            .shares()
+            .get_by(&validator.public_key)
+            .ok_or(Error::UnknownPubkey(validator.public_key))?
+            .encrypted_private_key;
+
+        let key = self
+            .decrypted_keys
+            .lock()
+            .try_get_or_insert(encrypted_private_key, || {
+                decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
+                    .map_err(|_| SpecificError::KeyShareDecryptionFailed)
+            })
+            .cloned()?;
+
+        Ok(Some(key))
+    }
+
+    /// Prepare signing data for a single validator: extract index and decrypt key share.
+    fn prepare_validator_signing_data(
+        &self,
+        validator: &ValidatorMetadata,
+        signing_root: Hash256,
+    ) -> Result<ValidatorSigningData, Error> {
+        let index = validator.index.ok_or(SpecificError::MissingIndex)?;
+        let share = self.resolve_decrypted_share(validator)?;
+        Ok(ValidatorSigningData {
+            root: signing_root,
+            index,
+            share,
+        })
+    }
+
     /// Collect signatures for multiple validators in a batch.
     /// This is more efficient than calling collect_signature multiple times because:
     /// 1. All partial signatures are sent in a single network message
@@ -341,34 +388,21 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         let mut validator_data = Vec::with_capacity(validators.len());
         for (validator, signing_root) in validators {
-            let decrypted_key_share = if let Some(operator_key) = &self.private_key {
-                let encrypted_private_key = self
-                    .database
-                    .state()
-                    .shares()
-                    .get_by(&validator.public_key)
-                    .ok_or(Error::UnknownPubkey(validator.public_key))?
-                    .encrypted_private_key;
+            match self.prepare_validator_signing_data(&validator, signing_root) {
+                Ok(data) => validator_data.push(data),
+                Err(e) => {
+                    warn!(
+                        error = ?e,
+                        pubkey = ?validator.public_key,
+                        "Skipping validator in batch signing"
+                    );
+                    continue;
+                }
+            }
+        }
 
-                let key = self
-                    .decrypted_keys
-                    .lock()
-                    .try_get_or_insert(encrypted_private_key, || {
-                        decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
-                            .map_err(|_| SpecificError::KeyShareDecryptionFailed)
-                    })
-                    .cloned()?;
-                Some(key)
-            } else {
-                // We are in imposter mode and cannot decrypt the share.
-                None
-            };
-
-            validator_data.push(ValidatorSigningData {
-                root: signing_root,
-                index: validator.index.ok_or(SpecificError::MissingIndex)?,
-                share: decrypted_key_share,
-            });
+        if validator_data.is_empty() {
+            return Ok(HashMap::new());
         }
 
         let signatures = self
@@ -2865,81 +2899,85 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
     fn sign_attestations(
         self: &Arc<Self>,
         attestations: Vec<AttestationToSign<E>>,
-    ) -> impl Stream<Item = Result<Vec<(u64, Attestation<E>)>, Error>> + Send {
-        let this = Arc::clone(self);
-        stream::once(async move {
-            if !*this.is_synced.borrow() {
-                return Err(Error::SpecificError(SpecificError::NotSynced));
+    ) -> impl Stream<Item = Result<Vec<(u64, Attestation<Self::E>)>, Error>> + Send {
+        async_stream::stream! {
+            if !*self.is_synced.borrow() {
+                yield Err(Error::SpecificError(SpecificError::NotSynced));
+                return;
             }
 
-            // Convert `AttestationToSign` into the tuple format used internally
-            let mut attestation_tuples: Vec<(u64, PublicKeyBytes, usize, Attestation<E>)> =
-                attestations
-                    .into_iter()
-                    .map(|a| {
-                        (
-                            a.validator_index,
-                            a.pubkey,
-                            a.validator_committee_index,
-                            a.attestation,
-                        )
-                    })
-                    .collect();
+            // Group attestations by SSV committee, converting to internal tuple format
+            let mut committee_mapping: HashMap<CommitteeId, Vec<AttestationEntry<E>>> =
+                HashMap::new();
 
-            let signing_futures = attestation_tuples.iter_mut().map(
-                |(_, pubkey, validator_committee_index, attestation)| async {
-                    this.sign_attestation(
-                        *pubkey,
-                        *validator_committee_index,
-                        attestation,
-                        attestation.data().target.epoch,
-                    )
-                    .await
-                },
-            );
-
-            let results = join_all(signing_futures).await;
-
-            let mut signed_attestations = Vec::with_capacity(results.len());
-            for (result, (validator_index, pubkey, _, attestation)) in
-                results.into_iter().zip(attestation_tuples.into_iter())
-            {
-                match result {
-                    Ok(()) => {
-                        signed_attestations.push((validator_index, attestation, pubkey));
+            for att in attestations {
+                let pubkey = att.pubkey;
+                let entry = (
+                    att.validator_index,
+                    att.pubkey,
+                    att.validator_committee_index,
+                    att.attestation,
+                );
+                match self.get_validator_and_cluster(pubkey) {
+                    Ok((_, cluster)) => {
+                        committee_mapping
+                            .entry(cluster.committee_id())
+                            .or_default()
+                            .push(entry);
                     }
-                    Err(ValidatorStoreError::UnknownPubkey(pubkey)) => {
-                        warn!(
-                            info = "a validator may have recently been removed from this VC",
-                            ?pubkey,
-                            "Missing pubkey for attestation"
-                        );
+                    Err(Error::UnknownPubkey(pk)) => {
+                        warn!(?pk, "Unknown pubkey while grouping attestations, skipping");
                     }
                     Err(e) => {
-                        error!(
-                            error = ?e,
-                            "Failed to sign attestation"
-                        );
+                        error!(error = ?e, ?pubkey, "Failed to get cluster for attestation, skipping");
                     }
                 }
             }
 
-            if signed_attestations.is_empty() {
-                return Ok(vec![]);
-            }
+            // Process committees concurrently, yielding results as each completes
+            let mut committee_futures: FuturesUnordered<_> = committee_mapping
+                .into_iter()
+                .map(|(committee_id, attestations)| async move {
+                    let result = self
+                        .sign_committee_attestations(committee_id, attestations)
+                        .await;
+                    (committee_id, result)
+                })
+                .collect();
 
-            // Check slashing protection and insert into database. Use a dedicated blocking
-            // thread to avoid clogging the async executor with blocking database I/O.
-            let validator_store = this.clone();
-            this.task_executor
-                .spawn_blocking_handle(
-                    move || validator_store.slashing_protection_attestations(signed_attestations),
-                    "slashing_protect_attestations",
-                )
-                .ok_or(Error::ExecutorError)?
-                .await
-                .map_err(|_| Error::ExecutorError)?
-        })
+            while let Some((committee_id, result)) = committee_futures.next().await {
+                match result {
+                    Ok(signed) => {
+                        if signed.is_empty() {
+                            continue;
+                        }
+
+                        // Check slashing protection on a blocking thread
+                        let validator_store = self.clone();
+                        let handle = match self.task_executor.spawn_blocking_handle(
+                            move || validator_store.slashing_protection_attestations(signed),
+                            "slashing_protect_attestations",
+                        ) {
+                            Some(handle) => handle,
+                            None => {
+                                yield Err(Error::ExecutorError);
+                                continue;
+                            }
+                        };
+
+                        match handle.await {
+                            Ok(Ok(protected)) => yield Ok(protected),
+                            Ok(Err(e)) => yield Err(e),
+                            Err(_) => yield Err(Error::ExecutorError),
+                        }
+                    }
+                    Err(e) => {
+                        error!(?committee_id, error = ?e, "Failed to sign committee attestations");
+                        yield Err(e);
+                    }
+                }
+            }
+        }
     }
 
     async fn sign_execution_payload_envelope(
