@@ -57,8 +57,6 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
     + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE
     + ssz::BYTES_PER_LENGTH_OFFSET;
 
-const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
-
 /// `SSVMessage.Data` max size: 726932
 /// `max(consensus_msg_max, partial_sig_max)` = `max(722412, 726932)` = 726932
 ///
@@ -609,36 +607,6 @@ impl SignedSSVMessage {
     }
 
     pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
-        if self.signatures.len() > MAX_SIGNATURES {
-            return Err(SignedSSVMessageError::TooManySignatures {
-                provided: self.signatures.len(),
-                max: MAX_SIGNATURES,
-            });
-        }
-
-        for (i, sig) in self.signatures.iter().enumerate() {
-            if sig.len() != RSA_SIGNATURE_SIZE {
-                return Err(SignedSSVMessageError::WrongRSASignatureSize {
-                    index: i,
-                    length: sig.len(),
-                    sig_length: RSA_SIGNATURE_SIZE,
-                });
-            }
-        }
-
-        if self.operator_ids.len() > MAX_SIGNATURES {
-            return Err(SignedSSVMessageError::TooManyOperatorIDs {
-                provided: self.operator_ids.len(),
-                max: MAX_SIGNATURES,
-            });
-        }
-
-        if self.full_data.len() > MAX_FULL_DATA_SIZE {
-            return Err(SignedSSVMessageError::FullDataTooLong {
-                provided: self.full_data.len(),
-                max: MAX_FULL_DATA_SIZE,
-            });
-        }
 
         // Rule: Must have at least one signer
         if self.operator_ids.is_empty() {
@@ -688,6 +656,7 @@ mod tests {
     use bls::Signature;
     use ssz::{Decode, Encode};
     use typenum::Unsigned;
+    const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 
     use super::*;
     use crate::{
