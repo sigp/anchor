@@ -281,8 +281,7 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
         cli_args.metrics_options.enable_high_validator_count_metrics;
 
     config.impostor = cli_args.impostor.map(OperatorId);
-    config.disable_latency_measurement_service =
-        cli_args.network_options.disable_latency_measurement_service;
+    config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
 
     // Operator doppelgänger protection
     config.operator_dg = cli_args.operator_dg;

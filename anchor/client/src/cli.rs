@@ -465,14 +465,6 @@ pub struct NetworkOptions {
 
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
     pub disable_gossipsub_topic_scoring: bool,
-
-    #[clap(
-        long,
-        help = "Disable the latency measurement service.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub disable_latency_measurement_service: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -540,6 +532,14 @@ pub struct Node {
 
     #[clap(flatten)]
     pub payload_building_options: PayloadBuildingOptions,
+
+    #[clap(
+        long,
+        help = "Disable the latency measurement service.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_latency_measurement_service: bool,
 
     #[clap(
         long,
