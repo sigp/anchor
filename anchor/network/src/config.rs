@@ -7,7 +7,6 @@ use discv5::Enr;
 use global_config::data_dir::NetworkDir;
 use libp2p::Multiaddr;
 use network_utils::listen_addr::{ListenAddr, ListenAddress};
-use ssv_types::domain_type::DomainType;
 
 /// This is a default network directory, but it will be overridden by the cli defaults.
 const DEFAULT_NETWORK_DIR: &str = ".anchor/network";
@@ -83,8 +82,6 @@ pub struct Config {
 
     /// Attempt to construct external port mappings with UPnP.
     pub upnp_enabled: bool,
-
-    pub domain_type: DomainType,
 }
 
 impl Config {
@@ -115,7 +112,6 @@ impl Config {
             disable_discovery: false,
             disable_quic_support: false,
             subscribe_all_subnets: false,
-            domain_type: DomainType::default(),
             upnp_enabled: true,
         }
     }
