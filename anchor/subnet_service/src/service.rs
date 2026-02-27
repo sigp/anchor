@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use database::{NetworkState, NonUniqueIndex};
-use fork::{Fork, ForkPhase, ForkSchedule};
+use fork::{Fork, ForkLifecycle, ForkSchedule};
 use slot_clock::SlotClock;
 use ssv_types::{CommitteeId, OperatorId};
 use task_executor::TaskExecutor;
@@ -154,7 +154,7 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
     slot_clock: S,
     chain_spec: Arc<ChainSpec>,
     fork_schedule: Arc<ForkSchedule>,
-    fork_phase_rx: async_broadcast::Receiver<ForkPhase>,
+    lifecycle_rx: watch::Receiver<ForkLifecycle>,
 ) -> (Arc<SubnetService<S>>, mpsc::Receiver<TopicEvent>) {
     let (tx, rx) = mpsc::channel(SUBNET_COUNT);
 
@@ -169,7 +169,7 @@ pub fn start_subnet_service<S: SlotClock + 'static, E: EthSpec>(
         E::slots_per_epoch(),
     ));
 
-    executor.spawn(service.clone().run::<E>(fork_phase_rx), "subnet_service");
+    executor.spawn(service.clone().run::<E>(lifecycle_rx), "subnet_service");
 
     (service, rx)
 }

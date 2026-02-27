@@ -98,7 +98,6 @@ alloy = { version = "1.2.1", features = [
     "rlp",
 ] }
 arbitrary = "1.4.1"
-async-broadcast = "0.7.2"
 async-channel = "1.9"
 axum = "0.8.1"
 base64 = "0.22.1"
