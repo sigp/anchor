@@ -1,6 +1,6 @@
 name: Claude Mentions
 
-# Scenario 1: @claude mentions on issues and PR comments
+# @claude mentions on issues and PR comments
 # See: https://github.com/anthropics/claude-code-action/pull/614
 
 on:
@@ -75,13 +75,24 @@ jobs:
                   role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
                   aws-region: us-west-2
 
+            - name: Read review prompt
+              if: steps.check.outputs.is_member == 'true'
+              id: review-prompt
+              run: |
+                  {
+                    echo "content<<PROMPT_EOF"
+                    cat .github/prompts/review.md
+                    echo "PROMPT_EOF"
+                  } >> "$GITHUB_OUTPUT"
+
             - name: Run Claude Code Action
               if: steps.check.outputs.is_member == 'true'
               timeout-minutes: 15
-              uses: anthropics/claude-code-action@v1
+              uses: anthropics/claude-code-action@v1.0.52
               with:
                   github_token: ${{ steps.app-token.outputs.token }}
                   use_bedrock: "true"
                   claude_args: |
                       --max-turns 50
-                      --model us.anthropic.claude-sonnet-4-5-20250929-v1:0
+                      --model us.anthropic.claude-opus-4-6-v1
+                      --append-system-prompt "${{ steps.review-prompt.outputs.content }}"
