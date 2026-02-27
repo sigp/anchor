@@ -98,7 +98,6 @@ alloy = { version = "1.2.1", features = [
     "rlp",
 ] }
 arbitrary = "1.4.1"
-async-broadcast = "0.7.2"
 async-channel = "1.9"
 axum = "0.8.1"
 base64 = "0.22.1"
@@ -162,8 +161,11 @@ zeroize = "1.8.1"
 
 # todo: remove when there is a proper release for peer-store.
 [patch.'https://github.com/libp2p/rust-libp2p.git']
-libp2p-core = "=0.43.1"
-libp2p-swarm = "=0.47.0"
+libp2p-core = "=0.43.2"
+libp2p-swarm = "=0.47.1"
+
+[patch.crates-io]
+yamux = { git = "https://github.com/sigp/rust-yamux", rev = "575b17c0f44f4253079a6bafaa2de74ca1d6dfaa" }
 
 [profile.maxperf]
 inherits = "release"
