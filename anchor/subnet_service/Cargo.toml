@@ -6,7 +6,6 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 alloy = { workspace = true }
-async-broadcast = { workspace = true }
 database = { workspace = true }
 ethereum_serde_utils = "0.7.0"
 fork = { workspace = true }
