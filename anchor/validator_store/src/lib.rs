@@ -16,7 +16,12 @@ use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
-use futures::{Stream, StreamExt, future::join_all, stream, stream::FuturesUnordered};
+use futures::{
+    Stream,
+    future::{Either, join_all},
+    stream,
+    stream::FuturesUnordered,
+};
 use lru::LruCache;
 use openssl::{
     pkey::Private,
@@ -1665,14 +1670,14 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     async fn sign_committee_attestations(
         &self,
         committee_id: CommitteeId,
-        attestations: Vec<AttestationEntry<E>>,
+        attestations: Vec<AttestationToSign<E>>,
     ) -> Result<Vec<(u64, Attestation<E>, PublicKeyBytes)>, Error> {
         // Early return for empty attestations to avoid index out of bounds
         let first_attestation = attestations
             .first()
             .ok_or(Error::SpecificError(SpecificError::NoAttestationsProvided))?;
-        let slot = first_attestation.3.data().slot;
-        let first_att_data = first_attestation.3.data();
+        let slot = first_attestation.attestation.data().slot;
+        let first_att_data = first_attestation.attestation.data();
 
         // All validators grouped by the same CommitteeId are managed by the same set of operators
         let cluster_members = self
@@ -1733,8 +1738,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         )> = Vec::with_capacity(attestations.len());
         let mut cluster_for_signing: Option<Cluster> = None;
 
-        for (validator_index, pubkey, validator_committee_position, mut attestation) in attestations
-        {
+        for att in attestations {
+            let (validator_index, pubkey, validator_committee_position, mut attestation) = (
+                att.validator_index,
+                att.pubkey,
+                att.validator_committee_index,
+                att.attestation,
+            );
             let (validator, cluster) = match self.get_validator_and_cluster(pubkey) {
                 Ok((v, c)) => (v, c),
                 Err(Error::UnknownPubkey(pk)) => {
@@ -2900,84 +2910,66 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self: &Arc<Self>,
         attestations: Vec<AttestationToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<(u64, Attestation<Self::E>)>, Error>> + Send {
-        async_stream::stream! {
-            if !*self.is_synced.borrow() {
-                yield Err(Error::SpecificError(SpecificError::NotSynced));
-                return;
-            }
+        if !*self.is_synced.borrow() {
+            return Either::Left(stream::once(futures::future::ready(Err(
+                Error::SpecificError(SpecificError::NotSynced),
+            ))));
+        }
 
-            // Group attestations by SSV committee, converting to internal tuple format
-            let mut committee_mapping: HashMap<CommitteeId, Vec<AttestationEntry<E>>> =
-                HashMap::new();
-
-            for att in attestations {
-                let pubkey = att.pubkey;
-                let entry = (
-                    att.validator_index,
-                    att.pubkey,
-                    att.validator_committee_index,
-                    att.attestation,
-                );
-                match self.get_validator_and_cluster(pubkey) {
-                    Ok((_, cluster)) => {
-                        committee_mapping
-                            .entry(cluster.committee_id())
-                            .or_default()
-                            .push(entry);
-                    }
-                    Err(Error::UnknownPubkey(pk)) => {
-                        warn!(?pk, "Unknown pubkey while grouping attestations, skipping");
-                    }
-                    Err(e) => {
-                        error!(error = ?e, ?pubkey, "Failed to get cluster for attestation, skipping");
-                    }
+        // Group attestations by SSV committee
+        let mut committee_mapping: HashMap<CommitteeId, Vec<AttestationToSign<E>>> = HashMap::new();
+        for att in attestations {
+            let pubkey = att.pubkey;
+            match self.get_validator_and_cluster(pubkey) {
+                Ok((_, cluster)) => {
+                    committee_mapping
+                        .entry(cluster.committee_id())
+                        .or_default()
+                        .push(att);
                 }
-            }
-
-            // Process committees concurrently, yielding results as each completes
-            let mut committee_futures: FuturesUnordered<_> = committee_mapping
-                .into_iter()
-                .map(|(committee_id, attestations)| async move {
-                    let result = self
-                        .sign_committee_attestations(committee_id, attestations)
-                        .await;
-                    (committee_id, result)
-                })
-                .collect();
-
-            while let Some((committee_id, result)) = committee_futures.next().await {
-                match result {
-                    Ok(signed) => {
-                        if signed.is_empty() {
-                            continue;
-                        }
-
-                        // Check slashing protection on a blocking thread
-                        let validator_store = self.clone();
-                        let handle = match self.task_executor.spawn_blocking_handle(
-                            move || validator_store.slashing_protection_attestations(signed),
-                            "slashing_protect_attestations",
-                        ) {
-                            Some(handle) => handle,
-                            None => {
-                                yield Err(Error::ExecutorError);
-                                continue;
-                            }
-                        };
-
-                        match handle.await {
-                            Ok(Ok(protected)) => yield Ok(protected),
-                            Ok(Err(e)) => yield Err(e),
-                            Err(_) => yield Err(Error::ExecutorError),
-                        }
-                    }
-                    Err(e) => {
-                        error!(?committee_id, error = ?e, "Failed to sign committee attestations");
-                        yield Err(e);
-                    }
+                Err(Error::UnknownPubkey(pk)) => {
+                    warn!(?pk, "Unknown pubkey while grouping attestations, skipping");
+                }
+                Err(e) => {
+                    error!(error = ?e, ?pubkey, "Failed to get cluster for attestation, skipping");
                 }
             }
         }
+
+        // Process each committee concurrently, streaming results as each completes.
+        // Each committee runs consensus + batch signing + slashing protection independently.
+        let committee_futures: FuturesUnordered<_> = committee_mapping
+            .into_iter()
+            .map(|(committee_id, attestations)| {
+                let this = Arc::clone(self);
+                async move {
+                    let signed = match this
+                        .sign_committee_attestations(committee_id, attestations)
+                        .await
+                    {
+                        Ok(signed) if signed.is_empty() => return Ok(Vec::new()),
+                        Ok(signed) => signed,
+                        Err(e) => {
+                            error!(?committee_id, error = ?e, "Failed to sign committee attestations");
+                            return Err(e);
+                        }
+                    };
+
+                    // Check slashing protection on a blocking thread
+                    let vs = Arc::clone(&this);
+                    this.task_executor
+                        .spawn_blocking_handle(
+                            move || vs.slashing_protection_attestations(signed),
+                            "slashing_protect_attestations",
+                        )
+                        .ok_or(Error::ExecutorError)?
+                        .await
+                        .map_err(|_| Error::ExecutorError)?
+                }
+            })
+            .collect();
+
+        Either::Right(committee_futures)
     }
 
     async fn sign_execution_payload_envelope(

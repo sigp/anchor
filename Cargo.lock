@@ -793,7 +793,6 @@ dependencies = [
 name = "anchor_validator_store"
 version = "0.1.0"
 dependencies = [
- "async-stream",
  "beacon_node_fallback",
  "bls",
  "database",
