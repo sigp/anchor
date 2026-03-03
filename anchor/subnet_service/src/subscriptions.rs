@@ -293,3 +293,340 @@ fn calculate_duration_to_next_epoch<E: EthSpec>(slot_clock: &impl SlotClock) -> 
         slot_duration * 3 // Wait 3 slots before next check
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, OnceLock},
+        time::Duration,
+    };
+
+    use database::NetworkDatabase;
+    use fork::{ALAN_TOPIC_PREFIX, Fork, ForkConfig, ForkLifecycle, ForkSchedule};
+    use slot_clock::{ManualSlotClock, SlotClock};
+    use ssv_types::{OperatorId, domain_type::DomainType};
+    use task_executor::test_utils::TestRuntime;
+    use tempfile::TempDir;
+    use tokio::{
+        sync::{mpsc, watch},
+        time::timeout,
+    };
+    use types::{ChainSpec, Epoch, MinimalEthSpec, Slot};
+
+    use crate::{SUBNET_COUNT, TopicEvent, start_subnet_service};
+
+    const TEST_NETWORK: &str = "test";
+    const ALAN_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
+    const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
+    const BOOLE_FORK_EPOCH: u64 = 100;
+    const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+    const NO_EXTRA_EVENTS_TIMEOUT: Duration = Duration::from_millis(50);
+
+    /// Test harness that spins up a live `SubnetService` and captures emitted topic events.
+    ///
+    /// The harness uses real watch/mpsc channels so tests exercise the `run()` loop end-to-end
+    /// for lifecycle transitions.
+    struct TestHarness {
+        _db: NetworkDatabase,
+        _runtime: TestRuntime,
+        _service: Arc<crate::SubnetService<ManualSlotClock>>,
+        lifecycle_tx: watch::Sender<ForkLifecycle>,
+        topic_event_rx: mpsc::Receiver<TopicEvent>,
+        alan_config: ForkConfig,
+        boole_config: ForkConfig,
+        // Keep this last so it drops after db/runtime/service and can clean up directory safely.
+        _temp_dir: TempDir,
+    }
+
+    impl TestHarness {
+        fn new_normal_on_alan() -> Self {
+            Self::new_with_initial_lifecycle(normal_on_alan)
+        }
+
+        fn new_warmup_alan_to_boole() -> Self {
+            Self::new_with_initial_lifecycle(warmup_from_alan_to_boole)
+        }
+
+        fn new_grace_period_current_boole_previous_alan() -> Self {
+            Self::new_with_initial_lifecycle(grace_period_current_boole_previous_alan)
+        }
+
+        /// Build a service with an initial lifecycle and ready-to-assert event receiver.
+        fn new_with_initial_lifecycle(
+            initial_lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) -> Self {
+            let temp_dir = TempDir::new().expect("should create temp directory for test database");
+            let db_path = temp_dir.path().join("subnet_service_lifecycle.db");
+            let db = NetworkDatabase::new_as_impostor(&db_path, &OperatorId(1), TEST_NETWORK)
+                .expect("should build test database");
+
+            let (fork_schedule, alan_config, boole_config) = test_fork_schedule();
+            let (lifecycle_tx, lifecycle_rx) =
+                watch::channel(initial_lifecycle(&alan_config, &boole_config));
+
+            let slot_clock = ManualSlotClock::new(
+                Slot::new(0),
+                Duration::from_secs(0),
+                Duration::from_secs(12),
+            );
+
+            let runtime = TestRuntime::default();
+            let (service, topic_event_rx) = start_subnet_service::<_, MinimalEthSpec>(
+                db.watch(),
+                // Keep tests deterministic: always subscribe to all subnets so each lifecycle
+                // phase emits a stable `SUBNET_COUNT` per tracked fork, independent of DB
+                // committee fixture contents.
+                true,
+                // These tests only validate subscribe/unsubscribe transitions, so disable periodic
+                // scoring updates to avoid unrelated topic-event traffic.
+                true,
+                &runtime.task_executor,
+                slot_clock,
+                Arc::new(ChainSpec::minimal()),
+                fork_schedule,
+                lifecycle_rx,
+            );
+
+            Self {
+                _db: db,
+                _runtime: runtime,
+                _service: service,
+                lifecycle_tx,
+                topic_event_rx,
+                alan_config,
+                boole_config,
+                _temp_dir: temp_dir,
+            }
+        }
+
+        /// Push a lifecycle transition into the service's watch channel.
+        fn send_lifecycle(
+            &self,
+            lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) {
+            self.lifecycle_tx
+                .send(lifecycle(&self.alan_config, &self.boole_config))
+                .expect("subnet service should still listen for lifecycle transitions");
+        }
+
+        fn transition_to_warmup_alan_to_boole(&self) {
+            self.send_lifecycle(warmup_from_alan_to_boole);
+        }
+
+        fn transition_to_normal_on_boole(&self) {
+            self.send_lifecycle(normal_on_boole);
+        }
+
+        fn transition_to_grace_period_current_boole_previous_alan(&self) {
+            self.send_lifecycle(grace_period_current_boole_previous_alan);
+        }
+
+        /// Receive exactly `count` transition events, failing fast on timeout/channel close.
+        async fn recv_transition_events(&mut self, count: usize) -> Vec<TopicEvent> {
+            let mut events = Vec::with_capacity(count);
+            for _ in 0..count {
+                events.push(
+                    timeout(EVENT_TIMEOUT, self.topic_event_rx.recv())
+                        .await
+                        .expect("timed out waiting for topic event")
+                        .expect("topic event channel closed unexpectedly"),
+                );
+            }
+            events
+        }
+
+        /// Consume startup subscriptions emitted immediately when the service boots.
+        async fn consume_startup_events(&mut self, count: usize) {
+            let startup_events = self.recv_transition_events(count).await;
+            assert_all_events_match(&startup_events, "subscribe event", is_subscribe_event);
+        }
+
+        async fn assert_no_additional_events(&mut self) {
+            match timeout(NO_EXTRA_EVENTS_TIMEOUT, self.topic_event_rx.recv()).await {
+                Ok(Some(event)) => panic!(
+                    "unexpected extra topic event after assertion boundary: {}",
+                    describe_topic_event(&event)
+                ),
+                Ok(None) => panic!("topic event channel closed unexpectedly"),
+                Err(_) => {}
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn warmup_transition_subscribes_upcoming_fork_topics() {
+        // Arrange
+        let mut harness = TestHarness::new_normal_on_alan();
+        // Startup in Normal(Alan) emits Alan subscriptions; clear them before the transition
+        // assert.
+        harness.consume_startup_events(SUBNET_COUNT).await;
+
+        // Act
+        harness.transition_to_warmup_alan_to_boole();
+        let events = harness.recv_transition_events(SUBNET_COUNT).await;
+
+        // Assert
+        assert_all_events_match(&events, "Boole subscribe event", is_boole_subscribe);
+        harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn grace_period_to_normal_unsubscribes_previous_fork_topics() {
+        // Arrange
+        let mut harness = TestHarness::new_grace_period_current_boole_previous_alan();
+        // Startup in GracePeriod(current=Boole, previous=Alan) emits subscribes for both forks.
+        harness.consume_startup_events(SUBNET_COUNT * 2).await;
+
+        // Act
+        harness.transition_to_normal_on_boole();
+        let events = harness.recv_transition_events(SUBNET_COUNT).await;
+
+        // Assert
+        assert_all_events_match(&events, "Alan unsubscribe event", is_alan_unsubscribe);
+        harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn warmup_to_grace_period_keeps_existing_topic_subscriptions() {
+        // Arrange
+        let mut harness = TestHarness::new_warmup_alan_to_boole();
+        harness.consume_startup_events(SUBNET_COUNT * 2).await;
+
+        // Act
+        harness.transition_to_grace_period_current_boole_previous_alan();
+
+        // Assert
+        // WarmUp(Alan->Boole) and GracePeriod(current=Boole, previous=Alan) track the same fork
+        // set, so no subscribe/unsubscribe topic events should be emitted for this
+        // transition.
+        harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn initial_lifecycle_warmup_subscribes_both_fork_topics() {
+        // Arrange
+        let mut harness = TestHarness::new_warmup_alan_to_boole();
+
+        // Act
+        let events = harness.recv_transition_events(SUBNET_COUNT * 2).await;
+
+        // Assert
+        assert_all_events_match(&events, "subscribe event", is_subscribe_event);
+        let alan_subscribes = events
+            .iter()
+            .filter(|event| is_alan_subscribe(event))
+            .count();
+        let boole_subscribes = events
+            .iter()
+            .filter(|event| is_boole_subscribe(event))
+            .count();
+
+        assert_eq!(alan_subscribes, SUBNET_COUNT);
+        assert_eq!(boole_subscribes, SUBNET_COUNT);
+        harness.assert_no_additional_events().await;
+    }
+
+    fn normal_on_alan(alan_config: &ForkConfig, _boole_config: &ForkConfig) -> ForkLifecycle {
+        ForkLifecycle::Normal {
+            current: alan_config.clone(),
+        }
+    }
+
+    fn normal_on_boole(_alan_config: &ForkConfig, boole_config: &ForkConfig) -> ForkLifecycle {
+        ForkLifecycle::Normal {
+            current: boole_config.clone(),
+        }
+    }
+
+    fn warmup_from_alan_to_boole(
+        alan_config: &ForkConfig,
+        boole_config: &ForkConfig,
+    ) -> ForkLifecycle {
+        ForkLifecycle::WarmUp {
+            current: alan_config.clone(),
+            upcoming: boole_config.clone(),
+        }
+    }
+
+    fn grace_period_current_boole_previous_alan(
+        alan_config: &ForkConfig,
+        boole_config: &ForkConfig,
+    ) -> ForkLifecycle {
+        ForkLifecycle::GracePeriod {
+            current: boole_config.clone(),
+            previous: alan_config.clone(),
+        }
+    }
+
+    fn test_fork_schedule() -> (Arc<ForkSchedule>, ForkConfig, ForkConfig) {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), ALAN_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(BOOLE_FORK_EPOCH), BOOLE_DOMAIN));
+        let schedule = Arc::new(
+            ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+                .expect("test fork schedule should be valid"),
+        );
+        let alan_config = schedule
+            .config(Fork::Alan)
+            .cloned()
+            .expect("Alan config should exist");
+        let boole_config = schedule
+            .config(Fork::Boole)
+            .cloned()
+            .expect("Boole config should exist");
+        (schedule, alan_config, boole_config)
+    }
+
+    fn boole_topic_prefix() -> &'static str {
+        static PREFIX: OnceLock<String> = OnceLock::new();
+        PREFIX.get_or_init(|| Fork::Boole.topic_prefix(TEST_NETWORK))
+    }
+
+    fn describe_topic_event(event: &TopicEvent) -> String {
+        match event {
+            TopicEvent::Subscribe { topic, .. } => format!("subscribe({topic})"),
+            TopicEvent::Unsubscribe { topic, .. } => format!("unsubscribe({topic})"),
+            TopicEvent::RateUpdate { topic, .. } => format!("rate_update({topic})"),
+        }
+    }
+
+    fn assert_all_events_match(
+        events: &[TopicEvent],
+        expected_event: &str,
+        predicate: impl Fn(&TopicEvent) -> bool,
+    ) {
+        for (index, event) in events.iter().enumerate() {
+            assert!(
+                predicate(event),
+                "unexpected event at index {index}: expected {expected_event}, got {}",
+                describe_topic_event(event)
+            );
+        }
+    }
+
+    fn is_subscribe_event(event: &TopicEvent) -> bool {
+        matches!(event, TopicEvent::Subscribe { .. })
+    }
+
+    fn is_alan_subscribe(event: &TopicEvent) -> bool {
+        matches!(
+            event,
+            TopicEvent::Subscribe { topic, .. } if topic.starts_with(ALAN_TOPIC_PREFIX)
+        )
+    }
+
+    fn is_boole_subscribe(event: &TopicEvent) -> bool {
+        matches!(
+            event,
+            TopicEvent::Subscribe { topic, .. } if topic.starts_with(boole_topic_prefix())
+        )
+    }
+
+    fn is_alan_unsubscribe(event: &TopicEvent) -> bool {
+        matches!(
+            event,
+            TopicEvent::Unsubscribe { topic, .. } if topic.starts_with(ALAN_TOPIC_PREFIX)
+        )
+    }
+}
