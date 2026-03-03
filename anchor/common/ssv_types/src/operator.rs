@@ -41,7 +41,9 @@ impl FromSql for OperatorId {
 
 impl ToSql for OperatorId {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::Owned(Value::Integer(self.0 as i64)))
+        let v = i64::try_from(self.0)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        Ok(ToSqlOutput::Owned(Value::Integer(v)))
     }
 }
 
