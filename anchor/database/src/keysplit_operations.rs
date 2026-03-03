@@ -19,7 +19,7 @@ impl NetworkDatabase {
         // Fetch one at a time to maintain order
         for id in operators {
             let pem_string = stmt
-                .query_row(params![id], |row| row.get::<_, String>(0))
+                .query_row(params![*id as i64], |row| row.get::<_, String>(0))
                 .map_err(DatabaseError::from)?;
             let decoded_pem = BASE64_STANDARD
                 .decode(pem_string)
@@ -38,7 +38,7 @@ impl NetworkDatabase {
         let mut stmt = conn.prepare(sql_operations::GET_NONCE)?;
         let mut rows = stmt.query(params![owner.to_string()])?;
         match rows.next()? {
-            Some(row) => Ok(Some(row.get(0)?)),
+            Some(row) => Ok(Some(row.get::<_, i64>(0)? as u64)),
             None => Ok(None),
         }
     }

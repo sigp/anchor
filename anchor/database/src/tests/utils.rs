@@ -355,7 +355,7 @@ pub mod queries {
             .prepare(GET_OPERATOR)
             .expect("Failed to prepare statement");
 
-        stmt.query_row(params![*id], |row| {
+        stmt.query_row(params![id], |row| {
             let operator = Operator::try_from(row).expect("Failed to create operator");
             Ok(operator)
         })
@@ -387,7 +387,7 @@ pub mod queries {
 
                 // Get the OperatorId from column 6 and ClusterId from column 1
                 let cluster_id = ClusterId(row.get(2)?);
-                let operator_id = OperatorId(row.get(3)?);
+                let operator_id = row.get(3)?;
 
                 Ok(Share {
                     validator_pubkey: *pubkey,
@@ -416,7 +416,7 @@ pub mod queries {
         let members: Result<Vec<_>, _> = stmt
             .query_map([cluster_id.0], |row| {
                 Ok(ClusterMember {
-                    operator_id: OperatorId(row.get(0)?),
+                    operator_id: row.get(0)?,
                     cluster_id,
                 })
             })
@@ -453,9 +453,9 @@ pub mod queries {
     pub fn get_metadata(conn: &Connection) -> Result<Metadata, rusqlite::Error> {
         conn.query_row(GET_METADATA, [], |row| {
             Ok(Metadata {
-                schema_version: row.get("schema_version")?,
+                schema_version: row.get::<_, i64>("schema_version")? as u64,
                 network_name: row.get("network_name")?,
-                block_number: row.get("block_number")?,
+                block_number: row.get::<_, i64>("block_number")? as u64,
             })
         })
     }

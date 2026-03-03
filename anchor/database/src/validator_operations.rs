@@ -105,7 +105,7 @@ impl NetworkDatabase {
             transaction
                 .prepare_cached(sql_operations::SET_INDEX)?
                 .execute(params![
-                    index.0,                // New index
+                    index,                  // New index
                     public_key.to_string()  // The public key of the validator
                 ])?;
         }

@@ -60,10 +60,11 @@ use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
     BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec, ContributionAndProof, Domain,
-    Epoch, EthSpec, ForkName, FullPayload, Graffiti, Hash256, SelectionProof,
-    SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
-    SignedContributionAndProof, SignedRoot, SignedValidatorRegistrationData, SignedVoluntaryExit,
-    Slot, SlotData, SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
+    Epoch, EthSpec, ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256,
+    SelectionProof, SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
+    SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedRoot,
+    SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
+    SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
     SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
 };
 use validator_metrics::IntCounterVec;
@@ -2020,7 +2021,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         validator_registration_data: ValidatorRegistrationData,
     ) -> Result<SignedValidatorRegistrationData, Error> {
         let future = async {
-            let domain_hash = self.spec.get_builder_domain();
+            let domain_hash = self.spec.get_builder_application_domain();
 
             let (validator, cluster) =
                 self.get_validator_and_cluster(validator_registration_data.pubkey)?;
@@ -2071,6 +2072,14 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
             future,
         )
         .await
+    }
+
+    async fn sign_execution_payload_envelope(
+        &self,
+        _validator_pubkey: PublicKeyBytes,
+        _envelope: ExecutionPayloadEnvelope<E>,
+    ) -> Result<SignedExecutionPayloadEnvelope<E>, Error> {
+        Err(Error::SpecificError(SpecificError::Unsupported))
     }
 
     async fn produce_signed_aggregate_and_proof(

@@ -3,6 +3,10 @@ use std::fmt::Debug;
 use bls::PublicKeyBytes;
 use derive_more::{Deref, Display, From};
 use indexmap::IndexSet;
+use rusqlite::{
+    ToSql,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef},
+};
 use ssz_derive::{Decode, Encode};
 use types::{Address, Graffiti};
 
@@ -72,6 +76,20 @@ pub struct ClusterMember {
 )]
 #[ssz(struct_behaviour = "transparent")]
 pub struct ValidatorIndex(pub usize);
+
+impl FromSql for ValidatorIndex {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let v = value.as_i64()?;
+        let v = usize::try_from(v).map_err(|_| FromSqlError::OutOfRange(v))?;
+        Ok(ValidatorIndex(v))
+    }
+}
+
+impl ToSql for ValidatorIndex {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::Owned(Value::Integer(self.0 as i64)))
+    }
+}
 
 impl From<ValidatorIndex> for u64 {
     fn from(value: ValidatorIndex) -> Self {

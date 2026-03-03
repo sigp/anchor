@@ -37,6 +37,7 @@ operator_key = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
 qbft_manager = { workspace = true }
+reqwest = { workspace = true }
 sensitive_url = { workspace = true }
 signature_collector = { workspace = true }
 slashing_protection = { workspace = true }

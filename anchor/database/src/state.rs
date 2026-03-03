@@ -136,13 +136,16 @@ impl NetworkState {
     // Get the last block that was processed and saved to db
     fn get_last_processed_block_from_db(conn: &PoolConn) -> Result<u64, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_BLOCK_NUMBER)?
-            .query_row(params![], |row| row.get(0))
+            .query_row(params![], |row| row.get::<_, i64>(0).map(|v| v as u64))
             .map_err(DatabaseError::from)
     }
 
     fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<Option<u64>, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
-            .query_row(params![], |row| row.get(0))
+            .query_row(params![], |row| {
+                row.get::<_, Option<i64>>(0)
+                    .map(|opt| opt.map(|v| v as u64))
+            })
             .map_err(DatabaseError::from)
     }
 
@@ -157,7 +160,7 @@ impl NetworkState {
                 .expect("Failed to encode RsaPublicKey"),
         );
         let mut stmt = conn.prepare(sql_operations::GET_OPERATOR_ID)?;
-        stmt.query_row(params![encoded], |row| Ok(OperatorId(row.get(0)?)))
+        stmt.query_row(params![encoded], |row| row.get(0))
             .optional()
             .map_err(DatabaseError::from)
     }
@@ -220,7 +223,7 @@ impl NetworkState {
         let mut stmt = conn.prepare(sql_operations::GET_CLUSTER_MEMBERS)?;
         let members = stmt.query_map([cluster_id.0], |row| {
             Ok(ClusterMember {
-                operator_id: OperatorId(row.get(0)?),
+                operator_id: row.get(0)?,
                 cluster_id,
             })
         })?;
@@ -235,7 +238,7 @@ impl NetworkState {
     ) -> Result<HashMap<ClusterId, Vec<Share>>, DatabaseError> {
         let mut stmt = conn.prepare(sql_operations::GET_SHARES)?;
         let shares = stmt
-            .query_map([*id], |row| Share::try_from(row))?
+            .query_map(params![id], |row| Share::try_from(row))?
             .map(|result| result.map_err(DatabaseError::from))
             .collect::<Result<Vec<_>, _>>()?;
 

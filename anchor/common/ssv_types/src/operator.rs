@@ -2,6 +2,10 @@ use std::{cmp::Eq, fmt::Debug, hash::Hash};
 
 use derive_more::{Deref, Display, From};
 use openssl::{pkey::Public, rsa::Rsa};
+use rusqlite::{
+    ToSql,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value, ValueRef},
+};
 use ssz_derive::{Decode, Encode};
 use tree_hash::{Hash256, PackedEncoding, TreeHash, TreeHashType};
 use types::Address;
@@ -26,6 +30,21 @@ use types::Address;
 #[ssz(struct_behaviour = "transparent")]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct OperatorId(pub u64);
+
+impl FromSql for OperatorId {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let v = value.as_i64()?;
+        let v = u64::try_from(v).map_err(|_| FromSqlError::OutOfRange(v))?;
+        Ok(OperatorId(v))
+    }
+}
+
+impl ToSql for OperatorId {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::Owned(Value::Integer(self.0 as i64)))
+    }
+}
+
 impl TreeHash for OperatorId {
     fn tree_hash_type() -> TreeHashType {
         TreeHashType::Basic

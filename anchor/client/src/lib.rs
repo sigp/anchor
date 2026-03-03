@@ -28,10 +28,7 @@ use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::Volu
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
 };
-use eth2::{
-    BeaconNodeHttpClient, Timeouts,
-    reqwest::{Certificate, ClientBuilder},
-};
+use eth2::{BeaconNodeHttpClient, Timeouts};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -40,6 +37,7 @@ use openssl::rsa::Rsa;
 use operator_doppelganger::OperatorDoppelgangerService;
 use parking_lot::RwLock;
 use qbft_manager::QbftManager;
+use reqwest::{Certificate, ClientBuilder};
 use sensitive_url::SensitiveUrl;
 use signature_collector::SignatureCollectorManager;
 use slashing_protection::SlashingDatabase;
@@ -82,8 +80,6 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
-// Generally the timeout for events should be longer than a slot.
-const HTTP_GET_EVENTS_TIMEOUT_MULTIPLIER: u32 = 50;
 
 pub struct Client {}
 
@@ -250,7 +246,6 @@ impl Client {
                     get_debug_beacon_states: slot_duration / HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT,
                     get_deposit_snapshot: slot_duration / HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT,
                     get_validator_block: slot_duration / HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT,
-                    events: HTTP_GET_EVENTS_TIMEOUT_MULTIPLIER * slot_duration,
                     default: slot_duration / HTTP_DEFAULT_TIMEOUT_QUOTIENT,
                 }
             } else {
@@ -809,7 +804,7 @@ async fn init_from_beacon_node<E: EthSpec>(
                     .0
                     .iter()
                     .filter_map(|(_, e)| e.request_failure())
-                    .any(|e| e.status() == Some(eth2::StatusCode::NOT_FOUND))
+                    .any(|e| e.status() == Some(reqwest::StatusCode::NOT_FOUND))
                 {
                     info!("Waiting for genesis");
                 } else {
