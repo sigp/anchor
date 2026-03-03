@@ -15,8 +15,7 @@ use logging::FileLoggingFlags;
 pub const FLAG_HEADER: &str = "Flags";
 
 #[derive(Parser, Clone, Debug)]
-#[clap(name = "node", about = "Start Anchor node")]
-pub struct Node {
+pub struct SecurityOptions {
     #[clap(
         long,
         global = true,
@@ -38,8 +37,10 @@ pub struct Node {
         display_order = 0
     )]
     pub password_file: Option<PathBuf>,
+}
 
-    // External APIs
+#[derive(Parser, Clone, Debug)]
+pub struct ExternalApis {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
@@ -84,6 +85,18 @@ pub struct Node {
 
     #[clap(
         long,
+        value_name = "CERTIFICATE-FILES",
+        value_delimiter = ',',
+        help = "Comma-separated paths to custom TLS certificates to use when connecting \
+                to an execution node. These certificates must be in PEM format and are used \
+                in addition to the OS trust store. Commas must only be used as a \
+                delimiter, and must not be part of the certificate path",
+        display_order = 0
+    )]
+    pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
+
+    #[clap(
+        long,
         value_name = "API_TOPICS",
         value_delimiter = ',',
         help = "Comma-separated list of beacon API topics to broadcast to all beacon nodes. \
@@ -113,20 +126,10 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub beacon_nodes_sync_tolerances: Vec<u64>,
+}
 
-    #[clap(
-        long,
-        value_name = "CERTIFICATE-FILES",
-        value_delimiter = ',',
-        help = "Comma-separated paths to custom TLS certificates to use when connecting \
-                to an execution node. These certificates must be in PEM format and are used \
-                in addition to the OS trust store. Commas must only be used as a \
-                delimiter, and must not be part of the certificate path",
-        display_order = 0
-    )]
-    pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
-
-    // REST API related arguments
+#[derive(Parser, Clone, Debug)]
+pub struct HttpApiOptions {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
@@ -186,8 +189,64 @@ pub struct Node {
         requires = "http"
     )]
     pub http_allow_origin: Option<HeaderValue>,
+}
 
-    // Network related arguments
+#[derive(Parser, Clone, Debug)]
+pub struct MetricsOptions {
+    #[clap(
+        long,
+        help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub metrics: bool,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        help = "Set the listen address for the Prometheus metrics HTTP server.",
+        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
+        display_order = 0,
+        requires = "metrics"
+    )]
+    pub metrics_address: Option<IpAddr>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
+        display_order = 0,
+        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
+        requires = "metrics"
+    )]
+    pub metrics_port: Option<u16>,
+
+    #[clap(
+        long,
+        help = "Enable per validator metrics for > 64 validators. \
+                Note: This flag is automatically enabled for <= 64 validators. \
+                Enabling this metric for higher validator counts will lead to higher volume \
+                of prometheus metrics being collected.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub enable_high_validator_count_metrics: bool,
+
+    #[clap(
+        long,
+        value_name = "ORIGIN",
+        help = "Set the value of the Access-Control-Allow-Origin response HTTP header \
+                for the metrics server. Use * to allow any origin (not recommended in production). \
+                If no value is supplied, the CORS allowed origin is set to the listen \
+                address of this server (e.g., http://localhost:5164).",
+        display_order = 0,
+        requires = "metrics"
+    )]
+    pub metrics_allow_origin: Option<HeaderValue>,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct NetworkOptions {
     #[clap(
         long,
         value_name = "ADDRESS",
@@ -284,58 +343,6 @@ pub struct Node {
         action = ArgAction::Set,
     )]
     pub target_peers: Option<usize>,
-
-    // Prometheus metrics HTTP server related arguments
-    #[clap(
-        long,
-        help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
-    )]
-    pub metrics: bool,
-
-    #[clap(
-        long,
-        value_name = "ADDRESS",
-        help = "Set the listen address for the Prometheus metrics HTTP server.",
-        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
-        display_order = 0,
-        requires = "metrics"
-    )]
-    pub metrics_address: Option<IpAddr>,
-
-    #[clap(
-        long,
-        value_name = "PORT",
-        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
-        display_order = 0,
-        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
-        requires = "metrics"
-    )]
-    pub metrics_port: Option<u16>,
-
-    #[clap(
-        long,
-        help = "Enable per validator metrics for > 64 validators. \
-                Note: This flag is automatically enabled for <= 64 validators. \
-                Enabling this metric for higher validator counts will lead to higher volume \
-                of prometheus metrics being collected.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
-    pub enable_high_validator_count_metrics: bool,
-
-    #[clap(
-        long,
-        value_name = "ORIGIN",
-        help = "Set the value of the Access-Control-Allow-Origin response HTTP header \
-                for the metrics server. Use * to allow any origin (not recommended in production). \
-                If no value is supplied, the CORS allowed origin is set to the listen \
-                address of this server (e.g., http://localhost:5164).",
-        display_order = 0,
-        requires = "metrics"
-    )]
-    pub metrics_allow_origin: Option<HeaderValue>,
 
     #[clap(
         long,
@@ -450,38 +457,18 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
-        hide = true,
-        display_order = 0
+        help = "Disables gossipsub peer scoring.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
     )]
-    pub disable_slashing_protection: bool,
+    pub disable_gossipsub_peer_scoring: bool,
 
-    // debugging stuff
-    #[clap(
-        long,
-        hide = true,
-        help = "Act as if we were a certain operator, except for sending messages."
-    )]
-    pub impostor: Option<u64>,
+    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
+    pub disable_gossipsub_topic_scoring: bool,
+}
 
-    // Performance options
-    #[clap(
-        long,
-        help = "The number of maximum concurrent workers. Defaults to logical cores.",
-        hide = true,
-        display_order = 0
-    )]
-    pub max_workers: Option<usize>,
-
-    #[clap(
-        long,
-        value_delimiter = ',',
-        help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
-        hide = true,
-        display_order = 0
-    )]
-    pub work_queue_size: Vec<String>,
-
+#[derive(Parser, Clone, Debug)]
+pub struct PayloadBuildingOptions {
     #[clap(
         long,
         value_name = "INTEGER",
@@ -523,6 +510,28 @@ pub struct Node {
         help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+#[clap(name = "node", about = "Start Anchor node")]
+pub struct Node {
+    #[clap(flatten)]
+    pub security_options: SecurityOptions,
+
+    #[clap(flatten)]
+    pub external_apis: ExternalApis,
+
+    #[clap(flatten)]
+    pub http_api_options: HttpApiOptions,
+
+    #[clap(flatten)]
+    pub metrics_options: MetricsOptions,
+
+    #[clap(flatten)]
+    pub network_options: NetworkOptions,
+
+    #[clap(flatten)]
+    pub payload_building_options: PayloadBuildingOptions,
 
     #[clap(
         long,
@@ -534,14 +543,37 @@ pub struct Node {
 
     #[clap(
         long,
-        help = "Disables gossipsub peer scoring.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
+        hide = true,
+        display_order = 0
     )]
-    pub disable_gossipsub_peer_scoring: bool,
+    pub disable_slashing_protection: bool,
 
-    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
-    pub disable_gossipsub_topic_scoring: bool,
+    // debugging stuff
+    #[clap(
+        long,
+        hide = true,
+        help = "Act as if we were a certain operator, except for sending messages."
+    )]
+    pub impostor: Option<u64>,
+
+    // Performance options
+    #[clap(
+        long,
+        help = "The number of maximum concurrent workers. Defaults to logical cores.",
+        hide = true,
+        display_order = 0
+    )]
+    pub max_workers: Option<usize>,
+
+    #[clap(
+        long,
+        value_delimiter = ',',
+        help = "Override size for a specific queue. Needs to be of the format \"queue_name=42\".",
+        hide = true,
+        display_order = 0
+    )]
+    pub work_queue_size: Vec<String>,
 
     // Operator Doppelgänger Protection
     #[clap(
