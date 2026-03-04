@@ -132,7 +132,7 @@ r2d2_sqlite = "0.32.0"
 rand = "0.9"
 reqwest = "0.12.12"
 rpassword = "7.4.0"
-rusqlite = "0.38.0"
+rusqlite = { version = "0.38.0", features = ["fallible_uint"] }
 safe_arith = "0.1.0"
 sensitive_url = "0.1"
 serde = { version = "1.0.208", features = ["derive"] }

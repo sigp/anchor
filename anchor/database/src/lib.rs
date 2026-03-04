@@ -208,7 +208,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
-            .execute(params![block_number as i64])?;
+            .execute(params![block_number])?;
         self.state
             .send_modify(|state| state.single_state.last_processed_block = block_number);
         Ok(())
@@ -221,7 +221,7 @@ impl NetworkDatabase {
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
-            .execute(params![operator_id as i64])?;
+            .execute(params![operator_id])?;
         self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
 
         Ok(())

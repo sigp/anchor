@@ -136,16 +136,13 @@ impl NetworkState {
     // Get the last block that was processed and saved to db
     fn get_last_processed_block_from_db(conn: &PoolConn) -> Result<u64, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_BLOCK_NUMBER)?
-            .query_row(params![], |row| row.get::<_, i64>(0).map(|v| v as u64))
+            .query_row(params![], |row| row.get(0))
             .map_err(DatabaseError::from)
     }
 
     fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<Option<u64>, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
-            .query_row(params![], |row| {
-                row.get::<_, Option<i64>>(0)
-                    .map(|opt| opt.map(|v| v as u64))
-            })
+            .query_row(params![], |row| row.get(0))
             .map_err(DatabaseError::from)
     }
 

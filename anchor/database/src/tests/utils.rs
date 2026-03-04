@@ -453,9 +453,9 @@ pub mod queries {
     pub fn get_metadata(conn: &Connection) -> Result<Metadata, rusqlite::Error> {
         conn.query_row(GET_METADATA, [], |row| {
             Ok(Metadata {
-                schema_version: row.get::<_, i64>("schema_version")? as u64,
+                schema_version: row.get("schema_version")?,
                 network_name: row.get("network_name")?,
-                block_number: row.get::<_, i64>("block_number")? as u64,
+                block_number: row.get("block_number")?,
             })
         })
     }
