@@ -607,7 +607,6 @@ impl SignedSSVMessage {
     }
 
     pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
-
         // Rule: Must have at least one signer
         if self.operator_ids.is_empty() {
             return Err(SignedSSVMessageError::NoSigners);
