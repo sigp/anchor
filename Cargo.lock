@@ -815,7 +815,6 @@ dependencies = [
  "ssz_types",
  "task_executor",
  "tokio",
- "tokio-stream",
  "tracing",
  "tree_hash",
  "types",
