@@ -93,7 +93,7 @@ jobs:
               run: |
                   {
                     echo "content<<PROMPT_EOF"
-                    git fetch https://github.com/${{ github.repository }}.git stable --depth=1
+                    git fetch https://github.com/${{ github.repository }}.git ${{ github.event.repository.default_branch }} --depth=1
                     git show FETCH_HEAD:.github/prompts/review.md
                     echo "PROMPT_EOF"
                   } >> "$GITHUB_OUTPUT"
