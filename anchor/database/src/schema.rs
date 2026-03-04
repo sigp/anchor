@@ -141,7 +141,7 @@ fn determine_database_type(conn: &Connection, network_name: &str) -> DatabaseTyp
                 .query_row(sql_operations::GET_LEGACY_BLOCK, [], |row| {
                     // Check if there is the expected column and no further columns.
                     Ok(
-                        row.get::<_, i64>("block_number").is_ok()
+                        row.get::<_, u64>("block_number").is_ok()
                             && row.get::<_, Value>(1).is_err(),
                     )
                 })

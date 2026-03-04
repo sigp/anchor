@@ -181,7 +181,7 @@ mod tests {
         // Verify it's version 1
         {
             let conn = Connection::open(&db_path).expect("Failed to open database");
-            let version: i64 = conn
+            let version: u64 = conn
                 .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
                 .expect("Failed to get schema version");
             assert_eq!(version, 1, "Should start at version 1");
@@ -206,7 +206,7 @@ mod tests {
             );
 
             // Verify max_operator_id_seen column exists
-            let max_operator_id: Option<i64> = conn
+            let max_operator_id: Option<u64> = conn
                 .query_row("SELECT max_operator_id_seen FROM metadata", [], |row| {
                     row.get(0)
                 })
@@ -229,7 +229,7 @@ mod tests {
         // Verify it's version 2
         {
             let conn = Connection::open(&db_path).expect("Failed to open database");
-            let version: i64 = conn
+            let version: u64 = conn
                 .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
                 .expect("Failed to get schema version");
             assert_eq!(version, 2, "Should start at version 2");
