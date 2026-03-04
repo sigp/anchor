@@ -12,7 +12,7 @@ use reqwest::Client;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tower::ServiceBuilder;
-use tracing::{debug, trace};
+use tracing::trace;
 use types::Graffiti;
 
 use crate::{error::ExecutionError, sync::MAX_OPERATORS};
@@ -180,11 +180,6 @@ pub fn validate_operators(
 /// Helper function to parse validator public keys
 pub fn parse_validator_pubkey(pubkey: &Bytes) -> Result<PublicKeyBytes, ExecutionError> {
     PublicKeyBytes::deserialize(pubkey).map_err(|e| {
-        debug!(
-            validator_pubkey = %pubkey,
-            error = ?e,
-            "Failed to parse validator public key"
-        );
         ExecutionError::InvalidEvent(format!("Failed to parse validator public key: {e:?}"))
     })
 }

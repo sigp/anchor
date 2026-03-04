@@ -220,20 +220,9 @@ impl EventProcessor {
 
         // Construct the Operator and insert it into the database
         let operator = Operator::new(data, operator_id, owner).map_err(|e| {
-            debug!(
-                operator_pubkey = ?publicKey,
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to construct operator"
-            );
             ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
         })?;
         self.db.insert_operator(&operator, tx).map_err(|e| {
-            debug!(
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to insert operator into database"
-            );
             ExecutionError::Database(format!("Failed to insert operator into database: {e}"))
         })?;
 
@@ -259,14 +248,9 @@ impl EventProcessor {
         trace!(operator_id = ?operator_id, "Processing operator removed");
 
         // Delete the operator from database and in memory
-        self.db.delete_operator(operator_id, tx).map_err(|e| {
-            debug!(
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to remove operator"
-            );
-            ExecutionError::Database(format!("Failed to remove operator: {e}"))
-        })?;
+        self.db
+            .delete_operator(operator_id, tx)
+            .map_err(|e| ExecutionError::Database(format!("Failed to remove operator: {e}")))?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
@@ -294,10 +278,10 @@ impl EventProcessor {
 
         // Get the expected nonce and then increment it. This will happen regardless of if the
         // event is malformed or not
-        let nonce = self.db.bump_and_get_nonce(&owner, tx).map_err(|e| {
-            debug!(owner = ?owner, "Failed to bump nonce");
-            ExecutionError::Database(format!("Failed to bump nonce: {e}"))
-        })?;
+        let nonce = self
+            .db
+            .bump_and_get_nonce(&owner, tx)
+            .map_err(|e| ExecutionError::Database(format!("Failed to bump nonce: {e}")))?;
 
         // During keysplitting, we only care about the nonce
         let Mode::Node {
@@ -322,12 +306,10 @@ impl EventProcessor {
         trace!(cluster_id = ?cluster_id, "Parsing and verifying shares");
         let (signature, shares) =
             parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey).map_err(|e| {
-                debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
                 ExecutionError::InvalidEvent(format!("Failed to parse shares. {e}"))
             })?;
 
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
-            debug!(cluster_id = ?cluster_id, "Signature verification failed");
             return Err(ExecutionError::InvalidEvent(
                 "Signature verification failed".to_string(),
             ));
@@ -336,7 +318,6 @@ impl EventProcessor {
         // Fetch the validator metadata
         let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
             .map_err(|e| {
-                debug!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
@@ -368,7 +349,6 @@ impl EventProcessor {
         self.db
             .insert_validator(cluster, &validator_metadata, shares, tx)
             .map_err(|e| {
-                debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
             })?;
 
@@ -412,10 +392,6 @@ impl EventProcessor {
         let metadata = match state.metadata().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    "Failed to fetch validator metadata from database"
-                );
                 return Err(ExecutionError::Database(
                     "Failed to fetch validator metadata from database".to_string(),
                 ));
@@ -426,10 +402,6 @@ impl EventProcessor {
         let cluster = match state.clusters().get_by(&validator_pubkey) {
             Some(data) => data,
             None => {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    "Failed to fetch cluster from database"
-                );
                 return Err(ExecutionError::Database(
                     "Failed to fetch cluster from database".to_string(),
                 ));
@@ -438,12 +410,6 @@ impl EventProcessor {
 
         // Make sure the right owner is removing this validator
         if owner != cluster.owner {
-            debug!(
-                cluster_id = ?cluster_id,
-                expected_owner = ?cluster.owner,
-                actual_owner = ?owner,
-                "Owner mismatch for validator removal"
-            );
             return Err(ExecutionError::InvalidEvent(format!(
                 "Cluster already exists with a different owner address. Expected {}. Got {}",
                 cluster.owner, owner
@@ -452,12 +418,6 @@ impl EventProcessor {
 
         // Make sure this is the correct validator
         if validator_pubkey != metadata.public_key {
-            debug!(
-                cluster_id = ?cluster_id,
-                expected_pubkey = %metadata.public_key,
-                actual_pubkey = %validator_pubkey,
-                "Validator pubkey mismatch"
-            );
             return Err(ExecutionError::InvalidEvent(
                 "Validator does not match".to_string(),
             ));
@@ -467,15 +427,7 @@ impl EventProcessor {
         // Remove the validator and all corresponding cluster data
         self.db
             .delete_validator(&validator_pubkey, tx)
-            .map_err(|e| {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    pubkey = ?validator_pubkey,
-                    error = %e,
-                    "Failed to delete validator from database"
-                );
-                ExecutionError::Database(format!("Failed to validator cluster: {e}"))
-            })?;
+            .map_err(|e| ExecutionError::Database(format!("Failed to delete validator: {e}")))?;
 
         trace!(
             cluster_id = ?cluster_id,
@@ -504,11 +456,6 @@ impl EventProcessor {
 
         // Update the status of the cluster to be liquidated
         self.db.update_status(cluster_id, true, tx).map_err(|e| {
-            debug!(
-                cluster_id = ?cluster_id,
-                error = %e,
-                "Failed to mark cluster as liquidated"
-            );
             ExecutionError::Database(format!("Failed to mark cluster as liquidated: {e}"))
         })?;
 
@@ -542,11 +489,6 @@ impl EventProcessor {
 
         // Update the status of the cluster to be active
         self.db.update_status(cluster_id, false, tx).map_err(|e| {
-            debug!(
-                cluster_id = ?cluster_id,
-                error = %e,
-                "Failed to mark cluster as active"
-            );
             ExecutionError::Database(format!("Failed to mark cluster as active: {e}"))
         })?;
 
@@ -577,11 +519,6 @@ impl EventProcessor {
         self.db
             .update_fee_recipient(owner, recipientAddress, tx)
             .map_err(|e| {
-                debug!(
-                    owner = ?owner,
-                    error = %e,
-                    "Failed to update fee recipient"
-                );
                 ExecutionError::Database(format!("Failed to update fee recipient: {e}"))
             })?;
         debug!(
@@ -659,16 +596,9 @@ impl EventProcessor {
                 );
             }
             Err(err) => {
-                // If the channel is closed, we can't send the exit request
-                // This is a fatal error and should be handled by the caller
-                error!(
-                    validator_pubkey = %validator_pubkey,
-                    ?err,
-                    "Failed to send validator exit request to processor"
-                );
-                return Err(ExecutionError::Misc(
-                    "Failed to send validator exit request to processor".to_string(),
-                ));
+                return Err(ExecutionError::Misc(format!(
+                    "Failed to send validator exit request to processor: {err}"
+                )));
             }
         }
 
