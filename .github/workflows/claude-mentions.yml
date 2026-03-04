@@ -80,6 +80,7 @@ jobs:
               id: review-prompt
               # Always load the prompt from the default branch (trusted source),
               # independent of whichever PR/fork ref was checked out above.
+              # Keep this block in sync with .github/workflows/claude-pr-review.yml.
               run: |
                   {
                     echo "content<<PROMPT_EOF"
