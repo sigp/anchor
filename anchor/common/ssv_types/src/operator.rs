@@ -80,9 +80,12 @@ pub struct Operator {
 
 impl Operator {
     /// Creates a new operator from its OperatorId and PEM-encoded public key string
-    pub fn new(pem_data: &[u8], operator_id: OperatorId, owner: Address) -> Result<Self, String> {
-        let rsa_pubkey =
-            operator_key::public::from_base64(pem_data).map_err(|err| err.to_string())?;
+    pub fn new(
+        pem_data: &[u8],
+        operator_id: OperatorId,
+        owner: Address,
+    ) -> Result<Self, operator_key::ConversionError> {
+        let rsa_pubkey = operator_key::public::from_base64(pem_data)?;
         Ok(Self::new_with_pubkey(rsa_pubkey, operator_id, owner))
     }
 
