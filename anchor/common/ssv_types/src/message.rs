@@ -1292,66 +1292,8 @@ mod tests {
         );
     }
 
-    /// Verify that `validate()` rejects a signer with operator ID = 0 on an SSZ-decoded message.
-    /// `from_ssz_bytes()` does not check operator ID values, so `validate()` must catch this.
-    #[test]
-    fn test_validate_rejects_zero_signer_on_ssz_decoded() {
-        // Arrange: valid 256-byte signature but operator_id = 0
-        let valid_sig = vec![0u8; RSA_SIGNATURE_SIZE];
-        let signed_msg = build_unvalidated_signed_ssv_message(vec![valid_sig], vec![OperatorId(0)]);
-
-        // Act
-        let result = signed_msg.validate();
-
-        // Assert
-        assert_eq!(
-            result,
-            Err(SignedSSVMessageError::ZeroSigner),
-            "validate() must reject operator_id = 0"
-        );
-    }
-
-    /// Verify that `validate()` rejects duplicate operator IDs on an SSZ-decoded message.
-    /// `from_ssz_bytes()` does not enforce uniqueness, so `validate()` must catch duplicates.
-    #[test]
-    fn test_validate_rejects_duplicate_signers_on_ssz_decoded() {
-        // Arrange: two valid signatures with the same operator_id (sorted, so passes sort check)
-        let sig1 = vec![0u8; RSA_SIGNATURE_SIZE];
-        let sig2 = vec![0u8; RSA_SIGNATURE_SIZE];
-        let signed_msg = build_unvalidated_signed_ssv_message(
-            vec![sig1, sig2],
-            vec![OperatorId(1), OperatorId(1)],
-        );
-
-        // Act
-        let result = signed_msg.validate();
-
-        // Assert
-        assert_eq!(
-            result,
-            Err(SignedSSVMessageError::DuplicatedSigner),
-            "validate() must reject duplicate operator IDs"
-        );
-    }
-
-    /// Verify that `validate()` rejects a mismatch between the number of signers and signatures
-    /// on an SSZ-decoded message. `from_ssz_bytes()` does not enforce length equality between
-    /// the `operator_ids` and `signatures` lists.
-    #[test]
-    fn test_validate_rejects_signers_signatures_length_mismatch() {
-        // Arrange: two signers but only one signature
-        let sig = vec![0u8; RSA_SIGNATURE_SIZE];
-        let signed_msg =
-            build_unvalidated_signed_ssv_message(vec![sig], vec![OperatorId(1), OperatorId(2)]);
-
-        // Act
-        let result = signed_msg.validate();
-
-        // Assert
-        assert_eq!(
-            result,
-            Err(SignedSSVMessageError::SignersAndSignaturesWithDifferentLength),
-            "validate() must reject mismatched signers/signatures lengths"
-        );
-    }
+    // Note: zero_signer, duplicate_signers, and signers/signatures length mismatch
+    // are already covered by the spec test fixtures in `spec_tests/src/types/signed_ssv_msg.rs`
+    // (e.g., `signedssvmsg_zero_signer.json`, `signedssvmsg_non_unique_signers.json`,
+    // `signedssvmsg_signers_and_signatures_with_different_length.json`).
 }
