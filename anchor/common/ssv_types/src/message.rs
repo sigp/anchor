@@ -607,8 +607,8 @@ impl SignedSSVMessage {
     }
 
     pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
-        // Rule: Each RSA signature must be exactly RSA_SIGNATURE_SIZE bytes.
-        // VariableList<u8, U256> only guarantees <= 256, not == 256, so this
+        // Rule: Each RSA signature must be exactly `RSA_SIGNATURE_SIZE` bytes.
+        // `VariableList<u8, U256>` only guarantees <= 256, not == 256, so this
         // catches undersized signatures from SSZ-decoded network messages.
         for (i, sig) in self.signatures.iter().enumerate() {
             if sig.len() != RSA_SIGNATURE_SIZE {
@@ -629,11 +629,14 @@ impl SignedSSVMessage {
             return Err(SignedSSVMessageError::NoSignatures);
         }
 
-        if !self.operator_ids.is_sorted() {
-            return Err(SignedSSVMessageError::SignersNotSorted);
-        }
-
-        // Note: Len Signers & Operators will only be > 1 after commit aggregation
+        // Note: Len Signers & Operators will only be > 1 after commit aggregation.
+        //
+        // No `is_sorted()` check: the Go spec's `Validate()` does not enforce sorting,
+        // and Go's `Aggregate()` appends without sorting. Signature verification
+        // pairs `operator_ids[i]` with `signatures[i]` by index, requiring consistent
+        // pairing rather than sorted order. Both Go (append) and Anchor (sort pairs
+        // together) preserve this pairing. Enforcing sorted order here would reject
+        // valid messages from Go nodes.
 
         // Rule: Signer can't be zero
         if self.operator_ids.iter().any(|&id| *id == 0) {
@@ -985,20 +988,21 @@ mod tests {
         }
     }
 
-    /// Checks that unsorted operator IDs triggers `SignersNotSorted`.
+    /// Verifies that unsorted operator IDs are accepted. The Go spec's Validate()
+    /// does not enforce sorting, and Go's Aggregate() appends without sorting,
+    /// so network messages may have unsorted operator IDs.
     #[test]
-    fn test_signed_ssv_message_signers_not_sorted() {
+    fn test_signed_ssv_message_unsorted_signers_accepted() {
         let ssv_msg = valid_ssv_message();
         let sigs = vec![valid_signature(), valid_signature()];
-        // Not sorted
         let ops = vec![OperatorId(10), OperatorId(2)];
 
         let result = SignedSSVMessage::new(sigs, ops, ssv_msg, vec![]);
 
-        match result {
-            Err(SignedSSVMessageError::SignersNotSorted) => (),
-            other => panic!("Expected SignersNotSorted, got {other:?}"),
-        }
+        assert!(
+            result.is_ok(),
+            "Unsorted signers should be accepted: {result:?}"
+        );
     }
 
     /// Checks that operator ID = 0 triggers `ZeroSigner`.

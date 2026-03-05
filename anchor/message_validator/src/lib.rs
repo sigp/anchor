@@ -256,13 +256,12 @@ impl From<&ValidationFailure> for MessageAcceptance {
 impl From<SignedSSVMessageError> for ValidationFailure {
     fn from(err: SignedSSVMessageError) -> Self {
         match err {
-            // Reachable: validate() checks these on SSZ-decoded messages
+            // Reachable: `validate()` checks these on SSZ-decoded messages
             SignedSSVMessageError::WrongRSASignatureSize { .. } => {
                 ValidationFailure::WrongRSASignatureSize
             }
             SignedSSVMessageError::NoSigners => ValidationFailure::NoSigners,
             SignedSSVMessageError::NoSignatures => ValidationFailure::NoSignatures,
-            SignedSSVMessageError::SignersNotSorted => ValidationFailure::SignersNotSorted,
             SignedSSVMessageError::ZeroSigner => ValidationFailure::ZeroSigner,
             SignedSSVMessageError::DuplicatedSigner => ValidationFailure::DuplicatedSigner,
             SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
@@ -276,17 +275,18 @@ impl From<SignedSSVMessageError> for ValidationFailure {
                     ValidationFailure::SignerNotInCommittee
                 }
             },
-            // These variants exist for `new()` and `aggregate()`, which convert
-            // raw Vecs into VariableLists and can exceed the max. `validate()`
-            // operates on data already in VariableList form, so these bounds are
-            // enforced by the type and cannot be violated here.
+            // Not returned by `validate()`:
+            // - `TooMany*` / `FullDataTooLong`: only from `new()`/`aggregate()` when converting raw
+            //   Vecs into VariableLists. `validate()` operates on data already in `VariableList`
+            //   form, so these are type-enforced.
+            // - `SignersNotSorted`: removed from `validate()` because the Go spec's `Validate()`
+            //   does not enforce sorting and Go's `Aggregate()` appends without sorting.
             SignedSSVMessageError::TooManySignatures { .. }
             | SignedSSVMessageError::TooManyOperatorIDs { .. }
-            | SignedSSVMessageError::FullDataTooLong { .. } => {
-                ValidationFailure::UnexpectedFailure {
-                    msg: err.to_string(),
-                }
-            }
+            | SignedSSVMessageError::FullDataTooLong { .. }
+            | SignedSSVMessageError::SignersNotSorted => ValidationFailure::UnexpectedFailure {
+                msg: err.to_string(),
+            },
         }
     }
 }
