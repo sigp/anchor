@@ -607,6 +607,19 @@ impl SignedSSVMessage {
     }
 
     pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
+        // Rule: Each RSA signature must be exactly RSA_SIGNATURE_SIZE bytes.
+        // VariableList<u8, U256> only guarantees <= 256, not == 256, so this
+        // catches undersized signatures from SSZ-decoded network messages.
+        for (i, sig) in self.signatures.iter().enumerate() {
+            if sig.len() != RSA_SIGNATURE_SIZE {
+                return Err(SignedSSVMessageError::WrongRSASignatureSize {
+                    index: i,
+                    length: sig.len(),
+                    sig_length: RSA_SIGNATURE_SIZE,
+                });
+            }
+        }
+
         // Rule: Must have at least one signer
         if self.operator_ids.is_empty() {
             return Err(SignedSSVMessageError::NoSigners);
@@ -628,8 +641,6 @@ impl SignedSSVMessage {
         }
 
         // Rule: Signers must be unique
-        // This check assumes that signers is sorted, so this rule should be after the check for
-        // ErrSignersNotSorted.
         let mut seen_ids = HashSet::with_capacity(self.operator_ids.len());
         for &id in &self.operator_ids {
             if !seen_ids.insert(id) {
@@ -1220,6 +1231,123 @@ mod tests {
         assert_eq!(
             SSVMessageDataLen::to_usize(),
             std::cmp::max(MAX_PARTIAL_SIGNATURE_MSGS_SIZE, MAX_CONSENSUS_MSG_SIZE)
+        );
+    }
+
+    // ==================== SSZ-decoded SignedSSVMessage validation tests ====================
+    //
+    // These tests verify that `SignedSSVMessage::validate()` rejects structurally invalid
+    // messages that bypass the `new()` constructor. This matters because `from_ssz_bytes()`
+    // can produce structs with invalid state (e.g., undersized signatures, zero signers),
+    // and the `validate()` call in `validate_decoded_message()` must catch them.
+
+    /// Helper to build a `SignedSSVMessage` with direct field access, bypassing `new()`.
+    /// This simulates a struct produced by `from_ssz_bytes()` with arbitrary field values.
+    fn build_unvalidated_signed_ssv_message(
+        signatures: Vec<Vec<u8>>,
+        operator_ids: Vec<OperatorId>,
+    ) -> SignedSSVMessage {
+        let sig_variable_lists: Vec<VariableList<u8, U256>> = signatures
+            .into_iter()
+            .map(|sig| {
+                VariableList::new(sig).expect("signature should fit in VariableList<u8, U256>")
+            })
+            .collect();
+        SignedSSVMessage {
+            signatures: VariableList::new(sig_variable_lists)
+                .expect("signatures list should fit in VariableList<_, U13>"),
+            operator_ids: VariableList::new(operator_ids)
+                .expect("operator_ids should fit in VariableList<_, U13>"),
+            ssv_message: valid_ssv_message(),
+            full_data: VariableList::empty(),
+        }
+    }
+
+    /// Verify that `validate()` rejects signatures shorter than `RSA_SIGNATURE_SIZE` (256 bytes).
+    /// `from_ssz_bytes()` can produce a `VariableList<u8, U256>` with fewer than 256 bytes
+    /// because the type only enforces an upper bound, not an exact length.
+    #[test]
+    fn test_validate_rejects_undersized_rsa_signature() {
+        // Arrange: create a message with a 100-byte signature (well under the required 256)
+        let undersized_signature = vec![0u8; 100];
+        let signed_msg =
+            build_unvalidated_signed_ssv_message(vec![undersized_signature], vec![OperatorId(1)]);
+
+        // Act
+        let result = signed_msg.validate();
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SignedSSVMessageError::WrongRSASignatureSize {
+                index: 0,
+                length: 100,
+                sig_length: RSA_SIGNATURE_SIZE,
+            }),
+            "validate() must reject signatures shorter than RSA_SIGNATURE_SIZE"
+        );
+    }
+
+    /// Verify that `validate()` rejects a signer with operator ID = 0 on an SSZ-decoded message.
+    /// `from_ssz_bytes()` does not check operator ID values, so `validate()` must catch this.
+    #[test]
+    fn test_validate_rejects_zero_signer_on_ssz_decoded() {
+        // Arrange: valid 256-byte signature but operator_id = 0
+        let valid_sig = vec![0u8; RSA_SIGNATURE_SIZE];
+        let signed_msg = build_unvalidated_signed_ssv_message(vec![valid_sig], vec![OperatorId(0)]);
+
+        // Act
+        let result = signed_msg.validate();
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SignedSSVMessageError::ZeroSigner),
+            "validate() must reject operator_id = 0"
+        );
+    }
+
+    /// Verify that `validate()` rejects duplicate operator IDs on an SSZ-decoded message.
+    /// `from_ssz_bytes()` does not enforce uniqueness, so `validate()` must catch duplicates.
+    #[test]
+    fn test_validate_rejects_duplicate_signers_on_ssz_decoded() {
+        // Arrange: two valid signatures with the same operator_id (sorted, so passes sort check)
+        let sig1 = vec![0u8; RSA_SIGNATURE_SIZE];
+        let sig2 = vec![0u8; RSA_SIGNATURE_SIZE];
+        let signed_msg = build_unvalidated_signed_ssv_message(
+            vec![sig1, sig2],
+            vec![OperatorId(1), OperatorId(1)],
+        );
+
+        // Act
+        let result = signed_msg.validate();
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SignedSSVMessageError::DuplicatedSigner),
+            "validate() must reject duplicate operator IDs"
+        );
+    }
+
+    /// Verify that `validate()` rejects a mismatch between the number of signers and signatures
+    /// on an SSZ-decoded message. `from_ssz_bytes()` does not enforce length equality between
+    /// the `operator_ids` and `signatures` lists.
+    #[test]
+    fn test_validate_rejects_signers_signatures_length_mismatch() {
+        // Arrange: two signers but only one signature
+        let sig = vec![0u8; RSA_SIGNATURE_SIZE];
+        let signed_msg =
+            build_unvalidated_signed_ssv_message(vec![sig], vec![OperatorId(1), OperatorId(2)]);
+
+        // Act
+        let result = signed_msg.validate();
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SignedSSVMessageError::SignersAndSignaturesWithDifferentLength),
+            "validate() must reject mismatched signers/signatures lengths"
         );
     }
 }
