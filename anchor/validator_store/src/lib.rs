@@ -59,9 +59,9 @@ use tracing::{debug, error, info, trace, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
-    BeaconBlockRef, BlindedBeaconBlock, BlindedPayload, ChainSpec, ContributionAndProof, Domain,
-    Epoch, EthSpec, ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256,
-    SelectionProof, SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
+    BeaconBlockRef, BlindedPayload, ChainSpec, ContributionAndProof, Domain, Epoch, EthSpec,
+    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, SelectionProof,
+    SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
     SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedRoot,
     SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
     SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
@@ -388,12 +388,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             Completed::Success(data) => data,
         };
 
-        let fork = ForkName::from(completed_data.version);
-
-        BlindedBeaconBlock::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+        completed_data
+            .decode_blinded_block()
             .map(UnsignedBlock::Blinded)
             .or_else(|_| {
-                FullBlockContents::from_ssz_bytes_for_fork(&completed_data.data_ssz, fork)
+                completed_data
+                    .decode_block_contents()
                     .map(UnsignedBlock::Full)
             })
             .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
