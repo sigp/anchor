@@ -62,6 +62,18 @@ fn try_read(key_file: &Path, password_file: Option<&Path>) -> Option<Result<Rsa<
 fn generate_key(dir: &DataDir, password_file: Option<&Path>) -> Result<Rsa<Private>, String> {
     info!("Creating private key");
     let key = Rsa::generate(2048).map_err(|e| format!("Unable to generate key: {e}"))?;
+
+    // A key file may have been placed between our initial check and now (e.g. docker cp
+    // while the container is running). Prefer the externally-provided key if present.
+    let unencrypted_key_file = dir.unencrypted_private_key_file();
+    let encrypted_key_file = dir.encrypted_private_key_file();
+    if let Some(result) = try_read(&unencrypted_key_file, password_file)
+        .or_else(|| try_read(&encrypted_key_file, password_file))
+    {
+        info!("Key file appeared during generation, using externally-provided key");
+        return result;
+    }
+
     // Encrypt the fresh key if a password key file was provided. For interactive password
     // input, the user should use the keygen tool.
     let password = password_file
