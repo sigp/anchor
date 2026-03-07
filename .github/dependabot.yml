@@ -2,6 +2,7 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
+    target-branch: "unstable"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -21,6 +22,7 @@ updates:
 
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "unstable"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -42,6 +44,7 @@ updates:
 
   - package-ecosystem: "npm"
     directory: "/docs"
+    target-branch: "unstable"
     schedule:
       interval: "weekly"
       day: "monday"
