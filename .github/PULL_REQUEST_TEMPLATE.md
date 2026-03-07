@@ -1,36 +1,38 @@
-## Issue Addressed
+Keep this concise. Use bullets where helpful. Write `N/A` if not applicable.
 
-Which issue # does this PR address?
+## Problem, Evidence, and Context (Required)
 
-## Motivation
+- What real problem does this solve, or what real value does it add now?
+- Why is this worth doing now?
+- What evidence supports that?
+- Relevant links: issue, discussion, spec, related PRs.
 
-Why is this change needed now? What concrete gap or risk does it address?
+## Change Overview (Required)
 
-## Proposed Changes
+- What changed at a high level?
+- How should the reviewer understand or read this diff?
+- What intentionally did not change?
 
-Please list or describe the changes introduced by this PR.
+## Risks, Trade-offs, and Mitigations (Required)
 
-## Real Benefits
+- What are the main risks or blast radius?
+- What trade-offs are being made?
+- How are those risks being mitigated?
 
-What practical outcomes do we gain (e.g., risk reduction, reliability, performance, maintainability)?
+## Validation (Required)
 
-## Risk
+- What proves the change does what it must do?
+- Examples: targeted tests, manual repro, benchmark/profiling result, before/after behavior, spec-parity check.
 
-What could go wrong with this change? What is the expected blast radius if it fails?
+## Rollback (Required for behavior or runtime changes; optional otherwise)
 
-## Testing
+- How can this be safely reverted?
+- Any config, data, or operational impact?
 
-What verification was performed? Include relevant commands or evidence.
+## Blockers / Dependencies (Optional)
 
-## Rollback
+- Anything that must happen before or after merge.
 
-How can this change be reverted safely if needed?
+## Additional Info / Next Steps (Optional)
 
-## Blockers / Dependencies
-
-What dependencies, prerequisite merges, external changes, or blockers are relevant?
-
-## Additional Info
-
-Please provide any additional information. For example, future considerations
-or information useful for reviewers.
+- Anything else reviewers should know.
