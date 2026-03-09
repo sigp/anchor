@@ -9,7 +9,6 @@ use std::{
 
 use fork::ForkLifecycle;
 use futures::StreamExt;
-use gossipsub::{IdentTopic, PublishError};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
@@ -17,6 +16,7 @@ use libp2p::{
         transport::{Boxed, ListenerId},
     },
     futures,
+    gossipsub::{self, IdentTopic, PublishError},
     identity::Keypair,
     multiaddr::Protocol,
     swarm::{SwarmEvent, dial_opts::DialOpts},
@@ -672,7 +672,10 @@ impl<R: MessageReceiver> Network<R> {
 
     fn on_upnp_event(&mut self, event: Event) {
         match event {
-            libp2p::upnp::Event::NewExternalAddr(addr) => {
+            libp2p::upnp::Event::NewExternalAddr {
+                external_addr: addr,
+                ..
+            } => {
                 info!(%addr, "UPnP route established");
                 let mut iter = addr.iter();
                 let is_ipv6 = {
@@ -702,7 +705,10 @@ impl<R: MessageReceiver> Network<R> {
                     }
                 }
             }
-            libp2p::upnp::Event::ExpiredExternalAddr(addr) => {
+            libp2p::upnp::Event::ExpiredExternalAddr {
+                external_addr: addr,
+                ..
+            } => {
                 info!(%addr, "UPnP route expired");
             }
             libp2p::upnp::Event::GatewayNotFound => info!("UPnP not available."),
