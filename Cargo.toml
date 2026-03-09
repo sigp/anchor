@@ -176,6 +176,8 @@ quinn = { git = "https://github.com/sigp/quinn", rev = "59af87979c8411864c1cb686
 libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 
 [profile.maxperf]
 inherits = "release"

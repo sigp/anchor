@@ -4634,9 +4634,9 @@ dependencies = [
  "libp2p-quic",
  "libp2p-request-response",
  "libp2p-swarm",
- "libp2p-tcp 0.44.1 (git+https://github.com/sigp/rust-libp2p.git?rev=f88e43de9eba00b416d0374b1a1fb2de47b65864)",
+ "libp2p-tcp",
  "libp2p-upnp",
- "libp2p-yamux 0.47.0 (git+https://github.com/sigp/rust-libp2p.git?rev=f88e43de9eba00b416d0374b1a1fb2de47b65864)",
+ "libp2p-yamux",
  "multiaddr",
  "pin-project",
  "rw-stream-sink",
@@ -4951,24 +4951,8 @@ dependencies = [
  "libp2p-identity",
  "libp2p-plaintext",
  "libp2p-swarm",
- "libp2p-tcp 0.44.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libp2p-yamux 0.47.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "tracing",
-]
-
-[[package]]
-name = "libp2p-tcp"
-version = "0.44.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb6585b9309699f58704ec9ab0bb102eca7a3777170fa91a8678d73ca9cafa93"
-dependencies = [
- "futures",
- "futures-timer",
- "if-watch",
- "libc",
- "libp2p-core",
- "socket2 0.6.3",
- "tokio",
+ "libp2p-tcp",
+ "libp2p-yamux",
  "tracing",
 ]
 
@@ -5017,21 +5001,6 @@ dependencies = [
  "libp2p-swarm",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "libp2p-yamux"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f15df094914eb4af272acf9adaa9e287baa269943f32ea348ba29cfb9bfc60d8"
-dependencies = [
- "either",
- "futures",
- "libp2p-core",
- "thiserror 2.0.18",
- "tracing",
- "yamux 0.12.1",
- "yamux 0.13.8",
 ]
 
 [[package]]
