@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
 use ssv_types::*;
@@ -168,4 +168,78 @@ async fn test_keysplit_mode_processing() {
 
     // Verify operator was stored even in KeySplit mode
     verify_operator_stored(&processor, OperatorId(operator_id));
+}
+
+#[tokio::test]
+async fn test_validator_exit_processor_failure_aborts_batch() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let mut operator_logs = Vec::new();
+    for operator_id in &operator_ids {
+        operator_logs.push(create_operator_added_log(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1_000,
+        ));
+    }
+
+    let result = test.processor.process_logs(operator_logs, true, 12345);
+    assert!(result.is_ok(), "Operator setup should succeed");
+
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let (shares, validator_pubkey) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey.serialize().to_vec());
+
+    let validator_added_log = create_validator_added_log(
+        owner,
+        operator_ids.clone(),
+        validator_public_key.clone(),
+        shares,
+    );
+    let result = test
+        .processor
+        .process_logs(vec![validator_added_log], true, 12346);
+    assert!(result.is_ok(), "Validator setup should succeed");
+
+    test.processor
+        .db
+        .set_validator_indices(HashMap::from([(validator_pubkey, ValidatorIndex(42))]))
+        .expect("Setting validator index should succeed");
+
+    let exit_log =
+        create_validator_exited_log(owner, operator_ids.clone(), validator_public_key.clone());
+    let trailing_operator_log = create_operator_added_log(
+        99,
+        Address::random(),
+        create_valid_rsa_public_key_bytes(),
+        2_000,
+    );
+
+    let result = test
+        .processor
+        .process_logs(vec![exit_log, trailing_operator_log], true, 12347);
+    let err = result.expect_err("Exit processor failure should abort the batch");
+
+    assert!(
+        err.to_string().contains("Exit processor unavailable"),
+        "Unexpected error: {err}"
+    );
+    assert!(
+        test.processor
+            .db
+            .state()
+            .get_operator(&OperatorId(99))
+            .is_none(),
+        "Later logs in the aborted batch should not be applied"
+    );
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        12346,
+        "Failed batches should not advance the processed block"
+    );
 }

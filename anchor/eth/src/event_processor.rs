@@ -9,7 +9,7 @@ use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    error::ExecutionError,
+    error::{ExecutionError, LogErrorDisposition},
     event_parser::EventDecoder,
     generated::SSVContract,
     index_sync, metrics,
@@ -134,10 +134,26 @@ impl EventProcessor {
                     .transaction_hash
                     .map(|hash| hash.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                if live {
-                    warn!(tx_hash, "Malformed event: {e}");
-                } else {
-                    trace!(tx_hash, "Malformed event: {e}");
+                match e.log_disposition() {
+                    LogErrorDisposition::SkipMalformed => {
+                        if live {
+                            warn!(tx_hash, error = %e, "Malformed event");
+                        } else {
+                            trace!(tx_hash, error = %e, "Malformed event");
+                        }
+                    }
+                    LogErrorDisposition::SkipExpected => {
+                        if live {
+                            debug!(tx_hash, error = %e, "Skipping event");
+                        } else {
+                            trace!(tx_hash, error = %e, "Skipping event");
+                        }
+                    }
+                    LogErrorDisposition::AbortBatch => {
+                        metrics::stop_timer(timer);
+                        error!(tx_hash, error = %e, "Event processing failed");
+                        return Err(e);
+                    }
                 }
                 continue;
             }
@@ -596,7 +612,7 @@ impl EventProcessor {
                 );
             }
             Err(err) => {
-                return Err(ExecutionError::Misc(format!(
+                return Err(ExecutionError::ExitProcessorUnavailable(format!(
                     "Failed to send validator exit request to processor: {err}"
                 )));
             }
@@ -665,7 +681,8 @@ impl EventProcessor {
     ///   mismatch
     ///
     /// # Note
-    /// If the cluster is already liquidated, the function will return `Ok(())` but issue a warning.
+    /// If the cluster is already liquidated, the function returns `SkippedEvent` so the caller can
+    /// skip it without aborting the batch.
     fn verify_validator_owner(
         &self,
         owner: &Address,
@@ -692,7 +709,7 @@ impl EventProcessor {
         }
 
         if cluster.liquidated {
-            return Err(ExecutionError::Misc(
+            return Err(ExecutionError::SkippedEvent(
                 "Cluster is liquidated, skipping exit processing".to_string(),
             ));
         }
