@@ -419,10 +419,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
     }
 
     /// Long running cleaner that removes instances based on completion or deadline
-    async fn cleaner(
-        self: Arc<Self>,
-        mut completion_rx: mpsc::UnboundedReceiver<InstanceId>,
-    ) {
+    async fn cleaner(self: Arc<Self>, mut completion_rx: mpsc::UnboundedReceiver<InstanceId>) {
         loop {
             tokio::select! {
                 // Branch 1: Instance completed - clean immediately

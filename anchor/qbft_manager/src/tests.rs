@@ -1304,8 +1304,11 @@ mod manager_tests {
         const SLOT_ARBITRARY: u64 = 100;
 
         // EXECUTE: Calculate deadline for slot 0
-        let deadline =
-            super::super::calculate_deadline(Role::Proposer, Slot::new(SLOT_ZERO), std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap());
+        let deadline = super::super::calculate_deadline(
+            Role::Proposer,
+            Slot::new(SLOT_ZERO),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
 
         // ASSERT: Proposer deadline should be same slot for immediate inclusion
         assert_eq!(
