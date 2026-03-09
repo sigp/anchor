@@ -319,109 +319,61 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
     }
 
-    /// Resolve and decrypt the key share for a validator.
-    ///
-    /// Returns `None` in impostor mode (no private key configured).
-    fn resolve_decrypted_share(
-        &self,
-        validator: &ValidatorMetadata,
-    ) -> Result<Option<SecretKey>, Error> {
-        let Some(operator_key) = &self.private_key else {
-            // We are in impostor mode and cannot decrypt the share.
-            return Ok(None);
-        };
-
-        let encrypted_private_key = self
-            .database
-            .state()
-            .shares()
-            .get_by(&validator.public_key)
-            .ok_or(Error::UnknownPubkey(validator.public_key))?
-            .encrypted_private_key;
-
-        let key = self
-            .decrypted_keys
-            .lock()
-            .try_get_or_insert(encrypted_private_key, || {
-                decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
-                    .map_err(|_| SpecificError::KeyShareDecryptionFailed)
-            })
-            .cloned()?;
-
-        Ok(Some(key))
-    }
-
-    /// Prepare signing data for a single validator: extract index and decrypt key share.
-    fn prepare_validator_signing_data(
-        &self,
-        validator: &ValidatorMetadata,
-        signing_root: Hash256,
-    ) -> Result<ValidatorSigningData, Error> {
-        let index = validator.index.ok_or(SpecificError::MissingIndex)?;
-        let share = self.resolve_decrypted_share(validator)?;
-        Ok(ValidatorSigningData {
-            root: signing_root,
-            index,
-            share,
-        })
-    }
-
-    /// Collect signatures for multiple validators in a batch.
-    /// This is more efficient than calling collect_signature multiple times because:
-    /// 1. All partial signatures are sent in a single network message
-    /// 2. No risk of deadlock from sequential processing in Committee mode
+    /// Collect signatures for multiple validators in a committee concurrently using `join_all`.
+    /// This avoids sequential deadlock while reusing the existing committee counting logic
+    /// in the signature collector's `committee_signatures` DashMap.
+    #[expect(clippy::too_many_arguments)]
     async fn collect_committee_signatures(
         &self,
         signature_kind: PartialSignatureKind,
         role: Role,
         slot: Slot,
-        committee_id: CommitteeId,
         cluster: &Cluster,
+        num_signatures_to_collect: usize,
+        base_hash: Hash256,
         validators: Vec<(ValidatorMetadata, Hash256)>,
     ) -> Result<HashMap<ValidatorIndex, Signature>, Error> {
-        let metadata = SignatureMetadata {
-            kind: signature_kind,
-            role,
-            threshold: cluster
-                .get_f()
-                .safe_mul(2)
-                .and_then(|x| x.safe_add(1))
-                .map_err(SpecificError::from)?,
-            slot,
-            committee_id,
+        let collection_mode = CollectionMode::Committee {
+            num_signatures_to_collect,
+            base_hash,
         };
 
-        let mut validator_data = Vec::with_capacity(validators.len());
-        for (validator, signing_root) in validators {
-            match self.prepare_validator_signing_data(&validator, signing_root) {
-                Ok(data) => validator_data.push(data),
+        let futures: Vec<_> = validators
+            .into_iter()
+            .filter_map(|(validator, signing_root)| {
+                let index = validator.index?;
+                Some(async move {
+                    let result = self
+                        .collect_signature(
+                            signature_kind,
+                            role,
+                            collection_mode,
+                            &validator,
+                            cluster,
+                            signing_root,
+                            slot,
+                        )
+                        .await;
+                    (index, result)
+                })
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+
+        let mut signatures = HashMap::with_capacity(results.len());
+        for (index, result) in results {
+            match result {
+                Ok(sig) => {
+                    signatures.insert(index, sig);
+                }
                 Err(e) => {
-                    warn!(
-                        error = ?e,
-                        pubkey = ?validator.public_key,
-                        "Skipping validator in batch signing"
-                    );
-                    continue;
+                    warn!(?index, error = ?e, "Failed to collect signature for validator");
                 }
             }
         }
 
-        if validator_data.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let _timer =
-            validator_metrics::start_timer_vec(&validator_metrics::SIGNING_TIMES, &["ssv"]);
-        let signatures = self
-            .signature_collector
-            .sign_and_collect_batch(metadata, validator_data)
-            .await
-            .map_err(SpecificError::from)?;
-
-        Ok(signatures
-            .into_iter()
-            .map(|(k, v)| (k, (*v).clone()))
-            .collect())
+        Ok(signatures)
     }
 
     async fn decide_abstract_block(
@@ -1695,7 +1647,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             return Ok(Vec::new());
         }
 
-        // Batch sign all validators at once
+        // Compute the signature count for the committee DashMap (must match sync committee's count)
+        let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+        let num_signatures_to_collect = voting_context_tx
+            .voting_assignments
+            .voting_message_count_for_committee(|idx| committee_validator_indices.contains(idx));
+        let data_hash = data.hash();
+
         let validators_for_signing: Vec<(ValidatorMetadata, Hash256)> = prepared
             .iter()
             .map(|(_, _, _, _, validator, signing_root)| (validator.clone(), *signing_root))
@@ -1706,8 +1664,9 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 PartialSignatureKind::PostConsensus,
                 Role::Committee,
                 slot,
-                committee_id,
                 &cluster,
+                num_signatures_to_collect,
+                data_hash,
                 validators_for_signing,
             )
             .await?;
@@ -2090,6 +2049,7 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
     selection_proof: SyncSelectionProof,
 }
 
+#[derive(Clone, Copy)]
 enum CollectionMode {
     SingleValidator,
     Committee {
