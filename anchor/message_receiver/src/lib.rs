@@ -1,10 +1,12 @@
 mod manager;
 
-use libp2p::gossipsub::{Message, MessageId};
-use libp2p::PeerId;
+use libp2p::{
+    gossipsub::{Message, MessageId},
+    PeerId,
+};
 use thiserror::Error;
 
-pub use crate::{NetworkMessageReceiver, manager::*};
+pub use crate::{manager::*, NetworkMessageReceiver};
 
 pub trait MessageReceiver {
     fn receive(

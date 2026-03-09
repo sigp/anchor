@@ -1,7 +1,10 @@
 use std::{hash::Hasher, time::Duration};
 
-use libp2p::gossipsub::{self, ConfigBuilderError, MessageAuthenticity, ValidationMode};
-use libp2p::{identify, ping, swarm::NetworkBehaviour};
+use libp2p::{
+    gossipsub::{self, ConfigBuilderError, MessageAuthenticity, ValidationMode},
+    identify, ping,
+    swarm::NetworkBehaviour,
+};
 use prometheus_client::registry::Registry;
 use thiserror::Error;
 use twox_hash::XxHash64;
@@ -189,8 +192,7 @@ impl AnchorBehaviour {
 
 #[cfg(test)]
 mod tests {
-    use libp2p::gossipsub::Message;
-    use libp2p::PeerId;
+    use libp2p::{PeerId, gossipsub::Message};
 
     use super::*;
 
