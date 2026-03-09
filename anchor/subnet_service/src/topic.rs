@@ -6,7 +6,7 @@
 //! - Boole and later: `/ssv/<network>/<fork>/<subnet_id>`
 
 use fork::Fork;
-use gossipsub::TopicHash;
+use libp2p::gossipsub::TopicHash;
 
 use crate::{SUBNET_COUNT, SubnetId};
 
@@ -109,7 +109,7 @@ pub fn extract_subnet_id(topic_str: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use gossipsub::IdentTopic;
+    use libp2p::gossipsub::IdentTopic;
     use ssv_network_config::ALAN_TOPIC_PREFIX;
 
     use super::*;

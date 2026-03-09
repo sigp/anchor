@@ -112,14 +112,25 @@ enr = "0.13.0"
 ethereum_ssz = "0.10.0"
 ethereum_ssz_derive = "0.10.0"
 futures = "0.3.30"
-# Target sigp-gossipsub (Aug 20 2025) - matching Lighthouse
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "5acdf89a65d64098f9346efa5769e57bcd19dea9", features = [
-    "metrics",
-] }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
-libp2p = { version = "0.56", default-features = false }
+libp2p = { version = "0.56", default-features = false, features = [
+    "identify",
+    "yamux",
+    "noise",
+    "secp256k1",
+    "tcp",
+    "tokio",
+    "macros",
+    "quic",
+    "ping",
+    "request-response",
+    "dns",
+    "metrics",
+    "gossipsub",
+    "upnp"
+] }
 lru = "0.16.0"
 multiaddr = "0.18.2"
 num_cpus = "1"
@@ -127,7 +138,7 @@ once_cell = "1.21.3"
 openssl = { version = "0.10.72", features = ["vendored"] }
 parking_lot = "0.12"
 pbkdf2 = "0.12.2"
-prometheus-client = "0.23.0"
+prometheus-client = "0.24.0"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.32.0"
 rand = "0.9"
@@ -160,11 +171,6 @@ tree_hash_derive = "0.12.0"
 typenum = "1.18"
 zeroize = "1.8.1"
 
-# todo: remove when there is a proper release for peer-store.
-[patch.'https://github.com/libp2p/rust-libp2p.git']
-libp2p-core = "=0.43.2"
-libp2p-swarm = "=0.47.1"
-
 # todo: Remove once streaming ValidatorStore PR is merged
 # https://github.com/sigp/lighthouse/pull/8880
 [patch.'https://github.com/sigp/lighthouse']
@@ -186,7 +192,15 @@ validator_store = { git = "https://github.com/shane-moore/lighthouse", rev = "66
 workspace_members = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
 
 [patch.crates-io]
-yamux = { git = "https://github.com/sigp/rust-yamux", rev = "575b17c0f44f4253079a6bafaa2de74ca1d6dfaa" }
+quick-protobuf = { git = "https://github.com/sigp/quick-protobuf.git", rev = "87c4ccb9bb2af494de375f5f6c62850badd26304" }
+yamux = { git = "https://github.com/sigp/rust-yamux", rev = "29efa6aebd4bdfcb16bfb21969ec0c785e570b74" }
+quinn = { git = "https://github.com/sigp/quinn", rev = "59af87979c8411864c1cb68613222f54ed2930a7" }
+libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+quick-protobuf-codec = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 
 [profile.maxperf]
 inherits = "release"
