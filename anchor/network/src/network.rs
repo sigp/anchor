@@ -7,7 +7,7 @@ use std::{
 };
 
 use futures::StreamExt;
-use gossipsub::{IdentTopic, PublishError, TopicHash};
+use libp2p::gossipsub::{self, IdentTopic, PublishError, TopicHash};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{

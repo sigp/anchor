@@ -12,7 +12,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
-pub use gossipsub::MessageAcceptance;
+pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Public},

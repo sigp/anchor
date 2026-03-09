@@ -111,14 +111,24 @@ enr = "0.13.0"
 ethereum_ssz = "0.9"
 ethereum_ssz_derive = "0.9"
 futures = "0.3.30"
-# Target sigp-gossipsub as of 2/10/25
-gossipsub = { package = "libp2p-gossipsub", git = "https://github.com/sigp/rust-libp2p.git", rev = "fabf27f", features = [
-    "metrics",
-] }
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
-libp2p = { version = "0.56", default-features = false }
+libp2p = { version = "0.56", default-features = false, features = [
+    "identify",
+    "yamux",
+    "noise",
+    "secp256k1",
+    "tcp",
+    "tokio",
+    "macros",
+    "quic",
+    "ping",
+    "request-response",
+    "dns",
+    "metrics",
+    "gossipsub"
+] }
 lru = "0.16.0"
 multiaddr = "0.18.2"
 num_cpus = "1"
@@ -126,7 +136,7 @@ once_cell = "1.21.3"
 openssl = "0.10.72"
 parking_lot = "0.12"
 pbkdf2 = "0.12.2"
-prometheus-client = "0.23.0"
+prometheus-client = "0.24.0"
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.21.0"
 rand = "0.9"
@@ -159,13 +169,13 @@ typenum = "1.18"
 vsss-rs = "5.1.0"
 zeroize = "1.8.1"
 
-# todo: remove when there is a proper release for peer-store.
-[patch.'https://github.com/libp2p/rust-libp2p.git']
-libp2p-core = "0.43.2"
-libp2p-swarm = "0.47.1"
-
 [patch.crates-io]
-yamux = { git = "https://github.com/sigp/rust-yamux", rev = "575b17c0f44f4253079a6bafaa2de74ca1d6dfaa" }
+quick-protobuf = { git = "https://github.com/sigp/quick-protobuf.git", rev = "87c4ccb9bb2af494de375f5f6c62850badd26304" }
+yamux = { git = "https://github.com/sigp/rust-yamux", rev = "29efa6aebd4bdfcb16bfb21969ec0c785e570b74" }
+quinn = { git = "https://github.com/sigp/quinn", rev = "59af87979c8411864c1cb68613222f54ed2930a7" }
+libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 
 [profile.maxperf]
 inherits = "release"
