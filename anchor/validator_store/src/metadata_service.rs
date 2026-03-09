@@ -115,7 +115,7 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
 }
 
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
         validator_store: Arc<AnchorValidatorStore<T, E>>,
