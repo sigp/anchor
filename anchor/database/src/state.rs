@@ -270,7 +270,7 @@ impl NetworkState {
         nonces.collect()
     }
 
-    pub fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
+    fn get_cluster_members(&self, committee_id: &CommitteeId) -> Option<IndexSet<OperatorId>> {
         self.multi_state
             .clusters
             .get_all_by(committee_id)

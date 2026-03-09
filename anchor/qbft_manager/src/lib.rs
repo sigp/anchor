@@ -4,7 +4,6 @@ use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use database::OwnOperatorId;
 use fork::{Fork, ForkSchedule};
-use indexmap::IndexSet;
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -13,7 +12,7 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    CommitteeId, OperatorId,
+    CommitteeId, IndexSet, OperatorId,
     consensus::{
         AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
         QbftDataValidator,

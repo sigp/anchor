@@ -6042,7 +6042,6 @@ dependencies = [
  "ethereum_ssz",
  "fork",
  "futures",
- "indexmap 2.13.0",
  "message_sender",
  "processor",
  "qbft",

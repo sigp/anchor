@@ -1584,12 +1584,26 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         committee_id: CommitteeId,
         attestations: Vec<AttestationToSign<E>>,
     ) -> Result<Vec<(u64, Attestation<E>, PublicKeyBytes)>, Error> {
-        // Early return for empty attestations to avoid index out of bounds
-        let first_attestation = attestations
-            .first()
-            .ok_or(Error::SpecificError(SpecificError::NoAttestationsProvided))?;
+        // Early return and log error for empty attestations
+        let Some(first_attestation) = attestations.first() else {
+            warn!("sign_committee_attestations called with empty attestations");
+            return Ok(vec![]);
+        };
         let slot = first_attestation.attestation.data().slot;
         let first_att_data = first_attestation.attestation.data();
+
+        // All attestations in a committee batch must be for the same slot
+        if let Some(mismatch) = attestations
+            .iter()
+            .find(|att| att.attestation.data().slot != slot)
+        {
+            error!(
+                expected = %slot,
+                found = %mismatch.attestation.data().slot,
+                pubkey = ?mismatch.pubkey,
+                "Slot mismatch in committee attestation batch"
+            );
+        }
 
         // All validators in this committee share the same cluster (same set of operators).
         // Look up once from the first attestation and reuse for QBFT + signing.
@@ -1650,14 +1664,13 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                 att.validator_committee_index,
                 att.attestation,
             );
-            let validator = match self.get_validator_and_cluster(pubkey) {
-                Ok((v, _)) => v,
-                Err(Error::UnknownPubkey(pk)) => {
-                    warn!(?pk, "Unknown pubkey while signing attestation, skipping");
-                    continue;
-                }
-                Err(e) => {
-                    error!(error = ?e, ?pubkey, "Failed to get validator metadata, skipping");
+            let validator = match self.database.state().metadata().get_by(&pubkey) {
+                Some(v) => v.clone(),
+                None => {
+                    warn!(
+                        ?pubkey,
+                        "Unknown pubkey while signing attestation, skipping"
+                    );
                     continue;
                 }
             };
@@ -2108,10 +2121,6 @@ pub enum SpecificError {
     KeyShareDecryptionFailed,
     DataTooLarge(String),
     ClusterLiquidated,
-    /// Empty attestations list provided to sign_committee_attestations
-    NoAttestationsProvided,
-    /// No cluster found for the given committee ID
-    UnknownCommittee(CommitteeId),
     /// Requested slot has already passed the current cached slot in `VotingAssignments`
     MetadataSlotPassed,
     /// Watch channel for `VotingAssignments` has been closed
