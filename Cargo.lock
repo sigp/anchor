@@ -4724,7 +4724,7 @@ dependencies = [
  "libp2p-swarm",
  "prometheus-client",
  "quick-protobuf",
- "quick-protobuf-codec 0.3.1 (git+https://github.com/sigp/rust-libp2p.git?rev=f88e43de9eba00b416d0374b1a1fb2de47b65864)",
+ "quick-protobuf-codec",
  "rand 0.8.5",
  "regex",
  "sha2 0.10.9",
@@ -4746,7 +4746,7 @@ dependencies = [
  "libp2p-identity",
  "libp2p-swarm",
  "quick-protobuf",
- "quick-protobuf-codec 0.3.1 (git+https://github.com/sigp/rust-libp2p.git?rev=f88e43de9eba00b416d0374b1a1fb2de47b65864)",
+ "quick-protobuf-codec",
  "smallvec",
  "thiserror 2.0.18",
  "tracing",
@@ -4866,7 +4866,7 @@ dependencies = [
  "libp2p-core",
  "libp2p-identity",
  "quick-protobuf",
- "quick-protobuf-codec 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quick-protobuf-codec",
  "tracing",
 ]
 
@@ -6445,19 +6445,6 @@ version = "0.8.1"
 source = "git+https://github.com/sigp/quick-protobuf.git?rev=87c4ccb9bb2af494de375f5f6c62850badd26304#87c4ccb9bb2af494de375f5f6c62850badd26304"
 dependencies = [
  "byteorder",
-]
-
-[[package]]
-name = "quick-protobuf-codec"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15a0580ab32b169745d7a39db2ba969226ca16738931be152a3209b409de2474"
-dependencies = [
- "asynchronous-codec",
- "bytes",
- "quick-protobuf",
- "thiserror 1.0.69",
- "unsigned-varint",
 ]
 
 [[package]]

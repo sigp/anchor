@@ -178,6 +178,7 @@ libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de
 libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+quick-protobuf-codec = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
 
 [profile.maxperf]
 inherits = "release"
