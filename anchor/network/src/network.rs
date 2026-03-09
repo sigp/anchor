@@ -7,7 +7,6 @@ use std::{
 };
 
 use futures::StreamExt;
-use gossipsub::{IdentTopic, PublishError, TopicHash};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
@@ -15,6 +14,7 @@ use libp2p::{
         transport::{Boxed, ListenerId},
     },
     futures,
+    gossipsub::{self, IdentTopic, PublishError, TopicHash},
     identity::Keypair,
     multiaddr::Protocol,
     swarm::{SwarmEvent, dial_opts::DialOpts},

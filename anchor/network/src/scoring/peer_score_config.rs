@@ -34,7 +34,7 @@ pub const BEHAVIOUR_PENALTY_THRESHOLD: f64 = 6.0;
 ///
 /// # Returns
 /// Configured `PeerScoreParams` for gossipsub
-pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
+pub fn peer_score_params(one_epoch: Duration) -> libp2p::gossipsub::PeerScoreParams {
     let decay_interval = one_epoch; // Use one epoch as decay interval
 
     // P7 calculation - behavior penalty decay
@@ -48,7 +48,7 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
 
     let retain_score = RETAIN_SCORE_EPOCH_MULTIPLIER * one_epoch; // 100 epochs
 
-    gossipsub::PeerScoreParams {
+    libp2p::gossipsub::PeerScoreParams {
         topics: Default::default(), // TODO https://github.com/sigp/anchor/issues/371
         topic_score_cap: TOPIC_SCORE_CAP,
         decay_interval,
@@ -69,8 +69,8 @@ pub fn peer_score_params(one_epoch: Duration) -> gossipsub::PeerScoreParams {
 ///
 /// # Returns
 /// Configured `PeerScoreThresholds` for gossipsub
-pub fn peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
-    gossipsub::PeerScoreThresholds {
+pub fn peer_score_thresholds() -> libp2p::gossipsub::PeerScoreThresholds {
+    libp2p::gossipsub::PeerScoreThresholds {
         gossip_threshold: GOSSIP_THRESHOLD,
         publish_threshold: PUBLISH_THRESHOLD,
         graylist_threshold: GRAYLIST_THRESHOLD,
