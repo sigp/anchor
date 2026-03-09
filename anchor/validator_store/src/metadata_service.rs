@@ -54,7 +54,7 @@ const WAD_SOFT_TIMEOUT: Duration = Duration::from_secs(1);
 const WAD_HARD_TIMEOUT: Duration = Duration::from_secs(3);
 const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct AttestationScore {
     score: f64,
     base_score: f64,
@@ -147,6 +147,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         info!(
             next_update_millis = duration_to_next_slot.as_millis(),
+            weighted_attestation_data = self.weighted_attestation_data,
             "Metadata service started"
         );
 
@@ -987,7 +988,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
     /// Query all beacon nodes in parallel and select the best attestation data by score.
     async fn weighted_calculation(&self, slot: Slot) -> Result<AttestationData, String> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
 
         let clients: Vec<(String, BeaconNodeHttpClient)> = {
             let candidates = self.beacon_nodes.candidates.read().await;
@@ -1104,10 +1105,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     ) -> Result<ScoredAttestationData, String> {
         let client_addr = client.to_string();
 
-        let _timer = validator_metrics::start_timer_vec(
-            &validator_metrics::ATTESTATION_SERVICE_TIMES,
-            &[validator_metrics::ATTESTATIONS_HTTP_GET],
-        );
         let attestation_data = client
             .get_validator_attestation_data(slot, 0)
             .await
@@ -1149,7 +1146,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ScoredAttestationData {
     client_addr: String,
     attestation_data: AttestationData,
