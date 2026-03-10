@@ -61,6 +61,7 @@ jobs:
             - name: Build and push
               uses: docker/build-push-action@v6
               with:
+                context: .
                 platforms: linux/${{ matrix.target.docker-arch }}
                 labels: |
                     git.revision=${{ github.sha }}
