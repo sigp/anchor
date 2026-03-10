@@ -77,6 +77,10 @@ pub const GET_SHARES: &str = r#"
     SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey
     FROM shares WHERE operator_id = ?1
 "#;
+pub const GET_SHARE_PUBKEYS_FOR_VALIDATOR: &str = r#"
+    SELECT operator_id, share_pubkey
+    FROM shares WHERE validator_pubkey = ?1
+"#;
 
 // Misc Datta
 pub const INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT: &str = r#"
