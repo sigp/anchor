@@ -368,7 +368,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                     signatures.insert(index, sig);
                 }
                 Err(e) => {
-                    warn!(?index, error = ?e, "Failed to collect signature for validator");
+                    error!(?index, error = ?e, "Failed to collect signature for validator");
                 }
             }
         }
@@ -1543,19 +1543,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
         let slot = first_attestation.attestation.data().slot;
         let first_att_data = first_attestation.attestation.data();
-
-        // All attestations in a committee batch must be for the same slot
-        if let Some(mismatch) = attestations
-            .iter()
-            .find(|att| att.attestation.data().slot != slot)
-        {
-            error!(
-                expected = %slot,
-                found = %mismatch.attestation.data().slot,
-                pubkey = ?mismatch.pubkey,
-                "Slot mismatch in committee attestation batch"
-            );
-        }
 
         // All validators in this committee share the same cluster (same set of operators).
         // Look up once from the first attestation and reuse for QBFT + signing.
@@ -2819,7 +2806,7 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
                         Ok(signed) => signed,
                         Err(e) => {
                             error!(?committee_id, error = ?e, "Failed to sign committee attestations");
-                            return Err(e);
+                            return Ok(Vec::new());
                         }
                     };
 
