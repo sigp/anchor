@@ -494,7 +494,9 @@ async fn integration_happy_path_all_valid() {
     }
 
     // Assert: notifier receives a valid reconstructed signature
-    let reconstructed = result_rx.await.expect("Should receive reconstructed signature");
+    let reconstructed = result_rx
+        .await
+        .expect("Should receive reconstructed signature");
 
     // Verify the reconstructed signature against the master pubkey
     assert!(
@@ -540,7 +542,9 @@ async fn integration_fallback_evicts_bad_and_succeeds() {
     send_partial_sig(&tx, *op4, sk4.sign(signing_root));
 
     // Assert: notifier receives a valid reconstructed signature
-    let reconstructed = result_rx.await.expect("Should receive reconstructed signature");
+    let reconstructed = result_rx
+        .await
+        .expect("Should receive reconstructed signature");
     assert!(
         verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
         "Reconstructed signature should verify after eviction + recovery"
@@ -582,7 +586,9 @@ async fn integration_duplicate_resolution_keeps_valid() {
     send_partial_sig(&tx, *op3, sk3.sign(signing_root));
 
     // Assert: notifier receives valid signature (op1's valid sig was retained)
-    let reconstructed = result_rx.await.expect("Should receive reconstructed signature");
+    let reconstructed = result_rx
+        .await
+        .expect("Should receive reconstructed signature");
     assert!(
         verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
         "Reconstructed signature should verify because valid duplicate was kept"
