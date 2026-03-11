@@ -388,8 +388,9 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     sender: tx.clone(),
                     for_slot: slot,
                 });
+                let db = self.database.clone();
                 let _ = self.processor.permitless.send_async(
-                    Box::pin(signature_collector(rx, signing_root).instrument(span)),
+                    Box::pin(signature_collector(rx, signing_root, db).instrument(span)),
                     COLLECTOR_NAME,
                 );
                 trace!(
@@ -526,12 +527,14 @@ impl From<bls_lagrange::Error> for CollectionError {
 async fn signature_collector(
     mut rx: mpsc::UnboundedReceiver<CollectorMessage>,
     signing_root: Hash256,
+    database: Arc<NetworkDatabase>,
 ) {
     let mut notifiers = vec![];
     let mut signature_share = HashMap::new();
     let mut full_signature: Option<Arc<Signature>> = None;
     let mut threshold = None;
     let mut validator_pubkey: Option<PublicKeyBytes> = None;
+    let mut evicted: HashSet<OperatorId> = HashSet::new();
 
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
@@ -573,19 +576,37 @@ async fn signature_collector(
                     continue;
                 }
 
+                if evicted.contains(&operator_id) {
+                    trace!(%operator_id, "Ignoring share from evicted operator");
+                    continue;
+                }
+
                 // Insert the signature into our map.
-                match signature_share.entry(operator_id) {
+                let received_different_share = match signature_share.entry(operator_id) {
                     hash_map::Entry::Vacant(entry) => {
-                        entry.insert(*signature);
+                        entry.insert(signature.as_ref().clone());
+                        false
                     }
-                    hash_map::Entry::Occupied(entry) => {
-                        if entry.get() != &*signature {
-                            // We can not know which signature is correct. This is serious
-                            // misbehaviour from the operator!
-                            error!(
-                                ?operator_id,
-                                "Received conflicting signatures from operator"
-                            );
+                    hash_map::Entry::Occupied(entry) => entry.get() != &*signature,
+                };
+
+                // Conflicting sig from same operator so verify both, keep valid one
+                if received_different_share {
+                    warn!(?operator_id, "Conflicting signature from operator");
+                    if let Some(validator_pk) = &validator_pubkey {
+                        match fetch_share_pubkeys(&database, validator_pk).await {
+                            Ok(pubkeys) => {
+                                resolve_duplicate_signature(
+                                    &mut signature_share,
+                                    operator_id,
+                                    &signature,
+                                    signing_root,
+                                    &pubkeys,
+                                );
+                            }
+                            Err(err) => {
+                                error!(?err, "DB lookup failed for duplicate resolution");
+                            }
                         }
                     }
                 }
@@ -595,35 +616,99 @@ async fn signature_collector(
         if let Some(threshold) = threshold
             && signature_share.len() as u64 >= threshold
         {
-            let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                Ok(signature) => Arc::new(signature),
-                Err(err) => {
+            let Some(validator_pk) = &validator_pubkey else {
+                error!("No validator pubkey available for verification");
+                return;
+            };
+
+            match try_combine_and_verify(&signature_share, validator_pk, signing_root) {
+                CombineOutcome::Success(signature) => {
+                    trace!(?signature, "Successfully recovered signature");
+                    for notifier in mem::take(&mut notifiers) {
+                        if notifier.send(Arc::clone(&signature)).is_err() {
+                            warn!("Callback dropped since signature is no longer relevant");
+                        }
+                    }
+                    full_signature = Some(signature);
+                }
+                CombineOutcome::CombineFailed(err) => {
                     error!(?err, "Failed to recover signature");
                     return;
                 }
-            };
-
-            trace!(?signature, "Successfully recovered signature");
-
-            for notifier in mem::take(&mut notifiers) {
-                if notifier.send(Arc::clone(&signature)).is_err() {
-                    warn!("Callback dropped - signature is no longer relevant");
+                CombineOutcome::VerificationFailed => {
+                    warn!("Reconstructed signature failed verification so run fallback");
+                    let share_pubkeys = match fetch_share_pubkeys(&database, validator_pk).await {
+                        Ok(pubkeys) => pubkeys,
+                        Err(err) => {
+                            error!(?err, "Failed to look up share pubkeys");
+                            return;
+                        }
+                    };
+                    let invalid_operators =
+                        find_invalid_shares(&signature_share, signing_root, &share_pubkeys);
+                    if invalid_operators.is_empty() {
+                        error!("Verification failed but no individual share was invalid");
+                        return;
+                    }
+                    warn!(?invalid_operators, "Evicting invalid shares");
+                    for op in &invalid_operators {
+                        signature_share.remove(op);
+                        evicted.insert(*op);
+                    }
                 }
             }
-            full_signature = Some(signature);
         }
     }
 }
 
+async fn fetch_share_pubkeys(
+    database: &Arc<NetworkDatabase>,
+    validator_pk: &PublicKeyBytes,
+) -> Result<HashMap<OperatorId, PublicKeyBytes>, database::DatabaseError> {
+    let db = Arc::clone(database);
+    let pk = *validator_pk;
+    tokio::task::spawn_blocking(move || db.get_share_pubkeys_for_validator(&pk))
+        .await
+        .map_err(|e| database::DatabaseError::SQLError(e.to_string()))?
+}
+
 fn combine_signatures(
-    shares: HashMap<OperatorId, Signature>,
+    shares: &HashMap<OperatorId, Signature>,
 ) -> Result<Signature, CollectionError> {
     let (ids, signatures): (Vec<_>, Vec<_>) = shares
-        .into_iter()
-        .map(|(k, s)| KeyId::try_from(*k).map(|k| (k, s)))
+        .iter()
+        .map(|(k, s)| KeyId::try_from(**k).map(|k| (k, s.clone())))
         .collect::<Result<_, _>>()?;
 
     Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
+}
+
+/// Outcome of attempting to combine and verify partial signatures.
+enum CombineOutcome {
+    /// Reconstruction + master-key verification succeeded.
+    Success(Arc<Signature>),
+    /// Lagrange interpolation failed (structural error in shares).
+    CombineFailed(CollectionError),
+    /// Reconstruction succeeded but BLS verification against master pubkey failed.
+    VerificationFailed,
+}
+
+/// Combine shares via Lagrange interpolation and verify against the validator pubkey.
+fn try_combine_and_verify(
+    shares: &HashMap<OperatorId, Signature>,
+    validator_pubkey: &PublicKeyBytes,
+    signing_root: Hash256,
+) -> CombineOutcome {
+    let combined = match combine_signatures(shares) {
+        Ok(sig) => sig,
+        Err(err) => return CombineOutcome::CombineFailed(err),
+    };
+
+    if verify_reconstructed_signature(&combined, validator_pubkey, signing_root) {
+        CombineOutcome::Success(Arc::new(combined))
+    } else {
+        CombineOutcome::VerificationFailed
+    }
 }
 
 /// Verify a reconstructed signature against the validator's master pubkey.
@@ -638,7 +723,45 @@ fn verify_reconstructed_signature(
     signature.verify(&pk, signing_root)
 }
 
-/// Verify each partial signature against its operator's share pubkey.
+/// Resolve duplicate signature per spec
+/// Verify both, keep valid one. If neither valid, remove both.
+fn resolve_duplicate_signature(
+    shares: &mut HashMap<OperatorId, Signature>,
+    operator_id: OperatorId,
+    new_signature: &Signature,
+    signing_root: Hash256,
+    share_pubkeys: &HashMap<OperatorId, PublicKeyBytes>,
+) {
+    let Some(share_pubkey) = share_pubkeys.get(&operator_id) else {
+        shares.remove(&operator_id);
+        return;
+    };
+
+    if let Some(old_sig) = shares.get(&operator_id)
+        && verify_partial_signature(old_sig, signing_root, share_pubkey)
+    {
+        return;
+    }
+
+    shares.remove(&operator_id);
+
+    if verify_partial_signature(new_signature, signing_root, share_pubkey) {
+        shares.insert(operator_id, new_signature.clone());
+    }
+}
+
+fn verify_partial_signature(
+    signature: &Signature,
+    signing_root: Hash256,
+    share_pubkey: &PublicKeyBytes,
+) -> bool {
+    let Ok(pk) = share_pubkey.decompress() else {
+        return false;
+    };
+    signature.verify(&pk, signing_root)
+}
+
+/// Verify each partial signature against its operator's share pubkey from the db.
 /// Returns the set of operator IDs whose signatures are invalid.
 fn find_invalid_shares(
     shares: &HashMap<OperatorId, Signature>,
@@ -649,11 +772,7 @@ fn find_invalid_shares(
     for (operator_id, signature) in shares {
         match share_pubkeys.get(operator_id) {
             Some(pubkey) => {
-                let Ok(pk) = pubkey.decompress() else {
-                    invalid.insert(*operator_id);
-                    continue;
-                };
-                if !signature.verify(&pk, signing_root) {
+                if !verify_partial_signature(signature, signing_root, pubkey) {
                     invalid.insert(*operator_id);
                 }
             }
