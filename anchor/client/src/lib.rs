@@ -502,6 +502,7 @@ impl Client {
             E::slots_per_epoch(),
             message_sender.clone(),
             slot_clock.clone(),
+            database.clone(),
         )
         .map_err(|e| format!("Unable to initialize signature collector manager: {e:?}"))?;
 

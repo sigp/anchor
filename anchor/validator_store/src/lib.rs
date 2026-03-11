@@ -307,6 +307,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             root: signing_root,
             index: validator.index.ok_or(SpecificError::MissingIndex)?,
             share: decrypted_key_share,
+            validator_pubkey: validator.public_key,
         };
 
         let _timer =

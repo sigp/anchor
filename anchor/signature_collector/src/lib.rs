@@ -7,7 +7,7 @@ use std::{
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
-use database::OwnOperatorId;
+use database::{NetworkDatabase, OwnOperatorId};
 use fork::ForkSchedule;
 use message_sender::MessageSender;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
@@ -87,6 +87,8 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     /// for all partial signatures based on that value for the committee.
     /// Note that this hash may differ from the actual signing root.
     committee_signatures: DashMap<(Hash256, CommitteeId), CommitteeSignatures>,
+    /// Database handle for fallback share pubkey lookup during signature verification.
+    database: Arc<NetworkDatabase>,
 }
 
 impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
@@ -97,6 +99,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         slots_per_epoch: u64,
         message_sender: Arc<dyn MessageSender>,
         slot_clock: S,
+        database: Arc<NetworkDatabase>,
     ) -> Result<Arc<Self>, CollectionError> {
         let manager = Arc::new(Self {
             processor,
@@ -107,6 +110,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             message_sender,
             signature_collectors: DashMap::new(),
             committee_signatures: DashMap::new(),
+            database,
         });
 
         manager
@@ -459,6 +463,7 @@ pub struct ValidatorSigningData {
     pub root: Hash256,
     pub index: ValidatorIndex,
     pub share: Option<SecretKey>,
+    pub validator_pubkey: PublicKeyBytes,
 }
 
 struct CollectorMessage {
