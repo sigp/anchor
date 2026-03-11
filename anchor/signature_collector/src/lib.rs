@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map},
+    collections::{HashMap, HashSet, hash_map},
     mem,
     sync::Arc,
 };
@@ -155,6 +155,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         // first, register notifier with preexisting or newly spawned instance
         let cloned_metadata = metadata.clone();
         let manager = self.clone();
+        let validator_pubkey = validator_signing_data.validator_pubkey;
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {
                 let sender = manager.get_or_spawn(
@@ -166,6 +167,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     kind: CollectorMessageKind::RegisterNotifier {
                         notify: result_tx,
                         threshold: cloned_metadata.threshold,
+                        validator_pubkey,
                     },
                     _drop_on_finish: drop_on_finish,
                 });
@@ -387,7 +389,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     for_slot: slot,
                 });
                 let _ = self.processor.permitless.send_async(
-                    Box::pin(signature_collector(rx).instrument(span)),
+                    Box::pin(signature_collector(rx, signing_root).instrument(span)),
                     COLLECTOR_NAME,
                 );
                 trace!(
@@ -477,6 +479,7 @@ enum CollectorMessageKind {
     RegisterNotifier {
         notify: oneshot::Sender<Arc<Signature>>,
         threshold: u64,
+        validator_pubkey: PublicKeyBytes,
     },
     /// A new partial signature is available - either because it arrived from the network, or
     /// because we created it
@@ -520,11 +523,15 @@ impl From<bls_lagrange::Error> for CollectionError {
 }
 
 /// The actual signature collector task, waiting for messages
-async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
+async fn signature_collector(
+    mut rx: mpsc::UnboundedReceiver<CollectorMessage>,
+    signing_root: Hash256,
+) {
     let mut notifiers = vec![];
     let mut signature_share = HashMap::new();
     let mut full_signature: Option<Arc<Signature>> = None;
     let mut threshold = None;
+    let mut validator_pubkey: Option<PublicKeyBytes> = None;
 
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
@@ -532,6 +539,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
             CollectorMessageKind::RegisterNotifier {
                 notify,
                 threshold: new_threshold,
+                validator_pubkey: new_validator_pubkey,
             } => {
                 if let Some(full_signature) = &full_signature {
                     // We already got a reconstructed signature, send it immediately.
@@ -541,6 +549,7 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
                 } else {
                     // Register the notifier and threshold.
                     notifiers.push(notify);
+                    validator_pubkey = Some(new_validator_pubkey);
                     if let Some(old_threshold) = threshold
                         && new_threshold != old_threshold
                     {
@@ -615,4 +624,44 @@ fn combine_signatures(
         .collect::<Result<_, _>>()?;
 
     Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
+}
+
+/// Verify a reconstructed signature against the validator's master pubkey.
+fn verify_reconstructed_signature(
+    signature: &Signature,
+    validator_pubkey: &PublicKeyBytes,
+    signing_root: Hash256,
+) -> bool {
+    let Ok(pk) = validator_pubkey.decompress() else {
+        return false;
+    };
+    signature.verify(&pk, signing_root)
+}
+
+/// Verify each partial signature against its operator's share pubkey.
+/// Returns the set of operator IDs whose signatures are invalid.
+fn find_invalid_shares(
+    shares: &HashMap<OperatorId, Signature>,
+    signing_root: Hash256,
+    share_pubkeys: &HashMap<OperatorId, PublicKeyBytes>,
+) -> HashSet<OperatorId> {
+    let mut invalid = HashSet::new();
+    for (operator_id, signature) in shares {
+        match share_pubkeys.get(operator_id) {
+            Some(pubkey) => {
+                let Ok(pk) = pubkey.decompress() else {
+                    invalid.insert(*operator_id);
+                    continue;
+                };
+                if !signature.verify(&pk, signing_root) {
+                    invalid.insert(*operator_id);
+                }
+            }
+            None => {
+                warn!(%operator_id, "No share pubkey found in DB — marking as invalid");
+                invalid.insert(*operator_id);
+            }
+        }
+    }
+    invalid
 }
