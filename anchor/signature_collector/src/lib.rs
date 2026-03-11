@@ -38,6 +38,8 @@ use tokio::{
 use tracing::{Instrument, debug_span, error, trace, warn};
 use types::{Hash256, Slot};
 
+pub(crate) mod metrics;
+
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
 const COLLECTOR_CLEANER_NAME: &str = "signature_collector_cleaner";
@@ -636,6 +638,9 @@ async fn signature_collector(
                     return;
                 }
                 CombineOutcome::VerificationFailed => {
+                    metrics::inc_counter(
+                        &metrics::SIGNATURE_VERIFICATION_FAILURES_TOTAL,
+                    );
                     warn!("Reconstructed signature failed verification so run fallback");
                     let share_pubkeys = match fetch_share_pubkeys(&database, validator_pk).await {
                         Ok(pubkeys) => pubkeys,
@@ -654,6 +659,7 @@ async fn signature_collector(
                     for op in &invalid_operators {
                         signature_share.remove(op);
                         evicted.insert(*op);
+                        metrics::inc_counter(&metrics::OPERATOR_EVICTIONS_TOTAL);
                     }
                 }
             }

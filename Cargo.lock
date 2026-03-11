@@ -7127,6 +7127,7 @@ dependencies = [
  "ethereum_ssz",
  "fork",
  "message_sender",
+ "metrics",
  "processor",
  "slot_clock",
  "ssv_types",
