@@ -638,9 +638,7 @@ async fn signature_collector(
                     return;
                 }
                 CombineOutcome::VerificationFailed => {
-                    metrics::inc_counter(
-                        &metrics::SIGNATURE_VERIFICATION_FAILURES_TOTAL,
-                    );
+                    metrics::inc_counter(&metrics::SIGNATURE_VERIFICATION_FAILURES_TOTAL);
                     warn!("Reconstructed signature failed verification so run fallback");
                     let share_pubkeys = match fetch_share_pubkeys(&database, validator_pk).await {
                         Ok(pubkeys) => pubkeys,
@@ -790,3 +788,6 @@ fn find_invalid_shares(
     }
     invalid
 }
+
+#[cfg(test)]
+mod tests;
