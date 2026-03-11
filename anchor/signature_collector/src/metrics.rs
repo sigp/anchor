@@ -10,10 +10,3 @@ pub static SIGNATURE_VERIFICATION_FAILURES_TOTAL: LazyLock<Result<IntCounter>> =
         )
     },
 );
-
-pub static OPERATOR_EVICTIONS_TOTAL: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
-    try_create_int_counter(
-        "anchor_signature_collector_operator_evictions_total",
-        "Count of operators evicted for submitting invalid partial signatures",
-    )
-});

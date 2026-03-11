@@ -510,10 +510,10 @@ async fn integration_happy_path_all_valid() {
 }
 
 ///  2 valid + 1 garbage share reach threshold,
-/// verification fails, garbage operator is evicted, then a 4th valid share
-/// brings us back to threshold and the collector succeeds.
+/// verification fails, garbage operator's share is removed, then a 4th valid
+/// share brings us back to threshold and the collector succeeds.
 #[tokio::test]
-async fn integration_fallback_evicts_bad_and_succeeds() {
+async fn integration_fallback_removes_bad_and_succeeds() {
     // Arrange
     let material = create_test_key_material();
     let garbage = create_garbage_key_material();
@@ -536,7 +536,7 @@ async fn integration_fallback_evicts_bad_and_succeeds() {
     send_partial_sig(&tx, bad_op, garbage_sig);
 
     // At this point threshold is reached but verification fails.
-    // The collector evicts operator 3, dropping below threshold.
+    // The collector removes operator 3's invalid share, dropping below threshold.
     // Now send the 4th valid share to bring us back to threshold.
     let (op4, sk4) = &material.shares[3];
     send_partial_sig(&tx, *op4, sk4.sign(signing_root));
@@ -547,7 +547,7 @@ async fn integration_fallback_evicts_bad_and_succeeds() {
         .expect("Should receive reconstructed signature");
     assert!(
         verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
-        "Reconstructed signature should verify after eviction + recovery"
+        "Reconstructed signature should verify after fallback + recovery"
     );
 
     drop(tx);
@@ -598,48 +598,3 @@ async fn integration_duplicate_resolution_keeps_valid() {
     handle.await.expect("Collector task should complete");
 }
 
-/// After an operator is evicted for submitting a bad share, subsequent messages
-/// from that operator should be silently ignored —> even if the new signature is
-/// valid. We prove this by NOT sending any other operator's share after the
-/// evicted operator retries: if the eviction check works, threshold is never
-/// reached and the notifier never fires.
-#[tokio::test]
-async fn integration_evicted_operator_ignored() {
-    // Arrange
-    let material = create_test_key_material();
-    let garbage = create_garbage_key_material();
-    let db = create_seeded_database(&material);
-
-    let (tx, rx) = mpsc::unbounded_channel();
-    let signing_root = material.signing_root;
-
-    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
-    let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
-
-    // Send 2 valid + 1 garbage to trigger eviction of operator 3
-    for (op_id, sk) in &material.shares[..2] {
-        send_partial_sig(&tx, *op_id, sk.sign(signing_root));
-    }
-    let bad_op = material.shares[2].0;
-    send_partial_sig(&tx, bad_op, garbage.shares[2].1.sign(signing_root));
-
-    // Eviction happened. Now send a VALID sig from the evicted operator.
-    // If eviction is enforced, this is silently ignored and we stay at 2
-    // shares (below threshold 3). If eviction is NOT enforced, this would
-    // be accepted, giving us 3 valid shares and triggering a successful
-    // reconstruction.
-    let valid_sig_from_evicted = material.shares[2].1.sign(signing_root);
-    send_partial_sig(&tx, bad_op, valid_sig_from_evicted);
-
-    // Drop the sender so the collector processes all queued messages and exits.
-    drop(tx);
-
-    // Assert: the notifier should NOT have received a result, because the
-    // evicted operator's valid sig was ignored and we never reached threshold.
-    assert!(
-        result_rx.await.is_err(),
-        "Notifier should not fire: evicted operator's valid sig must be ignored"
-    );
-
-    handle.await.expect("Collector task should complete");
-}

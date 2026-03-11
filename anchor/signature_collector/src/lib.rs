@@ -536,8 +536,6 @@ async fn signature_collector(
     let mut full_signature: Option<Arc<Signature>> = None;
     let mut threshold = None;
     let mut validator_pubkey: Option<PublicKeyBytes> = None;
-    let mut evicted: HashSet<OperatorId> = HashSet::new();
-
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
         match message.kind {
@@ -575,11 +573,6 @@ async fn signature_collector(
             } => {
                 if full_signature.is_some() {
                     // Already got the full signature.
-                    continue;
-                }
-
-                if evicted.contains(&operator_id) {
-                    trace!(%operator_id, "Ignoring share from evicted operator");
                     continue;
                 }
 
@@ -653,11 +646,9 @@ async fn signature_collector(
                         error!("Verification failed but no individual share was invalid");
                         return;
                     }
-                    warn!(?invalid_operators, "Evicting invalid shares");
+                    warn!(?invalid_operators, "Removing invalid shares");
                     for op in &invalid_operators {
                         signature_share.remove(op);
-                        evicted.insert(*op);
-                        metrics::inc_counter(&metrics::OPERATOR_EVICTIONS_TOTAL);
                     }
                 }
             }
