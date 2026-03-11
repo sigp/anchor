@@ -53,11 +53,11 @@ async fn validator_index_syncer(
 
     // counter to remember where we are in the sorted validator list
     // not perfect, as removed/added validators shift the list itself, but good enough for this
-    let mut db_sweep = 0;
+    let mut missing_index_scan_cursor = 0;
 
     // Track if there are store tasks waiting. If there are any waiting tasks, we do not fill up
     // batches from the database to avoid redundant work.
-    let waiting_store_tasks = Arc::new(AtomicUsize::new(0));
+    let pending_store_writes = Arc::new(AtomicUsize::new(0));
 
     loop {
         let mut batch = vec![];
@@ -92,31 +92,12 @@ async fn validator_index_syncer(
 
         // next, fill up the rest of the batch with older validators that are unknown from the
         // database
-        let space = MAX_BATCH_SIZE - batch.len();
-        // Only do this if we have any space remaining and there are no store tasks that might wait
-        // to write missing indices. If the count is 1, only we hold the Arc (no other tasks).
-        if space > 0 && waiting_store_tasks.load(Ordering::Relaxed) == 1 {
-            let state = db.state();
-            let clusters = state.clusters();
-            let mut from_database = state
-                .metadata()
-                .values()
-                .filter_map(|v| needs_index(v, &batch, clusters))
-                .collect::<Vec<_>>();
-            drop(state);
-            let count = from_database.len();
-            debug!(len = count, db_sweep, "Found unset index validators");
-
-            // sort and skip to current position
-            from_database.sort_unstable_by_key(|x| x.serialize());
-            batch.extend(from_database.into_iter().skip(db_sweep).take(space));
-
-            // update sweep, resetting it if necessary
-            db_sweep += space;
-            if db_sweep >= count {
-                db_sweep = 0;
-            }
-        }
+        fill_batch_with_missing_indices_from_db(
+            &mut batch,
+            &db,
+            &pending_store_writes,
+            &mut missing_index_scan_cursor,
+        );
 
         if !batch.is_empty() {
             trace!(len = batch.len(), "Sending request");
@@ -150,8 +131,8 @@ async fn validator_index_syncer(
             // in memory database. We do not want to do that on the async runtime, so we
             // spawn a blocking task.
             let db = db.clone();
-            let waiting_store_tasks = waiting_store_tasks.clone();
-            waiting_store_tasks.fetch_add(1, Ordering::Relaxed);
+            let pending_store_writes = pending_store_writes.clone();
+            pending_store_writes.fetch_add(1, Ordering::Relaxed);
             executor.spawn_blocking(
                 move || {
                     let len = map.len();
@@ -160,7 +141,7 @@ async fn validator_index_syncer(
                     } else {
                         trace!(len, "Stored indices from BN");
                     }
-                    waiting_store_tasks.fetch_sub(1, Ordering::Relaxed);
+                    pending_store_writes.fetch_sub(1, Ordering::Relaxed);
                 },
                 INDEX_SYNCER_STORE_NAME,
             );
@@ -179,4 +160,71 @@ fn needs_index(
             .get_by(&metadata.cluster_id)
             .is_some_and(|c| !c.liquidated))
     .then_some(metadata.public_key)
+}
+
+/// If there is space left in the batch, look up validators from the database that are missing
+/// indices. This is skipped if there are any pending store writes, as these store writes might
+/// add missing indices, and we want to avoid double lookups.
+fn fill_batch_with_missing_indices_from_db(
+    batch: &mut Vec<PublicKeyBytes>,
+    db: &NetworkDatabase,
+    pending_store_writes: &AtomicUsize,
+    missing_index_scan_cursor: &mut usize,
+) {
+    let space = MAX_BATCH_SIZE - batch.len();
+    // Only do this if we have any space remaining and there are no store tasks that might wait
+    // to write missing indices. If the count is 1, only we hold the Arc (no other tasks).
+    // We do this to avoid DB candidates while writes are active.
+    if space > 0 && pending_store_writes.load(Ordering::Relaxed) == 0 {
+        let state = db.state();
+        let clusters = state.clusters();
+        let mut from_database = state
+            .metadata()
+            .values()
+            .filter_map(|v| needs_index(v, batch, clusters))
+            .collect::<Vec<_>>();
+        drop(state);
+        let count = from_database.len();
+        debug!(
+            len = count,
+            missing_index_scan_cursor, "Found unset index validators"
+        );
+
+        // sort and skip to current position
+        from_database.sort_unstable_by_key(|x| x.serialize());
+        batch.extend(
+            from_database
+                .into_iter()
+                .skip(*missing_index_scan_cursor)
+                .take(space),
+        );
+
+        // update sweep, resetting it if necessary
+        *missing_index_scan_cursor += space;
+        if *missing_index_scan_cursor >= count {
+            *missing_index_scan_cursor = 0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use database::test_utils::InMemoryTestFixture;
+
+    use super::*;
+
+    #[test]
+    fn do_not_fill_up_batch_if_store_tasks_are_waiting() {
+        let mut batch = vec![];
+        let fixture = InMemoryTestFixture::new();
+
+        fill_batch_with_missing_indices_from_db(
+            &mut batch,
+            &fixture.db,
+            &AtomicUsize::new(1),
+            &mut 0,
+        );
+
+        assert_eq!(batch, vec![]);
+    }
 }
