@@ -597,4 +597,3 @@ async fn integration_duplicate_resolution_keeps_valid() {
     drop(tx);
     handle.await.expect("Collector task should complete");
 }
-
