@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::{KeyId, split_with_rng};
+use database::{NetworkDatabase, test_utils::generators};
 use rand::{prelude::*, rngs::StdRng};
-use types::Hash256;
+use ssv_types::{ENCRYPTED_KEY_LENGTH, Share, ValidatorMetadata};
+use tokio::sync::{mpsc, oneshot};
+use types::{Graffiti, Hash256};
 
 use super::*;
 
@@ -370,4 +373,267 @@ fn resolve_duplicate_removes_both() {
         !shares.contains_key(&target_op),
         "Map should not contain the operator when both signatures are invalid"
     );
+}
+
+// ==================== Integration test helpers ====================
+
+const TEST_NETWORK: &str = "test";
+
+/// Creates an in-memory `NetworkDatabase` seeded with a validator and operator shares
+/// whose `share_pubkey` values are real BLS public keys derived from the test key material.
+/// Returns the database for use with the `signature_collector()` async task.
+fn create_seeded_database(material: &TestKeyMaterial) -> Arc<NetworkDatabase> {
+    let rsa_pubkey = generators::pubkey::random_rsa();
+    let db = NetworkDatabase::new_in_memory(&rsa_pubkey, TEST_NETWORK)
+        .expect("Failed to create in-memory database");
+
+    let mut conn = db.connection().expect("Failed to get connection");
+    let tx = conn.transaction().expect("Failed to begin transaction");
+
+    // Create operators
+    let operators: Vec<_> = material
+        .shares
+        .iter()
+        .map(|(op_id, _)| generators::operator::with_id(**op_id))
+        .collect();
+    for op in &operators {
+        db.insert_operator(op, &tx)
+            .expect("Failed to insert operator");
+    }
+
+    // Create cluster with these operators
+    let cluster = generators::cluster::with_operators(&operators);
+
+    // Build shares with real BLS share pubkeys from key material
+    let shares: Vec<Share> = material
+        .shares
+        .iter()
+        .map(|(op_id, sk)| Share {
+            validator_pubkey: material.master_pubkey_bytes,
+            operator_id: *op_id,
+            cluster_id: cluster.cluster_id,
+            share_pubkey: PublicKeyBytes::from(sk.public_key()),
+            encrypted_private_key: [0u8; ENCRYPTED_KEY_LENGTH],
+        })
+        .collect();
+
+    // Create validator metadata with the real master pubkey
+    let validator = ValidatorMetadata {
+        public_key: material.master_pubkey_bytes,
+        cluster_id: cluster.cluster_id,
+        index: Some(ValidatorIndex(1)),
+        graffiti: Graffiti::default(),
+    };
+
+    db.insert_validator(cluster, &validator, shares, &tx)
+        .expect("Failed to insert validator");
+
+    tx.commit().expect("Failed to commit transaction");
+
+    Arc::new(db)
+}
+
+/// Sends a `RegisterNotifier` message to the collector channel.
+/// Returns the `oneshot::Receiver` that will receive the reconstructed signature.
+fn send_register_notifier(
+    tx: &mpsc::UnboundedSender<CollectorMessage>,
+    threshold: u64,
+    validator_pubkey: PublicKeyBytes,
+) -> oneshot::Receiver<Arc<Signature>> {
+    let (result_tx, result_rx) = oneshot::channel();
+    tx.send(CollectorMessage {
+        kind: CollectorMessageKind::RegisterNotifier {
+            notify: result_tx,
+            threshold,
+            validator_pubkey,
+        },
+        _drop_on_finish: None,
+    })
+    .expect("Failed to send RegisterNotifier");
+    result_rx
+}
+
+/// Sends a `PartialSignature` message to the collector channel.
+fn send_partial_sig(
+    tx: &mpsc::UnboundedSender<CollectorMessage>,
+    operator_id: OperatorId,
+    signature: Signature,
+) {
+    tx.send(CollectorMessage {
+        kind: CollectorMessageKind::PartialSignature {
+            operator_id,
+            signature: Box::new(signature),
+        },
+        _drop_on_finish: None,
+    })
+    .expect("Failed to send PartialSignature");
+}
+
+// ==================== Integration tests ====================
+
+/// End-to-end happy path: 3 valid shares reach threshold, collector reconstructs
+/// a valid signature and notifies the waiter.
+#[tokio::test]
+async fn integration_happy_path_all_valid() {
+    // Arrange
+    let material = create_test_key_material();
+    let db = create_seeded_database(&material);
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let signing_root = material.signing_root;
+
+    // Spawn the collector task
+    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+
+    // Register a notifier expecting threshold 3
+    let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
+
+    // Send 3 valid partial signatures
+    for (op_id, sk) in &material.shares[..3] {
+        send_partial_sig(&tx, *op_id, sk.sign(signing_root));
+    }
+
+    // Assert: notifier receives a valid reconstructed signature
+    let reconstructed = result_rx.await.expect("Should receive reconstructed signature");
+
+    // Verify the reconstructed signature against the master pubkey
+    assert!(
+        verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
+        "Reconstructed signature should verify against master pubkey"
+    );
+
+    // Clean up: drop sender so the collector task exits
+    drop(tx);
+    handle.await.expect("Collector task should complete");
+}
+
+///  2 valid + 1 garbage share reach threshold,
+/// verification fails, garbage operator is evicted, then a 4th valid share
+/// brings us back to threshold and the collector succeeds.
+#[tokio::test]
+async fn integration_fallback_evicts_bad_and_succeeds() {
+    // Arrange
+    let material = create_test_key_material();
+    let garbage = create_garbage_key_material();
+    let db = create_seeded_database(&material);
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let signing_root = material.signing_root;
+
+    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+    let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
+
+    // Send 2 valid partial signatures
+    for (op_id, sk) in &material.shares[..2] {
+        send_partial_sig(&tx, *op_id, sk.sign(signing_root));
+    }
+
+    // Send 1 garbage partial signature (operator 3 with wrong key)
+    let bad_op = material.shares[2].0;
+    let garbage_sig = garbage.shares[2].1.sign(signing_root);
+    send_partial_sig(&tx, bad_op, garbage_sig);
+
+    // At this point threshold is reached but verification fails.
+    // The collector evicts operator 3, dropping below threshold.
+    // Now send the 4th valid share to bring us back to threshold.
+    let (op4, sk4) = &material.shares[3];
+    send_partial_sig(&tx, *op4, sk4.sign(signing_root));
+
+    // Assert: notifier receives a valid reconstructed signature
+    let reconstructed = result_rx.await.expect("Should receive reconstructed signature");
+    assert!(
+        verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
+        "Reconstructed signature should verify after eviction + recovery"
+    );
+
+    drop(tx);
+    handle.await.expect("Collector task should complete");
+}
+
+/// Duplicate resolution via DB lookup: a valid sig is already held for an operator,
+/// then a garbage duplicate arrives. The collector should keep the valid sig.
+#[tokio::test]
+async fn integration_duplicate_resolution_keeps_valid() {
+    // Arrange
+    let material = create_test_key_material();
+    let garbage = create_garbage_key_material();
+    let db = create_seeded_database(&material);
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let signing_root = material.signing_root;
+
+    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+    let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
+
+    // Send valid sig for operator 1
+    let (op1, sk1) = &material.shares[0];
+    send_partial_sig(&tx, *op1, sk1.sign(signing_root));
+
+    // Send valid sig for operator 2
+    let (op2, sk2) = &material.shares[1];
+    send_partial_sig(&tx, *op2, sk2.sign(signing_root));
+
+    // Send a garbage duplicate for operator 1 — triggers resolve_duplicate_signature
+    let garbage_dup = garbage.shares[0].1.sign(signing_root);
+    send_partial_sig(&tx, *op1, garbage_dup);
+
+    // Send valid sig for operator 3 to reach threshold
+    let (op3, sk3) = &material.shares[2];
+    send_partial_sig(&tx, *op3, sk3.sign(signing_root));
+
+    // Assert: notifier receives valid signature (op1's valid sig was retained)
+    let reconstructed = result_rx.await.expect("Should receive reconstructed signature");
+    assert!(
+        verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
+        "Reconstructed signature should verify because valid duplicate was kept"
+    );
+
+    drop(tx);
+    handle.await.expect("Collector task should complete");
+}
+
+/// After an operator is evicted for submitting a bad share, subsequent messages
+/// from that operator should be silently ignored —> even if the new signature is
+/// valid. We prove this by NOT sending any other operator's share after the
+/// evicted operator retries: if the eviction check works, threshold is never
+/// reached and the notifier never fires.
+#[tokio::test]
+async fn integration_evicted_operator_ignored() {
+    // Arrange
+    let material = create_test_key_material();
+    let garbage = create_garbage_key_material();
+    let db = create_seeded_database(&material);
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let signing_root = material.signing_root;
+
+    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+    let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
+
+    // Send 2 valid + 1 garbage to trigger eviction of operator 3
+    for (op_id, sk) in &material.shares[..2] {
+        send_partial_sig(&tx, *op_id, sk.sign(signing_root));
+    }
+    let bad_op = material.shares[2].0;
+    send_partial_sig(&tx, bad_op, garbage.shares[2].1.sign(signing_root));
+
+    // Eviction happened. Now send a VALID sig from the evicted operator.
+    // If eviction is enforced, this is silently ignored and we stay at 2
+    // shares (below threshold 3). If eviction is NOT enforced, this would
+    // be accepted, giving us 3 valid shares and triggering a successful
+    // reconstruction.
+    let valid_sig_from_evicted = material.shares[2].1.sign(signing_root);
+    send_partial_sig(&tx, bad_op, valid_sig_from_evicted);
+
+    // Drop the sender so the collector processes all queued messages and exits.
+    drop(tx);
+
+    // Assert: the notifier should NOT have received a result, because the
+    // evicted operator's valid sig was ignored and we never reached threshold.
+    assert!(
+        result_rx.await.is_err(),
+        "Notifier should not fire: evicted operator's valid sig must be ignored"
+    );
+
+    handle.await.expect("Collector task should complete");
 }

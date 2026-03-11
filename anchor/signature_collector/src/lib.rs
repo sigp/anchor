@@ -171,7 +171,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         threshold: cloned_metadata.threshold,
                         validator_pubkey,
                     },
-                    _drop_on_finish: drop_on_finish,
+                    _drop_on_finish: Some(drop_on_finish),
                 });
             },
             COLLECTOR_MESSAGE_NAME,
@@ -353,7 +353,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         operator_id: message.signer,
                         signature: Box::new(message.partial_signature),
                     },
-                    _drop_on_finish: drop_on_finish,
+                    _drop_on_finish: Some(drop_on_finish),
                 }) {
                     error!(
                         ?err,
@@ -473,7 +473,7 @@ pub struct ValidatorSigningData {
 
 struct CollectorMessage {
     kind: CollectorMessageKind,
-    _drop_on_finish: DropOnFinish,
+    _drop_on_finish: Option<DropOnFinish>,
 }
 
 #[derive(Debug)]
