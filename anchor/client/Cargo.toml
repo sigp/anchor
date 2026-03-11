@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "1.2.1"
+version = "1.2.2"
 authors = ["Sigma Prime <contact@sigmaprime.io"]
 edition = { workspace = true }
 
@@ -37,6 +37,7 @@ operator_key = { workspace = true }
 parking_lot = { workspace = true }
 processor = { workspace = true }
 qbft_manager = { workspace = true }
+reqwest = { workspace = true }
 sensitive_url = { workspace = true }
 signature_collector = { workspace = true }
 slashing_protection = { workspace = true }

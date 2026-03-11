@@ -11,8 +11,8 @@ database = { workspace = true }
 duties_tracker = { workspace = true }
 ethereum_ssz = { workspace = true }
 fork = { workspace = true }
-gossipsub = { workspace = true }
 hex = { workspace = true }
+libp2p = { workspace = true }
 openssl = { workspace = true }
 processor = { workspace = true }
 safe_arith = { workspace = true }

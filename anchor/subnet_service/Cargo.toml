@@ -9,7 +9,7 @@ alloy = { workspace = true }
 database = { workspace = true }
 ethereum_serde_utils = "0.7.0"
 fork = { workspace = true }
-gossipsub = { workspace = true }
+libp2p = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 slot_clock = { workspace = true }
@@ -21,3 +21,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 typenum = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.14.0"

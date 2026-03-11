@@ -13,7 +13,7 @@ use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
 use fork::{Fork, ForkSchedule};
-pub use gossipsub::MessageAcceptance;
+pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Public},
@@ -26,7 +26,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
-    message::{MsgType, SignedSSVMessage},
+    message::{MsgType, SSVMessageError, SignedSSVMessage, SignedSSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
 };
@@ -253,6 +253,44 @@ impl From<&ValidationFailure> for MessageAcceptance {
     }
 }
 
+impl From<SignedSSVMessageError> for ValidationFailure {
+    fn from(err: SignedSSVMessageError) -> Self {
+        match err {
+            // Reachable: `validate()` checks these on SSZ-decoded messages
+            SignedSSVMessageError::WrongRSASignatureSize { .. } => {
+                ValidationFailure::WrongRSASignatureSize
+            }
+            SignedSSVMessageError::NoSigners => ValidationFailure::NoSigners,
+            SignedSSVMessageError::NoSignatures => ValidationFailure::NoSignatures,
+            SignedSSVMessageError::ZeroSigner => ValidationFailure::ZeroSigner,
+            SignedSSVMessageError::DuplicatedSigner => ValidationFailure::DuplicatedSigner,
+            SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
+                ValidationFailure::SignersAndSignaturesWithDifferentLength
+            }
+            SignedSSVMessageError::SSVMessageError(ssv_err) => match ssv_err {
+                SSVMessageError::EmptyData => ValidationFailure::EmptyData,
+                SSVMessageError::SSVDataTooBig { .. } => ValidationFailure::SSVDataTooBig,
+                SSVMessageError::WrongDomain { .. } => ValidationFailure::WrongDomain,
+                SSVMessageError::SignerNotInCommittee { .. } => {
+                    ValidationFailure::SignerNotInCommittee
+                }
+            },
+            // Not returned by `validate()`:
+            // - `TooMany*` / `FullDataTooLong`: only from `new()`/`aggregate()` when converting raw
+            //   Vecs into VariableLists. `validate()` operates on data already in `VariableList`
+            //   form, so these are type-enforced.
+            // - `SignersNotSorted`: removed from `validate()` because the Go spec's `Validate()`
+            //   does not enforce sorting and Go's `Aggregate()` appends without sorting.
+            SignedSSVMessageError::TooManySignatures { .. }
+            | SignedSSVMessageError::TooManyOperatorIDs { .. }
+            | SignedSSVMessageError::FullDataTooLong { .. }
+            | SignedSSVMessageError::SignersNotSorted => ValidationFailure::UnexpectedFailure {
+                msg: err.to_string(),
+            },
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
@@ -391,6 +429,11 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         signed_ssv_message: &SignedSSVMessage,
         topic_context: &TopicContext,
     ) -> Result<ValidatedMessage, ValidationFailure> {
+        // Structural validation: signer/signature invariants, RSA size, etc.
+        signed_ssv_message
+            .validate()
+            .map_err(ValidationFailure::from)?;
+
         // Get the role from message ID
         let ssv_message = signed_ssv_message.ssv_message();
         let role = ssv_message

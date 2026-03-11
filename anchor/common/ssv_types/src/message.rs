@@ -57,8 +57,6 @@ const MAX_PARTIAL_SIGNATURE_MSGS_SIZE: usize = PARTIAL_SIG_MSG_TYPE_SIZE
     + MAX_PARTIAL_SIGNATURE_MESSAGES * PARTIAL_SIGNATURE_MSG_SIZE
     + ssz::BYTES_PER_LENGTH_OFFSET;
 
-const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
-
 /// `SSVMessage.Data` max size: 726932
 /// `max(consensus_msg_max, partial_sig_max)` = `max(722412, 726932)` = 726932
 ///
@@ -609,13 +607,9 @@ impl SignedSSVMessage {
     }
 
     pub fn validate(&self) -> Result<(), SignedSSVMessageError> {
-        if self.signatures.len() > MAX_SIGNATURES {
-            return Err(SignedSSVMessageError::TooManySignatures {
-                provided: self.signatures.len(),
-                max: MAX_SIGNATURES,
-            });
-        }
-
+        // Rule: Each RSA signature must be exactly `RSA_SIGNATURE_SIZE` bytes.
+        // `VariableList<u8, U256>` only guarantees <= 256, not == 256, so this
+        // catches undersized signatures from SSZ-decoded network messages.
         for (i, sig) in self.signatures.iter().enumerate() {
             if sig.len() != RSA_SIGNATURE_SIZE {
                 return Err(SignedSSVMessageError::WrongRSASignatureSize {
@@ -624,20 +618,6 @@ impl SignedSSVMessage {
                     sig_length: RSA_SIGNATURE_SIZE,
                 });
             }
-        }
-
-        if self.operator_ids.len() > MAX_SIGNATURES {
-            return Err(SignedSSVMessageError::TooManyOperatorIDs {
-                provided: self.operator_ids.len(),
-                max: MAX_SIGNATURES,
-            });
-        }
-
-        if self.full_data.len() > MAX_FULL_DATA_SIZE {
-            return Err(SignedSSVMessageError::FullDataTooLong {
-                provided: self.full_data.len(),
-                max: MAX_FULL_DATA_SIZE,
-            });
         }
 
         // Rule: Must have at least one signer
@@ -649,11 +629,14 @@ impl SignedSSVMessage {
             return Err(SignedSSVMessageError::NoSignatures);
         }
 
-        if !self.operator_ids.is_sorted() {
-            return Err(SignedSSVMessageError::SignersNotSorted);
-        }
-
-        // Note: Len Signers & Operators will only be > 1 after commit aggregation
+        // Note: Len Signers & Operators will only be > 1 after commit aggregation.
+        //
+        // No `is_sorted()` check: the Go spec's `Validate()` does not enforce sorting,
+        // and Go's `Aggregate()` appends without sorting. Signature verification
+        // pairs `operator_ids[i]` with `signatures[i]` by index, requiring consistent
+        // pairing rather than sorted order. Both Go (append) and Anchor (sort pairs
+        // together) preserve this pairing. Enforcing sorted order here would reject
+        // valid messages from Go nodes.
 
         // Rule: Signer can't be zero
         if self.operator_ids.iter().any(|&id| *id == 0) {
@@ -661,8 +644,6 @@ impl SignedSSVMessage {
         }
 
         // Rule: Signers must be unique
-        // This check assumes that signers is sorted, so this rule should be after the check for
-        // ErrSignersNotSorted.
         let mut seen_ids = HashSet::with_capacity(self.operator_ids.len());
         for &id in &self.operator_ids {
             if !seen_ids.insert(id) {
@@ -688,6 +669,7 @@ mod tests {
     use bls::Signature;
     use ssz::{Decode, Encode};
     use typenum::Unsigned;
+    const MAX_FULL_DATA_SIZE: usize = SSVMessageFullDataLen::USIZE;
 
     use super::*;
     use crate::{
@@ -1006,20 +988,21 @@ mod tests {
         }
     }
 
-    /// Checks that unsorted operator IDs triggers `SignersNotSorted`.
+    /// Verifies that unsorted operator IDs are accepted. The Go spec's Validate()
+    /// does not enforce sorting, and Go's Aggregate() appends without sorting,
+    /// so network messages may have unsorted operator IDs.
     #[test]
-    fn test_signed_ssv_message_signers_not_sorted() {
+    fn test_signed_ssv_message_unsorted_signers_accepted() {
         let ssv_msg = valid_ssv_message();
         let sigs = vec![valid_signature(), valid_signature()];
-        // Not sorted
         let ops = vec![OperatorId(10), OperatorId(2)];
 
         let result = SignedSSVMessage::new(sigs, ops, ssv_msg, vec![]);
 
-        match result {
-            Err(SignedSSVMessageError::SignersNotSorted) => (),
-            other => panic!("Expected SignersNotSorted, got {other:?}"),
-        }
+        assert!(
+            result.is_ok(),
+            "Unsorted signers should be accepted: {result:?}"
+        );
     }
 
     /// Checks that operator ID = 0 triggers `ZeroSigner`.
@@ -1254,4 +1237,63 @@ mod tests {
             std::cmp::max(MAX_PARTIAL_SIGNATURE_MSGS_SIZE, MAX_CONSENSUS_MSG_SIZE)
         );
     }
+
+    // ==================== SSZ-decoded SignedSSVMessage validation tests ====================
+    //
+    // These tests verify that `SignedSSVMessage::validate()` rejects structurally invalid
+    // messages that bypass the `new()` constructor. This matters because `from_ssz_bytes()`
+    // can produce structs with invalid state (e.g., undersized signatures, zero signers),
+    // and the `validate()` call in `validate_decoded_message()` must catch them.
+
+    /// Helper to build a `SignedSSVMessage` with direct field access, bypassing `new()`.
+    /// This simulates a struct produced by `from_ssz_bytes()` with arbitrary field values.
+    fn build_unvalidated_signed_ssv_message(
+        signatures: Vec<Vec<u8>>,
+        operator_ids: Vec<OperatorId>,
+    ) -> SignedSSVMessage {
+        let sig_variable_lists: Vec<VariableList<u8, U256>> = signatures
+            .into_iter()
+            .map(|sig| {
+                VariableList::new(sig).expect("signature should fit in VariableList<u8, U256>")
+            })
+            .collect();
+        SignedSSVMessage {
+            signatures: VariableList::new(sig_variable_lists)
+                .expect("signatures list should fit in VariableList<_, U13>"),
+            operator_ids: VariableList::new(operator_ids)
+                .expect("operator_ids should fit in VariableList<_, U13>"),
+            ssv_message: valid_ssv_message(),
+            full_data: VariableList::empty(),
+        }
+    }
+
+    /// Verify that `validate()` rejects signatures shorter than `RSA_SIGNATURE_SIZE` (256 bytes).
+    /// `from_ssz_bytes()` can produce a `VariableList<u8, U256>` with fewer than 256 bytes
+    /// because the type only enforces an upper bound, not an exact length.
+    #[test]
+    fn test_validate_rejects_undersized_rsa_signature() {
+        // Arrange: create a message with a 100-byte signature (well under the required 256)
+        let undersized_signature = vec![0u8; 100];
+        let signed_msg =
+            build_unvalidated_signed_ssv_message(vec![undersized_signature], vec![OperatorId(1)]);
+
+        // Act
+        let result = signed_msg.validate();
+
+        // Assert
+        assert_eq!(
+            result,
+            Err(SignedSSVMessageError::WrongRSASignatureSize {
+                index: 0,
+                length: 100,
+                sig_length: RSA_SIGNATURE_SIZE,
+            }),
+            "validate() must reject signatures shorter than RSA_SIGNATURE_SIZE"
+        );
+    }
+
+    // Note: zero_signer, duplicate_signers, and signers/signatures length mismatch
+    // are already covered by the spec test fixtures in `spec_tests/src/types/signed_ssv_msg.rs`
+    // (e.g., `signedssvmsg_zero_signer.json`, `signedssvmsg_non_unique_signers.json`,
+    // `signedssvmsg_signers_and_signatures_with_different_length.json`).
 }

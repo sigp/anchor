@@ -11,7 +11,7 @@ use types::{Address, GRAFFITI_BYTES_LEN, Graffiti};
 
 use crate::{
     Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,
-    ValidatorIndex, ValidatorMetadata,
+    ValidatorMetadata,
 };
 
 // Helper for converting to Rustqlite Error
@@ -28,7 +28,7 @@ impl TryFrom<&Row<'_>> for Operator {
     type Error = rusqlite::Error;
     fn try_from(row: &Row) -> Result<Self, Self::Error> {
         // Get the OperatorId from column 0
-        let id: OperatorId = OperatorId(row.get(0)?);
+        let id: OperatorId = row.get(0)?;
 
         // Get the public key from column 1
         let pem_string = row.get::<_, String>(1)?;
@@ -93,7 +93,7 @@ impl TryFrom<&Row<'_>> for ClusterMember {
         let cluster_id = ClusterId(row.get(0)?);
 
         // Get OperatorId from column 1
-        let operator_id = OperatorId(row.get(1)?);
+        let operator_id = row.get(1)?;
 
         Ok(ClusterMember {
             operator_id,
@@ -115,7 +115,7 @@ impl TryFrom<&Row<'_>> for ValidatorMetadata {
         let cluster_id: ClusterId = ClusterId(row.get(1)?);
 
         // Get ValidatorIndex from column 2
-        let index = row.get::<_, Option<usize>>(2)?.map(ValidatorIndex);
+        let index = row.get(2)?;
 
         // Get Graffiti from column 3
         let graffiti = Graffiti(row.get::<_, [u8; GRAFFITI_BYTES_LEN]>(3)?);
@@ -142,7 +142,7 @@ impl TryFrom<&Row<'_>> for Share {
         let encrypted_private_key: [u8; ENCRYPTED_KEY_LENGTH] = row.get(1)?;
 
         // Get the OperatorId from column 2 and ClusterId from column 3
-        let operator_id = OperatorId(row.get(2)?);
+        let operator_id = row.get(2)?;
         let cluster_id = ClusterId(row.get(3)?);
 
         // Get the Validator PublicKey from column 4

@@ -41,7 +41,7 @@ impl NetworkDatabase {
         // Insert into the database
         tx.prepare_cached(sql_operations::INSERT_OPERATOR)?
             .execute(params![
-                *operator.id,               // The id of the registered operator
+                operator.id,                // The id of the registered operator
                 encoded,                    // RSA public key
                 operator.owner.to_string()  // The owner address of the operator
             ])?;
@@ -85,7 +85,7 @@ impl NetworkDatabase {
 
         if let Err(err) = tx
             .prepare_cached(sql_operations::DELETE_OPERATOR)?
-            .execute(params![*id])
+            .execute(params![id])
         {
             trace!(
                 ?err,
@@ -98,7 +98,7 @@ impl NetworkDatabase {
             // Mark the operator as removed. This will allow cluster membership to remain recorded.
             // The operator will be removed by a trigger if no cluster membership remains.
             tx.prepare_cached(sql_operations::MARK_OPERATOR_REMOVED)?
-                .execute(params![*id])?;
+                .execute(params![id])?;
         }
 
         self.state.send_modify(|state| {
@@ -114,7 +114,7 @@ impl NetworkDatabase {
         id: OperatorId,
         tx: &Transaction<'_>,
     ) -> Result<OperatorStatus, DatabaseError> {
-        match tx.query_row(sql_operations::GET_OPERATOR_STATUS, params![*id], |row| {
+        match tx.query_row(sql_operations::GET_OPERATOR_STATUS, params![id], |row| {
             row.get::<_, bool>(0)
         }) {
             Ok(removed) => Ok(if removed {

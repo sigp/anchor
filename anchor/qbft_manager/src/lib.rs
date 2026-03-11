@@ -12,7 +12,7 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, CommitteeId,
+    CommitteeId, IndexSet, OperatorId,
     consensus::{
         AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
         QbftDataValidator,
@@ -195,7 +195,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         initial: D,
         validator: Box<dyn QbftDataValidator<D>>,
         timeout_mode: TimeoutMode,
-        committee: &Cluster,
+        committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
         let Some(operator_id) = self.operator_id.get() else {
             return Err(QbftError::OwnOperatorIdUnknown);
@@ -213,15 +213,14 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
         let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
 
-        // General the qbft configuration
+        // Generate the qbft configuration
         let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
             instance_height,
-            committee.cluster_members.iter().copied().collect(),
+            committee_members.iter().copied().collect(),
             leader_fn,
         );
         let config = config
-            .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)
             .with_max_rounds(
                 message_id
                     .role()
