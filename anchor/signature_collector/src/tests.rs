@@ -117,6 +117,10 @@ fn sign_shares(
         .collect()
 }
 
+fn test_validator_index() -> ValidatorIndex {
+    ValidatorIndex(1)
+}
+
 // ==================== `find_invalid_shares` tests ====================
 
 /// Three valid shares and one garbage share. The function should identify
@@ -483,7 +487,12 @@ async fn integration_happy_path_all_valid() {
     let signing_root = material.signing_root;
 
     // Spawn the collector task
-    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+    let handle = tokio::spawn(signature_collector(
+        rx,
+        signing_root,
+        test_validator_index(),
+        db,
+    ));
 
     // Register a notifier expecting threshold 3
     let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
@@ -522,7 +531,12 @@ async fn integration_fallback_removes_bad_and_succeeds() {
     let (tx, rx) = mpsc::unbounded_channel();
     let signing_root = material.signing_root;
 
-    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+    let handle = tokio::spawn(signature_collector(
+        rx,
+        signing_root,
+        test_validator_index(),
+        db,
+    ));
     let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
 
     // Send 2 valid partial signatures
@@ -566,7 +580,12 @@ async fn integration_duplicate_resolution_keeps_valid() {
     let (tx, rx) = mpsc::unbounded_channel();
     let signing_root = material.signing_root;
 
-    let handle = tokio::spawn(signature_collector(rx, signing_root, db));
+    let handle = tokio::spawn(signature_collector(
+        rx,
+        signing_root,
+        test_validator_index(),
+        db,
+    ));
     let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
 
     // Send valid sig for operator 1
@@ -592,6 +611,50 @@ async fn integration_duplicate_resolution_keeps_valid() {
     assert!(
         verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
         "Reconstructed signature should verify because valid duplicate was kept"
+    );
+
+    drop(tx);
+    handle.await.expect("Collector task should complete");
+}
+
+/// Duplicate resolution must also work before local registration provides the
+/// validator pubkey, since inbound network partials can spawn the collector first.
+#[tokio::test]
+async fn integration_duplicate_resolution_before_register_notifier() {
+    let material = create_test_key_material();
+    let garbage = create_garbage_key_material();
+    let db = create_seeded_database(&material);
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let signing_root = material.signing_root;
+
+    let handle = tokio::spawn(signature_collector(
+        rx,
+        signing_root,
+        test_validator_index(),
+        db,
+    ));
+
+    let (op1, sk1) = &material.shares[0];
+
+    // Network-first path: store a bad share, then a valid replacement, before notifier
+    // registration.
+    send_partial_sig(&tx, *op1, garbage.shares[0].1.sign(signing_root));
+    send_partial_sig(&tx, *op1, sk1.sign(signing_root));
+
+    let result_rx = send_register_notifier(&tx, THRESHOLD, material.master_pubkey_bytes);
+
+    let (op2, sk2) = &material.shares[1];
+    send_partial_sig(&tx, *op2, sk2.sign(signing_root));
+    let (op3, sk3) = &material.shares[2];
+    send_partial_sig(&tx, *op3, sk3.sign(signing_root));
+
+    let reconstructed = result_rx
+        .await
+        .expect("Should receive reconstructed signature");
+    assert!(
+        verify_reconstructed_signature(&reconstructed, &material.master_pubkey_bytes, signing_root),
+        "Reconstructed signature should verify because the valid replacement was retained"
     );
 
     drop(tx);

@@ -392,7 +392,9 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                 });
                 let db = self.database.clone();
                 let _ = self.processor.permitless.send_async(
-                    Box::pin(signature_collector(rx, signing_root, db).instrument(span)),
+                    Box::pin(
+                        signature_collector(rx, signing_root, validator_index, db).instrument(span),
+                    ),
                     COLLECTOR_NAME,
                 );
                 trace!(
@@ -529,6 +531,7 @@ impl From<bls_lagrange::Error> for CollectionError {
 async fn signature_collector(
     mut rx: mpsc::UnboundedReceiver<CollectorMessage>,
     signing_root: Hash256,
+    validator_index: ValidatorIndex,
     database: Arc<NetworkDatabase>,
 ) {
     let mut notifiers = vec![];
@@ -588,20 +591,22 @@ async fn signature_collector(
                 // Conflicting sig from same operator so verify both, keep valid one
                 if received_different_share {
                     warn!(?operator_id, "Conflicting signature from operator");
-                    if let Some(validator_pk) = &validator_pubkey {
-                        match fetch_share_pubkeys(&database, validator_pk).await {
-                            Ok(pubkeys) => {
-                                resolve_duplicate_signature(
-                                    &mut signature_share,
-                                    operator_id,
-                                    &signature,
-                                    signing_root,
-                                    &pubkeys,
-                                );
-                            }
-                            Err(err) => {
-                                error!(?err, "DB lookup failed for duplicate resolution");
-                            }
+                    match fetch_share_pubkeys_by_validator_index(&database, validator_index).await {
+                        Ok(pubkeys) => {
+                            resolve_duplicate_signature(
+                                &mut signature_share,
+                                operator_id,
+                                &signature,
+                                signing_root,
+                                &pubkeys,
+                            );
+                        }
+                        Err(err) => {
+                            error!(
+                                ?err,
+                                ?validator_index,
+                                "DB lookup failed for duplicate resolution"
+                            );
                         }
                     }
                 }
@@ -667,6 +672,16 @@ async fn fetch_share_pubkeys(
         .map_err(|e| database::DatabaseError::SQLError(e.to_string()))?
 }
 
+async fn fetch_share_pubkeys_by_validator_index(
+    database: &Arc<NetworkDatabase>,
+    validator_index: ValidatorIndex,
+) -> Result<HashMap<OperatorId, PublicKeyBytes>, database::DatabaseError> {
+    let db = Arc::clone(database);
+    tokio::task::spawn_blocking(move || db.get_share_pubkeys_for_validator_index(validator_index))
+        .await
+        .map_err(|e| database::DatabaseError::SQLError(e.to_string()))?
+}
+
 fn combine_signatures(
     shares: &HashMap<OperatorId, Signature>,
 ) -> Result<Signature, CollectionError> {
@@ -728,6 +743,7 @@ fn resolve_duplicate_signature(
     share_pubkeys: &HashMap<OperatorId, PublicKeyBytes>,
 ) {
     let Some(share_pubkey) = share_pubkeys.get(&operator_id) else {
+        warn!(%operator_id, "No share pubkey found for duplicate resolution");
         shares.remove(&operator_id);
         return;
     };
@@ -742,6 +758,8 @@ fn resolve_duplicate_signature(
 
     if verify_partial_signature(new_signature, signing_root, share_pubkey) {
         shares.insert(operator_id, new_signature.clone());
+    } else {
+        warn!(%operator_id, "Both conflicting signatures were invalid");
     }
 }
 

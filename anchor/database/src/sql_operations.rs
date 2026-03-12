@@ -81,6 +81,12 @@ pub const GET_SHARE_PUBKEYS_FOR_VALIDATOR: &str = r#"
     SELECT operator_id, share_pubkey
     FROM shares WHERE validator_pubkey = ?1
 "#;
+pub const GET_SHARE_PUBKEYS_FOR_VALIDATOR_INDEX: &str = r#"
+    SELECT s.operator_id, s.share_pubkey
+    FROM shares s
+    JOIN validators v ON v.validator_pubkey = s.validator_pubkey
+    WHERE v.validator_index = ?1
+"#;
 
 // Misc Datta
 pub const INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT: &str = r#"
