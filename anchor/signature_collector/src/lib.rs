@@ -648,7 +648,12 @@ async fn signature_collector(
                     let invalid_operators =
                         find_invalid_shares(&signature_share, signing_root, &share_pubkeys);
                     if invalid_operators.is_empty() {
-                        error!("Verification failed but no individual share was invalid");
+                        let operators: Vec<_> = signature_share.keys().copied().collect();
+                        error!(
+                            ?signing_root,
+                            ?operators,
+                            "Verification failed but no individual share was invalid"
+                        );
                         return;
                     }
                     warn!(?invalid_operators, "Removing invalid shares");
@@ -669,7 +674,13 @@ async fn fetch_share_pubkeys(
     let pk = *validator_pk;
     tokio::task::spawn_blocking(move || db.get_share_pubkeys_for_validator(&pk))
         .await
-        .map_err(|e| database::DatabaseError::SQLError(e.to_string()))?
+        .map_err(|err| {
+            error!(
+                ?err,
+                "spawn_blocking failed while fetching share pubkeys by validator pubkey"
+            );
+            database::DatabaseError::SQLError(err.to_string())
+        })?
 }
 
 async fn fetch_share_pubkeys_by_validator_index(
@@ -679,7 +690,13 @@ async fn fetch_share_pubkeys_by_validator_index(
     let db = Arc::clone(database);
     tokio::task::spawn_blocking(move || db.get_share_pubkeys_for_validator_index(validator_index))
         .await
-        .map_err(|e| database::DatabaseError::SQLError(e.to_string()))?
+        .map_err(|err| {
+            error!(
+                ?err,
+                "spawn_blocking failed while fetching share pubkeys by validator index"
+            );
+            database::DatabaseError::SQLError(err.to_string())
+        })?
 }
 
 fn combine_signatures(
