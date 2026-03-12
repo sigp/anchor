@@ -728,6 +728,10 @@ fn verify_reconstructed_signature(
     signing_root: Hash256,
 ) -> bool {
     let Ok(pk) = validator_pubkey.decompress() else {
+        error!(
+            ?validator_pubkey,
+            "Failed to decompress validator pubkey during reconstructed signature verification"
+        );
         return false;
     };
     signature.verify(&pk, signing_root)
@@ -769,6 +773,10 @@ fn verify_partial_signature(
     share_pubkey: &PublicKeyBytes,
 ) -> bool {
     let Ok(pk) = share_pubkey.decompress() else {
+        error!(
+            ?share_pubkey,
+            "Failed to decompress share pubkey during partial signature verification"
+        );
         return false;
     };
     signature.verify(&pk, signing_root)
