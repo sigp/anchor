@@ -93,7 +93,6 @@ const VALIDATOR_REGISTRATION_LOG_NAME: &str = "validator registration";
 const AGGREGATE_LOG_NAME: &str = "aggregate";
 const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
 const SYNC_SELECTION_PROOF_LOG_NAME: &str = "sync selection proof";
-const SYNC_COMMITTEE_SIGNATURE_LOG_NAME: &str = "sync committee signature";
 const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
 
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
@@ -1389,97 +1388,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         .await
     }
 
-    /// Sign a single sync committee message, handling consensus and signature collection.
-    async fn sign_single_sync_committee_signature(
-        self: &Arc<Self>,
-        message: SyncMessageToSign,
-    ) -> Result<SyncCommitteeMessage, Error> {
-        let validator_pubkey = message.pubkey;
-        let future = async {
-            let epoch = message.slot.epoch(E::slots_per_epoch());
-            let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
-            let metadata = self.get_voting_context(message.slot).await?;
-
-            let validator_attestation_committees =
-                self.get_attesting_validators_in_committee(&metadata, cluster.committee_id());
-
-            let timer =
-                metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-            let timeout_mode = TimeoutMode::SlotTime {
-                instance_start_time: self.get_instant_in_slot(
-                    message.slot,
-                    Duration::from_secs(self.spec.seconds_per_slot) / 3,
-                )?,
-            };
-            let completed = self
-                .qbft_manager
-                .decide_instance(
-                    CommitteeInstanceId {
-                        committee: cluster.committee_id(),
-                        instance_height: message.slot.as_usize().into(),
-                    },
-                    metadata.beacon_vote.clone(),
-                    self.create_beacon_vote_validator(
-                        message.slot,
-                        validator_attestation_committees,
-                    ),
-                    timeout_mode,
-                    &cluster.cluster_members,
-                )
-                .await
-                .map_err(SpecificError::from)?;
-            drop(timer);
-
-            let data = match completed {
-                Completed::TimedOut => {
-                    return Err(Error::SpecificError(SpecificError::Timeout));
-                }
-                Completed::Success(data) => data,
-            };
-
-            // Calculate signature count for post-consensus committee collection
-            let committee_validator_indices =
-                self.get_committee_validator_indices(&cluster.committee_id());
-
-            // Use `voting_message_count_for_committee` for post-consensus (flat counting)
-            let num_signatures_to_collect = metadata
-                .voting_assignments
-                .voting_message_count_for_committee(|idx| {
-                    committee_validator_indices.contains(idx)
-                });
-
-            let domain = self.get_domain(epoch, Domain::SyncCommittee);
-            let signing_root = data.block_root.signing_root(domain);
-            let signature = self
-                .collect_signature(
-                    PartialSignatureKind::PostConsensus,
-                    Role::Committee,
-                    CollectionMode::Committee {
-                        num_signatures_to_collect,
-                        base_hash: data.hash(),
-                    },
-                    &validator,
-                    &cluster,
-                    signing_root,
-                    message.slot,
-                )
-                .await?;
-
-            Ok(SyncCommitteeMessage {
-                slot: message.slot,
-                beacon_block_root: data.block_root,
-                validator_index: message.validator_index,
-                signature,
-            })
-        };
-        run_and_update_metrics(
-            SYNC_COMMITTEE_SIGNATURE_LOG_NAME,
-            &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
-            future,
-        )
-        .await
-    }
-
     /// Sign a single sync committee contribution, handling fork-aware production and metrics.
     async fn sign_single_sync_committee_contribution(
         self: &Arc<Self>,
@@ -1526,6 +1434,154 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
             future,
         )
         .await
+    }
+
+    /// Sign sync committee messages for all validators in a single SSV committee.
+    ///
+    /// Runs QBFT consensus once for the committee, then collects signatures for each validator.
+    async fn sign_committee_sync_committee_signatures(
+        &self,
+        committee_id: CommitteeId,
+        messages: Vec<SyncMessageToSign>,
+    ) -> Result<Vec<SyncCommitteeMessage>, Error> {
+        let Some(first) = messages.first() else {
+            warn!("sign_committee_sync_committee_signatures called with empty messages");
+            return Ok(vec![]);
+        };
+        let slot = first.slot;
+        let epoch = slot.epoch(E::slots_per_epoch());
+
+        // All validators in this committee share the same cluster
+        let (_, cluster) = self.get_validator_and_cluster(first.pubkey)?;
+
+        let voting_context = self.get_voting_context(slot).await?;
+        let validator_attestation_committees =
+            self.get_attesting_validators_in_committee(&voting_context, committee_id);
+
+        // Run QBFT consensus once for the entire committee
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self
+                .get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?,
+        };
+
+        let completed = self
+            .qbft_manager
+            .decide_instance(
+                CommitteeInstanceId {
+                    committee: committee_id,
+                    instance_height: slot.as_usize().into(),
+                },
+                voting_context.beacon_vote.clone(),
+                self.create_beacon_vote_validator(slot, validator_attestation_committees),
+                timeout_mode,
+                &cluster.cluster_members,
+            )
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        let data = match completed {
+            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => data,
+        };
+
+        // Prepare all validators
+        let domain = self.get_domain(epoch, Domain::SyncCommittee);
+        let signing_root = data.block_root.signing_root(domain);
+
+        let mut prepared: Vec<(u64, ValidatorMetadata, Hash256)> =
+            Vec::with_capacity(messages.len());
+        for msg in &messages {
+            let validator = match self.database.state().metadata().get_by(&msg.pubkey) {
+                Some(v) => v.clone(),
+                None => {
+                    warn!(
+                        pubkey = ?msg.pubkey,
+                        "Unknown pubkey while signing sync committee message, skipping"
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                        &[metrics::OTHER_ERROR],
+                    );
+                    continue;
+                }
+            };
+            prepared.push((msg.validator_index, validator, signing_root));
+        }
+
+        if prepared.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Compute signature count for the committee
+        let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+        let num_signatures_to_collect = voting_context
+            .voting_assignments
+            .voting_message_count_for_committee(|idx| committee_validator_indices.contains(idx));
+        let data_hash = data.hash();
+
+        let validators_for_signing: Vec<(ValidatorMetadata, Hash256)> = prepared
+            .iter()
+            .map(|(_, validator, signing_root)| (validator.clone(), *signing_root))
+            .collect();
+
+        let signatures = self
+            .collect_committee_signatures(
+                PartialSignatureKind::PostConsensus,
+                Role::Committee,
+                slot,
+                &cluster,
+                num_signatures_to_collect,
+                data_hash,
+                validators_for_signing,
+            )
+            .await?;
+
+        // Assemble results by mapping signatures back to sync committee messages
+        let mut results = Vec::with_capacity(prepared.len());
+        for (validator_index, validator, _) in prepared {
+            let index = match validator.index {
+                Some(idx) => idx,
+                None => {
+                    warn!("Validator missing index, skipping sync committee message");
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                        &[metrics::OTHER_ERROR],
+                    );
+                    continue;
+                }
+            };
+
+            let signature = match signatures.get(&index) {
+                Some(sig) => sig.clone(),
+                None => {
+                    warn!(
+                        ?index,
+                        "Missing signature for validator, skipping sync committee message"
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                        &[metrics::OTHER_ERROR],
+                    );
+                    continue;
+                }
+            };
+
+            validator_metrics::inc_counter_vec(
+                &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                &[validator_metrics::SUCCESS],
+            );
+
+            results.push(SyncCommitteeMessage {
+                slot,
+                beacon_block_root: data.block_root,
+                validator_index,
+                signature,
+            });
+        }
+
+        Ok(results)
     }
 
     /// Sign attestations for all validators in a single SSV committee.
@@ -2644,19 +2700,54 @@ impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
         self: &Arc<Self>,
         messages: Vec<SyncMessageToSign>,
     ) -> impl Stream<Item = Result<Vec<SyncCommitteeMessage>, Error>> + Send {
-        let this = Arc::clone(self);
-        stream::once(async move {
-            let futures = messages.into_iter().map(|message| {
-                let this = Arc::clone(&this);
-                async move { this.sign_single_sync_committee_signature(message).await }
-            });
+        // Group messages by SSV committee
+        let mut committee_mapping: HashMap<CommitteeId, Vec<SyncMessageToSign>> = HashMap::new();
+        for msg in messages {
+            let pubkey = msg.pubkey;
+            match self.get_validator_and_cluster(pubkey) {
+                Ok((_, cluster)) => {
+                    committee_mapping
+                        .entry(cluster.committee_id())
+                        .or_default()
+                        .push(msg);
+                }
+                Err(Error::UnknownPubkey(pk)) => {
+                    warn!(
+                        ?pk,
+                        "Unknown pubkey while grouping sync committee messages, skipping"
+                    );
+                }
+                Err(e) => {
+                    error!(error = ?e, ?pubkey, "Failed to get cluster for sync committee message, skipping");
+                }
+            }
+        }
 
-            let results = join_all(futures).await;
+        // Process each committee concurrently, streaming results as each completes
+        let committee_futures: FuturesUnordered<_> = committee_mapping
+            .into_iter()
+            .map(|(committee_id, messages)| {
+                let this = Arc::clone(self);
+                async move {
+                    match this
+                        .sign_committee_sync_committee_signatures(committee_id, messages)
+                        .await
+                    {
+                        Ok(signed) => Ok(signed),
+                        Err(e) => {
+                            error!(
+                                ?committee_id,
+                                error = ?e,
+                                "Failed to sign committee sync committee messages"
+                            );
+                            Ok(Vec::new())
+                        }
+                    }
+                }
+            })
+            .collect();
 
-            let signed: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
-
-            Ok(signed)
-        })
+        committee_futures
     }
 
     fn sign_sync_committee_contributions(
