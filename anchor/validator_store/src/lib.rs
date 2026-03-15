@@ -1171,9 +1171,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
                             r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
                             pub_key: aggregator_pubkey,
                             slot,
-                            validator_index: validator
-                                .index
-                                .ok_or(SpecificError::MissingIndex)?,
+                            validator_index: validator.index.ok_or(SpecificError::MissingIndex)?,
                             committee_index: 0,
                             committee_length: 0,
                             committees_at_slot: 0,
