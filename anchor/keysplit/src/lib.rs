@@ -1,5 +1,6 @@
 use std::fs;
 
+use clap::CommandFactory;
 pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
 use error::KeysplitError;
 use global_config::GlobalConfig;
@@ -35,6 +36,11 @@ pub struct EncryptedKeyShare {
     public_key: Rsa<Public>,
     share_public_key: PublicKey,
     encrypted_keyshare: Vec<u8>,
+}
+
+// Allows other modules to introspect this crate's CLI interface
+pub fn cli() -> clap::Command {
+    Keysplit::command()
 }
 
 pub fn run_keysplitter(

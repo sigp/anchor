@@ -1,0 +1,21 @@
+[package]
+name = "docgen"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[[bin]]
+name = "anchor-docgen"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+clap-markdown = "0.1.5"
+client = { workspace = true }
+global_config = { workspace = true }
+keygen = { workspace = true }
+keysplit = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+indoc = "2"

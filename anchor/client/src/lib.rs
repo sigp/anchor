@@ -20,6 +20,7 @@ use anchor_validator_store::{
 use beacon_node_fallback::{
     ApiTopic, BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
+use clap::CommandFactory;
 pub use cli::Node;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
@@ -704,6 +705,11 @@ impl Client {
 
         Ok(())
     }
+}
+
+// Allows other modules to introspect this crate's CLI interface
+pub fn cli() -> clap::Command {
+    Node::command()
 }
 
 async fn init_from_beacon_node<E: EthSpec>(

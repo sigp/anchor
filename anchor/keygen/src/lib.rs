@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use global_config::data_dir::DataDir;
 use openssl::{error::ErrorStack, pkey::Private, rsa::Rsa};
 use operator_key::{
@@ -62,6 +62,11 @@ pub struct Keygen {
         requires = "encrypt"
     )]
     pub password_file: Option<PathBuf>,
+}
+
+// Allows other modules to introspect this crate's CLI interface
+pub fn cli() -> clap::Command {
+    Keygen::command()
 }
 
 // Run RSA keygeneration
