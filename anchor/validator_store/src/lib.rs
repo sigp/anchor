@@ -2519,11 +2519,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         aggregates: Vec<AggregateToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<SignedAggregateAndProof<E>>, Error>> + Send {
-        // Early return for empty input —> no fork to determine, nothing to sign
+        // Early return for empty input — no fork to determine, nothing to sign
         let Some(first) = aggregates.first() else {
-            return Either::Left(Either::Left(stream::once(futures::future::ready(Ok(
-                Vec::new(),
-            )))));
+            return Either::Right(FuturesUnordered::new());
         };
 
         if self
@@ -2545,9 +2543,17 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     }
                     Err(Error::UnknownPubkey(pk)) => {
                         warn!(?pk, "Unknown pubkey while grouping aggregates, skipping");
+                        validator_metrics::inc_counter_vec(
+                            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                            &[metrics::OTHER_ERROR],
+                        );
                     }
                     Err(e) => {
                         error!(error = ?e, ?pubkey, "Failed to get cluster for aggregate, skipping");
+                        validator_metrics::inc_counter_vec(
+                            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                            &[metrics::OTHER_ERROR],
+                        );
                     }
                 }
             }
@@ -2557,17 +2563,34 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 .map(|(committee_id, aggregates)| {
                     let this = Arc::clone(self);
                     async move {
+                        let num_aggregates = aggregates.len();
                         match this
                             .sign_committee_aggregate_and_proofs(committee_id, aggregates)
                             .await
                         {
                             Ok(signed) => Ok(signed),
+                            Err(Error::SpecificError(SpecificError::Timeout)) => {
+                                warn!(?committee_id, "Committee aggregate signing timed out");
+                                for _ in 0..num_aggregates {
+                                    validator_metrics::inc_counter_vec(
+                                        &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                                        &[metrics::TIMEOUT],
+                                    );
+                                }
+                                Ok(Vec::new())
+                            }
                             Err(e) => {
                                 error!(
                                     ?committee_id,
                                     error = ?e,
                                     "Failed to sign committee aggregate and proofs"
                                 );
+                                for _ in 0..num_aggregates {
+                                    validator_metrics::inc_counter_vec(
+                                        &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                                        &[metrics::OTHER_ERROR],
+                                    );
+                                }
                                 Ok(Vec::new())
                             }
                         }
@@ -2579,14 +2602,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         } else {
             // Pre-Boole: per-validator processing, no committee grouping needed
             let this = Arc::clone(self);
-            Either::Left(Either::Right(stream::once(async move {
+            Either::Left(stream::once(async move {
                 let futures = aggregates.into_iter().map(|agg| {
                     let this = Arc::clone(&this);
                     async move { this.sign_single_aggregate_and_proof(agg).await }
                 });
                 let results = join_all(futures).await;
                 Ok(results.into_iter().filter_map(|r| r.ok()).collect())
-            })))
+            }))
         }
     }
 
