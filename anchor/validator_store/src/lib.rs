@@ -232,6 +232,42 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .collect()
     }
 
+    /// Group items by SSV committee, looking up each item's cluster.
+    ///
+    /// Items with unknown pubkeys or cluster lookup failures are logged and skipped.
+    fn group_by_committee<I>(
+        &self,
+        items: Vec<I>,
+        get_pubkey: impl Fn(&I) -> PublicKeyBytes,
+        log_context: &str,
+        counter: &validator_metrics::Result<IntCounterVec>,
+    ) -> HashMap<CommitteeId, Vec<I>> {
+        let mut mapping: HashMap<CommitteeId, Vec<I>> = HashMap::new();
+        for item in items {
+            let pubkey = get_pubkey(&item);
+            match self.get_validator_and_cluster(pubkey) {
+                Ok((_, cluster)) => {
+                    mapping
+                        .entry(cluster.committee_id())
+                        .or_default()
+                        .push(item);
+                }
+                Err(Error::UnknownPubkey(pk)) => {
+                    warn!(
+                        ?pk,
+                        "Unknown pubkey while grouping {}, skipping", log_context
+                    );
+                    validator_metrics::inc_counter_vec(counter, &[metrics::OTHER_ERROR]);
+                }
+                Err(e) => {
+                    error!(error = ?e, ?pubkey, "Failed to get cluster for {}, skipping", log_context);
+                    validator_metrics::inc_counter_vec(counter, &[metrics::OTHER_ERROR]);
+                }
+            }
+        }
+        mapping
+    }
+
     /// Compute the signing root for a sync committee selection proof.
     ///
     /// Each subnet has a different signing root based on `SyncAggregatorSelectionData{Slot,
@@ -1336,31 +1372,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         // Assemble results by mapping signatures back to sync committee messages
         let mut results = Vec::with_capacity(prepared.len());
         for (validator_index, validator, _) in prepared {
-            let index = match validator.index {
-                Some(idx) => idx,
-                None => {
-                    warn!("Validator missing index, skipping sync committee message");
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                    continue;
-                }
-            };
-
-            let signature = match signatures.get(&index) {
-                Some(sig) => sig.clone(),
-                None => {
-                    warn!(
-                        ?index,
-                        "Missing signature for validator, skipping sync committee message"
-                    );
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                    continue;
-                }
+            let Some(signature) = validator
+                .index
+                .and_then(|idx| signatures.get(&idx).cloned())
+            else {
+                warn!("Missing validator index or signature, skipping sync committee message");
+                validator_metrics::inc_counter_vec(
+                    &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                    &[metrics::OTHER_ERROR],
+                );
+                continue;
             };
 
             validator_metrics::inc_counter_vec(
@@ -1520,23 +1541,18 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             _,
         ) in prepared
         {
-            let index = match validator.index {
-                Some(idx) => idx,
-                None => {
-                    warn!(?pubkey, "Validator missing index, skipping");
-                    continue;
-                }
+            let Some(signature) = validator
+                .index
+                .and_then(|idx| signatures.get(&idx).cloned())
+            else {
+                warn!(
+                    ?pubkey,
+                    "Missing validator index or signature, skipping attestation"
+                );
+                continue;
             };
 
-            let signature = match signatures.get(&index) {
-                Some(sig) => sig,
-                None => {
-                    warn!(?pubkey, "Missing signature for validator, skipping");
-                    continue;
-                }
-            };
-
-            if let Err(e) = attestation.add_signature(signature, validator_committee_position) {
+            if let Err(e) = attestation.add_signature(&signature, validator_committee_position) {
                 error!(error = ?e, ?pubkey, "Failed to add signature to attestation, skipping");
                 continue;
             }
@@ -1771,24 +1787,19 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         // Assemble results by mapping signatures back to AggregateAndProof messages
         let mut results = Vec::with_capacity(prepared.len());
         for (aggregator_index, pubkey, message, validator, _) in prepared {
-            let index = match validator.index {
-                Some(idx) => idx,
-                None => {
-                    // Already checked above, but handle gracefully
-                    continue;
-                }
-            };
-
-            let signature = match signatures.get(&index) {
-                Some(sig) => sig.clone(),
-                None => {
-                    warn!(?pubkey, "Missing signature for aggregator, skipping");
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                    continue;
-                }
+            let Some(signature) = validator
+                .index
+                .and_then(|idx| signatures.get(&idx).cloned())
+            else {
+                warn!(
+                    ?pubkey,
+                    "Missing validator index or signature for aggregator, skipping"
+                );
+                validator_metrics::inc_counter_vec(
+                    &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                    &[metrics::OTHER_ERROR],
+                );
+                continue;
             };
 
             debug!(
@@ -2530,33 +2541,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             >= Fork::Boole
         {
             // Boole+: group by committee, stream per committee via FuturesUnordered
-            let mut committee_mapping: HashMap<CommitteeId, Vec<AggregateToSign<E>>> =
-                HashMap::new();
-            for agg in aggregates {
-                let pubkey = agg.pubkey;
-                match self.get_validator_and_cluster(pubkey) {
-                    Ok((_, cluster)) => {
-                        committee_mapping
-                            .entry(cluster.committee_id())
-                            .or_default()
-                            .push(agg);
-                    }
-                    Err(Error::UnknownPubkey(pk)) => {
-                        warn!(?pk, "Unknown pubkey while grouping aggregates, skipping");
-                        validator_metrics::inc_counter_vec(
-                            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                            &[metrics::OTHER_ERROR],
-                        );
-                    }
-                    Err(e) => {
-                        error!(error = ?e, ?pubkey, "Failed to get cluster for aggregate, skipping");
-                        validator_metrics::inc_counter_vec(
-                            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                            &[metrics::OTHER_ERROR],
-                        );
-                    }
-                }
-            }
+            let committee_mapping = self.group_by_committee(
+                aggregates,
+                |a| a.pubkey,
+                "aggregates",
+                &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+            );
 
             let committee_futures: FuturesUnordered<_> = committee_mapping
                 .into_iter()
@@ -2840,28 +2830,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         messages: Vec<SyncMessageToSign>,
     ) -> impl Stream<Item = Result<Vec<SyncCommitteeMessage>, Error>> + Send {
-        // Group messages by SSV committee
-        let mut committee_mapping: HashMap<CommitteeId, Vec<SyncMessageToSign>> = HashMap::new();
-        for msg in messages {
-            let pubkey = msg.pubkey;
-            match self.get_validator_and_cluster(pubkey) {
-                Ok((_, cluster)) => {
-                    committee_mapping
-                        .entry(cluster.committee_id())
-                        .or_default()
-                        .push(msg);
-                }
-                Err(Error::UnknownPubkey(pk)) => {
-                    warn!(
-                        ?pk,
-                        "Unknown pubkey while grouping sync committee messages, skipping"
-                    );
-                }
-                Err(e) => {
-                    error!(error = ?e, ?pubkey, "Failed to get cluster for sync committee message, skipping");
-                }
-            }
-        }
+        let committee_mapping = self.group_by_committee(
+            messages,
+            |m| m.pubkey,
+            "sync committee messages",
+            &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+        );
 
         // Process each committee concurrently, streaming results as each completes
         let committee_futures: FuturesUnordered<_> = committee_mapping
@@ -2869,17 +2843,34 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             .map(|(committee_id, messages)| {
                 let this = Arc::clone(self);
                 async move {
+                    let num_messages = messages.len();
                     match this
                         .sign_committee_sync_committee_signatures(committee_id, messages)
                         .await
                     {
                         Ok(signed) => Ok(signed),
+                        Err(Error::SpecificError(SpecificError::Timeout)) => {
+                            warn!(?committee_id, "Committee sync committee signing timed out");
+                            for _ in 0..num_messages {
+                                validator_metrics::inc_counter_vec(
+                                    &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                                    &[metrics::TIMEOUT],
+                                );
+                            }
+                            Ok(Vec::new())
+                        }
                         Err(e) => {
                             error!(
                                 ?committee_id,
                                 error = ?e,
                                 "Failed to sign committee sync committee messages"
                             );
+                            for _ in 0..num_messages {
+                                validator_metrics::inc_counter_vec(
+                                    &validator_metrics::SIGNED_SYNC_COMMITTEE_MESSAGES_TOTAL,
+                                    &[metrics::OTHER_ERROR],
+                                );
+                            }
                             Ok(Vec::new())
                         }
                     }
@@ -3002,25 +2993,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             ))));
         }
 
-        // Group attestations by SSV committee
-        let mut committee_mapping: HashMap<CommitteeId, Vec<AttestationToSign<E>>> = HashMap::new();
-        for att in attestations {
-            let pubkey = att.pubkey;
-            match self.get_validator_and_cluster(pubkey) {
-                Ok((_, cluster)) => {
-                    committee_mapping
-                        .entry(cluster.committee_id())
-                        .or_default()
-                        .push(att);
-                }
-                Err(Error::UnknownPubkey(pk)) => {
-                    warn!(?pk, "Unknown pubkey while grouping attestations, skipping");
-                }
-                Err(e) => {
-                    error!(error = ?e, ?pubkey, "Failed to get cluster for attestation, skipping");
-                }
-            }
-        }
+        let committee_mapping = self.group_by_committee(
+            attestations,
+            |a| a.pubkey,
+            "attestations",
+            &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+        );
 
         // Process each committee concurrently, streaming results as each completes.
         // Each committee runs consensus + batch signing + slashing protection independently.
