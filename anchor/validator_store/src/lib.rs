@@ -540,7 +540,8 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         }
     }
 
-    fn update_voting_context(&self, metadata: VotingContext) {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn update_voting_context(&self, metadata: VotingContext) {
         self.voting_context_tx
             .send_replace(Some(Arc::new(metadata)));
     }
@@ -1920,7 +1921,7 @@ fn decrypt_key_share(
         .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
 }
 
-struct VotingContext {
+pub(crate) struct VotingContext {
     /// Cached voting assignments (computed at slot start, reused here)
     voting_assignments: Arc<VotingAssignments>,
     /// The `BeaconVote` (only available at 1/3 slot from beacon node)
@@ -2977,6 +2978,9 @@ impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, BlindedPayload<E>> {
         )))
     }
 }
+
+#[cfg(test)]
+mod testing;
 
 #[cfg(test)]
 mod tests {
