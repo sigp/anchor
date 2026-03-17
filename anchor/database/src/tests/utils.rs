@@ -1,16 +1,17 @@
 use std::path::PathBuf;
 
+use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,
-    ValidatorIndex, ValidatorMetadata, domain_type::DomainType,
+    ValidatorIndex, ValidatorMetadata,
 };
 use tempfile::TempDir;
 use types::{
-    Address, Graffiti, PublicKeyBytes,
-    test_utils::{SeedableRng, TestRandom, XorShiftRng},
+    Address, Graffiti,
+    test_utils::{SeedableRng, XorShiftRng},
 };
 
 use crate::{NetworkDatabase, multi_index::UniqueIndex};
@@ -20,7 +21,8 @@ use crate::{NetworkDatabase, multi_index::UniqueIndex};
 pub const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
 const DEFAULT_SEED: [u8; 16] = [42; 16];
-pub const TEST_DOMAIN: DomainType = DomainType([42, 42, 42, 42]);
+/// Test network name for database isolation
+pub const TEST_NETWORK: &str = "test";
 
 // Common data shared by all test fixtures
 #[derive(Debug)]
@@ -64,7 +66,7 @@ impl InMemoryTestFixture {
     pub fn new() -> Self {
         let (operators, pubkey) = generate_default_operators();
 
-        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_DOMAIN)
+        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK)
             .expect("Failed to create in-memory database");
 
         Self {
@@ -76,7 +78,7 @@ impl InMemoryTestFixture {
     pub fn new_empty() -> Self {
         let pubkey = generators::pubkey::random_rsa();
 
-        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_DOMAIN)
+        let db = NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK)
             .expect("Failed to create in-memory database");
 
         Self {
@@ -92,7 +94,7 @@ impl FileTestFixture {
         let (operators, pubkey) = generate_default_operators();
 
         let db_path = temp_dir.path().join("test.db");
-        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)
+        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_NETWORK)
             .expect("Failed to create file-based database");
 
         Self {
@@ -108,7 +110,7 @@ impl FileTestFixture {
         let pubkey = generators::pubkey::random_rsa();
 
         let db_path = temp_dir.path().join("test.db");
-        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_DOMAIN)
+        let db = NetworkDatabase::new(&db_path, &pubkey, TEST_NETWORK)
             .expect("Failed to create file-based database");
 
         Self {
@@ -288,7 +290,8 @@ pub mod generators {
     }
 
     pub mod pubkey {
-        use types::PublicKeyBytes;
+        use bls::PublicKeyBytes;
+        use types::test_utils::TestRandom;
 
         use super::*;
 
@@ -329,9 +332,9 @@ pub mod generators {
 pub mod queries {
     use std::str::FromStr;
 
+    use bls::PublicKeyBytes;
     use rusqlite::Connection;
     use ssv_types::{ClusterId, OperatorId};
-    use types::PublicKeyBytes;
 
     use super::*;
 
@@ -344,7 +347,7 @@ pub mod queries {
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
-    const GET_METADATA: &str = "SELECT schema_version, domain_type, block_number FROM metadata";
+    const GET_METADATA: &str = "SELECT schema_version, network_name, block_number FROM metadata";
 
     // Get an operator from the database
     pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
@@ -352,7 +355,7 @@ pub mod queries {
             .prepare(GET_OPERATOR)
             .expect("Failed to prepare statement");
 
-        stmt.query_row(params![*id], |row| {
+        stmt.query_row(params![id], |row| {
             let operator = Operator::try_from(row).expect("Failed to create operator");
             Ok(operator)
         })
@@ -384,7 +387,7 @@ pub mod queries {
 
                 // Get the OperatorId from column 6 and ClusterId from column 1
                 let cluster_id = ClusterId(row.get(2)?);
-                let operator_id = OperatorId(row.get(3)?);
+                let operator_id = row.get(3)?;
 
                 Ok(Share {
                     validator_pubkey: *pubkey,
@@ -413,7 +416,7 @@ pub mod queries {
         let members: Result<Vec<_>, _> = stmt
             .query_map([cluster_id.0], |row| {
                 Ok(ClusterMember {
-                    operator_id: OperatorId(row.get(0)?),
+                    operator_id: row.get(0)?,
                     cluster_id,
                 })
             })
@@ -443,7 +446,7 @@ pub mod queries {
 
     pub struct Metadata {
         pub schema_version: u64,
-        pub domain: DomainType,
+        pub network_name: String,
         pub block_number: u64,
     }
 
@@ -451,7 +454,7 @@ pub mod queries {
         conn.query_row(GET_METADATA, [], |row| {
             Ok(Metadata {
                 schema_version: row.get("schema_version")?,
-                domain: row.get("domain_type")?,
+                network_name: row.get("network_name")?,
                 block_number: row.get("block_number")?,
             })
         })
@@ -603,7 +606,7 @@ pub mod assertions {
 
     //
     pub mod share {
-        use types::PublicKeyBytes;
+        use bls::PublicKeyBytes;
 
         use super::*;
         fn data(s1: &Share, s2: &Share) {

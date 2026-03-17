@@ -1,9 +1,10 @@
 use std::{collections::HashMap, str::FromStr};
 
+use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
-use types::{Address, Graffiti, PublicKeyBytes};
+use types::{Address, Graffiti};
 
 use crate::{
     DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
@@ -104,7 +105,7 @@ impl NetworkDatabase {
             transaction
                 .prepare_cached(sql_operations::SET_INDEX)?
                 .execute(params![
-                    index.0,                // New index
+                    index,                  // New index
                     public_key.to_string()  // The public key of the validator
                 ])?;
         }

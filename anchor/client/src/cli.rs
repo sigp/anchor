@@ -4,6 +4,8 @@ use std::{
     path::PathBuf,
 };
 
+use axum::http::HeaderValue;
+use beacon_node_fallback::ApiTopic;
 use clap::{
     Parser,
     builder::{ArgAction, ArgPredicate},
@@ -18,8 +20,7 @@ pub const ADDITIONAL_OPTIONS: &str = "Additional Options";
 pub const PAYLOAD_BUILDING_OPTIONS: &str = "Payload Building Options";
 
 #[derive(Parser, Clone, Debug)]
-#[clap(name = "node", about = "Start Anchor node")]
-pub struct Node {
+pub struct SecurityOptions {
     #[clap(
         long,
         global = true,
@@ -43,8 +44,10 @@ pub struct Node {
         display_order = 0
     )]
     pub password_file: Option<PathBuf>,
+}
 
-    // External APIs
+#[derive(Parser, Clone, Debug)]
+pub struct ExternalApis {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
@@ -104,7 +107,41 @@ pub struct Node {
     )]
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
 
-    // REST API related arguments
+    #[clap(
+        long,
+        value_name = "API_TOPICS",
+        value_delimiter = ',',
+        help = "Comma-separated list of beacon API topics to broadcast to all beacon nodes. \
+                Possible values are: none, attestations, blocks, subscriptions, sync-committee. \
+                Default (when flag is omitted) is to broadcast subscriptions only.",
+        display_order = 0
+    )]
+    pub broadcast: Option<Vec<ApiTopic>>,
+
+    #[clap(
+        long,
+        value_name = "SYNC_TOLERANCES",
+        value_delimiter = ',',
+        default_value = "8,8,48",
+        help = "A comma-separated list of 3 values which sets the size of each sync distance range when \
+                determining the health of each connected beacon node. \
+                The first value determines the `Synced` range. If a connected beacon node is synced to within \
+                this number of slots it is considered 'Synced'. \
+                The second value determines the `Small` sync distance range. This range starts immediately after \
+                the `Synced` range. \
+                The third value determines the `Medium` sync distance range. This range starts immediately after \
+                the `Small` range. \
+                Any sync distance larger than the `Medium` range is considered `Large`. \
+                For example, a value of '8,8,48' would mean: \
+                Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub beacon_nodes_sync_tolerances: Vec<u64>,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct HttpApiOptions {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
@@ -166,9 +203,65 @@ pub struct Node {
         display_order = 0,
         requires = "http"
     )]
-    pub http_allow_origin: Option<String>,
+    pub http_allow_origin: Option<HeaderValue>,
+}
 
-    // Network related arguments
+#[derive(Parser, Clone, Debug)]
+pub struct MetricsOptions {
+    #[clap(
+        long,
+        help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub metrics: bool,
+
+    #[clap(
+        long,
+        value_name = "ADDRESS",
+        help = "Set the listen address for the Prometheus metrics HTTP server.",
+        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
+        display_order = 0,
+        requires = "metrics"
+    )]
+    pub metrics_address: Option<IpAddr>,
+
+    #[clap(
+        long,
+        value_name = "PORT",
+        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
+        display_order = 0,
+        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
+        requires = "metrics"
+    )]
+    pub metrics_port: Option<u16>,
+
+    #[clap(
+        long,
+        help = "Enable per validator metrics for > 64 validators. \
+                Note: This flag is automatically enabled for <= 64 validators. \
+                Enabling this metric for higher validator counts will lead to higher volume \
+                of prometheus metrics being collected.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub enable_high_validator_count_metrics: bool,
+
+    #[clap(
+        long,
+        value_name = "ORIGIN",
+        help = "Set the value of the Access-Control-Allow-Origin response HTTP header \
+                for the metrics server. Use * to allow any origin (not recommended in production). \
+                If no value is supplied, the CORS allowed origin is set to the listen \
+                address of this server (e.g., http://localhost:5164).",
+        display_order = 0,
+        requires = "metrics"
+    )]
+    pub metrics_allow_origin: Option<HeaderValue>,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct NetworkOptions {
     #[clap(
         long,
         value_name = "ADDRESS",
@@ -256,6 +349,14 @@ pub struct Node {
         hide = true,
     )]
     pub use_zero_ports: bool,
+
+    #[clap(
+        long,
+        help = "Disables UPnP support. Setting this will prevent Anchor \
+            from attempting to automatically establish external port mappings.",
+        default_value = "false"
+    )]
+    pub disable_upnp: bool,
 
     #[clap(
         long,
@@ -429,6 +530,92 @@ pub struct Node {
         display_order = 0
     )]
     pub subscribe_all_subnets: bool,
+
+    #[clap(
+        long,
+        help = "Disables gossipsub peer scoring.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_gossipsub_peer_scoring: bool,
+
+    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
+    pub disable_gossipsub_topic_scoring: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+pub struct PayloadBuildingOptions {
+    #[clap(
+        long,
+        value_name = "INTEGER",
+        default_value_t = 36_000_000,
+        help = "The gas limit to be used in all builder proposals for all validators managed. \
+                Note this will not necessarily be used if the gas limit \
+                set here moves too far from the previous block's gas limit.",
+        display_order = 0
+    )]
+    pub gas_limit: u64,
+
+    #[clap(
+        long,
+        alias = "private-tx-proposals",
+        help = "Deprecated and ignored. Validator registrations are now always created.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+        hide = true
+    )]
+    pub builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "UINT64",
+        help = "Defines the boost factor, \
+                a percentage multiplier to apply to the builder's payload value \
+                when choosing between a builder payload header and payload from \
+                the local execution node.",
+        conflicts_with = "prefer_builder_proposals",
+        display_order = 0
+    )]
+    pub builder_boost_factor: Option<u64>,
+
+    #[clap(
+        long,
+        help = "If this flag is set, Anchor will always prefer blocks \
+                constructed by builders, regardless of payload value.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub prefer_builder_proposals: bool,
+}
+
+#[derive(Parser, Clone, Debug)]
+#[clap(name = "node", about = "Start Anchor node")]
+pub struct Node {
+    #[clap(flatten)]
+    pub security_options: SecurityOptions,
+
+    #[clap(flatten)]
+    pub external_apis: ExternalApis,
+
+    #[clap(flatten)]
+    pub http_api_options: HttpApiOptions,
+
+    #[clap(flatten)]
+    pub metrics_options: MetricsOptions,
+
+    #[clap(flatten)]
+    pub network_options: NetworkOptions,
+
+    #[clap(flatten)]
+    pub payload_building_options: PayloadBuildingOptions,
+
+    #[clap(
+        long,
+        help = "Disable the latency measurement service.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
+    pub disable_latency_measurement_service: bool,
 
     #[clap(
         long,

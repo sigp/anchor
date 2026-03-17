@@ -31,7 +31,7 @@ To migrate from go-ssv to Anchor, we simply need to move the operator private ke
 mv ~/ssv-stack/ssv-node-data/encrypted_private_key.json ~/.anchor/mainnet/encrypted_private_key.json
 ```
 
-Once this key is moved, Anchor should be able to be run. See the [Node CLI Reference](/cli-node) for a list of CLI parameters required to fully run the Anchor node as an operator.
+Once this key is moved, Anchor should be able to be run. See the [Running an Operator](/running_an_operator) for how to fully run the Anchor node as an operator.
 
 You will need to put the password that decrypts the operator key into a file and reference it in Anchor's CLI via the `--password-file <PATH>` parameter.
 

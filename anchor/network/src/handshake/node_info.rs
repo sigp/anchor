@@ -35,7 +35,7 @@ pub struct NodeMetadata {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct NodeInfo {
-    pub network_id: String,
+    pub domain_type: String,
     pub metadata: Option<NodeMetadata>,
 }
 
@@ -47,9 +47,9 @@ struct Serializable {
 }
 
 impl NodeInfo {
-    pub fn new(network_id: String, metadata: Option<NodeMetadata>) -> Self {
+    pub fn new(domain_type: String, metadata: Option<NodeMetadata>) -> Self {
         NodeInfo {
-            network_id,
+            domain_type,
             metadata,
         }
     }
@@ -61,8 +61,8 @@ impl NodeInfo {
     /// Serialize `NodeInfo` to JSON bytes.
     fn marshal(&self) -> Result<Vec<u8>, Error> {
         let mut entries = vec![
-            "".to_string(),                           // formerly forkVersion, now deprecated
-            format!("0x{}", self.network_id.clone()), // network id
+            "".to_string(),                            // formerly forkVersion, now deprecated
+            format!("0x{}", self.domain_type.clone()), // domain type
         ];
 
         if let Some(meta) = &self.metadata {
@@ -82,10 +82,10 @@ impl NodeInfo {
             return Err(Validation("node info must have at least 2 entries".into()));
         }
         // skip ser.entries[0]: old forkVersion
-        let network_id = ser.entries[1]
+        let domain_type = ser.entries[1]
             .clone()
             .strip_prefix("0x")
-            .ok_or_else(|| Validation("network id must be prefixed with 0x".into()))?
+            .ok_or_else(|| Validation("domain type must be prefixed with 0x".into()))?
             .to_string();
 
         let metadata = if ser.entries.len() >= 3 {
@@ -94,7 +94,7 @@ impl NodeInfo {
         } else {
             None
         };
-        Ok(NodeInfo::new(network_id, metadata))
+        Ok(NodeInfo::new(domain_type, metadata))
     }
 
     /// Seals a `Record` into an Envelope by:
@@ -197,7 +197,7 @@ mod tests {
 
         // The "current" NodeInfo data
         let current_data = NodeInfo {
-            network_id: HOLESKY.to_string(),
+            domain_type: HOLESKY.to_string(),
             metadata: Some(NodeMetadata {
                 node_version: "v0.1.12".into(),
                 execution_node: "geth/x".into(),

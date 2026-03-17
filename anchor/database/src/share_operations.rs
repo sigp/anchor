@@ -1,6 +1,6 @@
+use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
 use ssv_types::Share;
-use types::PublicKeyBytes;
 
 use super::{DatabaseError, NetworkDatabase, sql_operations};
 
@@ -16,7 +16,7 @@ impl NetworkDatabase {
             .execute(params![
                 validator_pubkey.to_string(),
                 *share.cluster_id,
-                *share.operator_id,
+                share.operator_id,
                 share.share_pubkey.to_string(),
                 share.encrypted_private_key
             ])?;

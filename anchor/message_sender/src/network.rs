@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use database::OwnOperatorId;
-use message_validator::{DutiesProvider, MessageAcceptance, Validator};
+use message_validator::{DutiesProvider, MessageAcceptance, TopicContext, Validator};
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Private},
@@ -13,7 +13,7 @@ use ssv_types::{
     CommitteeId, RSA_SIGNATURE_SIZE, consensus::UnsignedSSVMessage, message::SignedSSVMessage,
 };
 use ssz::Encode;
-use subnet_service::SubnetId;
+use subnet_service::SubnetService;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, error, trace, warn};
 
@@ -25,22 +25,25 @@ const SENDER_NAME: &str = "message_send";
 /// Configuration for creating a NetworkMessageSender
 pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
     pub processor: processor::Senders,
-    pub network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+    /// Channel to send messages to the network. Tuple of (topic string, message bytes).
+    /// Per SIP-43, the topic is determined by the message's slot.
+    pub network_tx: mpsc::Sender<(String, Vec<u8>)>,
     pub private_key: Rsa<Private>,
     pub operator_id: OwnOperatorId,
     pub validator: Option<Arc<Validator<S, D>>>,
-    pub subnet_count: usize,
     pub is_synced: watch::Receiver<bool>,
+    pub subnet_service: Arc<SubnetService<S>>,
 }
 
 pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
-    network_tx: mpsc::Sender<(SubnetId, Vec<u8>)>,
+    /// Channel to send messages to the network. Tuple of (topic string, message bytes).
+    network_tx: mpsc::Sender<(String, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OwnOperatorId,
     validator: Option<Arc<Validator<S, D>>>,
-    subnet_count: usize,
     is_synced: watch::Receiver<bool>,
+    subnet_service: Arc<SubnetService<S>>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
@@ -125,16 +128,20 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             private_key,
             operator_id: config.operator_id,
             validator: config.validator,
-            subnet_count: config.subnet_count,
             is_synced: config.is_synced,
+            subnet_service: config.subnet_service,
         }))
     }
 
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
         let message_bytes = message.as_ssz_bytes();
 
+        // For outgoing messages, we use default TopicContext (no topic validation)
+        // since we're just doing a sanity check on our own message content
         if let Some(validator) = self.validator.as_ref()
-            && let Err(err) = validator.validate(&message_bytes).as_result()
+            && let Err(err) = validator
+                .validate(&message_bytes, &TopicContext::default())
+                .as_result()
         {
             // `Reject` is more severe and can be punished by other peers. We should not have
             // created this message ever, while `Ignore` can be triggered simply because the message
@@ -148,9 +155,38 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             return;
         }
 
-        let subnet = SubnetId::from_committee(committee_id, self.subnet_count);
-        match self.network_tx.try_send((subnet, message_bytes)) {
-            Ok(_) => trace!(?subnet, "Successfully sent message to network"),
+        // Extract slot from message for slot-based topic routing (per SIP-43)
+        let message_slot = match message.ssv_message().extract_slot() {
+            Some(slot) => slot,
+            None => {
+                warn!(
+                    ?committee_id,
+                    "Cannot extract slot from message for topic routing"
+                );
+                return;
+            }
+        };
+
+        // Use subnet service for slot-based subnet calculation
+        let subnet = match self
+            .subnet_service
+            .subnet_for_committee_at_slot(committee_id, message_slot)
+        {
+            Ok(subnet) => subnet,
+            Err(e) => {
+                warn!(?committee_id, ?e, "Cannot calculate subnet for message");
+                return;
+            }
+        };
+
+        // Create topic based on message slot (per SIP-43 slot-based routing)
+        let topic = self
+            .subnet_service
+            .router()
+            .topic_for_subnet_at_slot(subnet, message_slot);
+
+        match self.network_tx.try_send((topic.clone(), message_bytes)) {
+            Ok(_) => trace!(?subnet, %topic, "Successfully sent message to network"),
             Err(TrySendError::Closed(_)) => warn!("Network queue closed (shutting down?)"),
             Err(TrySendError::Full(_)) => warn!("Network queue full, unable to send message!"),
         }

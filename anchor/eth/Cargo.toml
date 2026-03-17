@@ -8,6 +8,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 alloy = { workspace = true }
 anchor_validator_store = { workspace = true }
 beacon_node_fallback = { workspace = true }
+bls = { workspace = true }
 database = { workspace = true }
 duties_tracker = { workspace = true }
 eth2 = { workspace = true }
@@ -19,7 +20,6 @@ metrics = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 sensitive_url = { workspace = true }
-slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
 ssv_network_config = { workspace = true }
 ssv_types = { workspace = true }
@@ -32,8 +32,5 @@ types = { workspace = true }
 [dev-dependencies]
 base64 = { workspace = true }
 bls = { workspace = true }
-bls_lagrange = { workspace = true }
 database = { workspace = true, features = ["test-utils"] }
-rand = { workspace = true }
-tempfile = "3.12"
 tracing-subscriber = "0.3"

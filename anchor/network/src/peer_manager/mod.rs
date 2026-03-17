@@ -5,6 +5,7 @@ use std::{
 };
 
 use discv5::libp2p_identity::PeerId;
+use fork::ForkLifecycle;
 use libp2p::{
     Multiaddr,
     core::{Endpoint, transport::PortUse},
@@ -16,6 +17,7 @@ use libp2p::{
 };
 use peer_store::memory_store::{self, MemoryStore};
 use subnet_service::SubnetId;
+use tokio::sync::watch;
 use tracing::info;
 
 use crate::{ClientType, Config, Enr, peer_manager::types::PeerInfo};
@@ -72,7 +74,12 @@ impl PeerManager {
     /// # Arguments
     /// * `config` - Network configuration (may contain user-provided target_peers)
     /// * `one_epoch_duration` - Duration of one epoch for blocking calculations
-    pub fn new(config: &Config, one_epoch_duration: Duration) -> Self {
+    /// * `fork_lifecycle` - Shared fork lifecycle for fork-aware peer selection
+    pub fn new(
+        config: &Config,
+        one_epoch_duration: Duration,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
+    ) -> Self {
         let peer_store =
             peer_store::Behaviour::new(MemoryStore::new(memory_store::Config::default()));
 
@@ -81,7 +88,7 @@ impl PeerManager {
         // subnet_service.
         let target_peers = config.target_peers.unwrap_or(BASE_PEER_COUNT);
 
-        let connection_manager = ConnectionManager::new(target_peers);
+        let connection_manager = ConnectionManager::new(target_peers, lifecycle_rx);
         let heartbeat_manager = HeartbeatManager::new();
         let blocking_manager = BlockingManager::new(one_epoch_duration);
 
@@ -205,10 +212,16 @@ impl PeerManager {
         &self.needed_subnets
     }
 
-    /// Update observed gossipsub subscription state for a peer
-    pub fn set_peer_subscription(&mut self, peer: PeerId, subnet: SubnetId, subscribed: bool) {
+    /// Update observed gossipsub subscription state for a peer on a specific fork.
+    pub fn set_peer_subscription(
+        &mut self,
+        peer: PeerId,
+        fork: fork::Fork,
+        subnet: SubnetId,
+        subscribed: bool,
+    ) {
         self.connection_manager
-            .set_peer_subscribed(peer, subnet, subscribed);
+            .set_peer_subscribed(peer, fork, subnet, subscribed);
     }
 
     /// Handle a completed handshake by updating peer client type and triggering metrics update.

@@ -3,6 +3,7 @@
 
 use std::{net::IpAddr, path::PathBuf};
 
+use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
 use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
 use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
@@ -11,9 +12,10 @@ use network_utils::unused_port::{
 };
 use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
+use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
 
-use crate::cli::Node;
+use crate::cli::{NetworkOptions, Node};
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
@@ -56,6 +58,10 @@ pub struct Config {
     /// A list of custom certificates that the validator client will additionally use when
     /// connecting to an execution node over SSL/TLS.
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
+    /// Configuration for beacon node fallback (sync tolerances).
+    pub beacon_node_fallback: beacon_node_fallback::Config,
+    /// Topics to broadcast to all beacon nodes.
+    pub broadcast_topics: Vec<ApiTopic>,
     /// Configuration for the processor
     pub processor: processor::Config,
     /// If slashing protection is disabled
@@ -64,8 +70,6 @@ pub struct Config {
     pub impostor: Option<OperatorId>,
     /// Gas limit on blocks
     pub gas_limit: u64,
-    /// Should payload construction be outsourced
-    pub builder_proposals: bool,
     /// Block boost factor
     pub builder_boost_factor: Option<u64>,
     /// Should external payloads always be preferred
@@ -113,10 +117,11 @@ impl Config {
             network: network_config,
             beacon_nodes_tls_certs: None,
             execution_nodes_tls_certs: None,
+            beacon_node_fallback: <_>::default(),
+            broadcast_topics: vec![ApiTopic::Subscriptions],
             processor: <_>::default(),
             disable_slashing_protection: false,
             impostor: None,
-            builder_proposals: false,
             builder_boost_factor: None,
             prefer_builder_proposals: false,
             gas_limit: 36_000_000,
@@ -130,19 +135,19 @@ impl Config {
 
 /// Returns a `Default` implementation of `Self` with some parameters modified by the supplied
 /// `cli_args`.
-pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, String> {
+pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Config, String> {
     let mut config = Config::new(global_config);
 
-    config.key_file = cli_args.key_file.clone();
-    config.password_file = cli_args.password_file.clone();
+    config.key_file = cli_args.security_options.key_file.clone();
+    config.password_file = cli_args.security_options.password_file.clone();
 
-    if let Some(ref beacon_nodes) = cli_args.beacon_nodes {
+    if let Some(ref beacon_nodes) = cli_args.external_apis.beacon_nodes {
         parse_urls(&mut config.beacon_nodes, beacon_nodes, "beacon node")?;
     }
-    if let Some(ref execution_rpc) = cli_args.execution_rpc {
+    if let Some(ref execution_rpc) = cli_args.external_apis.execution_rpc {
         parse_urls(&mut config.execution_nodes, execution_rpc, "execution RPC")?;
     }
-    if let Some(ref execution_ws) = cli_args.execution_ws {
+    if let Some(ref execution_ws) = cli_args.external_apis.execution_ws {
         let ws =
             SensitiveUrl::parse(execution_ws).map_err(|e| format!("Unable to parse URL: {e:?}"))?;
         config.execution_nodes_websocket = ws;
@@ -152,9 +157,9 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
     config.disable_slashing_protection = cli_args.disable_slashing_protection;
 
     // Network related
-    config.network.listen_addresses = parse_listening_addresses(cli_args)?;
+    config.network.listen_addresses = parse_listening_addresses(&cli_args.network_options)?;
 
-    for addr in cli_args.boot_nodes.clone() {
+    for addr in cli_args.network_options.boot_nodes.clone() {
         match addr.parse() {
             Ok(enr) => config.network.boot_nodes_enr.push(enr),
             Err(_) => {
@@ -172,7 +177,7 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
             }
         }
     }
-    if cli_args.boot_nodes.is_empty() {
+    if cli_args.network_options.boot_nodes.is_empty() {
         config.network.boot_nodes_enr = config
             .global_config
             .ssv_network
@@ -181,38 +186,62 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
             .unwrap_or_default();
     }
 
-    config.network.enr_address = (cli_args.enr_address, cli_args.enr_address6);
-    config.network.disable_enr_auto_update = cli_args.disable_enr_auto_update;
-    config.network.enr_tcp4_port = cli_args.enr_tcp_port;
-    config.network.enr_udp4_port = cli_args.enr_udp_port;
-    config.network.enr_quic4_port = cli_args.enr_quic_port;
-    config.network.enr_tcp6_port = cli_args.enr_tcp6_port;
-    config.network.enr_udp6_port = cli_args.enr_udp6_port;
-    config.network.enr_quic6_port = cli_args.enr_quic6_port;
+    config.network.enr_address = (
+        cli_args.network_options.enr_address,
+        cli_args.network_options.enr_address6,
+    );
+    config.network.disable_enr_auto_update = cli_args.network_options.disable_enr_auto_update;
+    config.network.enr_tcp4_port = cli_args.network_options.enr_tcp_port;
+    config.network.enr_udp4_port = cli_args.network_options.enr_udp_port;
+    config.network.enr_quic4_port = cli_args.network_options.enr_quic_port;
+    config.network.enr_tcp6_port = cli_args.network_options.enr_tcp6_port;
+    config.network.enr_udp6_port = cli_args.network_options.enr_udp6_port;
+    config.network.enr_quic6_port = cli_args.network_options.enr_quic6_port;
 
-    config.network.subscribe_all_subnets = cli_args.subscribe_all_subnets;
+    config.network.subscribe_all_subnets = cli_args.network_options.subscribe_all_subnets;
 
-    config.network.target_peers = cli_args.target_peers;
+    // If the flag was set (true), it means we disable upnp so upnp_enabled should be false
+    config.network.upnp_enabled = !cli_args.network_options.disable_upnp;
+
+    config.network.target_peers = cli_args.network_options.target_peers;
 
     // Network related - set peer scoring configuration
-    config.network.disable_gossipsub_peer_scoring = cli_args.disable_gossipsub_peer_scoring;
-    config.network.disable_gossipsub_topic_scoring = cli_args.disable_gossipsub_topic_scoring;
+    config.network.disable_gossipsub_peer_scoring =
+        cli_args.network_options.disable_gossipsub_peer_scoring;
+    config.network.disable_gossipsub_topic_scoring =
+        cli_args.network_options.disable_gossipsub_topic_scoring;
 
-    config.beacon_nodes_tls_certs = cli_args.beacon_nodes_tls_certs.clone();
-    config.execution_nodes_tls_certs = cli_args.execution_nodes_tls_certs.clone();
+    config.beacon_nodes_tls_certs = cli_args.external_apis.beacon_nodes_tls_certs.clone();
+    config.execution_nodes_tls_certs = cli_args.external_apis.execution_nodes_tls_certs.clone();
+
+    // Beacon node fallback configuration
+    config.beacon_node_fallback.sync_tolerances = BeaconNodeSyncDistanceTiers::from_vec(
+        &cli_args.external_apis.beacon_nodes_sync_tolerances,
+    )?;
+
+    if let Some(mut broadcast_topics) = cli_args.external_apis.broadcast.clone() {
+        broadcast_topics.retain(|topic| *topic != ApiTopic::None);
+        config.broadcast_topics = broadcast_topics;
+    }
 
     // MEV options
-    config.builder_proposals = cli_args.builder_proposals;
-    config.builder_boost_factor = cli_args.builder_boost_factor;
-    config.prefer_builder_proposals = cli_args.prefer_builder_proposals;
+    config.builder_boost_factor = cli_args.payload_building_options.builder_boost_factor;
+    config.prefer_builder_proposals = cli_args.payload_building_options.prefer_builder_proposals;
 
-    config.gas_limit = cli_args.gas_limit;
+    if cli_args.payload_building_options.builder_proposals {
+        warn!(
+            "The --builder-proposals flag is deprecated and ignored. Validator registrations are \
+             now always created. This flag will be removed in a future release and will error then."
+        );
+    }
+
+    config.gas_limit = cli_args.payload_building_options.gas_limit;
 
     // Http API server
-    config.http_api.enabled = cli_args.http;
+    config.http_api.enabled = cli_args.http_api_options.http;
 
-    if let Some(address) = cli_args.http_address {
-        if cli_args.unencrypted_http_transport {
+    if let Some(address) = cli_args.http_api_options.http_address {
+        if cli_args.http_api_options.unencrypted_http_transport {
             config.http_api.listen_addr = address;
         } else {
             return Err(
@@ -222,34 +251,34 @@ pub fn from_cli(cli_args: &Node, global_config: GlobalConfig) -> Result<Config, 
         }
     }
 
-    if let Some(port) = cli_args.http_port {
+    if let Some(port) = cli_args.http_api_options.http_port {
         config.http_api.listen_port = port;
     }
 
-    if let Some(allow_origin) = &cli_args.http_allow_origin {
-        // Pre-validate the config value to give feedback to the user on node startup, instead of
-        // as late as when the first API response is produced.
-        hyper::header::HeaderValue::from_str(allow_origin)
-            .map_err(|_| "Invalid allow-origin value")?;
-
-        config.http_api.allow_origin = Some(allow_origin.to_string());
+    if let Some(allow_origin) = cli_args.http_api_options.http_allow_origin.take() {
+        config.http_api.allow_origin = Some(AllowOrigin::exact(allow_origin));
     }
 
     // Prometheus metrics HTTP server
 
-    if cli_args.metrics {
+    if cli_args.metrics_options.metrics {
         config.http_metrics.enabled = true;
     }
 
-    if let Some(address) = cli_args.metrics_address {
+    if let Some(address) = cli_args.metrics_options.metrics_address {
         config.http_metrics.listen_addr = address;
     }
 
-    if let Some(port) = cli_args.metrics_port {
+    if let Some(port) = cli_args.metrics_options.metrics_port {
         config.http_metrics.listen_port = port;
     }
 
-    config.enable_high_validator_count_metrics = cli_args.enable_high_validator_count_metrics;
+    if let Some(allow_origin) = cli_args.metrics_options.metrics_allow_origin.take() {
+        config.http_metrics.allow_origin = Some(AllowOrigin::exact(allow_origin));
+    }
+
+    config.enable_high_validator_count_metrics =
+        cli_args.metrics_options.enable_high_validator_count_metrics;
 
     config.impostor = cli_args.impostor.map(OperatorId);
     config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
@@ -293,11 +322,11 @@ fn parse_urls(dest: &mut Vec<SensitiveUrl>, src: &[String], kind: &str) -> Resul
 }
 
 /// Gets the listening_addresses for lighthouse based on the cli options.
-pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, String> {
+pub fn parse_listening_addresses(network: &NetworkOptions) -> Result<ListenAddress, String> {
     // parse the possible ips
     let mut maybe_ipv4 = None;
     let mut maybe_ipv6 = None;
-    for addr in cli_args.listen_addresses.iter() {
+    for addr in network.listen_addresses.iter() {
         match addr {
             IpAddr::V4(v4_addr) => match &maybe_ipv4 {
                 Some(first_ipv4_addr) => {
@@ -328,19 +357,19 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
         }
         (None, Some(ipv6)) => {
             // A single ipv6 address was provided. Set the ports
-            if cli_args.port6.is_some() {
+            if network.port6.is_some() {
                 warn!(
                     "When listening only over IPv6, use the --port flag. The value of --port6 will be ignored."
                 );
             }
 
-            if cli_args.discovery_port6.is_some() {
+            if network.discovery_port6.is_some() {
                 warn!(
                     "When listening only over IPv6, use the --discovery-port flag. The value of --discovery-port6 will be ignored."
                 )
             }
 
-            if cli_args.quic_port6.is_some() {
+            if network.quic_port6.is_some() {
                 warn!(
                     "When listening only over IPv6, use the --quic-port flag. The value of --quic-port6 will be ignored."
                 )
@@ -350,11 +379,11 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 1. If use_zero_ports is set, use an unused TCP6 port.
             // 2. Else, if port is specified, use it.
             // 3. If none of the above are set, use the default TCP port (DEFAULT_TCP_PORT).
-            let tcp_port = cli_args
+            let tcp_port = network
                 .use_zero_ports
                 .then(unused_tcp6_port)
                 .transpose()?
-                .or(cli_args.port)
+                .or(network.port)
                 .unwrap_or(DEFAULT_TCP_PORT);
 
             // Select the discovery port in the following order of precedence:
@@ -362,23 +391,23 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 2. Else, if discovery_port is specified in CLI args, use it.
             // 3. Else, if port is specified, use it as the fallback.
             // 4. If none of the above are set, use the default discovery port (DEFAULT_DISC_PORT).
-            let disc_port = cli_args
+            let disc_port = network
                 .use_zero_ports
                 .then(unused_udp6_port)
                 .transpose()?
-                .or(cli_args.discovery_port)
-                .or(cli_args.port)
+                .or(network.discovery_port)
+                .or(network.port)
                 .unwrap_or(DEFAULT_DISC_PORT);
 
             // Select the QUIC port in the following order of precedence:
             // 1. If use_zero_ports is set, use an unused UDP6 port.
             // 2. Else, if quic_port is specified, use it.
             // 3. If none of the above are set, use the selected TCP port + 1.
-            let quic_port = cli_args
+            let quic_port = network
                 .use_zero_ports
                 .then(unused_udp6_port)
                 .transpose()?
-                .or(cli_args.quic_port)
+                .or(network.quic_port)
                 .unwrap_or(if tcp_port == 0 { 0 } else { tcp_port + 1 });
 
             ListenAddress::V6(ListenAddr {
@@ -395,33 +424,33 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             // 1. If use_zero_ports is set, use an unused TCP4 port.
             // 2. Else, if port is specified, use it.
             // 3. If none of the above are set, use the default TCP port (DEFAULT_TCP_PORT).
-            let tcp_port = cli_args
+            let tcp_port = network
                 .use_zero_ports
                 .then(unused_tcp4_port)
                 .transpose()?
-                .or(cli_args.port)
+                .or(network.port)
                 .unwrap_or(DEFAULT_TCP_PORT);
             // Select the discovery port in the following order of precedence:
             // 1. If use_zero_ports is set, use an unused UDP4 port.
             // 2. Else, if discovery_port is specified in CLI args, use it.
             // 3. Else, if port is specified, use it as the fallback.
             // 4. If none of the above are set, use the default discovery port (DEFAULT_DISC_PORT).
-            let disc_port = cli_args
+            let disc_port = network
                 .use_zero_ports
                 .then(unused_udp4_port)
                 .transpose()?
-                .or(cli_args.discovery_port)
-                .or(cli_args.port)
+                .or(network.discovery_port)
+                .or(network.port)
                 .unwrap_or(DEFAULT_DISC_PORT);
             // Select the QUIC port in the following order of precedence:
             // 1. If use_zero_ports is set, use an unused UDP4 port.
             // 2. Else, if quic_port is specified, use it.
             // 3. If none of the above are set, use the selected TCP port + 1.
-            let quic_port = cli_args
+            let quic_port = network
                 .use_zero_ports
                 .then(unused_udp4_port)
                 .transpose()?
-                .or(cli_args.quic_port)
+                .or(network.quic_port)
                 .unwrap_or(if tcp_port == 0 { 0 } else { tcp_port + 1 });
 
             ListenAddress::V4(ListenAddr {
@@ -432,47 +461,47 @@ pub fn parse_listening_addresses(cli_args: &Node) -> Result<ListenAddress, Strin
             })
         }
         (Some(ipv4), Some(ipv6)) => {
-            let ipv4_tcp_port = cli_args
+            let ipv4_tcp_port = network
                 .use_zero_ports
                 .then(unused_tcp4_port)
                 .transpose()?
-                .or(cli_args.port)
+                .or(network.port)
                 .unwrap_or(DEFAULT_TCP_PORT);
-            let ipv4_disc_port = cli_args
+            let ipv4_disc_port = network
                 .use_zero_ports
                 .then(unused_udp4_port)
                 .transpose()?
-                .or(cli_args.discovery_port)
-                .or(cli_args.port)
+                .or(network.discovery_port)
+                .or(network.port)
                 .unwrap_or(DEFAULT_DISC_PORT);
-            let ipv4_quic_port = cli_args
+            let ipv4_quic_port = network
                 .use_zero_ports
                 .then(unused_udp4_port)
                 .transpose()?
-                .or(cli_args.quic_port)
+                .or(network.quic_port)
                 .unwrap_or(if ipv4_tcp_port == 0 {
                     0
                 } else {
                     ipv4_tcp_port + 1
                 });
 
-            let ipv6_tcp_port = cli_args
+            let ipv6_tcp_port = network
                 .use_zero_ports
                 .then(unused_tcp6_port)
                 .transpose()?
-                .or(cli_args.port6)
+                .or(network.port6)
                 .unwrap_or(ipv4_tcp_port);
-            let ipv6_disc_port = cli_args
+            let ipv6_disc_port = network
                 .use_zero_ports
                 .then(unused_udp6_port)
                 .transpose()?
-                .or(cli_args.discovery_port6)
+                .or(network.discovery_port6)
                 .unwrap_or(ipv4_disc_port);
-            let ipv6_quic_port = cli_args
+            let ipv6_quic_port = network
                 .use_zero_ports
                 .then(unused_udp6_port)
                 .transpose()?
-                .or(cli_args.quic_port6)
+                .or(network.quic_port6)
                 .unwrap_or(if ipv6_tcp_port == 0 {
                     0
                 } else {

@@ -1,7 +1,9 @@
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{fmt::Debug, hash::Hash, num::NonZeroU64, sync::Arc};
 
+use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use database::OwnOperatorId;
+use fork::{Fork, ForkSchedule};
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
 use qbft::{
@@ -10,8 +12,11 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, CommitteeId,
-    consensus::{BeaconVote, QbftData, QbftDataValidator, ValidatorConsensusData},
+    CommitteeId, IndexSet, OperatorId,
+    consensus::{
+        AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
+        QbftDataValidator,
+    },
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
@@ -26,7 +31,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{Hash256, PublicKeyBytes};
+use types::{Epoch, EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
 
@@ -42,6 +47,17 @@ const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
 /// Number of slots to keep before the current slot
 const QBFT_RETAIN_SLOTS: u64 = 1;
 
+/// Determines how round timeouts are calculated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeoutMode {
+    /// Cumulative timeouts from instance start. Never resets.
+    /// Used for: attestations, aggregations, sync committee.
+    SlotTime { instance_start_time: Instant },
+    /// Per-round timeouts. Resets on round changes.
+    /// Used for: block proposals.
+    Relative { current_round_start_time: Instant },
+}
+
 // Unique Identifier for a committee and its corresponding QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct CommitteeInstanceId {
@@ -49,15 +65,25 @@ pub struct CommitteeInstanceId {
     pub instance_height: InstanceHeight,
 }
 
-// Unique Identifier for a validator instance
+// Unique Identifier for an aggregator committee QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ValidatorInstanceId {
+pub struct AggregatorCommitteeInstanceId {
+    pub committee: CommitteeId,
+    pub instance_height: InstanceHeight,
+}
+
+// Unique Identifier for a proposer QBFT instance
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ProposerInstanceId {
     pub validator: PublicKeyBytes,
+    // TODO(post-boole): remove `duty` field and `ValidatorDutyKind`. Post-boole,
+    // `Proposal` is the only validator specific duty
     pub duty: ValidatorDutyKind,
     pub instance_height: InstanceHeight,
 }
 
-// Type of validator duty that is being voted one
+// TODO(post-boole): remove this enum. Post-boole, `Proposal` is the only
+// validator specific duty kind.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ValidatorDutyKind {
     Proposal,
@@ -90,8 +116,8 @@ pub struct QbftInitialization<D: QbftData> {
     validator: Box<dyn QbftDataValidator<D>>,
     /// The message id to be embedded into outgoing messages.
     message_id: MessageId,
-    /// The time when the first round is supposed to start. Rounds will be advanced based on this.
-    start_time: Instant,
+    /// The timeout mode for this instance (includes timing reference).
+    timeout_mode: TimeoutMode,
     /// The configuration for the instance.
     config: qbft::Config<DefaultLeaderFunction>,
     /// The channel to send the final result to.
@@ -102,56 +128,74 @@ pub struct QbftInitialization<D: QbftData> {
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
 
 // Top level QBFTManager structure
-pub struct QbftManager {
+pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // Senders to send work off to the central processor
     processor: Senders,
     // OperatorID
     operator_id: OwnOperatorId,
-    // All of the QBFT instances that are voting on validator consensus data
-    validator_consensus_data_instances: Map<ValidatorInstanceId, ValidatorConsensusData>,
+    // All of the QBFT instances that are voting on proposer consensus data
+    proposer_consensus_data_instances: Map<ProposerInstanceId, ProposerConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
+    // QBFT instances for AggregatorCommitteeConsensusData
+    aggregator_committee_instances:
+        Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
-    // Network domain to embed into messages
-    domain: DomainType,
+    // Number of slots per epoch
+    slots_per_epoch: NonZeroU64,
+    // Fork schedule for looking up the active fork's domain type
+    fork_schedule: Arc<ForkSchedule>,
+    // Slot clock for determining the current epoch
+    slot_clock: S,
 }
 
-impl QbftManager {
+impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
     // Construct a new QBFT Manager
     pub fn new(
         processor: Senders,
         operator_id: OwnOperatorId,
-        slot_clock: impl SlotClock + 'static,
+        slot_clock: S,
         message_sender: Arc<dyn MessageSender>,
-        domain: DomainType,
+        slots_per_epoch: NonZeroU64,
+        fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
             operator_id,
-            validator_consensus_data_instances: DashMap::new(),
+            proposer_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
+            aggregator_committee_instances: DashMap::new(),
             message_sender,
-            domain,
+            slots_per_epoch,
+            fork_schedule,
+            slot_clock: slot_clock.clone(),
         });
 
         // Start a long running task that will clean up old instances
         manager
             .processor
             .permitless
-            .send_async(Arc::clone(&manager).cleaner(slot_clock), QBFT_CLEANER_NAME)?;
+            .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
         Ok(manager)
     }
 
+    /// Get the domain type for the slot associated with a QBFT instance.
+    fn domain_type_for_instance(&self, instance_height: InstanceHeight) -> DomainType {
+        let slot = Slot::new(*instance_height as u64);
+        let epoch = slot.epoch(E::slots_per_epoch());
+        self.fork_schedule.active_fork_config(epoch).domain_type
+    }
+
     // Decide a brand new qbft instance
-    pub async fn decide_instance<D: QbftDecidable>(
+    pub async fn decide_instance<D: QbftDecidable<E>>(
         &self,
         id: D::Id,
         initial: D,
         validator: Box<dyn QbftDataValidator<D>>,
-        start_time: Instant,
-        committee: &Cluster,
+        timeout_mode: TimeoutMode,
+        committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
         let Some(operator_id) = self.operator_id.get() else {
             return Err(QbftError::OwnOperatorIdUnknown);
@@ -159,16 +203,24 @@ impl QbftManager {
 
         // Tx/Rx pair to send and retrieve the final result
         let (result_sender, result_receiver) = oneshot::channel();
-        let message_id = D::message_id(&self.domain, &id);
+        let instance_height = initial.instance_height(&id);
+        let domain = self.domain_type_for_instance(instance_height);
+        let message_id = D::message_id(&domain, &id);
 
-        // General the qbft configuration
-        let config = ConfigBuilder::new(
+        // Compute whether to include epoch shift based on fork schedule
+        let instance_height = initial.instance_height(&id);
+        let epoch = Epoch::new(*instance_height as u64 / self.slots_per_epoch);
+        let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
+        let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
+
+        // Generate the qbft configuration
+        let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
-            initial.instance_height(&id),
-            committee.cluster_members.iter().copied().collect(),
+            instance_height,
+            committee_members.iter().copied().collect(),
+            leader_fn,
         );
         let config = config
-            .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)
             .with_max_rounds(
                 message_id
                     .role()
@@ -188,7 +240,7 @@ impl QbftManager {
                         initial,
                         validator,
                         message_id,
-                        start_time,
+                        timeout_mode,
                         config,
                         on_completed: result_sender,
                     }),
@@ -217,18 +269,21 @@ impl QbftManager {
                     Some(Role::Proposer) => ValidatorDutyKind::Proposal,
                     Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
-                    _ => {
-                        // should never happen
+                    // Committee roles use DutyExecutor::Committee, not Validator
+                    Some(Role::Committee | Role::AggregatorCommittee)
+                    // These roles don't use QBFT consensus
+                    | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
+                    | None => {
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
                         return Err(QbftError::InconsistentMessageId);
                     }
                 };
-                let id = ValidatorInstanceId {
+                let id = ProposerInstanceId {
                     validator,
                     duty,
                     instance_height,
                 };
-                self.pass_to_instance::<ValidatorConsensusData>(
+                self.pass_to_instance::<ProposerConsensusData>(
                     id,
                     WrappedQbftMessage {
                         signed_message: full_message,
@@ -237,17 +292,50 @@ impl QbftManager {
                 )
             }
             Some(DutyExecutor::Committee(committee)) => {
-                let id = CommitteeInstanceId {
-                    committee,
-                    instance_height,
-                };
-                self.pass_to_instance::<BeaconVote>(
-                    id,
-                    WrappedQbftMessage {
-                        signed_message: full_message,
-                        qbft_message,
-                    },
-                )
+                match msg_id.role() {
+                    Some(Role::Committee) => {
+                        // Existing BeaconVote routing
+                        let id = CommitteeInstanceId {
+                            committee,
+                            instance_height,
+                        };
+                        self.pass_to_instance::<BeaconVote>(
+                            id,
+                            WrappedQbftMessage {
+                                signed_message: full_message,
+                                qbft_message,
+                            },
+                        )
+                    }
+                    Some(Role::AggregatorCommittee) => {
+                        // Route to aggregator committee instances with fork gating
+                        let slot = types::Slot::new(qbft_message.height);
+                        let epoch = slot.epoch(E::slots_per_epoch());
+
+                        // Fork gating: Reject before Boole
+                        if self.fork_schedule.active_fork(epoch) < Fork::Boole {
+                            warn!(%slot, "Ignoring AggregatorCommittee message before Boole fork");
+                            return Err(QbftError::RoleNotActive);
+                        }
+
+                        let id = AggregatorCommitteeInstanceId {
+                            committee,
+                            instance_height,
+                        };
+                        self.pass_to_instance::<AggregatorCommitteeConsensusData<E>>(
+                            id,
+                            WrappedQbftMessage {
+                                signed_message: full_message,
+                                qbft_message,
+                            },
+                        )
+                    }
+                    // Validator roles should use DutyExecutor::Validator, not Committee
+                    Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
+                    // These roles don't use QBFT consensus
+                    | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
+                    | None => Err(QbftError::InconsistentMessageId),
+                }
             }
             None => {
                 warn!(?msg_id, "received invalid message id");
@@ -256,7 +344,7 @@ impl QbftManager {
         }
     }
 
-    fn pass_to_instance<D: QbftDecidable>(
+    fn pass_to_instance<D: QbftDecidable<E>>(
         &self,
         id: D::Id,
         data: WrappedQbftMessage,
@@ -275,34 +363,36 @@ impl QbftManager {
     }
 
     // Long running cleaner that will remove instances that are no longer relevant
-    async fn cleaner(self: Arc<Self>, slot_clock: impl SlotClock) {
+    async fn cleaner(self: Arc<Self>) {
         while !self.processor.permitless.is_closed() {
             sleep(
-                slot_clock
+                self.slot_clock
                     .duration_to_next_slot()
-                    .unwrap_or(slot_clock.slot_duration()),
+                    .unwrap_or(self.slot_clock.slot_duration()),
             )
             .await;
-            let Some(slot) = slot_clock.now() else {
+            let Some(slot) = self.slot_clock.now() else {
                 continue;
             };
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
             self.beacon_vote_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
-            self.validator_consensus_data_instances
+            self.proposer_consensus_data_instances
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+            self.aggregator_committee_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
     }
 }
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
-pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
+pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 'static {
     type Id: Hash + Eq + Send + Debug;
 
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self>;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self>;
 
-    fn get_or_spawn_instance(
-        manager: &QbftManager,
+    fn get_or_spawn_instance<S: SlotClock>(
+        manager: &QbftManager<E, S>,
         id: Self::Id,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
@@ -310,7 +400,7 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
             dashmap::Entry::Occupied(entry) => entry.get().clone(),
             dashmap::Entry::Vacant(entry) => {
                 // There is not an instance running yet, store the sender and spawn a new instance
-                // with the reeiver
+                // with the receiver
                 let (tx, rx) = mpsc::unbounded_channel();
                 let span = debug_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);
@@ -328,10 +418,10 @@ pub trait QbftDecidable: QbftData<Hash = Hash256> + Send + Sync + 'static {
     fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId;
 }
 
-impl QbftDecidable for ValidatorConsensusData {
-    type Id = ValidatorInstanceId;
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self> {
-        &manager.validator_consensus_data_instances
+impl<E: EthSpec> QbftDecidable<E> for ProposerConsensusData {
+    type Id = ProposerInstanceId;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
+        &manager.proposer_consensus_data_instances
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
@@ -348,9 +438,9 @@ impl QbftDecidable for ValidatorConsensusData {
     }
 }
 
-impl QbftDecidable for BeaconVote {
+impl<E: EthSpec> QbftDecidable<E> for BeaconVote {
     type Id = CommitteeInstanceId;
-    fn get_map(manager: &QbftManager) -> &Map<Self::Id, Self> {
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.beacon_vote_instances
     }
 
@@ -367,6 +457,25 @@ impl QbftDecidable for BeaconVote {
     }
 }
 
+impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
+    type Id = AggregatorCommitteeInstanceId;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
+        &manager.aggregator_committee_instances
+    }
+
+    fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
+        id.instance_height
+    }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        MessageId::new(
+            domain,
+            Role::AggregatorCommittee,
+            &DutyExecutor::Committee(id.committee),
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum QbftError {
     QueueClosedError,
@@ -374,6 +483,7 @@ pub enum QbftError {
     ConfigBuilderError(ConfigBuilderError),
     InconsistentMessageId,
     OwnOperatorIdUnknown,
+    RoleNotActive,
 }
 
 impl From<processor::Error> for QbftError {

@@ -6,7 +6,8 @@ use libp2p::{
     gossipsub::{Message, MessageAcceptance, MessageId},
 };
 use message_validator::{
-    DutiesProvider, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
+    DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationResult,
+    Validator,
 };
 use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
@@ -27,10 +28,10 @@ pub struct Outcome {
 }
 
 /// A message receiver that passes messages to responsible managers.
-pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageReceiver<E: types::EthSpec, S: SlotClock, D: DutiesProvider> {
     processor: processor::Senders,
-    qbft_manager: Arc<QbftManager>,
-    signature_collector: Arc<SignatureCollectorManager>,
+    qbft_manager: Arc<QbftManager<E, S>>,
+    signature_collector: Arc<SignatureCollectorManager<S>>,
     network_state_rx: watch::Receiver<NetworkState>,
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
@@ -38,12 +39,12 @@ pub struct NetworkMessageReceiver<S: SlotClock, D: DutiesProvider> {
     doppelganger_service: Option<Arc<OperatorDoppelgangerService>>,
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
-    #[allow(clippy::too_many_arguments)]
+impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<E, S, D> {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         processor: processor::Senders,
-        qbft_manager: Arc<QbftManager>,
-        signature_collector: Arc<SignatureCollectorManager>,
+        qbft_manager: Arc<QbftManager<E, S>>,
+        signature_collector: Arc<SignatureCollectorManager<S>>,
         network_state_rx: watch::Receiver<NetworkState>,
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
@@ -63,14 +64,15 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageReceiver<S, D> {
     }
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
-    for Arc<NetworkMessageReceiver<S, D>>
+impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
+    for Arc<NetworkMessageReceiver<E, S, D>>
 {
     fn receive(
         &self,
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
+        topic_context: TopicContext,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(
@@ -78,7 +80,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageReceiver
                 let span = debug_span!("message_receiver", msg=%message_id);
                 let _enter = span.enter();
 
-                let result = receiver.validator.validate(&message.data);
+                let result = receiver.validator.validate(&message.data, &topic_context);
 
                 let mut action = MessageAcceptance::from(&result);
 

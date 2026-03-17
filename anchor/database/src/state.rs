@@ -4,13 +4,14 @@ use std::{
 };
 
 use base64::prelude::*;
+use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::{Error as SqlError, OptionalExtension, params, types::Type};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
 };
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
@@ -36,6 +37,9 @@ impl NetworkState {
 
         // Get the last processed block from the database
         let last_processed_block = Self::get_last_processed_block_from_db(&conn)?;
+
+        // Get number of joined operators from the database
+        let max_operator_id_seen = Self::get_max_operator_id_seen_from_db(&conn)?;
 
         // Without an ID, we have no idea who we are. Check to see if an operator with our public
         // key is stored the database. If it does not exist, that means the operator still
@@ -71,6 +75,7 @@ impl NetworkState {
                 .map(|m| m.keys().copied().collect())
                 .unwrap_or_default(),
             nonces,
+            max_operator_id_seen,
         };
 
         // Populate all multi-index maps in a single pass through clusters
@@ -135,6 +140,12 @@ impl NetworkState {
             .map_err(DatabaseError::from)
     }
 
+    fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<Option<u64>, DatabaseError> {
+        conn.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
+            .query_row(params![], |row| row.get(0))
+            .map_err(DatabaseError::from)
+    }
+
     // Check to see if an operator with the public key already exists in the database
     fn does_self_exist(
         conn: &PoolConn,
@@ -146,7 +157,7 @@ impl NetworkState {
                 .expect("Failed to encode RsaPublicKey"),
         );
         let mut stmt = conn.prepare(sql_operations::GET_OPERATOR_ID)?;
-        stmt.query_row(params![encoded], |row| Ok(OperatorId(row.get(0)?)))
+        stmt.query_row(params![encoded], |row| row.get(0))
             .optional()
             .map_err(DatabaseError::from)
     }
@@ -209,7 +220,7 @@ impl NetworkState {
         let mut stmt = conn.prepare(sql_operations::GET_CLUSTER_MEMBERS)?;
         let members = stmt.query_map([cluster_id.0], |row| {
             Ok(ClusterMember {
-                operator_id: OperatorId(row.get(0)?),
+                operator_id: row.get(0)?,
                 cluster_id,
             })
         })?;
@@ -224,7 +235,7 @@ impl NetworkState {
     ) -> Result<HashMap<ClusterId, Vec<Share>>, DatabaseError> {
         let mut stmt = conn.prepare(sql_operations::GET_SHARES)?;
         let shares = stmt
-            .query_map([*id], |row| Share::try_from(row))?
+            .query_map(params![id], |row| Share::try_from(row))?
             .map(|result| result.map_err(DatabaseError::from))
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -339,6 +350,10 @@ impl NetworkState {
     /// Get the last block that has been fully processed by the database
     pub fn get_last_processed_block(&self) -> u64 {
         self.single_state.last_processed_block
+    }
+
+    pub fn get_max_operator_id_seen(&self) -> Option<u64> {
+        self.single_state.max_operator_id_seen
     }
 
     pub fn get_committee_info_by_committee_id(

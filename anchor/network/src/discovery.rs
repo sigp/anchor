@@ -15,6 +15,7 @@ use discv5::{
     libp2p_identity::{Keypair, PeerId},
     multiaddr::Multiaddr,
 };
+use fork::ForkLifecycle;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use libp2p::{
     bytes::Bytes,
@@ -27,11 +28,12 @@ use libp2p::{
 use network_utils::enr_ext::{CombinedKeyExt, EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 use ssv_types::domain_type::DomainType;
 use ssz::{Decode, Encode};
+use ssz_types::BitVector;
 use subnet_service::SubnetId;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, trace, warn};
-use types::{BitVector, typenum::U128};
+use typenum::U128;
 
 use crate::{
     Config,
@@ -151,7 +153,7 @@ pub struct Discovery {
     /// been started
     update_ports: UpdatePorts,
 
-    domain_type: DomainType,
+    lifecycle_rx: watch::Receiver<ForkLifecycle>,
 
     enr_file_path: PathBuf,
 }
@@ -160,6 +162,7 @@ impl Discovery {
     pub async fn new(
         local_keypair: Keypair,
         network_config: &Config,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Self, DiscoveryError> {
         let protocol_identity = ProtocolIdentity {
             protocol_id: *b"ssvdv5",
@@ -195,8 +198,11 @@ impl Discovery {
         let enr_key: CombinedKey =
             CombinedKey::from_libp2p(local_keypair).map_err(|e| EnrKey(e.to_string()))?;
 
+        // Get the domain type of the active fork on initialization.
+        let domain_type = lifecycle_rx.borrow().current_fork_config().domain_type;
+
         let previous_enr = load_enr_from_disk(&enr_file_path);
-        let enr = build_enr(&enr_key, network_config, previous_enr)?;
+        let enr = build_enr(&enr_key, network_config, domain_type, previous_enr)?;
         save_enr_to_disk(&enr_file_path, &enr);
         let local_node_id = enr.node_id();
 
@@ -305,7 +311,7 @@ impl Discovery {
             discv5,
             event_stream,
             started: !network_config.disable_discovery,
-            domain_type: network_config.domain_type,
+            lifecycle_rx,
             update_ports,
             enr_file_path,
         })
@@ -411,6 +417,37 @@ impl Discovery {
         Ok(true)
     }
 
+    /// Update the ENR domain type so other nodes can discover us with the new fork's domain.
+    ///
+    /// Called when a fork activates. The shared domain type is updated separately;
+    /// this method only handles the ENR update and disk persistence.
+    pub fn update_enr_domain_type(&mut self, new_domain_type: DomainType) -> Result<(), String> {
+        if let Some(Ok(old_domain_type)) = self
+            .discv5
+            .external_enr()
+            .read()
+            .get_decodable::<[u8; 4]>("domaintype")
+            && old_domain_type == new_domain_type.0
+        {
+            // No need to update the ENR if the domain type hasn't changed.
+            return Ok(());
+        }
+
+        self.discv5
+            .enr_insert("domaintype", &new_domain_type.0)
+            .map_err(|e| format!("Failed to update ENR domain type: {e:?}"))?;
+
+        save_enr_to_disk(&self.enr_file_path, &self.discv5.local_enr());
+
+        info!(
+            domain_type = ?new_domain_type,
+            enr_seq = self.discv5.local_enr().seq(),
+            "Updated ENR domain type for fork activation"
+        );
+
+        Ok(())
+    }
+
     /// Search for a specified number of new peers using the underlying discovery mechanism.
     ///
     /// This can optionally search for peers for a given predicate. Regardless of the predicate
@@ -425,12 +462,13 @@ impl Discovery {
         // predicate for finding nodes with a valid tcp port
         let tcp_predicate = move |enr: &Enr| enr.tcp4().is_some() || enr.tcp6().is_some();
 
-        // Capture a copy of the domain type so the closure no longer references `self`.
-        let local_domain_type = self.domain_type;
+        // Clone the lifecycle receiver so the closure can read the current domain type at
+        // query time.
+        let lifecycle_rx = self.lifecycle_rx.clone();
 
         let domain_type_predicate = move |enr: &Enr| {
             if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
-                local_domain_type.0 == domain_type
+                lifecycle_rx.borrow().current_fork_config().domain_type.0 == domain_type
             } else {
                 trace!(?enr, "Rejecting ENR with missing domaintype");
                 false
@@ -557,7 +595,6 @@ impl NetworkBehaviour for Discovery {
     ) {
     }
 
-    #[allow(clippy::single_match)]
     fn poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -589,6 +626,7 @@ impl NetworkBehaviour for Discovery {
 pub fn build_enr(
     enr_key: &CombinedKey,
     config: &Config,
+    domain_type: DomainType,
     prev_enr: Option<Enr>,
 ) -> Result<Enr, Error> {
     let mut builder = Enr::builder();
@@ -669,7 +707,7 @@ pub fn build_enr(
     builder.add_value::<Bytes>("subnets", &subnets.as_ssz_bytes().into());
 
     // set the "domaintype" field on our ENR
-    builder.add_value::<[u8; 4]>("domaintype", &config.domain_type.0);
+    builder.add_value::<[u8; 4]>("domaintype", &domain_type.0);
 
     // finally, set "ssv" to true
     builder.add_value::<bool>("ssv", &true);

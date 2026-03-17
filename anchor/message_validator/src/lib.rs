@@ -12,6 +12,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
+use fork::{Fork, ForkSchedule};
 pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
@@ -25,14 +26,15 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
-    message::{MsgType, SignedSSVMessage},
+    message::{MsgType, SSVMessageError, SignedSSVMessage, SignedSSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
 };
 use ssz::{Decode, DecodeError, Encode};
+use subnet_service::topic::ParsedTopic;
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
-use tracing::trace;
+use tracing::{debug, trace};
 use types::{Epoch, Slot};
 
 use crate::{
@@ -103,6 +105,16 @@ pub enum ValidationFailure {
     DecidedWithSameSigners,
     PubSubDataTooBig(usize),
     IncorrectTopic,
+    /// Topic's fork doesn't match the fork that should be active for the message's slot.
+    ///
+    /// Per SIP-43, messages should be on topics matching their slot's fork. For example,
+    /// a message for a post-fork slot should be on a post-fork topic.
+    TopicForkMismatch,
+    /// Could not extract slot from message data.
+    ///
+    /// The message data could not be decoded to extract the slot information needed
+    /// for slot-based validation.
+    UnknownMessageSlot,
     NonExistentCommitteeID,
     RoundTooHigh,
     ValidatorIndexMismatch,
@@ -166,7 +178,11 @@ pub enum ValidationFailure {
     PartialSigOneSigner,
     PrepareOrCommitWithFullData,
     FullDataNotInConsensusMessage,
-    TripleValidatorIndexInPartialSignatures,
+    TooManyValidatorIndexOccurrences {
+        validator_index: ValidatorIndex,
+        got: usize,
+        limit: usize,
+    },
     ZeroRound,
     RoundOverflow,
     DuplicatedMessage {
@@ -195,6 +211,16 @@ pub enum ValidationFailure {
     SyncCommitteePeriodCalculationFailure,
     UnexpectedFailure {
         msg: String,
+    },
+    RoleNotActiveBeforeFork {
+        role: Role,
+        current_fork: fork::Fork,
+        minimum_fork: fork::Fork,
+    },
+    RoleNotActiveAfterFork {
+        role: Role,
+        current_fork: fork::Fork,
+        deprecated_since_fork: fork::Fork,
     },
 }
 
@@ -227,6 +253,44 @@ impl From<&ValidationFailure> for MessageAcceptance {
     }
 }
 
+impl From<SignedSSVMessageError> for ValidationFailure {
+    fn from(err: SignedSSVMessageError) -> Self {
+        match err {
+            // Reachable: `validate()` checks these on SSZ-decoded messages
+            SignedSSVMessageError::WrongRSASignatureSize { .. } => {
+                ValidationFailure::WrongRSASignatureSize
+            }
+            SignedSSVMessageError::NoSigners => ValidationFailure::NoSigners,
+            SignedSSVMessageError::NoSignatures => ValidationFailure::NoSignatures,
+            SignedSSVMessageError::ZeroSigner => ValidationFailure::ZeroSigner,
+            SignedSSVMessageError::DuplicatedSigner => ValidationFailure::DuplicatedSigner,
+            SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
+                ValidationFailure::SignersAndSignaturesWithDifferentLength
+            }
+            SignedSSVMessageError::SSVMessageError(ssv_err) => match ssv_err {
+                SSVMessageError::EmptyData => ValidationFailure::EmptyData,
+                SSVMessageError::SSVDataTooBig { .. } => ValidationFailure::SSVDataTooBig,
+                SSVMessageError::WrongDomain { .. } => ValidationFailure::WrongDomain,
+                SSVMessageError::SignerNotInCommittee { .. } => {
+                    ValidationFailure::SignerNotInCommittee
+                }
+            },
+            // Not returned by `validate()`:
+            // - `TooMany*` / `FullDataTooLong`: only from `new()`/`aggregate()` when converting raw
+            //   Vecs into VariableLists. `validate()` operates on data already in `VariableList`
+            //   form, so these are type-enforced.
+            // - `SignersNotSorted`: removed from `validate()` because the Go spec's `Validate()`
+            //   does not enforce sorting and Go's `Aggregate()` appends without sorting.
+            SignedSSVMessageError::TooManySignatures { .. }
+            | SignedSSVMessageError::TooManyOperatorIDs { .. }
+            | SignedSSVMessageError::FullDataTooLong { .. }
+            | SignedSSVMessageError::SignersNotSorted => ValidationFailure::UnexpectedFailure {
+                msg: err.to_string(),
+            },
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
@@ -248,6 +312,35 @@ impl ValidatedMessage {
     }
 }
 
+/// Context for topic-aware message validation.
+///
+/// This enum makes explicit whether topic validation should be performed:
+/// - `SkipValidation`: Used for outgoing messages and tests where topic validation is not needed
+/// - `Validate`: Used for incoming network messages where topic validation is required
+///
+/// For incoming network messages, always use `TopicContext::Validate`. If topic parsing
+/// fails at the network layer, the message should be rejected immediately rather than
+/// passed to the validator with skip context.
+#[derive(Debug, Clone, Default)]
+pub enum TopicContext {
+    /// Skip topic validation entirely.
+    ///
+    /// Used for:
+    /// - Outgoing message self-validation (we calculate our own routing)
+    /// - Testing scenarios where topic context is irrelevant
+    #[default]
+    SkipValidation,
+
+    /// Validate message against the parsed topic.
+    ///
+    /// Used for incoming network messages where we need to verify the message
+    /// is on the correct subnet for its content.
+    Validate {
+        /// The parsed topic information (subnet_id, fork).
+        parsed: ParsedTopic,
+    },
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Processor error: {0}")]
@@ -264,6 +357,7 @@ struct ValidationContext<'a, S> {
     pub sync_committee_size: usize,
     pub slot_clock: S,
     pub operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+    pub fork_schedule: Arc<ForkSchedule>,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
@@ -274,9 +368,12 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     sync_committee_size: usize,
     duties_provider: Arc<D>,
     slot_clock: S,
+    subnet_service: Arc<subnet_service::SubnetService<S>>,
+    fork_schedule: Arc<ForkSchedule>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         network_state_rx: Receiver<NetworkState>,
         slots_per_epoch: u64,
@@ -284,6 +381,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         sync_committee_size: usize,
         duties_provider: Arc<D>,
         slot_clock: S,
+        subnet_service: Arc<subnet_service::SubnetService<S>>,
+        fork_schedule: Arc<ForkSchedule>,
         task_executor: &TaskExecutor,
     ) -> Arc<Self> {
         let validator = Arc::new(Self {
@@ -294,6 +393,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             sync_committee_size,
             duties_provider,
             slot_clock,
+            subnet_service,
+            fork_schedule,
         });
 
         task_executor.spawn(Arc::clone(&validator).cleaner(), VALIDATOR_CLEANER_NAME);
@@ -301,11 +402,16 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         validator
     }
 
-    pub fn validate(&self, message_data: &[u8]) -> ValidationResult {
+    /// Validate a message with topic context for fork-aware validation.
+    ///
+    /// The `topic_context` provides information about which topic the message was
+    /// received on, enabling validation of whether the message is on the correct
+    /// subnet for its committee based on the topic's fork.
+    pub fn validate(&self, message_data: &[u8], topic_context: &TopicContext) -> ValidationResult {
         match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
-                match self.validate_decoded_message(&signed_ssv_message) {
+                match self.validate_decoded_message(&signed_ssv_message, topic_context) {
                     Ok(validated_message) => ValidationResult::Success(validated_message),
                     Err(failure) => {
                         ValidationResult::PostDecodeFailure(failure, signed_ssv_message)
@@ -321,7 +427,13 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     fn validate_decoded_message(
         &self,
         signed_ssv_message: &SignedSSVMessage,
+        topic_context: &TopicContext,
     ) -> Result<ValidatedMessage, ValidationFailure> {
+        // Structural validation: signer/signature invariants, RSA size, etc.
+        signed_ssv_message
+            .validate()
+            .map_err(ValidationFailure::from)?;
+
         // Get the role from message ID
         let ssv_message = signed_ssv_message.ssv_message();
         let role = ssv_message
@@ -329,19 +441,27 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             .role()
             .ok_or(ValidationFailure::InvalidRole)?;
 
+        // Get committee ID for topic validation
+        let committee_id = match ssv_message.msg_id().duty_executor() {
+            Some(DutyExecutor::Committee(id)) => Some(id),
+            _ => None,
+        };
+
         // Get committee info based on role and duty executor
         let network_state = self.network_state_rx.borrow();
         let committee_info = match role {
-            Role::Committee => {
-                let committee_id = match ssv_message.msg_id().duty_executor() {
-                    Some(DutyExecutor::Committee(id)) => id,
-                    _ => return Err(ValidationFailure::NonExistentCommitteeID),
-                };
+            Role::Committee | Role::AggregatorCommittee => {
+                let committee_id = committee_id.ok_or(ValidationFailure::NonExistentCommitteeID)?;
                 network_state
                     .get_committee_info_by_committee_id(&committee_id)
                     .ok_or(ValidationFailure::NonExistentCommitteeID)?
             }
-            _ => {
+            // Validator roles use DutyExecutor::Validator with public key
+            Role::Aggregator
+            | Role::Proposer
+            | Role::SyncCommittee
+            | Role::ValidatorRegistration
+            | Role::VoluntaryExit => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -352,6 +472,17 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                     .ok_or(ValidationFailure::UnknownValidator)?
             }
         };
+
+        // Validate topic - message is on correct subnet and has correct domain for its committee
+        let operator_ids: Vec<_> = committee_info.committee_members.iter().copied().collect();
+        self.validate_topic_and_domain(
+            topic_context,
+            committee_id,
+            &operator_ids,
+            ssv_message,
+            ssv_message.msg_id(),
+        )?;
+
         let operator_pub_keys =
             &get_operator_pub_keys(&network_state, &committee_info.committee_members);
 
@@ -369,6 +500,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             sync_committee_size: self.sync_committee_size,
             slot_clock: self.slot_clock.clone(),
             operator_pub_keys,
+            fork_schedule: Arc::clone(&self.fork_schedule),
         };
 
         validate_ssv_message(
@@ -426,6 +558,123 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
                 .duty_state_map
                 .retain(|_, duty_state| !duty_state.outdated(now));
         }
+    }
+
+    /// Validates that a message is on the correct topic for its committee using slot-based rules.
+    ///
+    /// Per SIP-43, validation is slot-based: the message's slot determines which fork rules apply,
+    /// and the topic serves as a consistency check.
+    ///
+    /// This performs three validations:
+    /// 1. **Subnet validation**: The message is on the correct subnet for its committee.
+    /// 2. **Domain validation**: The message's domain matches the expected domain for the fork that
+    ///    is active at the message's slot.
+    /// 3. **Topic consistency**: The topic's fork matches the fork that should be active for the
+    ///    message's slot.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic_context` - The parsed topic information (subnet_id, fork)
+    /// * `committee_id` - The committee ID from the message
+    /// * `operator_ids` - The operator IDs from the committee
+    /// * `ssv_message` - The SSV message to validate (for slot extraction)
+    /// * `msg_id` - The message ID containing the domain to validate
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if all validations pass or if validation is skipped
+    /// * `Err(ValidationFailure::IncorrectTopic)` if the subnet is wrong
+    /// * `Err(ValidationFailure::WrongDomain)` if the domain doesn't match the slot's fork
+    /// * `Err(ValidationFailure::TopicForkMismatch)` if the topic's fork doesn't match the slot's
+    ///   fork
+    /// * `Err(ValidationFailure::UnknownMessageSlot)` if the slot cannot be extracted
+    fn validate_topic_and_domain(
+        &self,
+        topic_context: &TopicContext,
+        committee_id: Option<ssv_types::CommitteeId>,
+        operator_ids: &[OperatorId],
+        ssv_message: &ssv_types::message::SSVMessage,
+        msg_id: &MessageId,
+    ) -> Result<(), ValidationFailure> {
+        let parsed = match topic_context {
+            TopicContext::SkipValidation => {
+                trace!("Topic validation skipped");
+                return Ok(());
+            }
+            TopicContext::Validate { parsed } => parsed,
+        };
+
+        // Extract slot from message for slot-based validation
+        let message_slot = ssv_message
+            .extract_slot()
+            .ok_or(ValidationFailure::UnknownMessageSlot)?;
+
+        // Validate subnet using slot-based fork selection
+        let committee_id =
+            committee_id.unwrap_or_else(|| ssv_types::CommitteeId::from(operator_ids.to_vec()));
+
+        let expected_subnet = self
+            .subnet_service
+            .subnet_for_committee_with_operators_at_slot(committee_id, operator_ids, message_slot)
+            .map_err(|e| {
+                debug!(?e, "Failed to calculate expected subnet");
+                ValidationFailure::IncorrectTopic
+            })?;
+
+        if parsed.subnet_id != expected_subnet {
+            debug!(
+                actual_subnet = ?parsed.subnet_id,
+                ?expected_subnet,
+                topic_fork = ?parsed.fork,
+                "Message on incorrect subnet"
+            );
+            return Err(ValidationFailure::IncorrectTopic);
+        }
+
+        // Determine the expected fork based on the message's slot
+        let message_epoch = message_slot.epoch(self.slots_per_epoch);
+        let expected_fork = self.subnet_service.router().active_fork(message_epoch);
+
+        // Topic consistency check: verify topic's fork matches the slot's expected fork
+        if parsed.fork != expected_fork {
+            debug!(
+                topic_fork = ?parsed.fork,
+                ?expected_fork,
+                ?message_slot,
+                ?message_epoch,
+                "Topic fork does not match expected fork for message slot"
+            );
+            return Err(ValidationFailure::TopicForkMismatch);
+        }
+
+        // Validate domain against the fork active at the message's slot
+        let expected_domain = self
+            .subnet_service
+            .router()
+            .domain_type_for_epoch(message_epoch)
+            .ok_or_else(|| {
+                debug!(
+                    ?expected_fork,
+                    ?message_epoch,
+                    "Unknown fork, cannot validate domain"
+                );
+                ValidationFailure::WrongDomain
+            })?;
+
+        let msg_domain = msg_id.domain();
+        if msg_domain != expected_domain {
+            debug!(
+                ?msg_domain,
+                ?expected_domain,
+                fork = ?expected_fork,
+                ?message_slot,
+                "Message domain does not match expected domain for slot's fork"
+            );
+            return Err(ValidationFailure::WrongDomain);
+        }
+
+        trace!(subnet = ?expected_subnet, fork = ?expected_fork, "Topic validation passed");
+        Ok(())
     }
 }
 
@@ -579,6 +828,40 @@ pub(crate) fn validate_beacon_duty(
     Ok(())
 }
 
+/// Validates that a role is allowed for the fork active at the given slot.
+///
+/// Rejects:
+/// - AggregatorCommittee before Boole fork (not yet active)
+/// - Aggregator and SyncCommittee after Boole fork (deprecated)
+pub(crate) fn validate_role_for_fork(
+    slot: Slot,
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<(), ValidationFailure> {
+    let role = validation_context.role;
+    let epoch = slot.epoch(validation_context.slots_per_epoch);
+    let active_fork = validation_context.fork_schedule.active_fork(epoch);
+
+    // Reject AggregatorCommittee before Boole fork (safety net)
+    if role == Role::AggregatorCommittee && active_fork < Fork::Boole {
+        return Err(ValidationFailure::RoleNotActiveBeforeFork {
+            role,
+            current_fork: active_fork,
+            minimum_fork: Fork::Boole,
+        });
+    }
+
+    // Reject deprecated roles after Boole fork
+    if matches!(role, Role::Aggregator | Role::SyncCommittee) && active_fork >= Fork::Boole {
+        return Err(ValidationFailure::RoleNotActiveAfterFork {
+            role,
+            current_fork: active_fork,
+            deprecated_since_fork: Fork::Boole,
+        });
+    }
+
+    Ok(())
+}
+
 /// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
 const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
 /// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
@@ -638,9 +921,11 @@ fn message_lateness(
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
         Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
-        Role::Committee | Role::Aggregator | Role::ValidatorRegistration | Role::VoluntaryExit => {
-            validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE
-        }
+        Role::Committee
+        | Role::Aggregator
+        | Role::ValidatorRegistration
+        | Role::VoluntaryExit
+        | Role::AggregatorCommittee => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
@@ -719,7 +1004,10 @@ fn duty_limit(
             ))
         }
         Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
-        Role::Committee => {
+        // Committee roles (Committee and AggregatorCommittee) use the same duty limit formula:
+        // min(slots_per_epoch, 2*validator_count), or slots_per_epoch if any validator is in sync
+        // committee
+        Role::Committee | Role::AggregatorCommittee => {
             let validator_index_count = validator_indices.len() as u64;
             let slots_per_epoch_val = validation_context.slots_per_epoch;
 
@@ -743,7 +1031,8 @@ fn duty_limit(
                 2 * validator_index_count,
             )))
         }
-        _ => Ok(None),
+        // Proposer and SyncCommittee have no duty limit
+        Role::Proposer | Role::SyncCommittee => Ok(None),
     }
 }
 
@@ -1000,8 +1289,14 @@ mod tests {
     pub(crate) fn create_message_id_for_test(role: Role) -> MessageId {
         let domain = DomainType([0, 0, 0, 1]);
         let duty_executor = match role {
-            Role::Committee => DutyExecutor::Committee(CommitteeId([0u8; 32])),
-            _ => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            Role::Committee | Role::AggregatorCommittee => {
+                DutyExecutor::Committee(CommitteeId([0u8; 32]))
+            }
+            Role::Aggregator
+            | Role::Proposer
+            | Role::SyncCommittee
+            | Role::ValidatorRegistration
+            | Role::VoluntaryExit => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }

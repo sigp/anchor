@@ -219,11 +219,6 @@ where
         self
     }
 
-    pub fn with_quorum_size(mut self, quorum_size: usize) -> Self {
-        self.quorum_size = quorum_size;
-        self
-    }
-
     pub fn with_leader_fn(mut self, leader_fn: F) -> Self {
         self.leader_fn = leader_fn;
         self

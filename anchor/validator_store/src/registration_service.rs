@@ -15,15 +15,13 @@
 use std::sync::Arc;
 
 use beacon_node_fallback::BeaconNodeFallback;
+use bls::PublicKeyBytes;
 use futures::future::join_all;
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
 use tokio::time::{Duration, sleep};
-use tracing::{error, info, warn};
-use types::{
-    ChainSpec, EthSpec, PublicKeyBytes, SignedValidatorRegistrationData, Slot,
-    ValidatorRegistrationData,
-};
+use tracing::{debug, error, info, warn};
+use types::{ChainSpec, EthSpec, SignedValidatorRegistrationData, Slot, ValidatorRegistrationData};
 use validator_store::{DoppelgangerStatus, ValidatorStore};
 
 /// Number of epochs to wait before re-submitting validator registration.
@@ -148,16 +146,14 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
 
         // We don't log for missing fee recipients here because this will be logged more
         // frequently in `collect_preparation_data`.
-        proposal_data.fee_recipient.and_then(|fee_recipient| {
-            proposal_data
-                .builder_proposals
-                .then_some(ValidatorRegistrationData {
-                    fee_recipient,
-                    gas_limit: proposal_data.gas_limit,
-                    pubkey,
-                    timestamp,
-                })
-        })
+        proposal_data
+            .fee_recipient
+            .map(|fee_recipient| ValidatorRegistrationData {
+                fee_recipient,
+                gas_limit: proposal_data.gas_limit,
+                pubkey,
+                timestamp,
+            })
     }
 
     async fn sign_registration_data(
@@ -199,10 +195,13 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
                     count = signed.len(),
                     "Published validator registrations to the builder network"
                 ),
-                Err(err) => warn!(
-                    %err,
-                    "Unable to publish validator registrations to the builder network"
-                ),
+                Err(err) => {
+                    debug!(
+                        %err,
+                        "Unable to publish validator registrations to the builder network. \
+                         This is expected if no relay is configured in your Beacon Node."
+                    );
+                }
             }
         }
     }

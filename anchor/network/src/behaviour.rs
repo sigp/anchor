@@ -1,12 +1,15 @@
 use std::{hash::Hasher, time::Duration};
 
+use fork::ForkLifecycle;
 use libp2p::{
     gossipsub::{self, ConfigBuilderError, MessageAuthenticity, ValidationMode},
     identify, ping,
-    swarm::NetworkBehaviour,
+    swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
+    upnp::tokio::Behaviour as Upnp,
 };
 use prometheus_client::registry::Registry;
 use thiserror::Error;
+use tokio::sync::watch;
 use twox_hash::XxHash64;
 use types::{ChainSpec, EthSpec};
 use version::version_with_platform;
@@ -79,6 +82,8 @@ pub struct AnchorBehaviour {
     /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer
     /// selection.
     pub peer_manager: PeerManager,
+    /// Libp2p UPnP port mapping.
+    pub upnp: Toggle<Upnp>,
 
     pub handshake: handshake::Behaviour,
 }
@@ -89,6 +94,7 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Self, BehaviourError> {
         let identify = {
             let local_public_key = local_keypair.public();
@@ -152,7 +158,8 @@ impl AnchorBehaviour {
 
         let discovery = {
             // Build and start the discovery sub-behaviour
-            let mut discovery = Discovery::new(local_keypair.clone(), network_config).await?;
+            let mut discovery =
+                Discovery::new(local_keypair.clone(), network_config, lifecycle_rx.clone()).await?;
             // start searching for peers
             discovery.discover_peers(FIND_NODE_QUERY_CLOSEST_PEERS);
             discovery
@@ -162,22 +169,24 @@ impl AnchorBehaviour {
             let slots_per_epoch = E::slots_per_epoch();
             let slot_duration = Duration::from_secs(spec.seconds_per_slot);
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
-            PeerManager::new(network_config, one_epoch_duration)
+            PeerManager::new(network_config, one_epoch_duration, lifecycle_rx.clone())
         };
 
         let handshake = {
-            let domain_type: String = network_config.domain_type.into();
-            let node_info = handshake::node_info::NodeInfo::new(
-                domain_type,
-                Some(handshake::node_info::NodeMetadata {
-                    node_version: version_with_platform(),
-                    execution_node: "geth/v1.10.8".to_string(),
-                    consensus_node: "lighthouse/v1.5.0".to_string(),
-                    subnets: "00000000000000000000000000000000".to_string(),
-                }),
-            );
-            handshake::Behaviour::new(local_keypair, node_info)
+            let metadata = handshake::node_info::NodeMetadata {
+                node_version: version_with_platform(),
+                execution_node: "geth/v1.10.8".to_string(),
+                consensus_node: "lighthouse/v1.5.0".to_string(),
+                subnets: "00000000000000000000000000000000".to_string(),
+            };
+            handshake::Behaviour::new(local_keypair, lifecycle_rx, metadata)
         };
+
+        let upnp = Toggle::from(
+            network_config
+                .upnp_enabled
+                .then(libp2p::upnp::tokio::Behaviour::default),
+        );
 
         Ok(AnchorBehaviour {
             identify,
@@ -186,6 +195,7 @@ impl AnchorBehaviour {
             discovery,
             peer_manager,
             handshake,
+            upnp,
         })
     }
 }

@@ -11,7 +11,7 @@ use global_config::{GlobalConfig, GlobalFlags};
 use keygen::Keygen;
 use keysplit::Keysplit;
 use logging::{
-    AnchorFormatter, CountLayer, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
+    AnchorFormatter, CountLayer, FileFields, FileLoggingFlags, create_libp2p_discv5_tracing_layer,
     init_file_logging, utils::build_workspace_filter,
 };
 use task_executor::ShutdownReason;
@@ -107,7 +107,7 @@ fn main() -> Result<(), String> {
     let environment = Environment::default();
 
     match cli.subcommand {
-        AnchorSubcommands::Node(node) => start_anchor(&node, global_config, environment),
+        AnchorSubcommands::Node(node) => start_anchor(*node, global_config, environment),
         AnchorSubcommands::Keysplit(keysplit) => {
             keysplit::run_keysplitter(keysplit, global_config)
                 .map_err(|e| format!("Keysplit error: {e:?}"))?;
@@ -115,24 +115,24 @@ fn main() -> Result<(), String> {
         }
         AnchorSubcommands::Keygen(keygen) => {
             keygen::run_keygen(keygen, &global_config.data_dir)
-                .map_err(|e| format!("Keygen error: {e:?}"))?;
+                .map_err(|e| format!("Keygen error: {e}"))?;
             Ok(())
         }
     }
 }
 
 fn start_anchor(
-    anchor_config: &Node,
+    anchor_config: Node,
     global_config: GlobalConfig,
     mut environment: Environment,
 ) -> Result<(), String> {
     // Build the client config
-    let mut config = config::from_cli(anchor_config, global_config).map_err(|e| {
+    let config = config::from_cli(anchor_config, global_config).map_err(|e| {
         error!(e, "Unable to initialize configuration");
         e
     })?;
 
-    config.network.domain_type = config.global_config.ssv_network.ssv_domain_type;
+    // Domain type is set later after initializing the fork schedule with the current epoch.
 
     // Build the core task executor
     let core_executor = environment.executor();
@@ -282,6 +282,7 @@ pub fn enable_logging(
             logging_layers.push(
                 fmt::layer()
                     .event_format(anchor_formatter_log)
+                    .fmt_fields(FileFields)
                     .with_writer(file_logging_layer.non_blocking_writer)
                     .with_ansi(file_logging_flags.logfile_color)
                     .with_filter(

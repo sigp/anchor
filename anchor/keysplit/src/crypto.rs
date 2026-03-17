@@ -1,6 +1,6 @@
+use bls::SecretKey;
 use bls_lagrange::{KeyId, split};
 use openssl::{encrypt::Encrypter, pkey::PKey};
-use types::SecretKey;
 
 use crate::{EncryptedKeyShare, KeyShare, KeysplitError, cli::SharedKeygenOptions, split::Split};
 

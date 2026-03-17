@@ -4,20 +4,18 @@ use std::{
     time::Duration,
 };
 
+use bls::PublicKeyBytes;
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, Transaction, params};
-use ssv_types::{
-    Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata,
-    domain_type::DomainType,
-};
+use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
 };
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 pub use crate::{
     error::DatabaseError,
@@ -125,6 +123,8 @@ struct SingleState {
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
+    /// Monotonically increasing OperatorId count. None indicates a migrated database.
+    max_operator_id_seen: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -150,9 +150,9 @@ impl NetworkDatabase {
     pub fn new(
         path: &Path,
         pubkey: &Rsa<Public>,
-        domain: DomainType,
+        network_name: &str,
     ) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path, domain)?;
+        let conn_pool = Self::open_or_create(path, network_name)?;
         let operator = PubkeyOrId::Pubkey(pubkey.clone());
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -165,8 +165,8 @@ impl NetworkDatabase {
     /// Construct a new NetworkDatabase using an in-memory database (test-only)
     /// This is more explicit than passing ":memory:" as a path
     #[cfg(feature = "test-utils")]
-    pub fn new_in_memory(pubkey: &Rsa<Public>, domain: DomainType) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_in_memory(domain)?;
+    pub fn new_in_memory(pubkey: &Rsa<Public>, network_name: &str) -> Result<Self, DatabaseError> {
+        let conn_pool = Self::open_in_memory(network_name)?;
         let operator = PubkeyOrId::Pubkey(pubkey.clone());
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -180,9 +180,9 @@ impl NetworkDatabase {
     pub fn new_as_impostor(
         path: &Path,
         operator: &OperatorId,
-        domain: DomainType,
+        network_name: &str,
     ) -> Result<Self, DatabaseError> {
-        let conn_pool = Self::open_or_create(path, domain)?;
+        let conn_pool = Self::open_or_create(path, network_name)?;
         let operator = PubkeyOrId::Id(*operator);
         let state = watch::Sender::new(NetworkState::new_with_state(&conn_pool, &operator)?);
         Ok(Self {
@@ -214,9 +214,22 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Update the largest seen OperatorId in the database
+    pub fn set_max_operator_id_seen(
+        &self,
+        operator_id: u64,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+            .execute(params![operator_id])?;
+        self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
+
+        Ok(())
+    }
+
     // Open an existing database at the given `path`, or create one if none exists.
-    fn open_or_create(path: &Path, domain: DomainType) -> Result<Pool, DatabaseError> {
-        schema::ensure_up_to_date(path, domain)?;
+    fn open_or_create(path: &Path, network_name: &str) -> Result<Pool, DatabaseError> {
+        schema::ensure_up_to_date(path, network_name)?;
         Self::open_conn_pool(path)
     }
 
@@ -234,12 +247,14 @@ impl NetworkDatabase {
     // Build a new connection pool for in-memory databases (test-only)
     // In-memory databases bypass schema migrations and are initialized via connection customizer
     #[cfg(feature = "test-utils")]
-    fn open_in_memory(domain: DomainType) -> Result<Pool, DatabaseError> {
+    fn open_in_memory(network_name: &str) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::memory();
         let conn_pool = Pool::builder()
             .max_size(POOL_SIZE)
             .connection_timeout(CONNECTION_TIMEOUT)
-            .connection_customizer(Box::new(InMemoryCustomizeConnection { domain }))
+            .connection_customizer(Box::new(InMemoryCustomizeConnection {
+                network_name: network_name.to_string(),
+            }))
             .build(manager)?;
         Ok(conn_pool)
     }
@@ -272,14 +287,14 @@ impl CustomizeConnection<Connection, rusqlite::Error> for AnchorCustomizeConnect
 #[cfg(feature = "test-utils")]
 #[derive(Debug)]
 struct InMemoryCustomizeConnection {
-    domain: DomainType,
+    network_name: String,
 }
 
 #[cfg(feature = "test-utils")]
 impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
         // For in-memory databases, create schema on each connection
-        let _ = crate::schema::create_initial_schema(conn, self.domain);
+        let _ = schema::create_initial_schema(conn, &self.network_name);
         Ok(())
     }
 }

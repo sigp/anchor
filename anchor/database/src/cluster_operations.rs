@@ -1,6 +1,7 @@
+use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
-use types::{Address, PublicKeyBytes};
+use types::Address;
 
 use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_operations};
 
@@ -26,7 +27,7 @@ impl NetworkDatabase {
             .execute(params![
                 validator.public_key.to_string(), // validator public key
                 *cluster.cluster_id,              // cluster id
-                validator.index.as_deref(),       // validator index
+                validator.index,                  // validator index
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
 
@@ -48,7 +49,7 @@ impl NetworkDatabase {
 
             // Insert the cluster member and the share
             tx.prepare_cached(sql_operations::INSERT_CLUSTER_MEMBER)?
-                .execute(params![*share.cluster_id, *share.operator_id])?;
+                .execute(params![*share.cluster_id, share.operator_id])?;
             self.insert_share(tx, share, &validator.public_key)
         })?;
 

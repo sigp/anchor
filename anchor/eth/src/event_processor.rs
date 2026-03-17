@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use bls::PublicKeyBytes;
 use database::{NetworkDatabase, SlashingProtection, UniqueIndex};
-use eth2::types::PublicKeyBytes;
 use indexmap::IndexSet;
 use rusqlite::Transaction;
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
@@ -187,6 +187,22 @@ impl EventProcessor {
                 "Operator with id {operator_id:?} already exists in database"
             )));
         }
+
+        let max_seen = self.db.state().get_max_operator_id_seen();
+
+        // Only check for missing operators if we have a previous max (not a migrated database)
+        if let Some(max_seen) = max_seen
+            && max_seen != operatorId - 1
+        {
+            return Err(ExecutionError::InvalidEvent(format!(
+                "Missing OperatorAdded events: database has only seen up to id {max_seen}, \
+                but got operator {operator_id}."
+            )));
+        }
+
+        self.db
+            .set_max_operator_id_seen(operatorId, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         let data = publicKey.as_ref();
 

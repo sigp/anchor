@@ -6,9 +6,9 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 async-trait = "0.1.85"
-dirs = { workspace = true }
 discv5 = { workspace = true }
 ethereum_ssz = { workspace = true }
+fork = { workspace = true }
 futures = { workspace = true }
 global_config = { workspace = true }
 hex = { workspace = true }
@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 twox-hash = "2.1.2"
+typenum = { workspace = true }
 types = { workspace = true }
 version = { workspace = true }
 
