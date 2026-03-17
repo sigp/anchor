@@ -613,7 +613,7 @@ async fn signature_collector(
             }
         }
 
-        if let Some(threshold) = threshold
+        while let Some(threshold) = threshold
             && signature_share.len() as u64 >= threshold
         {
             let Some(validator_pk) = &validator_pubkey else {
@@ -630,6 +630,7 @@ async fn signature_collector(
                         }
                     }
                     full_signature = Some(signature);
+                    break;
                 }
                 CombineOutcome::CombineFailed(err) => {
                     error!(?err, "Failed to recover signature");
