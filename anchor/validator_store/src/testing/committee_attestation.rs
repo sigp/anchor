@@ -14,6 +14,8 @@ use validator_store::ValidatorStore;
 use super::common::*;
 use crate::{Error, SpecificError};
 
+type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
+
 /// Test 1: Multiple SSV committees in one `sign_attestations()` call produce separate stream
 /// batches (one per committee).
 ///
@@ -91,7 +93,7 @@ async fn test_sign_attestations_produces_one_stream_item_per_committee() {
     // Each committee runs QBFT `decide_instance`, which will time out since we only have
     // one operator (no quorum). The timeout duration is per-slot (slot_duration / 3 = 4s),
     // plus QBFT round timeouts. We give 60s total for both committees to time out.
-    let mut results: Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>> = Vec::new();
+    let mut results: SignAttestationsResult = Vec::new();
     let collect_timeout = tokio::time::timeout(Duration::from_secs(60), async {
         while let Some(item) = stream.next().await {
             results.push(item);
@@ -170,7 +172,7 @@ async fn test_single_committee_batches_all_validators_into_one_stream_item() {
     let stream = harness.validator_store.sign_attestations(attestations);
     tokio::pin!(stream);
 
-    let mut results: Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>> = Vec::new();
+    let mut results: SignAttestationsResult = Vec::new();
     let collect_timeout = tokio::time::timeout(Duration::from_secs(60), async {
         while let Some(item) = stream.next().await {
             results.push(item);
@@ -257,7 +259,7 @@ async fn test_not_synced_returns_immediate_error() {
     let stream = harness.validator_store.sign_attestations(attestations);
     tokio::pin!(stream);
 
-    let mut results: Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>> = Vec::new();
+    let mut results: SignAttestationsResult = Vec::new();
     // This should return instantly (no QBFT involved), so a short timeout is fine.
     let collect_timeout = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(item) = stream.next().await {

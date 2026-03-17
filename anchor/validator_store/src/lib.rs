@@ -540,7 +540,6 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn update_voting_context(&self, metadata: VotingContext) {
         self.voting_context_tx
             .send_replace(Some(Arc::new(metadata)));
