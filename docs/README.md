@@ -126,8 +126,9 @@ Ensure your sidebar configuration in `vocs.config.ts` matches your file structur
 ### Development Server Issues
 
 1. Clear cache: `rm -rf node_modules/.vite`
-2. Reinstall dependencies: `rm -rf node_modules && npm install`
-3. Restart the dev server: `npm run dev`
+2. Ensure that you are running node version 22 or less.
+3. Reinstall dependencies: `rm -rf node_modules && npm install`
+4. Restart the dev server: `npm run dev`
 
 ## Links
 

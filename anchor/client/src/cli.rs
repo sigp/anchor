@@ -239,7 +239,7 @@ pub struct MetricsOptions {
     #[clap(
         long,
         help = "Enable per validator metrics for > 64 validators. \
-                Note: This flag is automatically enabled for <= 64 validators. \
+                Note: This flag is automatically enabled for < 65 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
         display_order = 0,

@@ -5,8 +5,9 @@ use clap::{Arg, ArgAction, Command};
 use crate::errors::DocGenError;
 
 /// Sentinel markers for generated CLI reference sections in .mdx files.
-pub const CLI_REFERENCE_START: &str = "<!-- CLI_REFERENCE_START -->";
-pub const CLI_REFERENCE_END: &str = "<!-- CLI_REFERENCE_END -->";
+/// MDX uses JSX-style comments (`{/* */}`) rather than HTML comments (`<!-- -->`).
+pub const CLI_REFERENCE_START: &str = "{/* CLI_REFERENCE_START */}";
+pub const CLI_REFERENCE_END: &str = "{/* CLI_REFERENCE_END */}";
 
 /// Groups arguments by common help_heading values.
 ///
@@ -153,6 +154,9 @@ fn format_description(arg: &Arg) -> Result<String, DocGenError> {
 
     // Escape pipe characters for markdown table.
     desc = desc.replace('|', "\\|");
+
+    // Escape curly braces for MDX (unescaped braces are interpreted as JSX expressions).
+    desc = desc.replace('{', "\\{").replace('}', "\\}");
 
     // Append possible values if present.
     let possible_values: Vec<_> = arg

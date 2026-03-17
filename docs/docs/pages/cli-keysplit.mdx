@@ -8,48 +8,46 @@ anchor keysplit <SUBCOMMAND> [OPTIONS]
 
 Where `<SUBCOMMAND>` is one of:
 
-- `manual` - Split keys with manually provided operator data
-- `onchain` - Split keys using operator data from the blockchain
+- `onchain` - Utilize onchain data to split the key
+- `manual` - Split the key by manually providing data
 
-Both subcommands share these Options
+{/* CLI_REFERENCE_START */}
+### onchain Subcommand
 
-| Option | Description | Default |
-| --- | --- | ---|
-| `--keystore-path <PATH>` | Path to validator keystore file | Required |
-| `--password-file <PATH>` | Path to a file containing the password for the validator keystore (if omitted, password will be prompted) | None |
-| `--owner <ADDRESS>` | EOA address that owns the validator | Required |
-| `--output-path <OUTPUT PATH>` | Path for output file | Required |
-| `--operators <IDS>` | Comma-separated list of operator IDs | Required|
-| `-d, --data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
-| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `hoodi` |
-| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None |
-| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
-| `-h, --help` | Display help information | |
-
-### Manual Keysplit Subcommand
+Utilize onchain data to split the key
 
 ```bash
-anchor keysplit manual [OPTIONS]
+anchor onchain onchain [OPTIONS] --owner <ADDRESS> --output-path <OUTPUT PATH> --operators <IDS> --rpc <ENDPOINT>
 ```
 
-Additional Options:
-
 | Option | Description | Default |
-| --- | --- | ---|
-| `--nonce <NONCE>` | Nonce for the owner address | Required |
-| `--public-keys <KEYS>...` | RSA public keys for the operators | Required|
+| --- | --- | --- |
+| `--keystore-paths <PATH>` | Path(s) to the validator keystore file |  |
+| `--password-file <PATH>` | Path to a file containing the password for the validator keystore. If omitted, the password will be prompted for. |  |
+| `--owner <ADDRESS>` | EOA address that owns the validator |  |
+| `--output-path <OUTPUT PATH>` | Path for output |  |
+| `--operators <IDS>` | Operators to split key among |  |
+| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data |  |
 
-### Onchain Keysplit Subcommand
+### manual Subcommand
+
+Split the key by manually providing data
 
 ```bash
-anchor keysplit onchain [OPTIONS]
+anchor manual manual [OPTIONS] --owner <ADDRESS> --output-path <OUTPUT PATH> --operators <IDS> --nonce <NONCE> --public-keys <KEYS>...
 ```
 
-Additional Options:
-
 | Option | Description | Default |
-| --- | --- | ---|
-| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required|
+| --- | --- | --- |
+| `--keystore-paths <PATH>` | Path(s) to the validator keystore file |  |
+| `--password-file <PATH>` | Path to a file containing the password for the validator keystore. If omitted, the password will be prompted for. |  |
+| `--owner <ADDRESS>` | EOA address that owns the validator |  |
+| `--output-path <OUTPUT PATH>` | Path for output |  |
+| `--operators <IDS>` | Operators to split key among |  |
+| `--nonce <NONCE>` | Nonce for the owner address |  |
+| `--public-keys <KEYS>` | RSA public keys for the operators |  |
+
+{/* CLI_REFERENCE_END */}
 
 #### Examples
 
@@ -57,7 +55,7 @@ Manual key splitting
 
 ```bash
 anchor keysplit manual \
-  --keystore-path /path/to/validator_keystore.json \
+  --keystore-paths /path/to/validator_keystore.json \
   --password-file /path/to/password.txt \
   --owner 0x123abc... \
   --operators 1,2,3,4 \
@@ -71,7 +69,7 @@ Onchain key splitting
 
 ```bash
 anchor keysplit onchain \
-  --keystore-path /path/to/validator_keystore.json \
+  --keystore-paths /path/to/validator_keystore.json \
   --password-file /path/to/password.txt \
   --owner 0x123abc... \
   --operators 1,2,3,4 \
