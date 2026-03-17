@@ -158,6 +158,14 @@ udeps:
 clean:
 	cargo clean
 
+# Update CLI reference documentation in .mdx files from clap definitions
+cli-reference:
+	cargo run --bin anchor-docgen -- update --docs-dir docs/docs/pages
+
+# Check that CLI reference documentation is up to date (for CI)
+cli-reference-check:
+	cargo run --bin anchor-docgen -- check --docs-dir docs/docs/pages
+
 # Check if dependencies are sorted (requires cargo-sort)
 sort:
 	cargo sort --check --workspace --grouped

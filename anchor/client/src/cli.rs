@@ -9,8 +9,13 @@ use clap::{
     builder::{ArgAction, ArgPredicate},
 };
 use logging::FileLoggingFlags;
-
-pub const FLAG_HEADER: &str = "Flags";
+pub const SECURITY_OPTIONS: &str = "Security Options";
+pub const EXTERNAL_APIS: &str = "External APIs";
+pub const HTTP_API: &str = "HTTP API";
+pub const NETWORK_OPTIONS: &str = "Network Options";
+pub const METRICS_OPTIONS: &str = "Metrics Options";
+pub const ADDITIONAL_OPTIONS: &str = "Additional Options";
+pub const PAYLOAD_BUILDING_OPTIONS: &str = "Payload Building Options";
 
 #[derive(Parser, Clone, Debug)]
 #[clap(name = "node", about = "Start Anchor node")]
@@ -23,6 +28,7 @@ pub struct Node {
                 `.txt` for unencrypted keys, or `.json` for encrypted keys. \
                 If not provided, Anchor will look for the key in the data dir. \
                 If provided and the file does not exist, Anchor will exit.",
+        help_heading = SECURITY_OPTIONS,
         display_order = 0
     )]
     pub key_file: Option<PathBuf>,
@@ -33,6 +39,7 @@ pub struct Node {
         value_name = "PATH",
         help = "Path to the password used to decrypt the operator private key. \
                 If not provided but required, Anchor will request the password interactively.",
+        help_heading = SECURITY_OPTIONS,
         display_order = 0
     )]
     pub password_file: Option<PathBuf>,
@@ -44,6 +51,7 @@ pub struct Node {
         value_delimiter = ',',
         help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
                 Default is http://localhost:5052.",
+        help_heading = EXTERNAL_APIS,
         display_order = 0
     )]
     pub beacon_nodes: Option<Vec<String>>,
@@ -54,6 +62,7 @@ pub struct Node {
         value_delimiter = ',',
         help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
                 Default is http://localhost:8545.",
+        help_heading = EXTERNAL_APIS,
         display_order = 0
     )]
     pub execution_rpc: Option<Vec<String>>,
@@ -64,6 +73,7 @@ pub struct Node {
         value_delimiter = ',',
         help = "Address of execution node WS API. \
                 Default is ws://localhost:8546.",
+        help_heading = EXTERNAL_APIS,
         display_order = 0
     )]
     pub execution_ws: Option<String>,
@@ -76,6 +86,7 @@ pub struct Node {
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
                 delimiter, and must not be part of the certificate path.",
+        help_heading = EXTERNAL_APIS,
         display_order = 0
     )]
     pub beacon_nodes_tls_certs: Option<Vec<PathBuf>>,
@@ -88,6 +99,7 @@ pub struct Node {
                 to an execution node. These certificates must be in PEM format and are used \
                 in addition to the OS trust store. Commas must only be used as a \
                 delimiter, and must not be part of the certificate path",
+        help_heading = EXTERNAL_APIS,
         display_order = 0
     )]
     pub execution_nodes_tls_certs: Option<Vec<PathBuf>>,
@@ -96,8 +108,8 @@ pub struct Node {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
-        help_heading = FLAG_HEADER,
-        display_order = 0,
+        help_heading = HTTP_API,
+        display_order = 0
     )]
     pub http: bool,
 
@@ -115,6 +127,7 @@ pub struct Node {
                 `--unencrypted-http-transport` flag to ensure the user is aware of the \
                 risks involved. For access via the Internet, users should apply \
                 transport-layer security like a HTTPS reverse-proxy or SSH tunneling.",
+        help_heading = HTTP_API,
         display_order = 0,
         requires = "http",
         requires = "unencrypted_http_transport"
@@ -125,9 +138,9 @@ pub struct Node {
         long,
         help = "This is a safety flag to ensure that the user is aware that the http \
                 transport is unencrypted and using a custom HTTP address is unsafe.",
+        help_heading = HTTP_API,
         display_order = 0,
-        requires = "http_address",
-        help_heading = FLAG_HEADER,
+        requires = "http_address"
     )]
     pub unencrypted_http_transport: bool,
 
@@ -136,6 +149,7 @@ pub struct Node {
         value_name = "PORT",
         requires = "http",
         help = "Set the listen TCP port for the RESTful HTTP API server.",
+        help_heading = HTTP_API,
         display_order = 0,
         default_value_if("http", ArgPredicate::IsPresent, "5062")
     )]
@@ -148,6 +162,7 @@ pub struct Node {
                 Use * to allow any origin (not recommended in production). \
                 If no value is supplied, the CORS allowed origin is set to the listen \
                 address of this server (e.g., http://localhost:5062).",
+        help_heading = HTTP_API,
         display_order = 0,
         requires = "http"
     )]
@@ -166,6 +181,7 @@ pub struct Node {
                       - --listen-addresses '0.0.0.0' --listen-addresses '::' will listen over both \
                       IPv4 and IPv6. The order of the given addresses is not relevant. However, \
                       multiple IPv4, or multiple IPv6 addresses will not be accepted.",
+        help_heading = NETWORK_OPTIONS,
         num_args(0..=2),
         action = ArgAction::Append,
         default_value = "0.0.0.0",
@@ -179,6 +195,7 @@ pub struct Node {
                       The discovery UDP and TCP port will be set to this value. The Quic UDP port will be set to this value + 1. The discovery port can be modified by the \
                       --discovery-port flag and the quic port can be modified by the --quic-port flag. If listening over both IPv4 and IPv6 the --port flag \
                       will apply to the IPv4 address and --port6 to the IPv6 address. If this flag is not set, the default values will be 12001 for discovery and 13001 for TCP.",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub port: Option<u16>,
@@ -188,6 +205,7 @@ pub struct Node {
         value_name = "PORT",
         help = "The TCP/UDP ports to listen on over IPv6 when listening over both IPv4 and \
                       IPv6. The Quic UDP port will be set to this value + 1.",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub port6: Option<u16>,
@@ -196,6 +214,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The UDP port that discovery will listen on. Defaults to --port if --port is explicitly specified, and `12001` otherwise.",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub discovery_port: Option<u16>,
@@ -205,6 +224,7 @@ pub struct Node {
         value_name = "PORT",
         help = "The UDP port that discovery will listen on over IPv6 if listening over \
                       both IPv4 and IPv6. Defaults to `discovery_port`",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub discovery_port6: Option<u16>,
@@ -213,6 +233,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "The UDP port that quic will listen on. Defaults to `port` + 1",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub quic_port: Option<u16>,
@@ -222,6 +243,7 @@ pub struct Node {
         value_name = "PORT",
         help = "The UDP port that quic will listen on over IPv6 if listening over \
                       both IPv4 and IPv6. Defaults to `port6` + 1",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub quic_port6: Option<u16>,
@@ -239,6 +261,7 @@ pub struct Node {
         long,
         help = "Specify the target number of connected peers. If omitted, the target is calculated \
                 dynamically based on active subnets (60 base + 3 per subnet, capped at 150)",
+        help_heading = NETWORK_OPTIONS,
         action = ArgAction::Set,
     )]
     pub target_peers: Option<usize>,
@@ -247,8 +270,8 @@ pub struct Node {
     #[clap(
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        help_heading = METRICS_OPTIONS,
+        display_order = 0
     )]
     pub metrics: bool,
 
@@ -256,6 +279,7 @@ pub struct Node {
         long,
         value_name = "ADDRESS",
         help = "Set the listen address for the Prometheus metrics HTTP server.",
+        help_heading = METRICS_OPTIONS,
         default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
         display_order = 0,
         requires = "metrics"
@@ -266,6 +290,7 @@ pub struct Node {
         long,
         value_name = "PORT",
         help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
+        help_heading = METRICS_OPTIONS,
         display_order = 0,
         default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
         requires = "metrics"
@@ -278,8 +303,8 @@ pub struct Node {
                 Note: This flag is automatically enabled for <= 64 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = ADDITIONAL_OPTIONS,
+        display_order = 0
     )]
     pub enable_high_validator_count_metrics: bool,
     // TODO: Metrics CORS Origin
@@ -289,6 +314,7 @@ pub struct Node {
         global = true,
         value_delimiter = ',',
         help = "One or more comma-delimited ENRs or Multiaddrs to bootstrap the p2p network",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub boot_nodes: Vec<String>,
@@ -300,6 +326,7 @@ pub struct Node {
         help = "The IPv4 address to broadcast to other peers on how to reach \
                       this node. Set this only if you are sure other nodes can connect to your \
                       local node on this address. This will update the `ip4` ENR field accordingly.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_address: Option<Ipv4Addr>,
@@ -311,6 +338,7 @@ pub struct Node {
         help = "The IPv6 address to broadcast to other peers on how to reach \
                       this node. Set this only if you are sure other nodes can connect to your \
                       local node on this address. This will update the `ip6` ENR field accordingly.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_address6: Option<Ipv6Addr>,
@@ -321,6 +349,7 @@ pub struct Node {
         global = true,
         help = "The UDP4 port of the local ENR. Set this only if you are sure other nodes \
                       can connect to your local node on this port over IPv4.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_udp_port: Option<NonZeroU16>,
@@ -332,6 +361,7 @@ pub struct Node {
         help = "The TCP4 port of the local ENR. Set this only if you are sure other nodes \
                       can connect to your local node on this port over IPv4. The --port flag is \
                       used if this is not set.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_tcp_port: Option<NonZeroU16>,
@@ -342,6 +372,7 @@ pub struct Node {
         global = true,
         help = "The quic UDP4 port that will be set on the local ENR. Set this only if you are sure other nodes \
                       can connect to your local node on this port over IPv4.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_quic_port: Option<NonZeroU16>,
@@ -352,6 +383,7 @@ pub struct Node {
         global = true,
         help = "The UDP6 port of the local ENR. Set this only if you are sure other nodes \
                       can connect to your local node on this port over IPv6.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_udp6_port: Option<NonZeroU16>,
@@ -363,6 +395,7 @@ pub struct Node {
         help = "The TCP6 port of the local ENR. Set this only if you are sure other nodes \
                       can connect to your local node on this port over IPv6. The --port6 flag is \
                       used if this is not set.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_tcp6_port: Option<NonZeroU16>,
@@ -373,6 +406,7 @@ pub struct Node {
         global = true,
         help = "The quic UDP6 port that will be set on the local ENR. Set this only if you are sure other nodes \
                       can connect to your local node on this port over IPv6.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub enr_quic6_port: Option<NonZeroU16>,
@@ -383,6 +417,7 @@ pub struct Node {
         help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards.\
                 It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks.\
                 Setting this flag will disable discovery from updating the ENR from CLI set values.",
+        help_heading = NETWORK_OPTIONS,
         display_order = 0
     )]
     pub disable_enr_auto_update: bool,
@@ -390,8 +425,8 @@ pub struct Node {
     #[clap(
         long,
         help = "Subscribe to all subnets, regardless of committee membership.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        help_heading = NETWORK_OPTIONS,
+        display_order = 0
     )]
     pub subscribe_all_subnets: bool,
 
@@ -437,6 +472,7 @@ pub struct Node {
         help = "The gas limit to be used in all builder proposals for all validators managed. \
                 Note this will not necessarily be used if the gas limit \
                 set here moves too far from the previous block's gas limit.",
+        help_heading = PAYLOAD_BUILDING_OPTIONS,
         display_order = 0
     )]
     pub gas_limit: u64,
@@ -447,8 +483,8 @@ pub struct Node {
         help = "If this flag is set, Anchor will query the Beacon Node for only block \
                 headers during proposals and will sign over headers. Useful for outsourcing \
                 execution payload construction during proposals.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = PAYLOAD_BUILDING_OPTIONS,
+        display_order = 0
     )]
     pub builder_proposals: bool,
 
@@ -459,6 +495,7 @@ pub struct Node {
                 a percentage multiplier to apply to the builder's payload value \
                 when choosing between a builder payload header and payload from \
                 the local execution node.",
+        help_heading = PAYLOAD_BUILDING_OPTIONS,
         conflicts_with = "prefer_builder_proposals",
         display_order = 0
     )]
@@ -468,24 +505,24 @@ pub struct Node {
         long,
         help = "If this flag is set, Anchor will always prefer blocks \
                 constructed by builders, regardless of payload value.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = PAYLOAD_BUILDING_OPTIONS,
+        display_order = 0
     )]
     pub prefer_builder_proposals: bool,
 
     #[clap(
         long,
         help = "Disable the latency measurement service.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = ADDITIONAL_OPTIONS,
+        display_order = 0
     )]
     pub disable_latency_measurement_service: bool,
 
     #[clap(
         long,
         help = "Disables gossipsub peer scoring.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = ADDITIONAL_OPTIONS,
+        display_order = 0
     )]
     pub disable_gossipsub_peer_scoring: bool,
 
@@ -499,9 +536,9 @@ pub struct Node {
                 outgoing messages and monitors the network for messages signed with its operator ID \
                 that reference slots after startup. Shuts down if a twin operator is detected \
                 to prevent QBFT protocol violations.",
+        help_heading = ADDITIONAL_OPTIONS,
         display_order = 0,
         default_value_t = false,
-        help_heading = FLAG_HEADER,
         action = ArgAction::Set
     )]
     pub operator_dg: bool,
@@ -512,6 +549,7 @@ pub struct Node {
         help = "Number of epochs to monitor for twin operators using slot-based detection. \
                 During monitoring, outgoing messages remain blocked and the node checks incoming \
                 messages for slots after startup to detect duplicate operator instances.",
+        help_heading = ADDITIONAL_OPTIONS,
         display_order = 0,
         default_value_t = 2,
         requires = "operator_dg"
@@ -525,8 +563,8 @@ pub struct Node {
                 participate in attestation production if the checkpoint roots mismatch. \
                 Using this flag might reduce validator performance if cluster operators have \
                 struggling nodes, but can help to avoid finalization of a faulty majority fork.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        help_heading = ADDITIONAL_OPTIONS,
+        display_order = 0
     )]
     pub strict_mfp: bool,
 

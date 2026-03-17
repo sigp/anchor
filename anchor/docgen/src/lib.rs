@@ -16,7 +16,7 @@ pub fn construct_anchor_cli_tree() -> Command {
     GlobalFlags::augment_args(cmd)
 }
 
-/// Generate Markdown documentation for the given clap CLI [`Command`].
+/// Generate raw Markdown documentation using clap-markdown.
 pub fn generate_markdown(cmd: &Command) -> String {
     let options = MarkdownOptions::new()
         .title("Anchor CLI Reference".to_string())
