@@ -12,10 +12,10 @@ use clap::{
 };
 use logging::FileLoggingFlags;
 pub const SECURITY_OPTIONS: &str = "Security Options";
+pub const METRICS_OPTIONS: &str = "Metrics Options";
 pub const EXTERNAL_APIS: &str = "External APIs";
 pub const HTTP_API: &str = "HTTP API";
 pub const NETWORK_OPTIONS: &str = "Network Options";
-pub const METRICS_OPTIONS: &str = "Metrics Options";
 pub const ADDITIONAL_OPTIONS: &str = "Additional Options";
 pub const PAYLOAD_BUILDING_OPTIONS: &str = "Payload Building Options";
 
@@ -135,7 +135,7 @@ pub struct ExternalApis {
                 For example, a value of '8,8,48' would mean: \
                 Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
         display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = EXTERNAL_APIS
     )]
     pub beacon_nodes_sync_tolerances: Vec<u64>,
 }
@@ -212,7 +212,7 @@ pub struct MetricsOptions {
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
         display_order = 0,
-        help_heading = FLAG_HEADER,
+        help_heading = METRICS_OPTIONS,
     )]
     pub metrics: bool,
 
@@ -243,7 +243,7 @@ pub struct MetricsOptions {
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
         display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = METRICS_OPTIONS
     )]
     pub enable_high_validator_count_metrics: bool,
 
@@ -535,7 +535,7 @@ pub struct NetworkOptions {
         long,
         help = "Disables gossipsub peer scoring.",
         display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = NETWORK_OPTIONS
     )]
     pub disable_gossipsub_peer_scoring: bool,
 
@@ -561,7 +561,7 @@ pub struct PayloadBuildingOptions {
         alias = "private-tx-proposals",
         help = "Deprecated and ignored. Validator registrations are now always created.",
         display_order = 0,
-        help_heading = FLAG_HEADER,
+        help_heading = PAYLOAD_BUILDING_OPTIONS,
         hide = true
     )]
     pub builder_proposals: bool,
@@ -583,7 +583,7 @@ pub struct PayloadBuildingOptions {
         help = "If this flag is set, Anchor will always prefer blocks \
                 constructed by builders, regardless of payload value.",
         display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = PAYLOAD_BUILDING_OPTIONS
     )]
     pub prefer_builder_proposals: bool,
 }
@@ -613,7 +613,7 @@ pub struct Node {
         long,
         help = "Disable the latency measurement service.",
         display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = ADDITIONAL_OPTIONS
     )]
     pub disable_latency_measurement_service: bool,
 
@@ -696,14 +696,6 @@ pub struct Node {
         display_order = 0
     )]
     pub prefer_builder_proposals: bool,
-
-    #[clap(
-        long,
-        help = "Disable the latency measurement service.",
-        help_heading = ADDITIONAL_OPTIONS,
-        display_order = 0
-    )]
-    pub disable_latency_measurement_service: bool,
 
     #[clap(
         long,
