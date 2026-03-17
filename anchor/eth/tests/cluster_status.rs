@@ -9,9 +9,8 @@ use eth::util::compute_cluster_id;
 
 mod common;
 
-use database::UniqueIndex;
-
 use common::*;
+use database::UniqueIndex;
 
 async fn setup_cluster_via_events() -> (ProcessorFixture, ssv_types::ClusterId, Address, Vec<u64>) {
     let mut test = ProcessorFixture::new_empty();

@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod state_database_tests {
+    use rusqlite::params;
     use ssv_types::Share;
     use types::Address;
 
@@ -193,6 +194,41 @@ mod state_database_tests {
             .expect("Failed to advance processed block");
         assert_eq!(fixture.data.db.state().get_last_processed_event(), None);
         assert_eq!(fixture.data.db.state().next_block_to_fetch(0), 11);
+    }
+
+    #[test]
+    /// The three cursor columns represent one logical value. Restart should reject partially-NULL
+    /// metadata rows instead of silently guessing a resume point from corrupted state.
+    fn test_restart_rejects_partially_null_processed_event_cursor() {
+        let fixture = FileTestFixture::new();
+        let path = fixture.path.clone();
+        let pubkey = fixture.pubkey.clone();
+
+        {
+            let conn = fixture
+                .data
+                .db
+                .connection()
+                .expect("Failed to open database connection");
+            conn.execute(
+                "UPDATE metadata
+                 SET cursor_block_number = ?1,
+                     cursor_transaction_index = NULL,
+                     cursor_log_index = NULL",
+                params![12u64],
+            )
+            .expect("Failed to corrupt cursor columns");
+        }
+
+        drop(fixture.data.db);
+
+        let err = NetworkDatabase::new(&path, &pubkey, TEST_NETWORK)
+            .expect_err("Mixed cursor columns should be rejected on restart");
+        assert!(
+            err.to_string()
+                .contains("metadata cursor columns must either all be NULL or all be set"),
+            "Error should explain the cursor-column corruption: {err}",
+        );
     }
 
     #[test]

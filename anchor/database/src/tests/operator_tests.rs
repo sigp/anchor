@@ -2,7 +2,10 @@
 mod operator_database_tests {
     use ssv_types::{Operator, OperatorId};
 
-    use crate::test_utils::{InMemoryTestFixture, assertions, generators, test_cursor};
+    use crate::{
+        ProcessedEventCursor,
+        test_utils::{InMemoryTestFixture, assertions, generators, test_cursor},
+    };
 
     #[test]
     // Test to make sure we can insert new operators into the database and they are present in the
@@ -107,5 +110,28 @@ mod operator_database_tests {
 
         assertions::operator::exists_not_in_memory(&fixture.db, OperatorId(1));
         assertions::operator::exists_not_in_db(&fixture.db, OperatorId(1));
+    }
+
+    #[test]
+    /// `commit_seen_operator_id` should persist progress for malformed `OperatorAdded` history
+    /// without inserting any operator rows.
+    fn test_commit_seen_operator_id_advances_progress_without_operator_insert() {
+        let fixture = InMemoryTestFixture::new_empty();
+        let cursor = ProcessedEventCursor {
+            block_number: 7,
+            transaction_index: 1,
+            log_index: 2,
+        };
+
+        fixture
+            .db
+            .commit_seen_operator_id(5, cursor)
+            .expect("Malformed operator progress should still be committed");
+
+        assert_eq!(fixture.db.state().get_max_operator_id_seen(), Some(5));
+        assert_eq!(fixture.db.state().get_last_processed_event(), Some(cursor));
+        assert_eq!(fixture.db.state().get_last_processed_block(), 0);
+        assertions::operator::exists_not_in_memory(&fixture.db, OperatorId(5));
+        assertions::operator::exists_not_in_db(&fixture.db, OperatorId(5));
     }
 }
