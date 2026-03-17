@@ -278,10 +278,10 @@ pub fn generate_subcommand_page_content(
 
     if !has_subcommands {
         // Flat command — render "### Options" with grouped tables.
-        generate_flat_command_page_content(cmd)
+        generate_flat_command_page_content(subcmd)
     } else {
         // Command with subcommands — render per-subcommand sections.
-        generate_nested_command_page_content(cmd)
+        generate_nested_command_page_content(subcmd)
     }
 }
 
