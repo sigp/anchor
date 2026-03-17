@@ -676,7 +676,7 @@ impl EventProcessor {
                     cluster_id = ?cluster_id,
                     "Failed to fetch validator metadata from database"
                 );
-                return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
+                return Err(EventActionError::Fatal(ExecutionError::Database(
                     "Failed to fetch validator metadata from database".to_string(),
                 )));
             }
@@ -693,7 +693,7 @@ impl EventProcessor {
                     cluster_id = ?cluster_id,
                     "Failed to fetch cluster from database"
                 );
-                return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
+                return Err(EventActionError::Fatal(ExecutionError::Database(
                     "Failed to fetch cluster from database".to_string(),
                 )));
             }
