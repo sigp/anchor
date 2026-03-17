@@ -6,7 +6,9 @@ mod state_database_tests {
     use crate::{
         NetworkDatabase, ProcessedEventCursor,
         multi_index::UniqueIndex,
-        test_utils::{FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, generators},
+        test_utils::{
+            FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, generators, test_cursor,
+        },
     };
 
     #[test]
@@ -24,12 +26,9 @@ mod state_database_tests {
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
-        let mut conn = fixture.data.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
-
         // confirm that all of the operators exist
         for operator in &fixture.operators {
-            assertions::operator::exists_in_db(operator, &tx);
+            assertions::operator::exists_in_db(&fixture.data.db, operator);
             assertions::operator::exists_in_memory(&fixture.data.db, operator);
         }
     }
@@ -92,14 +91,17 @@ mod state_database_tests {
                 generators::share::random(cluster.cluster_id, op.id, &new_validator.public_key);
             shares.push(share);
         });
-        let mut conn = fixture.data.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
         fixture
             .data
             .db
-            .insert_validator(cluster, &new_validator, shares, &tx)
+            .commit_validator_added(
+                cluster.cluster_id,
+                cluster.owner,
+                new_validator,
+                shares,
+                test_cursor(100),
+            )
             .expect("Insert should not fail");
-        tx.commit().unwrap();
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
@@ -107,7 +109,6 @@ mod state_database_tests {
 
         // drop and recrate database
         drop(fixture.data.db);
-        drop(conn);
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
@@ -122,13 +123,10 @@ mod state_database_tests {
     fn test_block_number() {
         let fixture = InMemoryTestFixture::new();
         assert_eq!(fixture.db.state().get_last_processed_block(), 0);
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
         fixture
             .db
-            .processed_block(10, &tx)
+            .advance_processed_block(10)
             .expect("Failed to update the block number");
-        tx.commit().unwrap();
 
         assert_eq!(fixture.db.state().get_last_processed_block(), 10);
     }
@@ -137,21 +135,17 @@ mod state_database_tests {
     // Test to make sure the block number is loaded in after restart
     fn test_block_number_after_restart() {
         let mut fixture = FileTestFixture::new();
-        let mut conn = fixture.data.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
         fixture
             .data
             .db
-            .processed_block(10, &tx)
+            .advance_processed_block(10)
             .expect("Failed to update the block number");
-        tx.commit().unwrap();
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
         let pubkey = fixture.pubkey.clone();
 
         drop(fixture.data.db);
-        drop(conn);
 
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
@@ -206,20 +200,18 @@ mod state_database_tests {
     fn test_retrieve_increment_nonce() {
         let fixture = InMemoryTestFixture::new();
         let owner = Address::random();
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
 
         // this is the first time getting the nonce, so it should be zero
         let nonce = fixture
             .db
-            .bump_and_get_nonce(&owner, &tx)
+            .bump_and_get_nonce(&owner)
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 0);
 
         // increment the nonce and then confirm that is is one
         let nonce = fixture
             .db
-            .bump_and_get_nonce(&owner, &tx)
+            .bump_and_get_nonce(&owner)
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 1);
     }
@@ -229,34 +221,26 @@ mod state_database_tests {
     fn test_nonce_after_restart() {
         let mut fixture = FileTestFixture::new();
         let owner = Address::random();
-        let mut conn = fixture.data.db.connection().unwrap();
-
-        let tx = conn.transaction().unwrap();
         fixture
             .data
             .db
-            .bump_and_get_nonce(&owner, &tx)
+            .bump_and_get_nonce(&owner)
             .expect("Failed in increment nonce");
-
-        tx.commit().unwrap();
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
         let pubkey = fixture.pubkey.clone();
 
-        drop(conn);
         drop(fixture.data.db);
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
-        let mut conn = fixture.data.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
 
         // confirm that nonce is 1
         assert_eq!(
             fixture
                 .data
                 .db
-                .bump_and_get_nonce(&owner, &tx)
+                .bump_and_get_nonce(&owner)
                 .expect("Failed in increment nonce"),
             1
         );

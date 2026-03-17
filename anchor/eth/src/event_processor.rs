@@ -57,6 +57,8 @@ enum EventActionError {
     Fatal(ExecutionError),
 }
 
+/// Describes whether an event handler already persisted its cursor or still expects the caller to
+/// advance progress after side-effect work completed.
 enum EventProcessOutcome {
     CursorCommitted,
     NeedsCursorAdvance,
@@ -104,7 +106,11 @@ impl EventProcessor {
         Self { db, mode }
     }
 
-    /// Process a new set of logs
+    /// Process one fetched range of logs.
+    ///
+    /// This first drops any logs already covered by the committed in-block cursor, then processes
+    /// the remaining logs sequentially and finally collapses progress back to a fully processed
+    /// block if the whole range succeeded.
     #[instrument(skip(self, logs), fields(logs_count = logs.len()), level = "debug")]
     pub fn process_logs(
         &self,
@@ -127,8 +133,8 @@ impl EventProcessor {
         Ok(())
     }
 
-    // Process the fetched range sequentially. If every log succeeds or is intentionally skipped,
-    // we can collapse any partial in-block cursor back to a fully processed block at the end.
+    /// Process the fetched range sequentially and collapse partial progress only if the whole range
+    /// succeeded.
     fn process_logs_inner(
         &self,
         logs: &[Log],
@@ -146,8 +152,8 @@ impl EventProcessor {
         Ok(stats)
     }
 
-    // Process exactly one log: derive its durable cursor, route it to the right handler, and
-    // return only its contribution to the summary metrics above.
+    /// Process exactly one log by deriving its durable cursor, dispatching to the right handler,
+    /// and then finalizing cursor ownership.
     fn process_single_log(
         &self,
         log: &Log,
@@ -172,7 +178,9 @@ impl EventProcessor {
         self.finish_processed_log(log, live, cursor, event, result)
     }
 
-    // Decode topic-level dispatch only; durability and cursor advancement are handled afterwards.
+    /// Decode the event signature and delegate to the matching handler.
+    ///
+    /// Durability and cursor advancement are handled afterwards in `finish_processed_log`.
     fn dispatch_log(
         &self,
         topic0: B256,
@@ -217,8 +225,10 @@ impl EventProcessor {
         })
     }
 
-    // Some handlers commit the cursor themselves as part of a durable DB write, while others only
-    // describe side effects and need the caller to advance the cursor afterwards.
+    /// Resolve cursor ownership after one handler ran.
+    ///
+    /// Some handlers commit the cursor as part of their durable DB update, while others only
+    /// describe side effects and expect the caller to advance the cursor afterwards.
     fn finish_processed_log(
         &self,
         log: &Log,
@@ -248,18 +258,18 @@ impl EventProcessor {
         }
     }
 
+    /// Persist cursor-only progress for one processed or intentionally skipped log.
     fn mark_event_processed(&self, cursor: ProcessedEventCursor) -> Result<(), ExecutionError> {
         self.db
             .mark_event_processed(cursor)
             .map_err(|e| ExecutionError::Database(e.to_string()))
     }
 
-    // Collapse a partial in-block cursor back to a fully processed block once the whole range
-    // completed successfully.
-    //
-    // The processed block boundary is monotonic. Historical/live sync should never call this with
-    // an `end_block` older than the current committed boundary, but we guard against that here so
-    // an unexpected caller cannot silently regress durable progress.
+    /// Collapse a partial in-block cursor back to a fully processed block once the whole fetched
+    /// range completed successfully.
+    ///
+    /// The processed block boundary is monotonic, so an unexpected older `end_block` is ignored
+    /// instead of silently regressing durable progress.
     fn advance_processed_block_if_needed(&self, end_block: u64) -> Result<(), ExecutionError> {
         let (current_block, has_partial_cursor) = self.db.with_state(|state| {
             (
@@ -292,6 +302,7 @@ impl EventProcessor {
         }
     }
 
+    /// Drop logs that were already durably committed inside the current partial block.
     fn skip_processed_logs(&self, logs: Vec<Log>) -> Vec<Log> {
         let Some(cursor) = self.db.with_state(|state| state.get_last_processed_event()) else {
             return logs;
@@ -302,6 +313,7 @@ impl EventProcessor {
             .collect()
     }
 
+    /// Return `true` when a log falls at or before the committed in-block resume cursor.
     fn log_at_or_before_cursor(log: &Log, cursor: ProcessedEventCursor) -> bool {
         let Some(block_number) = log.block_number else {
             return false;
@@ -320,6 +332,7 @@ impl EventProcessor {
         (transaction_index, log_index) <= (cursor.transaction_index, cursor.log_index)
     }
 
+    /// Build the durable processed-event cursor for one execution log.
     fn cursor_for_log(log: &Log) -> Result<ProcessedEventCursor, ExecutionError> {
         let block_number = log
             .block_number
@@ -338,6 +351,7 @@ impl EventProcessor {
         })
     }
 
+    /// Log one intentionally skipped event at a level appropriate for historical vs live sync.
     fn log_skipped_event(log: &Log, live: bool, error: &ExecutionError) {
         let tx_hash = log
             .transaction_hash
@@ -350,7 +364,10 @@ impl EventProcessor {
         }
     }
 
-    // A new Operator has been registered in the network.
+    /// Handle one `OperatorAdded` log.
+    ///
+    /// Duplicate or malformed operator events are skippable, but may still need to advance
+    /// `max_operator_id_seen` so later valid operator ids are not blocked forever.
     fn process_operator_added(
         &self,
         log: &Log,
@@ -459,7 +476,7 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    // An Operator has been removed from the network
+    /// Handle one `OperatorRemoved` log.
     fn process_operator_removed(
         &self,
         log: &Log,
@@ -491,10 +508,11 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    // A new validator has entered the network. This means that a either a new cluster has formed
-    // and this is the first validator for the cluster, or this validator is joining an existing
-    // cluster. Perform data verification, store all relevant data, and extract the KeyShare if it
-    // belongs to this operator
+    /// Handle one `ValidatorAdded` log.
+    ///
+    /// Malformed validator-add events still consume the owner nonce on-chain, so the main
+    /// skippable path for this handler is "commit nonce + cursor, but do not insert validator
+    /// rows". Successful events also register slashing protection before the main DB commit.
     fn process_validator_added(
         &self,
         log: &Log,
@@ -638,7 +656,7 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    // A validator has been removed from the network and its respective cluster
+    /// Handle one `ValidatorRemoved` log.
     fn process_validator_removed(
         &self,
         log: &Log,
@@ -746,7 +764,7 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    /// A cluster has ran out of operational funds. Set the cluster as liquidated
+    /// Handle one `ClusterLiquidated` log by committing the new cluster status plus cursor.
     fn process_cluster_liquidated(
         &self,
         log: &Log,
@@ -789,7 +807,7 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    // A cluster that was previously liquidated has had more SSV deposited and is now active
+    /// Handle one `ClusterReactivated` log by committing the new cluster status plus cursor.
     fn process_cluster_reactivated(
         &self,
         log: &Log,
@@ -833,7 +851,7 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    // The fee recipient address of a validator has been changed
+    /// Handle one `FeeRecipientAddressUpdated` log.
     fn process_fee_recipient_updated(
         &self,
         log: &Log,
@@ -869,7 +887,10 @@ impl EventProcessor {
         Ok(EventProcessOutcome::CursorCommitted)
     }
 
-    // A validator has exited the beacon chain
+    /// Handle one `ValidatorExited` log.
+    ///
+    /// This is primarily a side-effect event, so the handler usually returns
+    /// `NeedsCursorAdvance` and lets the caller mark progress after any downstream work is queued.
     fn process_validator_exited(
         &self,
         log: &Log,
@@ -959,6 +980,7 @@ impl EventProcessor {
         Ok(EventProcessOutcome::NeedsCursorAdvance)
     }
 
+    /// Return `true` if the current operator holds a share for this validator.
     fn is_our_validator(&self, validator_pubkey: &PublicKeyBytes) -> bool {
         self.db
             .with_state(|state| state.shares().get_by(validator_pubkey).is_some())

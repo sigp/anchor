@@ -17,6 +17,10 @@ pub enum OperatorStatus {
 }
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
+    /// Persist the highest operator id we have observed so far inside an existing transaction.
+    ///
+    /// `OperatorAdded` history is expected to be contiguous, so sync uses this to distinguish
+    /// malformed/duplicate operator events from a genuinely missing earlier operator id.
     pub(crate) fn set_max_operator_id_seen_tx(
         &self,
         max_operator_id_seen: u64,
@@ -28,6 +32,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Insert one operator row inside an existing transaction.
     pub(crate) fn insert_operator_tx(
         &self,
         operator: &Operator,
@@ -51,6 +56,9 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed operator insert into `NetworkState`.
+    ///
+    /// This also resolves our own operator id the first time we observe the matching pubkey/id.
     pub(crate) fn apply_insert_operator_state(
         &self,
         state: &mut crate::NetworkState,
@@ -79,6 +87,10 @@ impl NetworkDatabase {
             .insert(operator.id, operator.to_owned());
     }
 
+    /// Commit the durable effects of one `OperatorAdded` event.
+    ///
+    /// The operator insert, `max_operator_id_seen`, and exact processed-event cursor all commit in
+    /// the same SQLite transaction before the matching in-memory state is published.
     pub fn commit_operator_added(
         &self,
         operator: &Operator,
@@ -100,6 +112,10 @@ impl NetworkDatabase {
         )
     }
 
+    /// Commit only "we have now seen operator id N" plus the matching event cursor.
+    ///
+    /// This is used for malformed/skipped `OperatorAdded` events so later valid operator ids are
+    /// not blocked forever by a bad event payload.
     pub fn commit_seen_operator_id(
         &self,
         max_operator_id_seen: u64,
@@ -115,26 +131,7 @@ impl NetworkDatabase {
         )
     }
 
-    /// Insert a new Operator into the database
-    pub fn insert_operator(
-        &self,
-        operator: &Operator,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        // Make sure that this operator does not already exist
-        if self.state().operator_exists(&operator.id) {
-            return Err(DatabaseError::NotFound(format!(
-                "Operator with id {} already in database",
-                *operator.id
-            )));
-        }
-
-        self.insert_operator_tx(operator, tx)?;
-        self.state
-            .send_modify(|state| self.apply_insert_operator_state(state, operator));
-        Ok(())
-    }
-
+    /// Delete one operator row inside an existing transaction, soft-deleting on FK conflicts.
     pub(crate) fn delete_operator_tx(
         &self,
         id: OperatorId,
@@ -161,6 +158,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed operator removal into `NetworkState`.
     pub(crate) fn apply_delete_operator_state(
         &self,
         state: &mut crate::NetworkState,
@@ -169,6 +167,7 @@ impl NetworkDatabase {
         state.single_state.operators.remove(&id);
     }
 
+    /// Commit the durable effects of one `OperatorRemoved` event.
     pub fn commit_operator_removed(
         &self,
         id: OperatorId,
@@ -180,26 +179,6 @@ impl NetworkDatabase {
             |tx| self.delete_operator_tx(id, tx),
             |state| self.apply_delete_operator_state(state, id),
         )
-    }
-
-    /// Delete an operator
-    pub fn delete_operator(
-        &self,
-        id: OperatorId,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        // Make sure that this operator exists
-        if !self.state().operator_exists(&id) {
-            return Err(DatabaseError::NotFound(format!(
-                "Operator with id {} not in database",
-                *id
-            )));
-        }
-
-        self.delete_operator_tx(id, tx)?;
-        self.state
-            .send_modify(|state| self.apply_delete_operator_state(state, id));
-        Ok(())
     }
 
     /// Get the status of an operator in the database

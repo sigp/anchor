@@ -336,9 +336,10 @@ impl SsvEventSyncer {
         ))
     }
 
-    // Perform a historical sync on the network. This will fetch blocks from the contract deployment
-    // block up until the current tip of the chain. This way, we can recreate the current state of
-    // the network through event logs
+    /// Perform a historical sync from contract deployment up to the current follow-distance tip.
+    ///
+    /// Fetching is still pipelined, but log processing itself is serialized and uses the same
+    /// DB-owned commit/progress model as restart recovery.
     #[instrument(
         skip(self, contract_address, deployment_block, events),
         level = "debug"
@@ -663,9 +664,11 @@ impl SsvEventSyncer {
         Ok(())
     }
 
-    // Once caught up with the chain, start live sync which will stream in live blocks from the
-    // network. The events will be processed and duties will be created in response to network
-    // actions
+    /// Once caught up with the chain, stream live blocks and process any newly relevant events.
+    ///
+    /// The live path uses the same `next_block_to_fetch` resume model as historical sync, so
+    /// reconnects and reorg retries re-fetch from the last committed point instead of assuming a
+    /// simple `last_processed_block + 1` boundary.
     #[instrument(skip(self, contract_address), level = "debug")]
     async fn live_sync(&mut self, contract_address: Address) -> Result<(), ExecutionError> {
         info!(?contract_address, "Starting live sync");

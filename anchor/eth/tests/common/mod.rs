@@ -212,13 +212,7 @@ pub fn verify_operator_stored(processor: &EventProcessor, operator_id: OperatorI
         .expect("Operator should be stored and accessible");
 
     // Verify operator exists in database using database test utilities
-    let mut conn = processor
-        .db
-        .connection()
-        .expect("Failed to get database connection");
-    let tx = conn.transaction().expect("Failed to start transaction");
-
-    assertions::operator::exists_in_db(&stored_operator, &tx);
+    assertions::operator::exists_in_db(&processor.db, &stored_operator);
 }
 
 /// Helper function to create a mock Log object for SSV contract events
@@ -407,13 +401,13 @@ pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: Ope
 
     // Verify operator is not accessible through normal database queries
     // (which filter out removed=TRUE operators)
+    assertions::operator::exists_not_in_db(&processor.db, operator_id);
+
     let mut conn = processor
         .db
         .connection()
         .expect("Failed to get database connection");
     let tx = conn.transaction().expect("Failed to start transaction");
-
-    assertions::operator::exists_not_in_db(operator_id, &tx);
 
     // Verify operator still exists in database but is marked as removed=TRUE (soft delete)
     let is_soft_deleted = processor

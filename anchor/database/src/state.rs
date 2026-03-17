@@ -149,12 +149,17 @@ impl NetworkState {
             .map_err(DatabaseError::from)
     }
 
+    /// Load the highest operator id we have observed so far from durable metadata.
     fn get_max_operator_id_seen_from_db(conn: &PoolConn) -> Result<Option<u64>, DatabaseError> {
         conn.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
             .query_row(params![], |row| row.get(0))
             .map_err(DatabaseError::from)
     }
 
+    /// Load the exact processed-event cursor from durable metadata.
+    ///
+    /// The three cursor columns represent one logical value, so partially NULL rows are treated as
+    /// corruption rather than an absent cursor.
     fn get_last_processed_event_from_db(
         conn: &PoolConn,
     ) -> Result<Option<ProcessedEventCursor>, DatabaseError> {
@@ -307,6 +312,7 @@ impl NetworkState {
         nonces.collect()
     }
 
+    /// Load owner-level fee-recipient overrides for rebuilding the read model after restart.
     fn fetch_fee_recipients(conn: &PoolConn) -> Result<HashMap<Address, Address>, DatabaseError> {
         let mut stmt = conn.prepare(sql_operations::GET_ALL_FEE_RECIPIENTS)?;
         let fee_recipients = stmt

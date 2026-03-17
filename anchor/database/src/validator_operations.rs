@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
 use types::{Address, Graffiti};
@@ -13,6 +13,7 @@ use crate::{
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
+    /// Insert or update one owner-level fee-recipient override inside an existing transaction.
     pub(crate) fn update_fee_recipient_tx(
         &self,
         owner: Address,
@@ -28,6 +29,10 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed fee-recipient override into `NetworkState`.
+    ///
+    /// This updates both the owner-level override map and all already-materialized clusters owned
+    /// by that address.
     pub(crate) fn apply_update_fee_recipient_state(
         &self,
         state: &mut crate::NetworkState,
@@ -43,6 +48,7 @@ impl NetworkDatabase {
         });
     }
 
+    /// Commit the durable effects of one `FeeRecipientAddressUpdated` event.
     pub fn commit_fee_recipient_updated(
         &self,
         owner: Address,
@@ -57,29 +63,13 @@ impl NetworkDatabase {
         )
     }
 
-    /// Update the fee recipient address for all validators in a cluster
-    pub fn update_fee_recipient(
-        &self,
-        owner: Address,
-        fee_recipient: Address,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        self.update_fee_recipient_tx(owner, fee_recipient, tx)?;
-
-        self.modify_state(|state| {
-            self.apply_update_fee_recipient_state(state, owner, fee_recipient);
-        });
-        Ok(())
-    }
-
-    /// Get the fee recipient for an owner
-    /// Returns Some(address) if found, None otherwise
-    pub fn fee_recipient_for_owner(
+    /// Read the current fee recipient for an owner from the supplied committed connection view.
+    fn fee_recipient_for_owner_from_conn(
         &self,
         owner: &Address,
-        tx: &Transaction<'_>,
+        conn: &Connection,
     ) -> Result<Option<Address>, DatabaseError> {
-        let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
+        let mut stmt = conn.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
             parse_optional_text_column(row, 0)
@@ -92,8 +82,17 @@ impl NetworkDatabase {
         }
     }
 
-    /// Update the Graffiti for a Validator
-    pub fn update_graffiti(
+    /// Get the fee recipient for an owner from the latest committed database state.
+    pub fn fee_recipient_for_owner(
+        &self,
+        owner: &Address,
+    ) -> Result<Option<Address>, DatabaseError> {
+        let conn = self.connection()?;
+        self.fee_recipient_for_owner_from_conn(owner, &conn)
+    }
+
+    /// Update one validator's graffiti inside an existing transaction.
+    pub(crate) fn update_graffiti_tx(
         &self,
         validator_pubkey: &PublicKeyBytes,
         graffiti: Graffiti,
@@ -106,19 +105,42 @@ impl NetworkDatabase {
                 validator_pubkey.to_string()  // The public key of the validator
             ])?;
 
-        self.modify_state(|state| {
-            if let Some(validator) = state
-                .multi_state
-                .validator_metadata
-                .get_mut_by(validator_pubkey)
-            {
-                // Update in memory
-                validator.graffiti = graffiti;
-            }
-        });
         Ok(())
     }
 
+    /// Mirror a committed graffiti update into `NetworkState`.
+    pub(crate) fn apply_update_graffiti_state(
+        &self,
+        state: &mut crate::NetworkState,
+        validator_pubkey: &PublicKeyBytes,
+        graffiti: Graffiti,
+    ) {
+        if let Some(validator) = state
+            .multi_state
+            .validator_metadata
+            .get_mut_by(validator_pubkey)
+        {
+            // Update in memory
+            validator.graffiti = graffiti;
+        }
+    }
+
+    /// Commit a graffiti update against both SQLite and the in-memory read model.
+    pub fn update_graffiti(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        graffiti: Graffiti,
+    ) -> Result<(), DatabaseError> {
+        let validator_pubkey = *validator_pubkey;
+        self.commit_db_update(
+            super::ProgressUpdate::None,
+            true,
+            |tx| self.update_graffiti_tx(&validator_pubkey, graffiti, tx),
+            |state| self.apply_update_graffiti_state(state, &validator_pubkey, graffiti),
+        )
+    }
+
+    /// Commit a batch of validator index updates and then mirror them into `NetworkState`.
     pub fn set_validator_indices(
         &self,
         map: HashMap<PublicKeyBytes, ValidatorIndex>,
@@ -132,6 +154,7 @@ impl NetworkDatabase {
         )
     }
 
+    /// Persist a batch of validator index updates inside an existing transaction.
     pub(crate) fn set_validator_indices_tx(
         &self,
         map: &HashMap<PublicKeyBytes, ValidatorIndex>,
@@ -148,6 +171,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed batch of validator index updates into `NetworkState`.
     pub(crate) fn apply_set_validator_indices_state(
         &self,
         state: &mut crate::NetworkState,

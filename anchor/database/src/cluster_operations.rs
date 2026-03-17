@@ -7,6 +7,11 @@ use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_ope
 
 /// Implements all cluster related functionality on the database
 impl NetworkDatabase {
+    /// Insert the durable validator/cluster/share rows for one validator inside an existing
+    /// transaction.
+    ///
+    /// This is the write-model half of `ValidatorAdded`; it intentionally does not depend on a
+    /// fully materialized in-memory `Cluster`.
     pub(crate) fn insert_validator_tx(
         &self,
         cluster_id: ClusterId,
@@ -35,6 +40,10 @@ impl NetworkDatabase {
             "INSERT OR IGNORE INTO owners (owner, fee_recipient) VALUES (?, ?)",
             params![owner.to_string(), owner.to_string()],
         )?;
+        tx.execute(
+            "UPDATE owners SET fee_recipient = COALESCE(fee_recipient, ?2) WHERE owner = ?1",
+            params![owner.to_string(), owner.to_string()],
+        )?;
 
         for share in shares {
             tx.prepare_cached(sql_operations::INSERT_CLUSTER_MEMBER)?
@@ -45,6 +54,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed validator insert into `NetworkState`.
     pub(crate) fn apply_insert_validator_state(
         &self,
         state: &mut crate::NetworkState,
@@ -84,6 +94,10 @@ impl NetworkDatabase {
         );
     }
 
+    /// Commit the durable effects of one `ValidatorAdded` event.
+    ///
+    /// The owner nonce bump, validator/cluster/share insert, and exact processed-event cursor all
+    /// commit together before the in-memory read model is updated and published.
     pub fn commit_validator_added(
         &self,
         cluster_id: ClusterId,
@@ -119,6 +133,10 @@ impl NetworkDatabase {
         )
     }
 
+    /// Commit only the owner nonce bump plus the matching event cursor.
+    ///
+    /// This is used for malformed/skipped `ValidatorAdded` events and in keysplit mode, where the
+    /// nonce must still track the on-chain event stream even though no validator rows are inserted.
     pub fn commit_owner_nonce(
         &self,
         owner: Address,
@@ -134,23 +152,7 @@ impl NetworkDatabase {
         )
     }
 
-    /// Inserts a new validator into the database. A new cluster will be created if this is the
-    /// first validator for the cluster
-    pub fn insert_validator(
-        &self,
-        cluster: Cluster,
-        validator: &ValidatorMetadata,
-        shares: Vec<Share>,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        self.insert_validator_tx(cluster.cluster_id, cluster.owner, validator, &shares, tx)?;
-        self.modify_state(|state| {
-            self.apply_insert_validator_state(state, &cluster, validator, &shares);
-        });
-
-        Ok(())
-    }
-
+    /// Update the liquidated/active flag for one cluster inside an existing transaction.
     pub(crate) fn update_status_tx(
         &self,
         cluster_id: ClusterId,
@@ -166,6 +168,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed cluster status change into `NetworkState`.
     pub(crate) fn apply_update_status_state(
         &self,
         state: &mut crate::NetworkState,
@@ -177,6 +180,7 @@ impl NetworkDatabase {
         }
     }
 
+    /// Commit the durable effects of one cluster liquidation/reactivation event.
     pub fn commit_cluster_status(
         &self,
         cluster_id: ClusterId,
@@ -191,19 +195,7 @@ impl NetworkDatabase {
         )
     }
 
-    /// Mark the cluster as liquidated or active
-    pub fn update_status(
-        &self,
-        cluster_id: ClusterId,
-        status: bool,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        self.update_status_tx(cluster_id, status, tx)?;
-        self.modify_state(|state| self.apply_update_status_state(state, cluster_id, status));
-
-        Ok(())
-    }
-
+    /// Delete one validator row inside an existing transaction.
     pub(crate) fn delete_validator_tx(
         &self,
         validator_pubkey: &PublicKeyBytes,
@@ -215,6 +207,10 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed validator removal into `NetworkState`.
+    ///
+    /// If the removed validator was the last one in its cluster, the in-memory cluster view and our
+    /// local cluster-membership set are removed as well.
     pub(crate) fn apply_delete_validator_state(
         &self,
         state: &mut crate::NetworkState,
@@ -239,6 +235,7 @@ impl NetworkDatabase {
         }
     }
 
+    /// Commit the durable effects of one `ValidatorRemoved` event.
     pub fn commit_validator_removed(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -252,20 +249,7 @@ impl NetworkDatabase {
         )
     }
 
-    /// Delete a validator from a cluster. This will cascade and remove all corresponding share
-    /// data for this validator. If this validator is the last one in the cluster, the cluster
-    /// and all corresponding cluster members will also be removed
-    pub fn delete_validator(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        self.delete_validator_tx(validator_pubkey, tx)?;
-        self.modify_state(|state| self.apply_delete_validator_state(state, validator_pubkey));
-
-        Ok(())
-    }
-
+    /// Increment an owner's durable nonce inside an existing transaction.
     pub(crate) fn bump_nonce_tx(
         &self,
         owner: &Address,
@@ -277,6 +261,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Mirror a committed nonce bump into `NetworkState` and return the committed nonce value.
     pub(crate) fn apply_bump_nonce_state(
         &self,
         state: &mut crate::NetworkState,
@@ -296,18 +281,19 @@ impl NetworkDatabase {
         }
     }
 
-    /// Bump the nonce of the owner
-    pub fn bump_and_get_nonce(
-        &self,
-        owner: &Address,
-        tx: &Transaction<'_>,
-    ) -> Result<u16, DatabaseError> {
-        self.bump_nonce_tx(owner, tx)?;
-
+    /// Bump the nonce of the owner and return the committed value.
+    pub fn bump_and_get_nonce(&self, owner: &Address) -> Result<u16, DatabaseError> {
+        let owner = *owner;
         let mut nonce = None;
-        self.modify_state(|state| {
-            nonce = Some(self.apply_bump_nonce_state(state, owner));
-        });
+        self.commit_db_update(
+            super::ProgressUpdate::None,
+            false,
+            |tx| self.bump_nonce_tx(&owner, tx),
+            |state| {
+                nonce = Some(self.apply_bump_nonce_state(state, &owner));
+            },
+        )?;
+
         Ok(nonce.expect("Nonce update should always produce a value"))
     }
 }

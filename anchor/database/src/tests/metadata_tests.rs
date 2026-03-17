@@ -141,11 +141,8 @@ mod tests {
 
         // Update block number
         let new_block = 12345u64;
-        let mut conn = db.connection().expect("Failed to get connection");
-        let tx = conn.transaction().expect("Failed to start transaction");
-        db.processed_block(new_block, &tx)
+        db.advance_processed_block(new_block)
             .expect("Failed to update block");
-        tx.commit().expect("Failed to commit transaction");
 
         // Verify update
         let updated_block = db.state().get_last_processed_block();

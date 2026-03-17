@@ -193,8 +193,11 @@ pub struct NetworkDatabase {
 
 #[derive(Clone, Copy)]
 enum ProgressUpdate {
+    /// No sync-progress change accompanies this DB update.
     None,
+    /// Persist exact in-block progress for one committed/skipped event.
     Event(ProcessedEventCursor),
+    /// Persist a fully processed block boundary and clear any partial cursor.
     Block(u64),
 }
 
@@ -245,6 +248,7 @@ impl NetworkDatabase {
         })
     }
 
+    /// Borrow the latest committed in-memory view.
     pub fn state(&self) -> Ref<'_, NetworkState> {
         self.state.borrow()
     }
@@ -287,35 +291,6 @@ impl NetworkDatabase {
         )
     }
 
-    /// Update the last processed block number in the database
-    /// Also, trigger a notification for other code to act on the new state
-    pub fn processed_block(
-        &self,
-        block_number: u64,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
-            .execute(params![block_number])?;
-        self.state.send_modify(|state| {
-            state.single_state.last_processed_block = block_number;
-            state.single_state.last_processed_event = None;
-        });
-        Ok(())
-    }
-
-    /// Update the largest seen OperatorId in the database
-    pub fn set_max_operator_id_seen(
-        &self,
-        operator_id: u64,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
-            .execute(params![operator_id])?;
-        self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
-
-        Ok(())
-    }
-
     // Open an existing database at the given `path`, or create one if none exists.
     fn open_or_create(path: &Path, network_name: &str) -> Result<Pool, DatabaseError> {
         schema::ensure_up_to_date(path, network_name)?;
@@ -353,8 +328,10 @@ impl NetworkDatabase {
         Ok(self.conn_pool.get()?)
     }
 
-    /// for convenience: Apply a modification to the state without triggering a notification
-    /// This will be done at the end of a block via `processed_block` to avoid spamming
+    /// Apply a committed in-memory state update without notifying watch subscribers.
+    ///
+    /// This is used for internal bookkeeping such as nonce bumps and cursor-only advances that do
+    /// not change the externally visible validator/operator view.
     fn modify_state(&self, f: impl FnOnce(&mut NetworkState)) {
         self.state.send_if_modified(|state| {
             f(state);
@@ -396,6 +373,7 @@ impl NetworkDatabase {
         Ok(())
     }
 
+    /// Persist the sync-progress part of a DB update inside the currently open transaction.
     fn apply_progress_to_tx(
         &self,
         progress: ProgressUpdate,
@@ -420,6 +398,7 @@ impl NetworkDatabase {
         }
     }
 
+    /// Mirror the already-committed sync-progress update into `NetworkState`.
     fn apply_progress_to_state(&self, progress: ProgressUpdate, state: &mut NetworkState) {
         match progress {
             ProgressUpdate::None => {}
