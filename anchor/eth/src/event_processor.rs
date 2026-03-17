@@ -57,13 +57,6 @@ enum EventActionError {
     Fatal(ExecutionError),
 }
 
-/// Describes whether an event handler already persisted its cursor or still expects the caller to
-/// advance progress after side-effect work completed.
-enum EventProcessOutcome {
-    CursorCommitted,
-    NeedsCursorAdvance,
-}
-
 // Only validator add/remove events feed the high-level processing counters we log at the end of a
 // batch. Everything else still mutates state, but does not affect these summary metrics.
 #[derive(Default)]
@@ -180,14 +173,14 @@ impl EventProcessor {
 
     /// Decode the event signature and delegate to the matching handler.
     ///
-    /// Durability and cursor advancement are handled afterwards in `finish_processed_log`.
+    /// Each handler is responsible for durably recording its own cursor before returning success.
     fn dispatch_log(
         &self,
         topic0: B256,
         log: &Log,
         live: bool,
         cursor: ProcessedEventCursor,
-    ) -> Option<(CountedEvent, Result<EventProcessOutcome, EventActionError>)> {
+    ) -> Option<(CountedEvent, Result<(), EventActionError>)> {
         Some(match topic0 {
             SSVContract::OperatorAdded::SIGNATURE_HASH => (
                 CountedEvent::Other,
@@ -219,32 +212,26 @@ impl EventProcessor {
             ),
             SSVContract::ValidatorExited::SIGNATURE_HASH => (
                 CountedEvent::Other,
-                self.process_validator_exited(log, live),
+                self.process_validator_exited(log, live, cursor),
             ),
             _ => return None,
         })
     }
 
-    /// Resolve cursor ownership after one handler ran.
+    /// Handle post-handler bookkeeping for one processed log.
     ///
-    /// Some handlers commit the cursor as part of their durable DB update, while others only
-    /// describe side effects and expect the caller to advance the cursor afterwards.
+    /// By the time control reaches this function, successful handlers have already durably
+    /// recorded their exact cursor.
     fn finish_processed_log(
         &self,
         log: &Log,
         live: bool,
         cursor: ProcessedEventCursor,
         event: CountedEvent,
-        result: Result<EventProcessOutcome, EventActionError>,
+        result: Result<(), EventActionError>,
     ) -> Result<ProcessingStats, ExecutionError> {
         match result {
-            Ok(EventProcessOutcome::CursorCommitted) => {
-                Ok(ProcessingStats::from_counted_event(event))
-            }
-            Ok(EventProcessOutcome::NeedsCursorAdvance) => {
-                self.mark_event_processed(cursor)?;
-                Ok(ProcessingStats::from_counted_event(event))
-            }
+            Ok(()) => Ok(ProcessingStats::from_counted_event(event)),
             Err(EventActionError::Skippable(err)) => {
                 self.mark_event_processed(cursor)?;
                 Self::log_skipped_event(log, live, &err);
@@ -372,7 +359,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
             operatorId, // The ID of the newly registered operator
@@ -473,7 +460,7 @@ impl EventProcessor {
             "Successfully registered operator"
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_added"]);
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `OperatorRemoved` log.
@@ -481,7 +468,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         // Extract the ID of the Operator
         let SSVContract::OperatorRemoved { operatorId } =
             SSVContract::OperatorRemoved::decode_from_log(log)
@@ -505,7 +492,7 @@ impl EventProcessor {
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `ValidatorAdded` log.
@@ -517,7 +504,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         // Parse and destructure log
         let SSVContract::ValidatorAdded {
             owner,
@@ -552,7 +539,7 @@ impl EventProcessor {
                     "Failed to bump nonce: {e}"
                 )))
             })?;
-            return Ok(EventProcessOutcome::CursorCommitted);
+            return Ok(());
         };
 
         // Process data into a usable form
@@ -653,7 +640,7 @@ impl EventProcessor {
             "Successfully added validator"
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `ValidatorRemoved` log.
@@ -661,7 +648,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         // Parse and destructure log
         let SSVContract::ValidatorRemoved {
             owner,
@@ -761,7 +748,7 @@ impl EventProcessor {
             "Successfully removed validator and cluster"
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_removed"]);
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `ClusterLiquidated` log by committing the new cluster status plus cursor.
@@ -769,7 +756,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         let SSVContract::ClusterLiquidated {
             owner,
             operatorIds: operator_ids,
@@ -804,7 +791,7 @@ impl EventProcessor {
             &metrics::EXECUTION_EVENTS_PROCESSED,
             &["cluster_liquidated"],
         );
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `ClusterReactivated` log by committing the new cluster status plus cursor.
@@ -812,7 +799,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         let SSVContract::ClusterReactivated {
             owner,
             operatorIds: operator_ids,
@@ -848,7 +835,7 @@ impl EventProcessor {
             &["cluster_reactivated"],
         );
 
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `FeeRecipientAddressUpdated` log.
@@ -856,7 +843,7 @@ impl EventProcessor {
         &self,
         log: &Log,
         cursor: ProcessedEventCursor,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+    ) -> Result<(), EventActionError> {
         let SSVContract::FeeRecipientAddressUpdated {
             owner,
             recipientAddress,
@@ -884,21 +871,25 @@ impl EventProcessor {
             &metrics::EXECUTION_EVENTS_PROCESSED,
             &["fee_recipient_updated"],
         );
-        Ok(EventProcessOutcome::CursorCommitted)
+        Ok(())
     }
 
     /// Handle one `ValidatorExited` log.
     ///
-    /// This is primarily a side-effect event, so the handler usually returns
-    /// `NeedsCursorAdvance` and lets the caller mark progress after any downstream work is queued.
+    /// This event does not mutate Anchor's durable validator state. It either queues exit work or
+    /// intentionally ignores the event, and in both cases records cursor-only progress directly in
+    /// this handler.
     fn process_validator_exited(
         &self,
         log: &Log,
         live: bool,
-    ) -> Result<EventProcessOutcome, EventActionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<(), EventActionError> {
         // In KeySplit mode, we don't need to process validator exits
         let Mode::Node { exit_tx, .. } = &self.mode else {
-            return Ok(EventProcessOutcome::NeedsCursorAdvance);
+            self.mark_event_processed(cursor)
+                .map_err(EventActionError::Fatal)?;
+            return Ok(());
         };
         let SSVContract::ValidatorExited {
             owner,
@@ -930,7 +921,11 @@ impl EventProcessor {
 
         let validator_index = match self.get_validator_index(&validator_pubkey) {
             Ok(Some(value)) => value,
-            Ok(None) => return Ok(EventProcessOutcome::NeedsCursorAdvance),
+            Ok(None) => {
+                self.mark_event_processed(cursor)
+                    .map_err(EventActionError::Fatal)?;
+                return Ok(());
+            }
             Err(value) => return Err(EventActionError::Skippable(value)),
         };
 
@@ -945,7 +940,9 @@ impl EventProcessor {
             } else {
                 trace!(%validator_index, "Ignoring historic validator exit");
             }
-            return Ok(EventProcessOutcome::NeedsCursorAdvance);
+            self.mark_event_processed(cursor)
+                .map_err(EventActionError::Fatal)?;
+            return Ok(());
         }
 
         // Send to exit processor instead of handling in-place
@@ -977,7 +974,10 @@ impl EventProcessor {
             }
         }
 
-        Ok(EventProcessOutcome::NeedsCursorAdvance)
+        self.mark_event_processed(cursor)
+            .map_err(EventActionError::Fatal)?;
+
+        Ok(())
     }
 
     /// Return `true` if the current operator holds a share for this validator.
