@@ -45,5 +45,8 @@ processor = { workspace = true }
 rand = { workspace = true }
 ssz_types = { workspace = true }
 tempfile = "3.14.0"
-tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
-tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = [
+    "test-util",
+    "macros",
+    "rt-multi-thread",
+] }

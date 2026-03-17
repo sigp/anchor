@@ -822,7 +822,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "tree_hash",
  "types",
  "validator_metrics",
