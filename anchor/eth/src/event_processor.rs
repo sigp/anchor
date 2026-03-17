@@ -670,28 +670,26 @@ impl EventProcessor {
         // Compute the cluster id
         let cluster_id = compute_cluster_id(owner, &operatorIds);
 
-        let metadata = match self
+        let metadata_exists = self
             .db
-            .with_state(|state| state.metadata().get_by(&validator_pubkey).cloned())
-        {
-            Some(data) => data,
-            None => {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    "Failed to fetch validator metadata from database"
-                );
-                return Err(EventActionError::Fatal(ExecutionError::Database(
-                    "Failed to fetch validator metadata from database".to_string(),
-                )));
-            }
-        };
+            .with_state(|state| state.metadata().get_by(&validator_pubkey).is_some());
+        if !metadata_exists {
+            debug!(
+                cluster_id = ?cluster_id,
+                "Failed to fetch validator metadata from database"
+            );
+            return Err(EventActionError::Fatal(ExecutionError::Database(
+                "Failed to fetch validator metadata from database".to_string(),
+            )));
+        }
 
-        // Get the cluster that this validator is in
-        let cluster = match self
+        // This lookup is keyed by `validator_pubkey`, so once the metadata exists there is no
+        // additional value in cloning the whole row just to compare the pubkey back to the key.
+        let cluster_owner = match self
             .db
-            .with_state(|state| state.clusters().get_by(&validator_pubkey).cloned())
+            .with_state(|state| state.clusters().get_by(&validator_pubkey).map(|cluster| cluster.owner))
         {
-            Some(data) => data,
+            Some(owner) => owner,
             None => {
                 debug!(
                     cluster_id = ?cluster_id,
@@ -704,31 +702,18 @@ impl EventProcessor {
         };
 
         // Make sure the right owner is removing this validator
-        if owner != cluster.owner {
+        if owner != cluster_owner {
             debug!(
                 cluster_id = ?cluster_id,
-                expected_owner = ?cluster.owner,
+                expected_owner = ?cluster_owner,
                 actual_owner = ?owner,
                 "Owner mismatch for validator removal"
             );
             return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
                 format!(
                     "Cluster already exists with a different owner address. Expected {}. Got {}",
-                    cluster.owner, owner
+                    cluster_owner, owner
                 ),
-            )));
-        }
-
-        // Make sure this is the correct validator
-        if validator_pubkey != metadata.public_key {
-            debug!(
-                cluster_id = ?cluster_id,
-                expected_pubkey = %metadata.public_key,
-                actual_pubkey = %validator_pubkey,
-                "Validator pubkey mismatch"
-            );
-            return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
-                "Validator does not match".to_string(),
             )));
         }
         // Remove the validator and all corresponding cluster data
@@ -1004,11 +989,11 @@ impl EventProcessor {
         validator_pubkey: &PublicKeyBytes,
     ) -> Result<Option<ValidatorIndex>, ExecutionError> {
         // Get the validator metadata including its index
-        let validator_metadata = match self
+        let validator_index = match self
             .db
-            .with_state(|state| state.metadata().get_by(validator_pubkey).cloned())
+            .with_state(|state| state.metadata().get_by(validator_pubkey).map(|metadata| metadata.index))
         {
-            Some(metadata) => metadata,
+            Some(index) => index,
             None => {
                 return Err(ExecutionError::InvalidEvent(
                     "Validator metadata not found".to_string(),
@@ -1017,7 +1002,7 @@ impl EventProcessor {
         };
 
         // Check if we have a validator index (required for exits)
-        let validator_index = match validator_metadata.index {
+        let validator_index = match validator_index {
             Some(index) => Some(index),
             None => {
                 trace!(
@@ -1058,7 +1043,12 @@ impl EventProcessor {
         // Get the cluster for this validator to access owner information
         let cluster = match self
             .db
-            .with_state(|state| state.clusters().get_by(validator_pubkey).cloned())
+            .with_state(|state| {
+                state
+                    .clusters()
+                    .get_by(validator_pubkey)
+                    .map(|cluster| (cluster.cluster_id, cluster.liquidated, cluster.owner))
+            })
         {
             Some(cluster) => cluster,
             None => {
@@ -1068,13 +1058,13 @@ impl EventProcessor {
             }
         };
 
-        if cluster.cluster_id != *computed_cluster_id {
+        if cluster.0 != *computed_cluster_id {
             return Err(ExecutionError::InvalidEvent(
                 "Validator's cluster id is not the same as the computed cluster id".to_string(),
             ));
         }
 
-        if cluster.liquidated {
+        if cluster.1 {
             return Err(ExecutionError::InvalidEvent(
                 "Cluster is liquidated, skipping exit processing".to_string(),
             ));
@@ -1082,7 +1072,7 @@ impl EventProcessor {
 
         // Verify that the owner from the contract event is the one who registered the validator
         // (which is stored as the cluster's owner in our database)
-        if &cluster.owner != owner {
+        if &cluster.2 != owner {
             return Err(ExecutionError::InvalidEvent(
                 "Contract event owner does not match the validator's registered owner".to_string(),
             ));
