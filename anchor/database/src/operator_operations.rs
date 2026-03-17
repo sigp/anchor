@@ -17,6 +17,17 @@ pub enum OperatorStatus {
 }
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
+    pub(crate) fn set_max_operator_id_seen_tx(
+        &self,
+        max_operator_id_seen: u64,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+            .execute(params![max_operator_id_seen])?;
+
+        Ok(())
+    }
+
     pub(crate) fn insert_operator_tx(
         &self,
         operator: &Operator,
@@ -79,13 +90,27 @@ impl NetworkDatabase {
             super::ProgressUpdate::Event(cursor),
             true,
             |tx| {
-                tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
-                    .execute(params![max_operator_id_seen])?;
+                self.set_max_operator_id_seen_tx(max_operator_id_seen, tx)?;
                 self.insert_operator_tx(&operator, tx)
             },
             |state| {
                 state.single_state.max_operator_id_seen = Some(max_operator_id_seen);
                 self.apply_insert_operator_state(state, &operator);
+            },
+        )
+    }
+
+    pub fn commit_seen_operator_id(
+        &self,
+        max_operator_id_seen: u64,
+        cursor: crate::ProcessedEventCursor,
+    ) -> Result<(), DatabaseError> {
+        self.commit_db_update(
+            super::ProgressUpdate::Event(cursor),
+            false,
+            |tx| self.set_max_operator_id_seen_tx(max_operator_id_seen, tx),
+            |state| {
+                state.single_state.max_operator_id_seen = Some(max_operator_id_seen);
             },
         )
     }

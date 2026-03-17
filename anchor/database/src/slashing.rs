@@ -23,6 +23,11 @@ pub trait SlashingProtection: Send + Sync {
     /// Register a new validator in the slashing protection database.
     ///
     /// This must be called before the validator can sign any blocks or attestations.
+    /// Implementations must keep this operation idempotent: re-registering an already-enabled
+    /// validator should succeed as a no-op, and re-registering a previously disabled validator
+    /// should re-enable it without changing its identity. The event-processing crash-safety model
+    /// relies on this behavior when a validator may be registered here before the main database
+    /// cursor is committed.
     /// Returns an error if registration fails.
     fn register_validator(&self, public_key: PublicKeyBytes) -> Result<(), String>;
 }

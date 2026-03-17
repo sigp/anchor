@@ -265,11 +265,19 @@ impl NetworkDatabase {
     ///
     /// This is used when an event succeeded, or was intentionally skipped, but the enclosing
     /// block/range has not yet been fully completed.
+    ///
+    /// The event cursor is a finer-grained form of progress than `last_processed_block`, so it
+    /// must never point to a block that is older than the last fully processed block. Once a full
+    /// block boundary is committed via `advance_processed_block`, the cursor is cleared again.
     pub fn mark_event_processed(&self, cursor: ProcessedEventCursor) -> Result<(), DatabaseError> {
         self.commit_db_update(ProgressUpdate::Event(cursor), false, |_| Ok(()), |_| {})
     }
 
     /// Collapse progress back to a fully processed block once the entire fetched range succeeded.
+    ///
+    /// This advances the coarse block boundary and clears any finer-grained event cursor, because
+    /// there is no longer a partial block to resume within. Block progress is monotonic, so
+    /// callers must only publish the current block boundary or a later one.
     pub fn advance_processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
         self.commit_db_update(
             ProgressUpdate::Block(block_number),
@@ -416,9 +424,17 @@ impl NetworkDatabase {
         match progress {
             ProgressUpdate::None => {}
             ProgressUpdate::Event(cursor) => {
+                debug_assert!(
+                    cursor.block_number >= state.single_state.last_processed_block,
+                    "processed event cursor must not point before the last fully processed block"
+                );
                 state.single_state.last_processed_event = Some(cursor);
             }
             ProgressUpdate::Block(block_number) => {
+                debug_assert!(
+                    block_number >= state.single_state.last_processed_block,
+                    "fully processed block boundary must not regress"
+                );
                 state.single_state.last_processed_block = block_number;
                 state.single_state.last_processed_event = None;
             }

@@ -2,6 +2,7 @@ use std::{str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use bls::SecretKey;
 use database::{ProcessedEventCursor, test_utils::generators};
 use ssv_types::*;
 
@@ -75,6 +76,86 @@ async fn test_validator_added_event_processing() {
     }
 }
 
+#[tokio::test]
+async fn test_duplicate_validator_added_is_skipped() {
+    setup_tracing();
+
+    let mut test = ProcessorFixture::new_empty();
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+
+    let operator_ids = vec![1u64, 2, 3, 4];
+    let mut operator_logs = Vec::new();
+    for (index, operator_id) in operator_ids.iter().copied().enumerate() {
+        let mut log = create_operator_added_log(
+            operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000,
+        );
+        log.block_number = Some(100);
+        log.log_index = Some(index as u64);
+        operator_logs.push(log);
+    }
+
+    test.processor
+        .process_logs(operator_logs, true, 100)
+        .expect("Operator setup should succeed");
+
+    let validator_secret_key = SecretKey::random();
+    let (first_shares, validator_pubkey) = create_valid_shares_data_for_validator_and_owner_nonce(
+        &operator_ids,
+        owner,
+        0,
+        &validator_secret_key,
+    );
+    let mut first_log = create_validator_added_log(
+        owner,
+        operator_ids.clone(),
+        Bytes::from(validator_pubkey.serialize().to_vec()),
+        first_shares,
+    );
+    first_log.block_number = Some(101);
+    first_log.log_index = Some(0);
+
+    test.processor
+        .process_logs(vec![first_log], true, 101)
+        .expect("Initial validator addition should succeed");
+
+    let queued_pubkey = test
+        .index_sync_rx
+        .recv()
+        .await
+        .expect("Validator should be queued for index sync");
+    assert_eq!(queued_pubkey, validator_pubkey);
+
+    let (duplicate_shares, _) = create_valid_shares_data_for_validator_and_owner_nonce(
+        &operator_ids,
+        owner,
+        1,
+        &validator_secret_key,
+    );
+    let mut duplicate_log = create_validator_added_log(
+        owner,
+        operator_ids,
+        Bytes::from(validator_pubkey.serialize().to_vec()),
+        duplicate_shares,
+    );
+    duplicate_log.block_number = Some(102);
+    duplicate_log.log_index = Some(0);
+
+    test.processor
+        .process_logs(vec![duplicate_log], true, 102)
+        .expect("Duplicate validator addition should be skipped");
+
+    assert_eq!(test.processor.db.state().metadata().length(), 1);
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 102);
+    assert_eq!(test.processor.db.state().get_next_nonce(&owner), 2);
+    assert!(
+        test.index_sync_rx.try_recv().is_err(),
+        "Duplicate validator should not be queued for index sync again"
+    );
+}
+
 /// Test processing multiple events in a single batch
 #[tokio::test]
 async fn test_multiple_events_processing() {
@@ -109,6 +190,87 @@ async fn test_multiple_events_processing() {
     // Verify processed block was updated using proper database API
     let block_number = test.processor.db.state().get_last_processed_block();
     assert_eq!(block_number, 12350, "Block number should be updated");
+}
+
+#[tokio::test]
+async fn test_malformed_operator_still_advances_max_seen() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+
+    let mut first_log = create_operator_added_log(
+        1,
+        Address::random(),
+        create_valid_rsa_public_key_bytes(),
+        1000,
+    );
+    first_log.log_index = Some(0);
+
+    let mut malformed_log = create_operator_added_log(
+        2,
+        Address::random(),
+        Bytes::from_static(b"not-base64"),
+        1000,
+    );
+    malformed_log.log_index = Some(1);
+
+    let mut third_log = create_operator_added_log(
+        3,
+        Address::random(),
+        create_valid_rsa_public_key_bytes(),
+        1000,
+    );
+    third_log.log_index = Some(2);
+
+    test.processor
+        .process_logs(vec![first_log, malformed_log, third_log], true, 12350)
+        .expect("Malformed operator should be skipped without blocking later operator ids");
+
+    verify_operator_stored(&test.processor, OperatorId(1));
+    verify_operator_stored(&test.processor, OperatorId(3));
+    assert!(!test.processor.db.state().operator_exists(&OperatorId(2)));
+    assert_eq!(
+        test.processor.db.state().get_max_operator_id_seen(),
+        Some(3)
+    );
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12350);
+}
+
+#[tokio::test]
+async fn test_duplicate_operator_pubkey_is_skipped_without_blocking_later_ids() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+    let duplicate_public_key = create_valid_rsa_public_key_bytes();
+
+    let mut first_log =
+        create_operator_added_log(1, Address::random(), duplicate_public_key.clone(), 1000);
+    first_log.log_index = Some(0);
+
+    let mut duplicate_log =
+        create_operator_added_log(2, Address::random(), duplicate_public_key, 1000);
+    duplicate_log.log_index = Some(1);
+
+    let mut third_log = create_operator_added_log(
+        3,
+        Address::random(),
+        create_valid_rsa_public_key_bytes(),
+        1000,
+    );
+    third_log.log_index = Some(2);
+
+    test.processor
+        .process_logs(vec![first_log, duplicate_log, third_log], true, 12351)
+        .expect("Duplicate operator pubkey should be skipped without blocking later operator ids");
+
+    verify_operator_stored(&test.processor, OperatorId(1));
+    verify_operator_stored(&test.processor, OperatorId(3));
+    assert!(!test.processor.db.state().operator_exists(&OperatorId(2)));
+    assert_eq!(
+        test.processor.db.state().get_max_operator_id_seen(),
+        Some(3)
+    );
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12351);
 }
 
 #[tokio::test]
@@ -201,6 +363,25 @@ async fn test_resume_skips_already_processed_logs_in_same_block() {
 
     verify_operator_stored(&test.processor, OperatorId(first_operator_id));
     verify_operator_stored(&test.processor, OperatorId(second_operator_id));
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12345);
+    assert_eq!(test.processor.db.state().get_last_processed_event(), None);
+}
+
+#[tokio::test]
+async fn test_older_end_block_does_not_regress_progress() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+
+    test.processor
+        .process_logs(Vec::new(), true, 12345)
+        .expect("Initial empty batch should advance the processed block");
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12345);
+    assert_eq!(test.processor.db.state().get_last_processed_event(), None);
+
+    test.processor
+        .process_logs(Vec::new(), true, 12344)
+        .expect("Older empty batch should be ignored without regressing progress");
     assert_eq!(test.processor.db.state().get_last_processed_block(), 12345);
     assert_eq!(test.processor.db.state().get_last_processed_event(), None);
 }

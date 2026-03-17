@@ -502,8 +502,13 @@ impl SsvEventSyncer {
 
             info!("Processed all events up to block {}", end_block);
 
-            // update end block processed information
-            start_block = end_block + 1;
+            // Re-read the committed resume point instead of assuming `end_block + 1`.
+            // In the normal case this is equivalent, but it keeps the outer loop aligned with the
+            // same DB-owned progress model that is used after restart.
+            start_block = self
+                .event_processor
+                .db
+                .with_state(|state| state.next_block_to_fetch(deployment_block));
         }
         info!("Historical sync completed");
 

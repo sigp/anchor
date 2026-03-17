@@ -49,6 +49,23 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
     owner: Address,
     nonce: u16,
 ) -> (Bytes, PublicKeyBytes) {
+    let validator_secret_key = SecretKey::random();
+    create_valid_shares_data_for_validator_and_owner_nonce(
+        operator_ids,
+        owner,
+        nonce,
+        &validator_secret_key,
+    )
+}
+
+/// Generate valid shares data for a specific validator key and owner/nonce pair.
+/// This is useful for tests that need to replay the same validator pubkey across multiple events.
+pub fn create_valid_shares_data_for_validator_and_owner_nonce(
+    operator_ids: &[u64],
+    owner: Address,
+    nonce: u16,
+    validator_secret_key: &SecretKey,
+) -> (Bytes, PublicKeyBytes) {
     let operator_count = operator_ids.len();
 
     // Calculate expected length: signature + (public_keys * count) + (encrypted_keys * count)
@@ -59,8 +76,6 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
     let mut shares_bytes = Vec::with_capacity(expected_length);
 
     // 1. Generate a validator keypair for this test
-    // For testing purposes, just generate a random key and use it
-    let validator_secret_key = SecretKey::random();
     let validator_public_key = validator_secret_key.public_key();
     let validator_pubkey_bytes = validator_public_key.serialize();
     let validator_pubkey = PublicKeyBytes::deserialize(&validator_pubkey_bytes)

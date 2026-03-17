@@ -256,11 +256,23 @@ impl EventProcessor {
 
     // Collapse a partial in-block cursor back to a fully processed block once the whole range
     // completed successfully.
+    //
+    // The processed block boundary is monotonic. Historical/live sync should never call this with
+    // an `end_block` older than the current committed boundary, but we guard against that here so
+    // an unexpected caller cannot silently regress durable progress.
     fn advance_processed_block_if_needed(&self, end_block: u64) -> Result<(), ExecutionError> {
-        let state = self.db.state();
-        let needs_advance = state.get_last_processed_block() != end_block
-            || state.get_last_processed_event().is_some();
-        drop(state);
+        let (current_block, has_partial_cursor) = self.db.with_state(|state| {
+            (
+                state.get_last_processed_block(),
+                state.get_last_processed_event().is_some(),
+            )
+        });
+
+        if end_block < current_block {
+            return Ok(());
+        }
+
+        let needs_advance = current_block != end_block || has_partial_cursor;
 
         if needs_advance {
             self.db
@@ -281,7 +293,7 @@ impl EventProcessor {
     }
 
     fn skip_processed_logs(&self, logs: Vec<Log>) -> Vec<Log> {
-        let Some(cursor) = self.db.state().get_last_processed_event() else {
+        let Some(cursor) = self.db.with_state(|state| state.get_last_processed_event()) else {
             return logs;
         };
 
@@ -357,13 +369,16 @@ impl EventProcessor {
         trace!(operator_id = ?operator_id, owner = ?owner, "Processing operator added");
 
         // Confirm that this operator does not already exist
-        if self.db.state().operator_exists(&operator_id) {
+        if self
+            .db
+            .with_state(|state| state.operator_exists(&operator_id))
+        {
             return Err(EventActionError::Skippable(ExecutionError::Duplicate(
                 format!("Operator with id {operator_id:?} already exists in database"),
             )));
         }
 
-        let max_seen = self.db.state().get_max_operator_id_seen();
+        let max_seen = self.db.with_state(|state| state.get_max_operator_id_seen());
 
         // Only check for missing operators if we have a previous max (not a migrated database)
         if let Some(max_seen) = max_seen
@@ -376,6 +391,17 @@ impl EventProcessor {
                 ),
             )));
         }
+
+        let skip_with_seen_operator = |err| {
+            self.db
+                .commit_seen_operator_id(operatorId, cursor)
+                .map_err(|e| {
+                    EventActionError::Fatal(ExecutionError::Database(format!(
+                        "Failed to persist max seen operator id: {e}"
+                    )))
+                })?;
+            Err(EventActionError::SkippableCommitted(err))
+        };
 
         let data = publicKey.as_ref();
 
@@ -392,29 +418,37 @@ impl EventProcessor {
         };
 
         // Construct the Operator and insert it into the database
-        let operator = Operator::new(data, operator_id, owner).map_err(|e| {
-            debug!(
-                operator_pubkey = ?publicKey,
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to construct operator"
-            );
-            EventActionError::Skippable(ExecutionError::InvalidEvent(format!(
-                "Failed to construct operator: {e}"
-            )))
-        })?;
-        self.db
-            .commit_operator_added(&operator, operatorId, cursor)
-            .map_err(|e| {
+        let operator = match Operator::new(data, operator_id, owner) {
+            Ok(operator) => operator,
+            Err(e) => {
                 debug!(
+                    operator_pubkey = ?publicKey,
                     operator_id = ?operator_id,
                     error = %e,
-                    "Failed to insert operator into database"
+                    "Failed to construct operator"
                 );
-                EventActionError::Fatal(ExecutionError::Database(format!(
+                return skip_with_seen_operator(ExecutionError::InvalidEvent(format!(
+                    "Failed to construct operator: {e}"
+                )));
+            }
+        };
+        if let Err(e) = self.db.commit_operator_added(&operator, operatorId, cursor) {
+            if e.to_string()
+                .contains("UNIQUE constraint failed: operators.public_key")
+            {
+                return skip_with_seen_operator(ExecutionError::InvalidEvent(format!(
                     "Failed to insert operator into database: {e}"
-                )))
-            })?;
+                )));
+            }
+            debug!(
+                operator_id = ?operator_id,
+                error = %e,
+                "Failed to insert operator into database"
+            );
+            return Err(EventActionError::Fatal(ExecutionError::Database(format!(
+                "Failed to insert operator into database: {e}"
+            ))));
+        }
 
         debug!(
             operator_id = ?operator_id,
@@ -477,7 +511,7 @@ impl EventProcessor {
             .map_err(EventActionError::Skippable)?;
         trace!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
-        let nonce = self.db.state().get_next_nonce(&owner);
+        let nonce = self.db.with_state(|state| state.get_next_nonce(&owner));
 
         let skip_with_nonce = |err| {
             self.db.commit_owner_nonce(owner, cursor).map_err(|e| {
@@ -508,12 +542,26 @@ impl EventProcessor {
             Ok(value) => value,
             Err(err) => return skip_with_nonce(err),
         };
+
+        // Duplicate ValidatorAdded logs still consume the owner nonce on-chain. Treat them as
+        // malformed input to skip instead of letting the SQL unique constraint abort sync.
+        let validator_exists = self
+            .db
+            .with_state(|state| state.metadata().get_by(&validator_pubkey).is_some());
+        if validator_exists {
+            return skip_with_nonce(ExecutionError::Duplicate(format!(
+                "Validator with public key {validator_pubkey} already exists in database"
+            )));
+        }
         let cluster_id = compute_cluster_id(owner, &operatorIds);
         let operator_ids: Vec<_> = operatorIds.into_iter().map(OperatorId).collect();
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
-        if let Err(err) = validate_operators(&operator_ids, &cluster_id, &self.db.state()) {
+        let operators_valid = self
+            .db
+            .with_state(|state| validate_operators(&operator_ids, &cluster_id, state));
+        if let Err(err) = operators_valid {
             return skip_with_nonce(err);
         }
 
@@ -553,6 +601,11 @@ impl EventProcessor {
         // only needed when materializing the full cluster view after the write commits.
 
         // First, do the slashing protection database...
+        //
+        // This happens before the main DB commit on purpose: we would rather fail before
+        // persisting the validator than risk later signing without slashing protection. Crash
+        // safety therefore relies on `register_validator` being idempotent; on replay it must be
+        // safe to call again before the main DB cursor is committed.
         slashing_protection
             .register_validator(validator_pubkey)
             .map_err(|e| {
@@ -608,9 +661,10 @@ impl EventProcessor {
         // Compute the cluster id
         let cluster_id = compute_cluster_id(owner, &operatorIds);
 
-        let state = self.db.state();
-        // Get the metadata for this validator
-        let metadata = match state.metadata().get_by(&validator_pubkey) {
+        let metadata = match self
+            .db
+            .with_state(|state| state.metadata().get_by(&validator_pubkey).cloned())
+        {
             Some(data) => data,
             None => {
                 debug!(
@@ -624,7 +678,10 @@ impl EventProcessor {
         };
 
         // Get the cluster that this validator is in
-        let cluster = match state.clusters().get_by(&validator_pubkey) {
+        let cluster = match self
+            .db
+            .with_state(|state| state.clusters().get_by(&validator_pubkey).cloned())
+        {
             Some(data) => data,
             None => {
                 debug!(
@@ -665,8 +722,6 @@ impl EventProcessor {
                 "Validator does not match".to_string(),
             )));
         }
-        drop(state);
-
         // Remove the validator and all corresponding cluster data
         self.db
             .commit_validator_removed(validator_pubkey, cursor)
@@ -842,7 +897,8 @@ impl EventProcessor {
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
-        validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())
+        self.db
+            .with_state(|state| validate_operators(&operator_ids, &computed_cluster_id, state))
             .map_err(EventActionError::Skippable)?;
 
         let block_timestamp = log.block_timestamp.ok_or_else(|| {
@@ -904,7 +960,8 @@ impl EventProcessor {
     }
 
     fn is_our_validator(&self, validator_pubkey: &PublicKeyBytes) -> bool {
-        self.db.state().shares().get_by(validator_pubkey).is_some()
+        self.db
+            .with_state(|state| state.shares().get_by(validator_pubkey).is_some())
     }
 
     /// Retrieves the validator index for a given validator public key from the database.
@@ -921,8 +978,10 @@ impl EventProcessor {
         validator_pubkey: &PublicKeyBytes,
     ) -> Result<Option<ValidatorIndex>, ExecutionError> {
         // Get the validator metadata including its index
-        let state = self.db.state();
-        let validator_metadata = match state.metadata().get_by(validator_pubkey) {
+        let validator_metadata = match self
+            .db
+            .with_state(|state| state.metadata().get_by(validator_pubkey).cloned())
+        {
             Some(metadata) => metadata,
             None => {
                 return Err(ExecutionError::InvalidEvent(
@@ -970,11 +1029,11 @@ impl EventProcessor {
         validator_pubkey: &PublicKeyBytes,
         computed_cluster_id: &ClusterId,
     ) -> Result<(), ExecutionError> {
-        // Get validator's metadata from the database
-        let state = self.db.state();
-
         // Get the cluster for this validator to access owner information
-        let cluster = match state.clusters().get_by(validator_pubkey) {
+        let cluster = match self
+            .db
+            .with_state(|state| state.clusters().get_by(validator_pubkey).cloned())
+        {
             Some(cluster) => cluster,
             None => {
                 return Err(ExecutionError::InvalidEvent(

@@ -158,6 +158,11 @@ impl NetworkDatabase {
                 // Update in memory
                 validator.index = Some(index);
             } else {
+                // TODO: Distinguish "DB updated 0 rows because the validator was removed while
+                // index sync was in flight" from real DB/cache divergence.
+                // `set_validator_indices_tx` should return only the pubkeys that
+                // actually updated rows so we can avoid logging expected races and
+                // warn more strongly on true inconsistencies.
                 debug!(?public_key, "Tried to update index of unknown validator");
             }
         }

@@ -407,7 +407,21 @@ impl NetworkState {
         self.single_state.last_processed_event
     }
 
+    /// Return the first block that still needs to be fetched from the execution node.
+    ///
+    /// When a partial event cursor exists, replay resumes from that cursor's block so the same
+    /// block can be re-fetched and already-committed logs can be skipped deterministically.
+    /// This relies on the invariant that a partial cursor can only exist at or after the last
+    /// fully processed block; `advance_processed_block` clears the cursor once the block boundary
+    /// is committed.
     pub fn next_block_to_fetch(&self, deployment_block: u64) -> u64 {
+        if let Some(cursor) = self.single_state.last_processed_event {
+            debug_assert!(
+                cursor.block_number >= self.single_state.last_processed_block,
+                "processed event cursor must not point before the last fully processed block"
+            );
+        }
+
         self.single_state
             .last_processed_event
             .map(|cursor| cursor.block_number)
