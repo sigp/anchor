@@ -367,6 +367,8 @@ impl EventProcessor {
             publicKey,  // The RSA public key
             ..
         } = SSVContract::OperatorAdded::decode_from_log(log)
+            // Decode failures are only cursor-skippable: we have not learned `operatorId`, so we
+            // cannot safely preserve `max_operator_id_seen` the way later malformed paths do.
             .map_err(EventActionError::Skippable)?;
         let operator_id = OperatorId(operatorId);
 
@@ -396,6 +398,8 @@ impl EventProcessor {
             )));
         }
 
+        // Once decoding succeeded we know `operatorId`, so malformed operator payloads should
+        // still preserve `max_operator_id_seen` before the event is skipped.
         let skip_with_seen_operator = |err| {
             self.db
                 .commit_seen_operator_id(operatorId, cursor)
