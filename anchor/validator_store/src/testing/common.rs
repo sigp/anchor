@@ -208,6 +208,8 @@ pub struct ValidatorStoreTestHarness {
     /// Receives outgoing messages from QBFT and signature collector.
     #[expect(dead_code)]
     pub network_rx: mpsc::UnboundedReceiver<ssv_types::message::SignedSSVMessage>,
+    /// Controls the `is_synced` state seen by the validator store.
+    pub is_synced_tx: watch::Sender<bool>,
     /// Slot clock shared across all components.
     #[expect(dead_code)]
     pub slot_clock: ManualSlotClock,
@@ -347,8 +349,6 @@ impl ValidatorStoreTestHarness {
 
         // `is_synced` watch channel: default to synced
         let (is_synced_tx, is_synced_rx) = watch::channel(true);
-        // Keep the sender alive so the receiver does not see a closed channel
-        std::mem::forget(is_synced_tx);
 
         let spec = Arc::new(ChainSpec::mainnet());
 
@@ -375,6 +375,7 @@ impl ValidatorStoreTestHarness {
             validator_store,
             committee_setups,
             network_rx,
+            is_synced_tx,
             slot_clock,
             slashing_db_dir,
         }

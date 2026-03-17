@@ -9,11 +9,10 @@ use std::time::Duration;
 use futures::StreamExt;
 use ssv_types::OperatorId;
 use types::{Attestation, MainnetEthSpec};
-
 use validator_store::ValidatorStore;
 
 use super::common::*;
-use crate::Error;
+use crate::{Error, SpecificError};
 
 /// Test 1: Multiple SSV committees in one `sign_attestations()` call produce separate stream
 /// batches (one per committee).
@@ -127,4 +126,165 @@ async fn test_sign_attestations_produces_one_stream_item_per_committee() {
             "Stream item {i} should be Ok, but got: {result:?}"
         );
     }
+}
+
+/// Test 2: All validators in the same committee produce exactly one stream item, not one per
+/// validator.
+///
+/// This verifies that `sign_attestations` groups by `CommitteeId`, not by validator. Three
+/// validators in the same committee should result in a single `sign_committee_attestations`
+/// call and therefore a single stream item.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_single_committee_batches_all_validators_into_one_stream_item() {
+    // Arrange
+    let rsa_private_key = generate_rsa_keypair();
+    let rsa_pubkey = rsa_public_from_private(&rsa_private_key);
+    let our_operator_id = OperatorId(1);
+
+    let operator_ids: Vec<OperatorId> =
+        vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+
+    let committee = create_committee_setup(
+        &operator_ids,
+        3, // 3 validators, all in the same committee
+        our_operator_id,
+        &rsa_pubkey,
+        0,
+    );
+
+    let (executor, _signal) = create_test_executor();
+
+    let harness =
+        ValidatorStoreTestHarness::new(vec![committee], our_operator_id, rsa_private_key, executor);
+
+    harness.seed_voting_context();
+
+    // Build 3 attestations, all from the same committee
+    let attestations = vec![
+        harness.create_attestation_to_sign(0, 0),
+        harness.create_attestation_to_sign(0, 1),
+        harness.create_attestation_to_sign(0, 2),
+    ];
+
+    // Act
+    let stream = harness.validator_store.sign_attestations(attestations);
+    tokio::pin!(stream);
+
+    let mut results: Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>> = Vec::new();
+    let collect_timeout = tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(item) = stream.next().await {
+            results.push(item);
+        }
+    })
+    .await;
+
+    // Assert
+    if collect_timeout.is_err() {
+        panic!(
+            "Stream collection timed out after 60s. Got {} items before timeout.",
+            results.len()
+        );
+    }
+
+    assert_eq!(
+        results.len(),
+        1,
+        "3 validators in the same committee should produce exactly 1 stream item, got {}.",
+        results.len()
+    );
+
+    assert!(
+        results[0].is_ok(),
+        "Stream item should be Ok, but got: {:?}",
+        results[0]
+    );
+}
+
+/// Test 3: When the node is not synced, `sign_attestations` returns an immediate error without
+/// entering the committee-batching or QBFT consensus path.
+///
+/// This verifies the early-exit guard at the top of `sign_attestations`. The stream should
+/// yield exactly one `Err(NotSynced)` item regardless of how many committees or validators
+/// are involved.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_not_synced_returns_immediate_error() {
+    // Arrange
+    let rsa_private_key = generate_rsa_keypair();
+    let rsa_pubkey = rsa_public_from_private(&rsa_private_key);
+    let our_operator_id = OperatorId(1);
+
+    let operator_ids_a: Vec<OperatorId> =
+        vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+    let operator_ids_b: Vec<OperatorId> =
+        vec![OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
+
+    let committee_a = create_committee_setup(
+        &operator_ids_a,
+        2,
+        our_operator_id,
+        &rsa_pubkey,
+        0,
+    );
+    let committee_b = create_committee_setup(
+        &operator_ids_b,
+        1,
+        our_operator_id,
+        &rsa_pubkey,
+        100,
+    );
+
+    let (executor, _signal) = create_test_executor();
+
+    let harness = ValidatorStoreTestHarness::new(
+        vec![committee_a, committee_b],
+        our_operator_id,
+        rsa_private_key,
+        executor,
+    );
+
+    harness.seed_voting_context();
+
+    // Mark node as not synced
+    harness.is_synced_tx.send_replace(false);
+
+    let attestations = vec![
+        harness.create_attestation_to_sign(0, 0),
+        harness.create_attestation_to_sign(0, 1),
+        harness.create_attestation_to_sign(1, 0),
+    ];
+
+    // Act
+    let stream = harness.validator_store.sign_attestations(attestations);
+    tokio::pin!(stream);
+
+    let mut results: Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>> = Vec::new();
+    // This should return instantly (no QBFT involved), so a short timeout is fine.
+    let collect_timeout = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(item) = stream.next().await {
+            results.push(item);
+        }
+    })
+    .await;
+
+    // Assert
+    assert!(
+        collect_timeout.is_ok(),
+        "Not-synced path should return immediately, not time out"
+    );
+
+    assert_eq!(
+        results.len(),
+        1,
+        "Not-synced should produce exactly 1 error item, got {}.",
+        results.len()
+    );
+
+    let err = results[0]
+        .as_ref()
+        .expect_err("Stream item should be Err when not synced");
+
+    assert!(
+        matches!(err, validator_store::Error::SpecificError(SpecificError::NotSynced)),
+        "Error should be NotSynced, but got: {err:?}"
+    );
 }
