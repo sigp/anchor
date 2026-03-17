@@ -1,7 +1,7 @@
 use std::fs;
 
-use clap::CommandFactory;
 use bls::{PublicKey, SecretKey};
+use clap::CommandFactory;
 pub use cli::{KeygenSubcommands, Keysplit, Manual, Onchain};
 use error::KeysplitError;
 use global_config::GlobalConfig;
