@@ -5,7 +5,7 @@
 //! - historic exits that are intentionally ignored
 //! - validators without a resolved index, which should advance progress without queueing work
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
 use ssv_types::ValidatorIndex;
@@ -125,4 +125,40 @@ async fn test_live_validator_exited_without_index_advances_progress_without_queu
     assert!(test.exit_rx.try_recv().is_err());
     assert_eq!(test.processor.db.state().get_last_processed_block(), 12382);
     assert_eq!(test.processor.db.state().get_last_processed_event(), None);
+}
+
+#[tokio::test]
+/// KeySplit mode intentionally ignores `ValidatorExited`, but it must still record cursor-only
+/// progress so restart recovery does not replay the same exit forever.
+async fn test_keysplit_validator_exited_only_advances_progress() {
+    use database::test_utils::{TEST_NETWORK, generators};
+
+    setup_tracing();
+
+    // Arrange: build a KeySplit processor and a syntactically valid exit log.
+    let pubkey = generators::pubkey::random_rsa();
+    let db = Arc::new(
+        database::NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK)
+            .expect("Failed to create in-memory database"),
+    );
+    let processor = create_keysplit_mode_processor(Arc::clone(&db));
+    let owner = Address::random();
+    let operator_ids = vec![1u64, 2, 3, 4];
+    let (_, validator_pubkey) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+    let log = create_validator_exited_log(
+        owner,
+        operator_ids,
+        Bytes::from(validator_pubkey.serialize().to_vec()),
+    );
+
+    // Act: process the exit event in KeySplit mode.
+    processor
+        .process_logs(vec![log], true, 12383)
+        .expect("KeySplit ValidatorExited should only record progress");
+
+    // Assert: no validator state is created, but progress still advances.
+    assert_eq!(db.state().metadata().length(), 0);
+    assert_eq!(db.state().get_last_processed_block(), 12383);
+    assert_eq!(db.state().get_last_processed_event(), None);
 }

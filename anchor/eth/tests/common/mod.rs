@@ -431,6 +431,90 @@ pub fn create_validator_exited_log(
     )
 }
 
+/// Helper function to create a `ClusterLiquidated` event log for an existing operator set.
+pub fn create_cluster_liquidated_log(owner: Address, operator_ids: Vec<u64>) -> Log {
+    let cluster = SSVContract::Cluster {
+        validatorCount: 1,
+        networkFeeIndex: 0,
+        index: 0,
+        active: false,
+        balance: U256::from(0),
+    };
+
+    let event = SSVContract::ClusterLiquidated {
+        owner,
+        operatorIds: operator_ids,
+        cluster,
+    };
+
+    let mut topics = vec![SSVContract::ClusterLiquidated::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(12403),
+        Some(FixedBytes::default()),
+        Some(4),
+    )
+}
+
+/// Helper function to create a `ClusterReactivated` event log for an existing operator set.
+pub fn create_cluster_reactivated_log(owner: Address, operator_ids: Vec<u64>) -> Log {
+    let cluster = SSVContract::Cluster {
+        validatorCount: 1,
+        networkFeeIndex: 0,
+        index: 0,
+        active: true,
+        balance: U256::from(0),
+    };
+
+    let event = SSVContract::ClusterReactivated {
+        owner,
+        operatorIds: operator_ids,
+        cluster,
+    };
+
+    let mut topics = vec![SSVContract::ClusterReactivated::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(12404),
+        Some(FixedBytes::default()),
+        Some(5),
+    )
+}
+
+/// Helper function to create a `FeeRecipientAddressUpdated` event log for an owner.
+pub fn create_fee_recipient_updated_log(owner: Address, recipient_address: Address) -> Log {
+    let event = SSVContract::FeeRecipientAddressUpdated {
+        owner,
+        recipientAddress: recipient_address,
+    };
+
+    let mut topics = vec![SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(12405),
+        Some(FixedBytes::default()),
+        Some(6),
+    )
+}
+
 /// Verify that an operator is soft deleted (removed from memory but still exists in database with
 /// removed=TRUE)
 pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: OperatorId) {
