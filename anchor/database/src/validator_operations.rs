@@ -177,7 +177,7 @@ impl NetworkDatabase {
         map: &HashMap<PublicKeyBytes, ValidatorIndex>,
     ) {
         for (public_key, index) in map {
-            if let Some(validator) = state.multi_state.validator_metadata.get_mut_by(&public_key) {
+            if let Some(validator) = state.multi_state.validator_metadata.get_mut_by(public_key) {
                 // Update in memory
                 validator.index = Some(*index);
             } else {
