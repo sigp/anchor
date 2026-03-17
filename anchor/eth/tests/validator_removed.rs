@@ -1,3 +1,5 @@
+//! Focused `ValidatorRemoved` coverage for missing-state behavior.
+
 use alloy::primitives::Bytes;
 
 mod common;
@@ -5,6 +7,8 @@ mod common;
 use common::*;
 
 #[tokio::test]
+/// `ValidatorRemoved` still treats missing committed validator state as a fatal inconsistency.
+/// This protects the branch from silently skipping over unexpected DB/state divergence.
 async fn test_validator_removed_missing_state_is_fatal() {
     setup_tracing();
 

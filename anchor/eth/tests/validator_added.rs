@@ -1,3 +1,11 @@
+//! Focused `ValidatorAdded` coverage for the per-event commit model.
+//!
+//! These tests cover:
+//! - the happy path
+//! - malformed/duplicate validator-add history that must still consume the owner nonce
+//! - KeySplit nonce-only behavior
+//! - slashing-protection failure before the main DB commit
+
 use std::{str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
@@ -39,6 +47,8 @@ fn add_operators(test: &ProcessorFixture, operator_ids: &[u64], block_number: u6
 }
 
 #[tokio::test]
+/// A valid `ValidatorAdded` log should insert validator state and queue the validator for index
+/// lookup after the commit succeeds.
 async fn test_validator_added_event_processing() {
     setup_tracing();
 
@@ -67,6 +77,8 @@ async fn test_validator_added_event_processing() {
 }
 
 #[tokio::test]
+/// Duplicate `ValidatorAdded` logs must be skipped without re-queueing index sync, while still
+/// consuming the owner nonce because the on-chain nonce has already advanced.
 async fn test_duplicate_validator_added_is_skipped() {
     setup_tracing();
 
@@ -132,6 +144,8 @@ async fn test_duplicate_validator_added_is_skipped() {
 }
 
 #[tokio::test]
+/// Missing operators make the validator event unprocessable, but the owner nonce still needs to
+/// advance so later valid events from the same owner are not blocked.
 async fn test_validator_added_with_missing_operators_still_bumps_nonce() {
     setup_tracing();
 
@@ -159,6 +173,8 @@ async fn test_validator_added_with_missing_operators_still_bumps_nonce() {
 }
 
 #[tokio::test]
+/// Malformed share data is another nonce-consuming skip path: the validator must not be inserted,
+/// but owner nonce and progress still need to move forward.
 async fn test_invalid_validator_added_shares_still_bump_nonce() {
     setup_tracing();
 
@@ -194,6 +210,8 @@ async fn test_invalid_validator_added_shares_still_bump_nonce() {
 }
 
 #[tokio::test]
+/// KeySplit mode only tracks the owner nonce for `ValidatorAdded`; it intentionally does not
+/// insert validator rows or schedule index sync.
 async fn test_keysplit_validator_added_only_bumps_nonce() {
     use database::test_utils::{TEST_NETWORK, generators};
 
@@ -227,6 +245,8 @@ async fn test_keysplit_validator_added_only_bumps_nonce() {
 }
 
 #[tokio::test]
+/// Slashing registration happens before the main DB commit on purpose. If it fails, neither nonce
+/// progress nor validator state should be committed.
 async fn test_slashing_registration_failure_aborts_validator_added() {
     setup_tracing();
 
@@ -246,7 +266,10 @@ async fn test_slashing_registration_failure_aborts_validator_added() {
     );
 
     let result = test.processor.process_logs(vec![log], true, 12363);
-    assert!(result.is_err(), "Slashing registration failure must abort processing");
+    assert!(
+        result.is_err(),
+        "Slashing registration failure must abort processing"
+    );
 
     assert_eq!(test.processor.db.state().metadata().length(), 0);
     assert_eq!(test.processor.db.state().get_next_nonce(&owner), 0);

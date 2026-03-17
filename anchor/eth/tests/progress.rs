@@ -1,3 +1,5 @@
+//! Focused progress-boundary coverage for the per-event sync model.
+
 use alloy::primitives::Address;
 
 mod common;
@@ -5,6 +7,8 @@ mod common;
 use common::*;
 
 #[tokio::test]
+/// Multiple successful events in one fetched range should still collapse back to a single
+/// processed-block boundary once the whole range succeeds.
 async fn test_multiple_events_processing() {
     setup_tracing();
 
@@ -34,6 +38,8 @@ async fn test_multiple_events_processing() {
 }
 
 #[tokio::test]
+/// Historical/live sync must never regress the coarse processed-block boundary if an older
+/// `end_block` is observed after newer progress was already committed.
 async fn test_older_end_block_does_not_regress_progress() {
     setup_tracing();
 

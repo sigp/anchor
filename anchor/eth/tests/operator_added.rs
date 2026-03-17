@@ -1,8 +1,15 @@
+//! Focused `OperatorAdded` coverage for the per-event commit model.
+//!
+//! These tests cover:
+//! - the happy path
+//! - malformed/duplicate operator history that must still preserve `max_operator_id_seen`
+//! - resume semantics within a partially processed block
+//! - KeySplit behavior
+
 use std::sync::Arc;
 
 use alloy::primitives::Address;
 use base64::Engine;
-
 use database::test_utils::generators;
 use ssv_types::{Operator, OperatorId};
 
@@ -11,6 +18,7 @@ mod common;
 use common::*;
 
 #[tokio::test]
+/// A valid `OperatorAdded` log should persist the operator and advance progress normally.
 async fn test_operator_added_event_processing() {
     setup_tracing();
 
@@ -32,6 +40,8 @@ async fn test_operator_added_event_processing() {
 }
 
 #[tokio::test]
+/// Duplicate operator ids are malformed history, but they should not abort the batch or roll back
+/// already-committed operators from the same fetched range.
 async fn test_duplicate_operator_id_is_skipped() {
     setup_tracing();
 
@@ -44,7 +54,9 @@ async fn test_duplicate_operator_id_is_skipped() {
     let valid_log = create_operator_added_log(operator_id, owner, public_key.clone(), 1000);
     let duplicate_log = create_operator_added_log(operator_id, Address::random(), public_key, 2000);
 
-    let result = test.processor.process_logs(vec![valid_log, duplicate_log], true, 12351);
+    let result = test
+        .processor
+        .process_logs(vec![valid_log, duplicate_log], true, 12351);
     assert!(
         result.is_ok(),
         "Duplicate operator ids should be skipped without aborting the batch"
@@ -54,6 +66,8 @@ async fn test_duplicate_operator_id_is_skipped() {
 }
 
 #[tokio::test]
+/// Once `operatorId` is decoded, malformed operator payloads must still preserve
+/// `max_operator_id_seen` so later valid operator ids are not blocked forever.
 async fn test_malformed_operator_still_advances_max_seen() {
     setup_tracing();
 
@@ -94,6 +108,8 @@ async fn test_malformed_operator_still_advances_max_seen() {
 }
 
 #[tokio::test]
+/// Duplicate operator public keys are handled like malformed history: skip the bad event, preserve
+/// `max_operator_id_seen`, and continue applying later valid operator ids.
 async fn test_duplicate_operator_pubkey_is_skipped_without_blocking_later_ids() {
     setup_tracing();
 
@@ -131,6 +147,8 @@ async fn test_duplicate_operator_pubkey_is_skipped_without_blocking_later_ids() 
 }
 
 #[tokio::test]
+/// Re-fetching a block after one log in that block was already committed should skip the committed
+/// log and continue from the next log instead of replaying it.
 async fn test_resume_skips_already_processed_operator_in_same_block() {
     setup_tracing();
 
@@ -188,6 +206,7 @@ async fn test_resume_skips_already_processed_operator_in_same_block() {
 }
 
 #[tokio::test]
+/// KeySplit mode still processes `OperatorAdded` fully because operator state is needed there too.
 async fn test_keysplit_mode_processing() {
     use database::test_utils::TEST_NETWORK;
 

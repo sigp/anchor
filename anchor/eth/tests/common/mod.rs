@@ -140,6 +140,11 @@ pub struct ProcessorFixture {
 }
 
 impl ProcessorFixture {
+    /// Build a processor fixture from a seeded in-memory database fixture.
+    ///
+    /// This preserves the underlying seeded cluster/validator/operator data alongside the
+    /// `EventProcessor`, so high-level event tests can set up assertions without re-querying every
+    /// piece of state through the database.
     fn from_fixture(
         fixture: InMemoryTestFixture,
         slashing_protection: Arc<dyn SlashingProtection>,
@@ -398,8 +403,13 @@ pub fn create_validator_removed_log(
     )
 }
 
-/// Helper function to create a ValidatorExited event log
-pub fn create_validator_exited_log(owner: Address, operator_ids: Vec<u64>, public_key: Bytes) -> Log {
+/// Helper function to create a `ValidatorExited` event log using the same owner-topic encoding as
+/// the contract event.
+pub fn create_validator_exited_log(
+    owner: Address,
+    operator_ids: Vec<u64>,
+    public_key: Bytes,
+) -> Log {
     let event = SSVContract::ValidatorExited {
         owner,
         operatorIds: operator_ids,

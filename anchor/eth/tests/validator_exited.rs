@@ -1,3 +1,10 @@
+//! Focused `ValidatorExited` coverage for the per-event commit model.
+//!
+//! These tests cover:
+//! - live exits that queue follow-up work
+//! - historic exits that are intentionally ignored
+//! - validators without a resolved index, which should advance progress without queueing work
+
 use std::collections::HashMap;
 
 use alloy::primitives::{Address, Bytes};
@@ -57,6 +64,8 @@ async fn setup_validator_via_events(
 }
 
 #[tokio::test]
+/// Live `ValidatorExited` events should queue exit work and still commit progress in the same
+/// processed block once the handler succeeds.
 async fn test_live_validator_exited_queues_work_and_advances_progress() {
     setup_tracing();
 
@@ -79,6 +88,8 @@ async fn test_live_validator_exited_queues_work_and_advances_progress() {
 }
 
 #[tokio::test]
+/// Historic exits are intentionally ignored to avoid replaying stale exit work, but they must
+/// still advance progress so sync can move on.
 async fn test_historic_validator_exited_is_ignored_but_progress_advances() {
     setup_tracing();
 
@@ -96,6 +107,8 @@ async fn test_historic_validator_exited_is_ignored_but_progress_advances() {
 }
 
 #[tokio::test]
+/// If the validator has not been assigned an index yet, exit processing is intentionally skipped.
+/// The event is still considered handled, so progress must advance without queueing work.
 async fn test_live_validator_exited_without_index_advances_progress_without_queueing() {
     setup_tracing();
 
