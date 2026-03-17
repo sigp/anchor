@@ -2,12 +2,14 @@
 //!
 //! `sign_attestations()` groups attestations by `CommitteeId`, processes each committee
 //! concurrently via `FuturesUnordered`, and returns a `Stream` of results. These tests verify
-//! the grouping, streaming, and per-committee consensus flow.
+//! the grouping, streaming, per-committee consensus flow, and failure isolation.
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
+use bls::FixedBytesExtended;
 use futures::StreamExt;
 use ssv_types::OperatorId;
+use ssz::Decode;
 use types::{Attestation, MainnetEthSpec};
 use validator_store::ValidatorStore;
 
@@ -15,6 +17,8 @@ use super::common::*;
 use crate::{Error, SpecificError};
 
 type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
+
+// ==================== Test 1: Stream grouping with single-operator timeout ====================
 
 /// Test 1: Multiple SSV committees in one `sign_attestations()` call produce separate stream
 /// batches (one per committee).
@@ -78,6 +82,9 @@ async fn test_sign_attestations_produces_one_stream_item_per_committee() {
 
     harness.seed_voting_context();
 
+    // Advance clock far past all QBFT timeouts so single-operator consensus times out instantly
+    harness.set_clock_for_instant_timeout();
+
     // Build attestations: 2 from committee A, 1 from committee B
     let attestations = vec![
         harness.create_attestation_to_sign(0, 0),
@@ -130,14 +137,21 @@ async fn test_sign_attestations_produces_one_stream_item_per_committee() {
     }
 }
 
-/// Test 2: A stuck committee does not prevent another committee from producing its stream item.
+// ==================== Test 2: Failure isolation between committees ====================
+
+/// Test 2: A stuck committee does not prevent another committee from producing signed
+/// attestations via multi-operator QBFT consensus.
 ///
-/// This verifies failure isolation in the `FuturesUnordered` fan-out. Committee B's attestations
-/// use a slot for which no `VotingContext` is seeded, so `get_voting_context` blocks
-/// indefinitely. Committee A's attestations use the seeded slot and proceed to QBFT timeout
-/// normally. The stream should yield committee A's result without waiting for committee B.
+/// This test verifies failure isolation in the `FuturesUnordered` fan-out. Committee A has
+/// multi-operator QBFT enabled (all 4 operators participate), so consensus succeeds and
+/// signed attestations are produced. Committee B's attestations use an unseeded slot, so
+/// `get_voting_context` blocks indefinitely.
+///
+/// The stream should yield committee A's result (with actual signed attestations) without
+/// waiting for committee B. Since committee B is permanently blocked, we expect exactly
+/// 1 stream item within our timeout.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_stuck_committee_does_not_block_other_committees() {
+async fn test_stuck_committee_does_not_block_successful_consensus() {
     // Arrange
     let rsa_private_key = generate_rsa_keypair();
     let rsa_pubkey = rsa_public_from_private(&rsa_private_key);
@@ -148,33 +162,41 @@ async fn test_stuck_committee_does_not_block_other_committees() {
     let operator_ids_b: Vec<OperatorId> =
         vec![OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
 
-    let committee_a = create_committee_setup(
-        &operator_ids_a,
-        2,
-        our_operator_id,
-        &rsa_pubkey,
-        0,
-    );
-    let committee_b = create_committee_setup(
-        &operator_ids_b,
-        1,
-        our_operator_id,
-        &rsa_pubkey,
-        100,
-    );
+    let committee_a = create_committee_setup(&operator_ids_a, 2, our_operator_id, &rsa_pubkey, 0);
+    let committee_b = create_committee_setup(&operator_ids_b, 1, our_operator_id, &rsa_pubkey, 100);
+
+    let committee_id_a = committee_a.cluster.committee_id();
 
     let (executor, _signal) = create_test_executor();
 
-    let harness = ValidatorStoreTestHarness::new(
+    let mut harness = ValidatorStoreTestHarness::new(
         vec![committee_a, committee_b],
         our_operator_id,
         rsa_private_key,
         executor,
     );
 
-    // Only seed VotingContext for TEST_SLOT. Committee B's attestations will use a
+    // Only seed VotingContext for TEST_SLOT. Committee B's attestation will use a
     // different slot, so its `get_voting_context` call will block forever.
     harness.seed_voting_context();
+
+    let beacon_vote = ssv_types::consensus::BeaconVote {
+        block_root: types::Hash256::zero(),
+        source: types::Checkpoint {
+            epoch: types::Epoch::new(0),
+            root: types::Hash256::zero(),
+        },
+        target: types::Checkpoint {
+            epoch: types::Epoch::new(0),
+            root: types::Hash256::zero(),
+        },
+    };
+
+    // Enable multi-operator consensus for committee A
+    let mut enabled = HashSet::new();
+    enabled.insert(committee_id_a);
+
+    let _captured = harness.start_consensus_router(beacon_vote, &enabled);
 
     // Committee A attestations use the seeded slot (TEST_SLOT).
     // Committee B attestation uses a slot with no VotingContext, causing it to hang.
@@ -189,18 +211,18 @@ async fn test_stuck_committee_does_not_block_other_committees() {
     let stream = harness.validator_store.sign_attestations(attestations);
     tokio::pin!(stream);
 
-    // Collect with a timeout. Committee A should complete quickly (QBFT timeout).
+    // Collect with a timeout. Committee A should complete (QBFT succeeds with all 4 operators).
     // Committee B blocks on VotingContext, so the stream never fully drains. We expect
     // exactly 1 item (committee A) before our timeout.
     let mut results: SignAttestationsResult = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(10), async {
+    let _ = tokio::time::timeout(Duration::from_secs(15), async {
         while let Some(item) = stream.next().await {
             results.push(item);
         }
     })
     .await;
 
-    // Assert: committee A produced its stream item despite committee B being stuck
+    // Assert: committee A produced its stream item with REAL signed attestations
     assert!(
         !results.is_empty(),
         "Expected at least 1 stream item from committee A, but got none. \
@@ -215,14 +237,182 @@ async fn test_stuck_committee_does_not_block_other_committees() {
         results.len()
     );
 
-    assert!(
-        results[0].is_ok(),
-        "Committee A's stream item should be Ok, but got: {:?}",
-        results[0]
+    let signed_attestations = results[0]
+        .as_ref()
+        .expect("Committee A's stream item should be Ok");
+
+    // Committee A had 2 validators with multi-operator QBFT, so we expect 2 signed attestations
+    assert_eq!(
+        signed_attestations.len(),
+        2,
+        "Committee A should produce 2 signed attestations (one per validator) via multi-operator \
+         QBFT consensus, got {}. This confirms real consensus succeeded, not just a timeout.",
+        signed_attestations.len()
     );
 }
 
-/// Test 3: When the node is not synced, `sign_attestations` returns an immediate error without
+// ==================== Test 3: Committee collection mode verification ====================
+
+/// Test 3: Partial signature messages use `DutyExecutor::Committee` and batch all validators'
+/// signatures into a single outgoing message.
+///
+/// When `sign_committee_attestations` collects signatures for multiple validators in the same
+/// committee, the `SignatureCollectorManager` batches them into a single
+/// `PartialSignatureMessages` message with `DutyExecutor::Committee(committee_id)` in the
+/// `MessageId`. This test verifies that batching behavior by inspecting the captured outgoing
+/// partial signature messages.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_committee_attestation_uses_committee_collection_mode() {
+    // Arrange
+    let rsa_private_key = generate_rsa_keypair();
+    let rsa_pubkey = rsa_public_from_private(&rsa_private_key);
+    let our_operator_id = OperatorId(1);
+
+    let operator_ids: Vec<OperatorId> =
+        vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+
+    let num_validators = 3;
+    let committee = create_committee_setup(
+        &operator_ids,
+        num_validators,
+        our_operator_id,
+        &rsa_pubkey,
+        0,
+    );
+    let committee_id = committee.cluster.committee_id();
+
+    let (executor, _signal) = create_test_executor();
+
+    let mut harness =
+        ValidatorStoreTestHarness::new(vec![committee], our_operator_id, rsa_private_key, executor);
+
+    harness.seed_voting_context();
+
+    let beacon_vote = ssv_types::consensus::BeaconVote {
+        block_root: types::Hash256::zero(),
+        source: types::Checkpoint {
+            epoch: types::Epoch::new(0),
+            root: types::Hash256::zero(),
+        },
+        target: types::Checkpoint {
+            epoch: types::Epoch::new(0),
+            root: types::Hash256::zero(),
+        },
+    };
+
+    // Enable multi-operator consensus for this committee
+    let mut enabled = HashSet::new();
+    enabled.insert(committee_id);
+
+    let captured = harness.start_consensus_router(beacon_vote, &enabled);
+
+    let attestations = vec![
+        harness.create_attestation_to_sign(0, 0),
+        harness.create_attestation_to_sign(0, 1),
+        harness.create_attestation_to_sign(0, 2),
+    ];
+
+    // Act
+    let stream = harness.validator_store.sign_attestations(attestations);
+    tokio::pin!(stream);
+
+    let mut results: SignAttestationsResult = Vec::new();
+    let collect_timeout = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(item) = stream.next().await {
+            results.push(item);
+        }
+    })
+    .await;
+
+    // Assert: stream completed and produced results
+    if collect_timeout.is_err() {
+        panic!(
+            "Stream collection timed out after 30s. Got {} items before timeout.",
+            results.len()
+        );
+    }
+
+    assert_eq!(
+        results.len(),
+        1,
+        "Should have exactly 1 stream item (1 committee), got {}",
+        results.len()
+    );
+
+    let signed_attestations = results[0].as_ref().expect("stream item should be Ok");
+    assert_eq!(
+        signed_attestations.len(),
+        num_validators,
+        "Should have {num_validators} signed attestations, got {}",
+        signed_attestations.len()
+    );
+
+    // Inspect captured partial signature messages from our operator
+    let captured_msgs = captured.lock();
+
+    // Our operator should have sent exactly 1 batched partial signature message
+    // (not 3 separate messages, one per validator).
+    assert_eq!(
+        captured_msgs.len(),
+        1,
+        "Expected exactly 1 batched partial signature message from our operator, got {}. \
+         Committee collection mode should batch all validators' sigs into one message.",
+        captured_msgs.len()
+    );
+
+    let msg = &captured_msgs[0];
+
+    // Verify the message uses `DutyExecutor::Committee`
+    let msg_id = msg.ssv_message().msg_id();
+    let duty_executor = msg_id
+        .duty_executor()
+        .expect("message should have a duty executor");
+    match duty_executor {
+        ssv_types::msgid::DutyExecutor::Committee(cid) => {
+            assert_eq!(
+                cid, committee_id,
+                "Partial sig message should use the committee's CommitteeId"
+            );
+        }
+        other => {
+            panic!(
+                "Expected DutyExecutor::Committee, got {other:?}. \
+                 Committee attestation sigs should use committee collection mode."
+            );
+        }
+    }
+
+    // Verify the message contains all 3 validators' partial signatures
+    let partial_sigs =
+        ssv_types::partial_sig::PartialSignatureMessages::from_ssz_bytes(msg.ssv_message().data())
+            .expect("should decode partial signature messages");
+
+    assert_eq!(
+        partial_sigs.messages.len(),
+        num_validators,
+        "Batched message should contain {num_validators} partial signatures (one per validator), \
+         got {}",
+        partial_sigs.messages.len()
+    );
+
+    // Verify each partial signature references a distinct validator index
+    let mut validator_indices: Vec<_> = partial_sigs
+        .messages
+        .iter()
+        .map(|m| *m.validator_index)
+        .collect();
+    validator_indices.sort();
+    validator_indices.dedup();
+    assert_eq!(
+        validator_indices.len(),
+        num_validators,
+        "Each partial signature should be for a distinct validator, but got duplicates"
+    );
+}
+
+// ==================== Test 4: Not-synced early exit ====================
+
+/// Test 4: When the node is not synced, `sign_attestations` returns an immediate error without
 /// entering the committee-batching or QBFT consensus path.
 ///
 /// This verifies the early-exit guard at the top of `sign_attestations`. The stream should
@@ -240,20 +430,8 @@ async fn test_not_synced_returns_immediate_error() {
     let operator_ids_b: Vec<OperatorId> =
         vec![OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
 
-    let committee_a = create_committee_setup(
-        &operator_ids_a,
-        2,
-        our_operator_id,
-        &rsa_pubkey,
-        0,
-    );
-    let committee_b = create_committee_setup(
-        &operator_ids_b,
-        1,
-        our_operator_id,
-        &rsa_pubkey,
-        100,
-    );
+    let committee_a = create_committee_setup(&operator_ids_a, 2, our_operator_id, &rsa_pubkey, 0);
+    let committee_b = create_committee_setup(&operator_ids_b, 1, our_operator_id, &rsa_pubkey, 100);
 
     let (executor, _signal) = create_test_executor();
 
@@ -306,7 +484,10 @@ async fn test_not_synced_returns_immediate_error() {
         .expect_err("Stream item should be Err when not synced");
 
     assert!(
-        matches!(err, validator_store::Error::SpecificError(SpecificError::NotSynced)),
+        matches!(
+            err,
+            validator_store::Error::SpecificError(SpecificError::NotSynced)
+        ),
         "Error should be NotSynced, but got: {err:?}"
     );
 }
