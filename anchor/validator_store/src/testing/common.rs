@@ -286,7 +286,11 @@ impl ValidatorStoreTestHarness {
         let senders: Senders = processor::spawn(processor_config, executor.clone());
 
         // Fork schedule
-        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
+        let fork_schedule = Arc::new(ForkSchedule::new(
+            Fork::Boole,
+            DomainType::default(),
+            "test",
+        ));
 
         // Collect unique operator IDs across all committees
         let mut all_operator_ids = HashSet::new();
