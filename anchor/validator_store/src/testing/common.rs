@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Shared test infrastructure for `AnchorValidatorStore` integration tests.
 //!
 //! Provides a `ValidatorStoreTestHarness` that wires up a real `AnchorValidatorStore` with
