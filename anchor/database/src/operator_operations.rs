@@ -17,20 +17,11 @@ pub enum OperatorStatus {
 }
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
-    /// Insert a new Operator into the database
-    pub fn insert_operator(
+    pub(crate) fn insert_operator_tx(
         &self,
         operator: &Operator,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        // Make sure that this operator does not already exist
-        if self.state().operator_exists(&operator.id) {
-            return Err(DatabaseError::NotFound(format!(
-                "Operator with id {} already in database",
-                *operator.id
-            )));
-        }
-
         // Base64 encode the key for storage
         let pem_key = operator
             .rsa_pubkey
@@ -46,43 +37,84 @@ impl NetworkDatabase {
                 operator.owner.to_string()  // The owner address of the operator
             ])?;
 
-        self.state.send_modify(|state| {
-            // Check to see if this operator is the current operator
-            if state.single_state.id.is_none() {
-                // If the keys match, this is the current operator so we want to save the id
-                let keys_match = match &self.operator {
-                    PubkeyOrId::Pubkey(pubkey) => {
-                        pem_key == pubkey.public_key_to_pem().unwrap_or_default()
-                    }
-                    PubkeyOrId::Id(id) => *id == operator.id,
-                };
-                if keys_match {
-                    state.single_state.id = Some(operator.id);
-                }
-            }
-            // Store the operator in memory
-            state
-                .single_state
-                .operators
-                .insert(operator.id, operator.to_owned());
-        });
         Ok(())
     }
 
-    /// Delete an operator
-    pub fn delete_operator(
+    pub(crate) fn apply_insert_operator_state(
+        &self,
+        state: &mut crate::NetworkState,
+        operator: &Operator,
+    ) {
+        let pem_key = operator
+            .rsa_pubkey
+            .public_key_to_pem()
+            .expect("Failed to encode RsaPublicKey");
+
+        if state.single_state.id.is_none() {
+            let keys_match = match &self.operator {
+                PubkeyOrId::Pubkey(pubkey) => {
+                    pem_key == pubkey.public_key_to_pem().unwrap_or_default()
+                }
+                PubkeyOrId::Id(id) => *id == operator.id,
+            };
+            if keys_match {
+                state.single_state.id = Some(operator.id);
+            }
+        }
+
+        state
+            .single_state
+            .operators
+            .insert(operator.id, operator.to_owned());
+    }
+
+    pub fn commit_operator_added(
+        &self,
+        operator: &Operator,
+        max_operator_id_seen: u64,
+        cursor: crate::ProcessedEventCursor,
+    ) -> Result<(), DatabaseError> {
+        let operator = operator.clone();
+        self.commit_db_update(
+            super::ProgressUpdate::Event(cursor),
+            true,
+            |tx| {
+                tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+                    .execute(params![max_operator_id_seen])?;
+                self.insert_operator_tx(&operator, tx)
+            },
+            |state| {
+                state.single_state.max_operator_id_seen = Some(max_operator_id_seen);
+                self.apply_insert_operator_state(state, &operator);
+            },
+        )
+    }
+
+    /// Insert a new Operator into the database
+    pub fn insert_operator(
+        &self,
+        operator: &Operator,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        // Make sure that this operator does not already exist
+        if self.state().operator_exists(&operator.id) {
+            return Err(DatabaseError::NotFound(format!(
+                "Operator with id {} already in database",
+                *operator.id
+            )));
+        }
+
+        self.insert_operator_tx(operator, tx)?;
+        self.state
+            .send_modify(|state| self.apply_insert_operator_state(state, operator));
+        Ok(())
+    }
+
+    pub(crate) fn delete_operator_tx(
         &self,
         id: OperatorId,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        // Make sure that this operator exists
-        if !self.state().operator_exists(&id) {
-            return Err(DatabaseError::NotFound(format!(
-                "Operator with id {} not in database",
-                *id
-            )));
-        }
-
         if let Err(err) = tx
             .prepare_cached(sql_operations::DELETE_OPERATOR)?
             .execute(params![id])
@@ -101,10 +133,47 @@ impl NetworkDatabase {
                 .execute(params![id])?;
         }
 
-        self.state.send_modify(|state| {
-            // Remove the operator
-            state.single_state.operators.remove(&id);
-        });
+        Ok(())
+    }
+
+    pub(crate) fn apply_delete_operator_state(
+        &self,
+        state: &mut crate::NetworkState,
+        id: OperatorId,
+    ) {
+        state.single_state.operators.remove(&id);
+    }
+
+    pub fn commit_operator_removed(
+        &self,
+        id: OperatorId,
+        cursor: crate::ProcessedEventCursor,
+    ) -> Result<(), DatabaseError> {
+        self.commit_db_update(
+            super::ProgressUpdate::Event(cursor),
+            true,
+            |tx| self.delete_operator_tx(id, tx),
+            |state| self.apply_delete_operator_state(state, id),
+        )
+    }
+
+    /// Delete an operator
+    pub fn delete_operator(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        // Make sure that this operator exists
+        if !self.state().operator_exists(&id) {
+            return Err(DatabaseError::NotFound(format!(
+                "Operator with id {} not in database",
+                *id
+            )));
+        }
+
+        self.delete_operator_tx(id, tx)?;
+        self.state
+            .send_modify(|state| self.apply_delete_operator_state(state, id));
         Ok(())
     }
 

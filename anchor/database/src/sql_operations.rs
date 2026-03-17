@@ -4,6 +4,16 @@ pub const GET_METADATA: &str = r#"SELECT schema_version FROM metadata"#;
 pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
 pub const GET_MAX_OPERATOR_ID_SEEN: &str = r#"SELECT max_operator_id_seen FROM metadata"#;
 pub const SET_MAX_OPERATOR_ID_SEEN: &str = r#"UPDATE metadata SET max_operator_id_seen = ?1"#;
+pub const GET_PROCESSED_EVENT_CURSOR: &str = r#"
+    SELECT cursor_block_number, cursor_transaction_index, cursor_log_index
+    FROM metadata
+"#;
+pub const SET_PROCESSED_EVENT_CURSOR: &str = r#"
+    UPDATE metadata
+    SET cursor_block_number = ?1,
+        cursor_transaction_index = ?2,
+        cursor_log_index = ?3
+"#;
 
 // Operator
 pub const INSERT_OPERATOR: &str = r#"
@@ -84,6 +94,11 @@ pub const INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT: &str = r#"
     ON CONFLICT (owner) DO UPDATE SET fee_recipient = ?2
 "#;
 pub const GET_OWNER_FEE_RECIPIENT: &str = r#"SELECT fee_recipient FROM owners WHERE owner = ?1"#;
+pub const GET_ALL_FEE_RECIPIENTS: &str = r#"
+    SELECT owner, fee_recipient
+    FROM owners
+    WHERE fee_recipient IS NOT NULL
+"#;
 
 pub const SET_GRAFFITI: &str = r#"UPDATE validators SET graffiti = ?1 WHERE validator_pubkey = ?2"#;
 pub const SET_INDEX: &str = r#"
@@ -93,7 +108,13 @@ pub const SET_INDEX: &str = r#"
 "#;
 
 // Blocks
-pub const UPDATE_BLOCK_NUMBER: &str = r#"UPDATE metadata SET block_number = ?1"#;
+pub const UPDATE_BLOCK_NUMBER: &str = r#"
+    UPDATE metadata
+    SET block_number = ?1,
+        cursor_block_number = NULL,
+        cursor_transaction_index = NULL,
+        cursor_log_index = NULL
+"#;
 pub const GET_BLOCK_NUMBER: &str = r#"SELECT block_number FROM metadata"#;
 
 // Nonce

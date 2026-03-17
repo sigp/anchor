@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
     path::Path,
+    str::FromStr,
     time::Duration,
 };
 
@@ -21,7 +23,7 @@ pub use crate::{
     error::DatabaseError,
     multi_index::{MultiIndexMap, *},
     slashing::SlashingProtection,
-    state::NetworkState,
+    state::{NetworkState, ProcessedEventCursor},
 };
 
 mod cluster_operations;
@@ -52,6 +54,49 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
+
+/// Parse a text column into a domain type while preserving the originating SQLite column index in
+/// any conversion error.
+pub(crate) fn parse_text_column<T>(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<T>
+where
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
+{
+    let value = row.get::<_, String>(column)?;
+    T::from_str(&value).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+/// Like `parse_text_column`, but for nullable text columns that represent optional domain values.
+pub(crate) fn parse_optional_text_column<T>(
+    row: &rusqlite::Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
+{
+    let value = row.get::<_, Option<String>>(column)?;
+    value
+        .map(|value| {
+            T::from_str(&value).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    column,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()
+}
 
 /// All the shares that belong to the current operator.
 /// IMPORTANT: There are parts of the code that assume this only contains shares that belong to the
@@ -117,12 +162,16 @@ struct SingleState {
     id: Option<OperatorId>,
     /// The last block that was processed
     last_processed_block: u64,
+    /// The last processed event inside a partially processed block.
+    last_processed_event: Option<ProcessedEventCursor>,
     /// All of the operators in the network
     operators: HashMap<OperatorId, Operator>,
     /// All of the Clusters that we are a memeber of
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
+    /// Explicit fee recipient overrides keyed by owner address.
+    fee_recipients: HashMap<Address, Address>,
     /// Monotonically increasing OperatorId count. None indicates a migrated database.
     max_operator_id_seen: Option<u64>,
 }
@@ -143,6 +192,13 @@ pub struct NetworkDatabase {
     state: watch::Sender<NetworkState>,
     /// Connection to the database
     conn_pool: Pool,
+}
+
+#[derive(Clone, Copy)]
+enum ProgressUpdate {
+    None,
+    Event(ProcessedEventCursor),
+    Block(u64),
 }
 
 impl NetworkDatabase {
@@ -200,6 +256,19 @@ impl NetworkDatabase {
         self.state.subscribe()
     }
 
+    pub fn mark_event_processed(&self, cursor: ProcessedEventCursor) -> Result<(), DatabaseError> {
+        self.commit_db_update(ProgressUpdate::Event(cursor), false, |_| Ok(()), |_| {})
+    }
+
+    pub fn advance_processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
+        self.commit_db_update(
+            ProgressUpdate::Block(block_number),
+            false,
+            |_| Ok(()),
+            |_| {},
+        )
+    }
+
     /// Update the last processed block number in the database
     /// Also, trigger a notification for other code to act on the new state
     pub fn processed_block(
@@ -209,8 +278,10 @@ impl NetworkDatabase {
     ) -> Result<(), DatabaseError> {
         tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
             .execute(params![block_number])?;
-        self.state
-            .send_modify(|state| state.single_state.last_processed_block = block_number);
+        self.state.send_modify(|state| {
+            state.single_state.last_processed_block = block_number;
+            state.single_state.last_processed_event = None;
+        });
         Ok(())
     }
 
@@ -271,6 +342,76 @@ impl NetworkDatabase {
             f(state);
             false
         });
+    }
+
+    /// Atomically commit a database write and then update in-memory state.
+    ///
+    /// If `notify` is `true`, `watch` subscribers are notified of the state change.
+    /// Use `false` for internal bookkeeping (nonce bumps, cursor-only advances) that
+    /// does not change observable validator/operator state.
+    fn commit_db_update(
+        &self,
+        progress: ProgressUpdate,
+        notify: bool,
+        apply_tx: impl FnOnce(&Transaction<'_>) -> Result<(), DatabaseError>,
+        apply_state: impl FnOnce(&mut NetworkState),
+    ) -> Result<(), DatabaseError> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+
+        apply_tx(&tx)?;
+        self.apply_progress_to_tx(progress, &tx)?;
+        tx.commit()?;
+
+        let publish = move |state: &mut NetworkState| {
+            apply_state(state);
+            self.apply_progress_to_state(progress, state);
+        };
+
+        if notify {
+            self.state.send_modify(publish);
+        } else {
+            self.modify_state(publish);
+        }
+
+        Ok(())
+    }
+
+    fn apply_progress_to_tx(
+        &self,
+        progress: ProgressUpdate,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        match progress {
+            ProgressUpdate::None => Ok(()),
+            ProgressUpdate::Event(cursor) => tx
+                .prepare_cached(sql_operations::SET_PROCESSED_EVENT_CURSOR)?
+                .execute(params![
+                    cursor.block_number,
+                    cursor.transaction_index,
+                    cursor.log_index
+                ])
+                .map(|_| ())
+                .map_err(DatabaseError::from),
+            ProgressUpdate::Block(block_number) => tx
+                .prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
+                .execute(params![block_number])
+                .map(|_| ())
+                .map_err(DatabaseError::from),
+        }
+    }
+
+    fn apply_progress_to_state(&self, progress: ProgressUpdate, state: &mut NetworkState) {
+        match progress {
+            ProgressUpdate::None => {}
+            ProgressUpdate::Event(cursor) => {
+                state.single_state.last_processed_event = Some(cursor);
+            }
+            ProgressUpdate::Block(block_number) => {
+                state.single_state.last_processed_block = block_number;
+                state.single_state.last_processed_event = None;
+            }
+        }
     }
 }
 

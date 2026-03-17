@@ -4,7 +4,7 @@ mod state_database_tests {
     use types::Address;
 
     use crate::{
-        NetworkDatabase,
+        NetworkDatabase, ProcessedEventCursor,
         multi_index::UniqueIndex,
         test_utils::{FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, generators},
     };
@@ -156,6 +156,49 @@ mod state_database_tests {
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
         assert_eq!(fixture.data.db.state().get_last_processed_block(), 10);
+    }
+
+    #[test]
+    fn test_processed_event_cursor_after_restart() {
+        let mut fixture = FileTestFixture::new();
+        let cursor = ProcessedEventCursor {
+            block_number: 10,
+            transaction_index: 2,
+            log_index: 7,
+        };
+
+        fixture
+            .data
+            .db
+            .mark_event_processed(cursor)
+            .expect("Failed to store processed event cursor");
+
+        assert_eq!(
+            fixture.data.db.state().get_last_processed_event(),
+            Some(cursor)
+        );
+        assert_eq!(fixture.data.db.state().next_block_to_fetch(0), 10);
+
+        let path = fixture.path.clone();
+        let pubkey = fixture.pubkey.clone();
+
+        drop(fixture.data.db);
+
+        fixture.data.db =
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
+        assert_eq!(
+            fixture.data.db.state().get_last_processed_event(),
+            Some(cursor)
+        );
+        assert_eq!(fixture.data.db.state().next_block_to_fetch(0), 10);
+
+        fixture
+            .data
+            .db
+            .advance_processed_block(10)
+            .expect("Failed to advance processed block");
+        assert_eq!(fixture.data.db.state().get_last_processed_event(), None);
+        assert_eq!(fixture.data.db.state().next_block_to_fetch(0), 11);
     }
 
     #[test]

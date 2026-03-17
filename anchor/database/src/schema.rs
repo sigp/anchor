@@ -28,6 +28,14 @@ const MIGRATION_V2_TO_V3: &str = r#"
     UPDATE metadata SET schema_version = 3;
 "#;
 
+/// Migration from schema version 3 to 4: Track the exact processed log position inside a block.
+const MIGRATION_V3_TO_V4: &str = r#"
+    ALTER TABLE metadata ADD COLUMN cursor_block_number INTEGER;
+    ALTER TABLE metadata ADD COLUMN cursor_transaction_index INTEGER;
+    ALTER TABLE metadata ADD COLUMN cursor_log_index INTEGER;
+    UPDATE metadata SET schema_version = 4;
+"#;
+
 enum UpgradeAction {
     UpToDate,
     DoUpdate {
@@ -183,7 +191,11 @@ fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
             script: MIGRATION_V2_TO_V3,
             new_version: 3,
         },
-        Some(3) => UpgradeAction::UpToDate,
-        Some(4..) => UpgradeAction::Future,
+        Some(3) => UpgradeAction::DoUpdate {
+            script: MIGRATION_V3_TO_V4,
+            new_version: 4,
+        },
+        Some(4) => UpgradeAction::UpToDate,
+        Some(5..) => UpgradeAction::Future,
     }
 }

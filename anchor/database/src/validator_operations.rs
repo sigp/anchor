@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
 use rusqlite::{Transaction, params};
@@ -7,11 +7,56 @@ use tracing::debug;
 use types::{Address, Graffiti};
 
 use crate::{
-    DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
+    DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex,
+    parse_optional_text_column, sql_operations,
 };
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
+    pub(crate) fn update_fee_recipient_tx(
+        &self,
+        owner: Address,
+        fee_recipient: Address,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT)?
+            .execute(params![
+                owner.to_string(),         // Owner of the cluster
+                fee_recipient.to_string()  // New fee recipient address for entire cluster
+            ])?;
+
+        Ok(())
+    }
+
+    pub(crate) fn apply_update_fee_recipient_state(
+        &self,
+        state: &mut crate::NetworkState,
+        owner: Address,
+        fee_recipient: Address,
+    ) {
+        state
+            .single_state
+            .fee_recipients
+            .insert(owner, fee_recipient);
+        state.multi_state.clusters.modify_all_by(&owner, |cluster| {
+            cluster.fee_recipient = fee_recipient;
+        });
+    }
+
+    pub fn commit_fee_recipient_updated(
+        &self,
+        owner: Address,
+        fee_recipient: Address,
+        cursor: crate::ProcessedEventCursor,
+    ) -> Result<(), DatabaseError> {
+        self.commit_db_update(
+            super::ProgressUpdate::Event(cursor),
+            true,
+            |tx| self.update_fee_recipient_tx(owner, fee_recipient, tx),
+            |state| self.apply_update_fee_recipient_state(state, owner, fee_recipient),
+        )
+    }
+
     /// Update the fee recipient address for all validators in a cluster
     pub fn update_fee_recipient(
         &self,
@@ -19,17 +64,10 @@ impl NetworkDatabase {
         fee_recipient: Address,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        // Update the database
-        tx.prepare_cached(sql_operations::INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT)?
-            .execute(params![
-                owner.to_string(),         // Owner of the cluster
-                fee_recipient.to_string()  // New fee recipient address for entire cluster
-            ])?;
+        self.update_fee_recipient_tx(owner, fee_recipient, tx)?;
 
         self.modify_state(|state| {
-            state.multi_state.clusters.modify_all_by(&owner, |cluster| {
-                cluster.fee_recipient = fee_recipient;
-            });
+            self.apply_update_fee_recipient_state(state, owner, fee_recipient);
         });
         Ok(())
     }
@@ -44,20 +82,7 @@ impl NetworkDatabase {
         let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
-            let address_str: Option<String> = row.get(0)?;
-            // If the address is None, return None
-            if let Some(address_str) = address_str {
-                let address = Address::from_str(&address_str).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?;
-                Ok(Some(address))
-            } else {
-                Ok(None)
-            }
+            parse_optional_text_column(row, 0)
         });
 
         match result {
@@ -98,31 +123,43 @@ impl NetworkDatabase {
         &self,
         map: HashMap<PublicKeyBytes, ValidatorIndex>,
     ) -> Result<(), DatabaseError> {
-        // Update the database
-        let mut conn = self.connection()?;
-        let transaction = conn.transaction()?;
-        for (public_key, index) in map.iter() {
-            transaction
-                .prepare_cached(sql_operations::SET_INDEX)?
+        let tx_map = map.clone();
+        self.commit_db_update(
+            super::ProgressUpdate::None,
+            true,
+            |tx| self.set_validator_indices_tx(&tx_map, tx),
+            |state| self.apply_set_validator_indices_state(state, map),
+        )
+    }
+
+    pub(crate) fn set_validator_indices_tx(
+        &self,
+        map: &HashMap<PublicKeyBytes, ValidatorIndex>,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        for (public_key, index) in map {
+            tx.prepare_cached(sql_operations::SET_INDEX)?
                 .execute(params![
                     index,                  // New index
                     public_key.to_string()  // The public key of the validator
                 ])?;
         }
-        transaction.commit()?;
 
-        self.modify_state(|state| {
-            for (public_key, index) in map {
-                if let Some(validator) =
-                    state.multi_state.validator_metadata.get_mut_by(&public_key)
-                {
-                    // Update in memory
-                    validator.index = Some(index);
-                } else {
-                    debug!(?public_key, "Tried to update index of unknown validator");
-                }
-            }
-        });
         Ok(())
+    }
+
+    pub(crate) fn apply_set_validator_indices_state(
+        &self,
+        state: &mut crate::NetworkState,
+        map: HashMap<PublicKeyBytes, ValidatorIndex>,
+    ) {
+        for (public_key, index) in map {
+            if let Some(validator) = state.multi_state.validator_metadata.get_mut_by(&public_key) {
+                // Update in memory
+                validator.index = Some(index);
+            } else {
+                debug!(?public_key, "Tried to update index of unknown validator");
+            }
+        }
     }
 }

@@ -1,8 +1,8 @@
--- SCHEMA VERSION 3
+-- SCHEMA VERSION 4
 
 -- we should avoid removing columns from this to keep compatibility between anchor Versions
 CREATE TABLE metadata (
-    schema_version INTEGER NOT NULL DEFAULT 3,
+    schema_version INTEGER NOT NULL DEFAULT 4,
     -- DEPRECATED: domain_type is no longer used for network isolation as of schema v3.
     -- Previously, we used domain_type (a 4-byte value derived from the fork) to prevent
     -- cross-network database usage. However, domain_type changes at each fork activation,
@@ -13,6 +13,9 @@ CREATE TABLE metadata (
     domain_type INTEGER NOT NULL DEFAULT 0,
     network_name TEXT NOT NULL,  -- Network name for network isolation (e.g., "mainnet", "hoodi")
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+    cursor_block_number INTEGER CHECK (cursor_block_number >= 0),
+    cursor_transaction_index INTEGER CHECK (cursor_transaction_index >= 0),
+    cursor_log_index INTEGER CHECK (cursor_log_index >= 0),
     max_operator_id_seen INTEGER DEFAULT 0
 );
 CREATE TRIGGER unique_metadata
