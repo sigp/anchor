@@ -169,7 +169,7 @@ pub fn validate_operators(
         .iter()
         .any(|id| !network_state.operator_exists(id))
     {
-        return Err(ExecutionError::Database(
+        return Err(ExecutionError::InvalidEvent(
             "One or more operators do not exist".to_string(),
         ));
     }

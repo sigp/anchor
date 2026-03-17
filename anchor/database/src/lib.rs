@@ -57,10 +57,7 @@ type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
 
 /// Parse a text column into a domain type while preserving the originating SQLite column index in
 /// any conversion error.
-pub(crate) fn parse_text_column<T>(
-    row: &rusqlite::Row<'_>,
-    column: usize,
-) -> rusqlite::Result<T>
+pub(crate) fn parse_text_column<T>(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<T>
 where
     T: FromStr,
     T::Err: Error + Send + Sync + 'static,
@@ -252,14 +249,27 @@ impl NetworkDatabase {
         self.state.borrow()
     }
 
+    /// Execute a short read against the latest committed state without letting the underlying
+    /// `watch::Ref` escape into caller logic that may later publish another update.
+    pub fn with_state<R>(&self, f: impl FnOnce(&NetworkState) -> R) -> R {
+        let state = self.state.borrow();
+        f(&state)
+    }
+
+    /// Subscribe to the committed in-memory view that is published after database commits.
     pub fn watch(&self) -> Receiver<NetworkState> {
         self.state.subscribe()
     }
 
+    /// Persist only the exact last processed event cursor.
+    ///
+    /// This is used when an event succeeded, or was intentionally skipped, but the enclosing
+    /// block/range has not yet been fully completed.
     pub fn mark_event_processed(&self, cursor: ProcessedEventCursor) -> Result<(), DatabaseError> {
         self.commit_db_update(ProgressUpdate::Event(cursor), false, |_| Ok(()), |_| {})
     }
 
+    /// Collapse progress back to a fully processed block once the entire fetched range succeeded.
     pub fn advance_processed_block(&self, block_number: u64) -> Result<(), DatabaseError> {
         self.commit_db_update(
             ProgressUpdate::Block(block_number),
@@ -344,7 +354,8 @@ impl NetworkDatabase {
         });
     }
 
-    /// Atomically commit a database write and then update in-memory state.
+    /// Atomically apply a durable database change, persist the matching progress cursor, and only
+    /// then publish the corresponding in-memory state update.
     ///
     /// If `notify` is `true`, `watch` subscribers are notified of the state change.
     /// Use `false` for internal bookkeeping (nonce bumps, cursor-only advances) that

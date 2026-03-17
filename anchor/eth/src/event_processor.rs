@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use alloy::{
+    primitives::{Address, B256},
+    rpc::types::Log,
+    sol_types::SolEvent,
+};
 use bls::PublicKeyBytes;
-use database::{NetworkDatabase, SlashingProtection, UniqueIndex};
-use indexmap::IndexSet;
-use rusqlite::Transaction;
-use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
+use database::{NetworkDatabase, ProcessedEventCursor, SlashingProtection, UniqueIndex};
+use ssv_types::{ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -49,6 +51,53 @@ pub struct EventProcessor {
     mode: Mode,
 }
 
+enum EventActionError {
+    Skippable(ExecutionError),
+    SkippableCommitted(ExecutionError),
+    Fatal(ExecutionError),
+}
+
+enum EventProcessOutcome {
+    CursorCommitted,
+    NeedsCursorAdvance,
+}
+
+// Only validator add/remove events feed the high-level processing counters we log at the end of a
+// batch. Everything else still mutates state, but does not affect these summary metrics.
+#[derive(Default)]
+struct ProcessingStats {
+    validators_added: usize,
+    validators_removed: usize,
+}
+
+impl ProcessingStats {
+    fn from_counted_event(event: CountedEvent) -> Self {
+        match event {
+            CountedEvent::ValidatorAdded => Self {
+                validators_added: 1,
+                validators_removed: 0,
+            },
+            CountedEvent::ValidatorRemoved => Self {
+                validators_added: 0,
+                validators_removed: 1,
+            },
+            CountedEvent::Other => Self::default(),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.validators_added += other.validators_added;
+        self.validators_removed += other.validators_removed;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CountedEvent {
+    Other,
+    ValidatorAdded,
+    ValidatorRemoved,
+}
+
 impl EventProcessor {
     /// Construct a new EventProcessor
     pub fn new(db: Arc<NetworkDatabase>, mode: Mode) -> Self {
@@ -65,126 +114,252 @@ impl EventProcessor {
     ) -> Result<(), ExecutionError> {
         debug!(logs_count = logs.len(), "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
-
-        // Counters for summary logging
-        let mut validators_added = 0;
-        let mut validators_removed = 0;
-
-        // Open a transaction for the log batch.
-        let mut conn = self
-            .db
-            .connection()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
-
-        for (index, log) in logs.iter().enumerate() {
-            trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
-
-            // Extract the topic0 to identify the event type
-            let topic0 = match log.topic0() {
-                Some(topic) => topic,
-                None => {
-                    warn!("Log missing topic0, skipping");
-                    continue;
-                }
-            };
-
-            // Process log based on signature hash
-            let result = match *topic0 {
-                SSVContract::OperatorAdded::SIGNATURE_HASH => self.process_operator_added(log, &tx),
-
-                SSVContract::OperatorRemoved::SIGNATURE_HASH => {
-                    self.process_operator_removed(log, &tx)
-                }
-
-                SSVContract::ValidatorAdded::SIGNATURE_HASH => self
-                    .process_validator_added(log, &tx)
-                    .inspect(|_| validators_added += 1),
-
-                SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
-                    .process_validator_removed(log, &tx)
-                    .inspect(|_| validators_removed += 1),
-
-                SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
-                    self.process_cluster_liquidated(log, &tx)
-                }
-
-                SSVContract::ClusterReactivated::SIGNATURE_HASH => {
-                    self.process_cluster_reactivated(log, &tx)
-                }
-
-                SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
-                    self.process_fee_recipient_updated(log, &tx)
-                }
-
-                SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                    self.process_validator_exited(log, live)
-                }
-                _ => {
-                    debug!(?topic0, "Unknown event signature, skipping");
-                    continue;
-                }
-            };
-
-            // Handle any errors from the event processing
-            if let Err(e) = result {
-                let tx_hash = log
-                    .transaction_hash
-                    .map(|hash| hash.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                if live {
-                    warn!(tx_hash, "Malformed event: {e}");
-                } else {
-                    trace!(tx_hash, "Malformed event: {e}");
-                }
-                continue;
-            }
-        }
+        let logs = self.skip_processed_logs(logs);
+        let result = self.process_logs_inner(&logs, live, end_block);
 
         metrics::stop_timer(timer);
-        self.db
-            .processed_block(end_block, &tx)
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
-        // Commit everything!
-        tx.commit()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        let stats = result?;
 
-        // Log summaries for validator operations
-        if validators_added > 0 {
-            debug!(count = validators_added, "Added validators");
-        }
-        if validators_removed > 0 {
-            debug!(count = validators_removed, "Removed validators");
-        }
+        Self::log_processed_counts(&stats);
 
         debug!(logs_count = logs.len(), "Completed processing logs");
         Ok(())
+    }
+
+    // Process the fetched range sequentially. If every log succeeds or is intentionally skipped,
+    // we can collapse any partial in-block cursor back to a fully processed block at the end.
+    fn process_logs_inner(
+        &self,
+        logs: &[Log],
+        live: bool,
+        end_block: u64,
+    ) -> Result<ProcessingStats, ExecutionError> {
+        let mut stats = ProcessingStats::default();
+
+        for (index, log) in logs.iter().enumerate() {
+            stats.merge(self.process_single_log(log, live, index)?);
+        }
+
+        self.advance_processed_block_if_needed(end_block)?;
+
+        Ok(stats)
+    }
+
+    // Process exactly one log: derive its durable cursor, route it to the right handler, and
+    // return only its contribution to the summary metrics above.
+    fn process_single_log(
+        &self,
+        log: &Log,
+        live: bool,
+        log_index: usize,
+    ) -> Result<ProcessingStats, ExecutionError> {
+        trace!(log_index, topic = ?log.topic0(), "Processing individual log");
+
+        let cursor = Self::cursor_for_log(log)?;
+        let Some(topic0) = log.topic0().copied() else {
+            self.mark_event_processed(cursor)?;
+            warn!("Log missing topic0, skipping");
+            return Ok(ProcessingStats::default());
+        };
+
+        let Some((event, result)) = self.dispatch_log(topic0, log, live, cursor) else {
+            self.mark_event_processed(cursor)?;
+            debug!(?topic0, "Unknown event signature, skipping");
+            return Ok(ProcessingStats::default());
+        };
+
+        self.finish_processed_log(log, live, cursor, event, result)
+    }
+
+    // Decode topic-level dispatch only; durability and cursor advancement are handled afterwards.
+    fn dispatch_log(
+        &self,
+        topic0: B256,
+        log: &Log,
+        live: bool,
+        cursor: ProcessedEventCursor,
+    ) -> Option<(CountedEvent, Result<EventProcessOutcome, EventActionError>)> {
+        Some(match topic0 {
+            SSVContract::OperatorAdded::SIGNATURE_HASH => (
+                CountedEvent::Other,
+                self.process_operator_added(log, cursor),
+            ),
+            SSVContract::OperatorRemoved::SIGNATURE_HASH => (
+                CountedEvent::Other,
+                self.process_operator_removed(log, cursor),
+            ),
+            SSVContract::ValidatorAdded::SIGNATURE_HASH => (
+                CountedEvent::ValidatorAdded,
+                self.process_validator_added(log, cursor),
+            ),
+            SSVContract::ValidatorRemoved::SIGNATURE_HASH => (
+                CountedEvent::ValidatorRemoved,
+                self.process_validator_removed(log, cursor),
+            ),
+            SSVContract::ClusterLiquidated::SIGNATURE_HASH => (
+                CountedEvent::Other,
+                self.process_cluster_liquidated(log, cursor),
+            ),
+            SSVContract::ClusterReactivated::SIGNATURE_HASH => (
+                CountedEvent::Other,
+                self.process_cluster_reactivated(log, cursor),
+            ),
+            SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => (
+                CountedEvent::Other,
+                self.process_fee_recipient_updated(log, cursor),
+            ),
+            SSVContract::ValidatorExited::SIGNATURE_HASH => (
+                CountedEvent::Other,
+                self.process_validator_exited(log, live),
+            ),
+            _ => return None,
+        })
+    }
+
+    // Some handlers commit the cursor themselves as part of a durable DB write, while others only
+    // describe side effects and need the caller to advance the cursor afterwards.
+    fn finish_processed_log(
+        &self,
+        log: &Log,
+        live: bool,
+        cursor: ProcessedEventCursor,
+        event: CountedEvent,
+        result: Result<EventProcessOutcome, EventActionError>,
+    ) -> Result<ProcessingStats, ExecutionError> {
+        match result {
+            Ok(EventProcessOutcome::CursorCommitted) => {
+                Ok(ProcessingStats::from_counted_event(event))
+            }
+            Ok(EventProcessOutcome::NeedsCursorAdvance) => {
+                self.mark_event_processed(cursor)?;
+                Ok(ProcessingStats::from_counted_event(event))
+            }
+            Err(EventActionError::Skippable(err)) => {
+                self.mark_event_processed(cursor)?;
+                Self::log_skipped_event(log, live, &err);
+                Ok(ProcessingStats::default())
+            }
+            Err(EventActionError::SkippableCommitted(err)) => {
+                Self::log_skipped_event(log, live, &err);
+                Ok(ProcessingStats::default())
+            }
+            Err(EventActionError::Fatal(err)) => Err(err),
+        }
+    }
+
+    fn mark_event_processed(&self, cursor: ProcessedEventCursor) -> Result<(), ExecutionError> {
+        self.db
+            .mark_event_processed(cursor)
+            .map_err(|e| ExecutionError::Database(e.to_string()))
+    }
+
+    // Collapse a partial in-block cursor back to a fully processed block once the whole range
+    // completed successfully.
+    fn advance_processed_block_if_needed(&self, end_block: u64) -> Result<(), ExecutionError> {
+        let state = self.db.state();
+        let needs_advance = state.get_last_processed_block() != end_block
+            || state.get_last_processed_event().is_some();
+        drop(state);
+
+        if needs_advance {
+            self.db
+                .advance_processed_block(end_block)
+                .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    fn log_processed_counts(stats: &ProcessingStats) {
+        if stats.validators_added > 0 {
+            debug!(count = stats.validators_added, "Added validators");
+        }
+        if stats.validators_removed > 0 {
+            debug!(count = stats.validators_removed, "Removed validators");
+        }
+    }
+
+    fn skip_processed_logs(&self, logs: Vec<Log>) -> Vec<Log> {
+        let Some(cursor) = self.db.state().get_last_processed_event() else {
+            return logs;
+        };
+
+        logs.into_iter()
+            .filter(|log| !Self::log_at_or_before_cursor(log, cursor))
+            .collect()
+    }
+
+    fn log_at_or_before_cursor(log: &Log, cursor: ProcessedEventCursor) -> bool {
+        let Some(block_number) = log.block_number else {
+            return false;
+        };
+        let Some(transaction_index) = log.transaction_index else {
+            return false;
+        };
+        let Some(log_index) = log.log_index else {
+            return false;
+        };
+
+        if block_number != cursor.block_number {
+            return block_number < cursor.block_number;
+        }
+
+        (transaction_index, log_index) <= (cursor.transaction_index, cursor.log_index)
+    }
+
+    fn cursor_for_log(log: &Log) -> Result<ProcessedEventCursor, ExecutionError> {
+        let block_number = log
+            .block_number
+            .ok_or_else(|| ExecutionError::InvalidEvent("Log missing block_number".to_string()))?;
+        let transaction_index = log.transaction_index.ok_or_else(|| {
+            ExecutionError::InvalidEvent("Log missing transaction_index".to_string())
+        })?;
+        let log_index = log
+            .log_index
+            .ok_or_else(|| ExecutionError::InvalidEvent("Log missing log_index".to_string()))?;
+
+        Ok(ProcessedEventCursor {
+            block_number,
+            transaction_index,
+            log_index,
+        })
+    }
+
+    fn log_skipped_event(log: &Log, live: bool, error: &ExecutionError) {
+        let tx_hash = log
+            .transaction_hash
+            .map(|hash| hash.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        if live {
+            warn!(tx_hash, "Malformed event: {error}");
+        } else {
+            trace!(tx_hash, "Malformed event: {error}");
+        }
     }
 
     // A new Operator has been registered in the network.
     fn process_operator_added(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         // Destructure operator added event
         let SSVContract::OperatorAdded {
             operatorId, // The ID of the newly registered operator
             owner,      // The EOA owner address
             publicKey,  // The RSA public key
             ..
-        } = SSVContract::OperatorAdded::decode_from_log(log)?;
+        } = SSVContract::OperatorAdded::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
         let operator_id = OperatorId(operatorId);
 
         trace!(operator_id = ?operator_id, owner = ?owner, "Processing operator added");
 
         // Confirm that this operator does not already exist
         if self.db.state().operator_exists(&operator_id) {
-            return Err(ExecutionError::Duplicate(format!(
-                "Operator with id {operator_id:?} already exists in database"
+            return Err(EventActionError::Skippable(ExecutionError::Duplicate(
+                format!("Operator with id {operator_id:?} already exists in database"),
             )));
         }
 
@@ -194,15 +369,13 @@ impl EventProcessor {
         if let Some(max_seen) = max_seen
             && max_seen != operatorId - 1
         {
-            return Err(ExecutionError::InvalidEvent(format!(
-                "Missing OperatorAdded events: database has only seen up to id {max_seen}, \
+            return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
+                format!(
+                    "Missing OperatorAdded events: database has only seen up to id {max_seen}, \
                 but got operator {operator_id}."
+                ),
             )));
         }
-
-        self.db
-            .set_max_operator_id_seen(operatorId, tx)
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
         let data = publicKey.as_ref();
 
@@ -226,16 +399,22 @@ impl EventProcessor {
                 error = %e,
                 "Failed to construct operator"
             );
-            ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
+            EventActionError::Skippable(ExecutionError::InvalidEvent(format!(
+                "Failed to construct operator: {e}"
+            )))
         })?;
-        self.db.insert_operator(&operator, tx).map_err(|e| {
-            debug!(
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to insert operator into database"
-            );
-            ExecutionError::Database(format!("Failed to insert operator into database: {e}"))
-        })?;
+        self.db
+            .commit_operator_added(&operator, operatorId, cursor)
+            .map_err(|e| {
+                debug!(
+                    operator_id = ?operator_id,
+                    error = %e,
+                    "Failed to insert operator into database"
+                );
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to insert operator into database: {e}"
+                )))
+            })?;
 
         debug!(
             operator_id = ?operator_id,
@@ -243,34 +422,39 @@ impl EventProcessor {
             "Successfully registered operator"
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_added"]);
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     // An Operator has been removed from the network
     fn process_operator_removed(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         // Extract the ID of the Operator
         let SSVContract::OperatorRemoved { operatorId } =
-            SSVContract::OperatorRemoved::decode_from_log(log)?;
+            SSVContract::OperatorRemoved::decode_from_log(log)
+                .map_err(EventActionError::Skippable)?;
         let operator_id = OperatorId(operatorId);
         trace!(operator_id = ?operator_id, "Processing operator removed");
 
         // Delete the operator from database and in memory
-        self.db.delete_operator(operator_id, tx).map_err(|e| {
-            debug!(
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to remove operator"
-            );
-            ExecutionError::Database(format!("Failed to remove operator: {e}"))
-        })?;
+        self.db
+            .commit_operator_removed(operator_id, cursor)
+            .map_err(|e| {
+                debug!(
+                    operator_id = ?operator_id,
+                    error = %e,
+                    "Failed to remove operator"
+                );
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to remove operator: {e}"
+                )))
+            })?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     // A new validator has entered the network. This means that a either a new cluster has formed
@@ -280,8 +464,8 @@ impl EventProcessor {
     fn process_validator_added(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         // Parse and destructure log
         let SSVContract::ValidatorAdded {
             owner,
@@ -289,15 +473,20 @@ impl EventProcessor {
             publicKey,
             shares,
             ..
-        } = SSVContract::ValidatorAdded::decode_from_log(log)?;
+        } = SSVContract::ValidatorAdded::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
         trace!(owner = ?owner, operator_count = operatorIds.len(), "Processing validator addition");
 
-        // Get the expected nonce and then increment it. This will happen regardless of if the
-        // event is malformed or not
-        let nonce = self.db.bump_and_get_nonce(&owner, tx).map_err(|e| {
-            debug!(owner = ?owner, "Failed to bump nonce");
-            ExecutionError::Database(format!("Failed to bump nonce: {e}"))
-        })?;
+        let nonce = self.db.state().get_next_nonce(&owner);
+
+        let skip_with_nonce = |err| {
+            self.db.commit_owner_nonce(owner, cursor).map_err(|e| {
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to bump nonce: {e}"
+                )))
+            })?;
+            Err(EventActionError::SkippableCommitted(err))
+        };
 
         // During keysplitting, we only care about the nonce
         let Mode::Node {
@@ -306,70 +495,80 @@ impl EventProcessor {
             ..
         } = &self.mode
         else {
-            return Ok(());
+            self.db.commit_owner_nonce(owner, cursor).map_err(|e| {
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to bump nonce: {e}"
+                )))
+            })?;
+            return Ok(EventProcessOutcome::CursorCommitted);
         };
 
         // Process data into a usable form
-        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
+        let validator_pubkey = match parse_validator_pubkey(&publicKey) {
+            Ok(value) => value,
+            Err(err) => return skip_with_nonce(err),
+        };
         let cluster_id = compute_cluster_id(owner, &operatorIds);
         let operator_ids: Vec<_> = operatorIds.into_iter().map(OperatorId).collect();
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
-        validate_operators(&operator_ids, &cluster_id, &self.db.state())?;
+        if let Err(err) = validate_operators(&operator_ids, &cluster_id, &self.db.state()) {
+            return skip_with_nonce(err);
+        }
 
         // Parse the share byte stream into a list of valid Shares and then verify the signature
         trace!(cluster_id = ?cluster_id, "Parsing and verifying shares");
         let (signature, shares) =
-            parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey).map_err(|e| {
-                debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
-                ExecutionError::InvalidEvent(format!("Failed to parse shares. {e}"))
-            })?;
+            match parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
+                    return skip_with_nonce(ExecutionError::InvalidEvent(format!(
+                        "Failed to parse shares. {e}"
+                    )));
+                }
+            };
 
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
             debug!(cluster_id = ?cluster_id, "Signature verification failed");
-            return Err(ExecutionError::InvalidEvent(
+            return skip_with_nonce(ExecutionError::InvalidEvent(
                 "Signature verification failed".to_string(),
             ));
         }
 
         // Fetch the validator metadata
-        let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
-            .map_err(|e| {
+        let validator_metadata = match construct_validator_metadata(&validator_pubkey, &cluster_id)
+        {
+            Ok(metadata) => metadata,
+            Err(e) => {
                 debug!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
-                ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
-            })?;
-
-        // Get the fee recipient if one has been stored, otherwise default to the owner address
-        let fee_recipient = match self.db.fee_recipient_for_owner(&owner, tx) {
-            Ok(Some(address)) => address,
-            _ => owner,
+                return skip_with_nonce(ExecutionError::InvalidEvent(format!(
+                    "Failed to fetch validator metadata: {e}"
+                )));
+            }
         };
 
-        // Finally, construct and insert the full cluster and insert into the database
-        let cluster = Cluster {
-            cluster_id,
-            owner,
-            fee_recipient,
-            liquidated: false,
-            cluster_members: IndexSet::from_iter(operator_ids),
-        };
+        // `fee_recipient` is not required to persist the validator. It lives in `owners` and is
+        // only needed when materializing the full cluster view after the write commits.
 
         // First, do the slashing protection database...
         slashing_protection
             .register_validator(validator_pubkey)
             .map_err(|e| {
-                ExecutionError::Database(format!(
+                EventActionError::Fatal(ExecutionError::Database(format!(
                     "Failed to insert validator into slashing db: {e}"
-                ))
+                )))
             })?;
 
         // ...then the main database.
         self.db
-            .insert_validator(cluster, &validator_metadata, shares, tx)
+            .commit_validator_added(cluster_id, owner, validator_metadata, shares, cursor)
             .map_err(|e| {
-                debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
-                ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
+                debug!(cluster_id = ?cluster_id, error = %e, "Failed to insert validator into cluster");
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to insert validator into cluster: {e}"
+                )))
             })?;
 
         // Schedule validator for index lookup
@@ -383,26 +582,28 @@ impl EventProcessor {
             "Successfully added validator"
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     // A validator has been removed from the network and its respective cluster
     fn process_validator_removed(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         // Parse and destructure log
         let SSVContract::ValidatorRemoved {
             owner,
             operatorIds,
             publicKey,
             ..
-        } = SSVContract::ValidatorRemoved::decode_from_log(log)?;
+        } = SSVContract::ValidatorRemoved::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
         trace!(owner = ?owner, public_key = ?publicKey, "Processing Validator Removed");
 
         // Parse the public key
-        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
+        let validator_pubkey =
+            parse_validator_pubkey(&publicKey).map_err(EventActionError::Skippable)?;
 
         // Compute the cluster id
         let cluster_id = compute_cluster_id(owner, &operatorIds);
@@ -416,9 +617,9 @@ impl EventProcessor {
                     cluster_id = ?cluster_id,
                     "Failed to fetch validator metadata from database"
                 );
-                return Err(ExecutionError::Database(
+                return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
                     "Failed to fetch validator metadata from database".to_string(),
-                ));
+                )));
             }
         };
 
@@ -430,9 +631,9 @@ impl EventProcessor {
                     cluster_id = ?cluster_id,
                     "Failed to fetch cluster from database"
                 );
-                return Err(ExecutionError::Database(
+                return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
                     "Failed to fetch cluster from database".to_string(),
-                ));
+                )));
             }
         };
 
@@ -444,9 +645,11 @@ impl EventProcessor {
                 actual_owner = ?owner,
                 "Owner mismatch for validator removal"
             );
-            return Err(ExecutionError::InvalidEvent(format!(
-                "Cluster already exists with a different owner address. Expected {}. Got {}",
-                cluster.owner, owner
+            return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
+                format!(
+                    "Cluster already exists with a different owner address. Expected {}. Got {}",
+                    cluster.owner, owner
+                ),
             )));
         }
 
@@ -458,15 +661,15 @@ impl EventProcessor {
                 actual_pubkey = %validator_pubkey,
                 "Validator pubkey mismatch"
             );
-            return Err(ExecutionError::InvalidEvent(
+            return Err(EventActionError::Skippable(ExecutionError::InvalidEvent(
                 "Validator does not match".to_string(),
-            ));
+            )));
         }
         drop(state);
 
         // Remove the validator and all corresponding cluster data
         self.db
-            .delete_validator(&validator_pubkey, tx)
+            .commit_validator_removed(validator_pubkey, cursor)
             .map_err(|e| {
                 debug!(
                     cluster_id = ?cluster_id,
@@ -474,7 +677,9 @@ impl EventProcessor {
                     error = %e,
                     "Failed to delete validator from database"
                 );
-                ExecutionError::Database(format!("Failed to validator cluster: {e}"))
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to validator cluster: {e}"
+                )))
             })?;
 
         trace!(
@@ -483,34 +688,39 @@ impl EventProcessor {
             "Successfully removed validator and cluster"
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_removed"]);
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     /// A cluster has ran out of operational funds. Set the cluster as liquidated
     fn process_cluster_liquidated(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         let SSVContract::ClusterLiquidated {
             owner,
             operatorIds: operator_ids,
             ..
-        } = SSVContract::ClusterLiquidated::decode_from_log(log)?;
+        } = SSVContract::ClusterLiquidated::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
 
         let cluster_id = compute_cluster_id(owner, &operator_ids);
 
         trace!(cluster_id = ?cluster_id, "Processing cluster liquidation");
 
         // Update the status of the cluster to be liquidated
-        self.db.update_status(cluster_id, true, tx).map_err(|e| {
-            debug!(
-                cluster_id = ?cluster_id,
-                error = %e,
-                "Failed to mark cluster as liquidated"
-            );
-            ExecutionError::Database(format!("Failed to mark cluster as liquidated: {e}"))
-        })?;
+        self.db
+            .commit_cluster_status(cluster_id, true, cursor)
+            .map_err(|e| {
+                debug!(
+                    cluster_id = ?cluster_id,
+                    error = %e,
+                    "Failed to mark cluster as liquidated"
+                );
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to mark cluster as liquidated: {e}"
+                )))
+            })?;
 
         debug!(
             cluster_id = ?cluster_id,
@@ -521,34 +731,39 @@ impl EventProcessor {
             &metrics::EXECUTION_EVENTS_PROCESSED,
             &["cluster_liquidated"],
         );
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     // A cluster that was previously liquidated has had more SSV deposited and is now active
     fn process_cluster_reactivated(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         let SSVContract::ClusterReactivated {
             owner,
             operatorIds: operator_ids,
             ..
-        } = SSVContract::ClusterReactivated::decode_from_log(log)?;
+        } = SSVContract::ClusterReactivated::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
 
         let cluster_id = compute_cluster_id(owner, &operator_ids);
 
         trace!(cluster_id = ?cluster_id, "Processing cluster reactivation");
 
         // Update the status of the cluster to be active
-        self.db.update_status(cluster_id, false, tx).map_err(|e| {
-            debug!(
-                cluster_id = ?cluster_id,
-                error = %e,
-                "Failed to mark cluster as active"
-            );
-            ExecutionError::Database(format!("Failed to mark cluster as active: {e}"))
-        })?;
+        self.db
+            .commit_cluster_status(cluster_id, false, cursor)
+            .map_err(|e| {
+                debug!(
+                    cluster_id = ?cluster_id,
+                    error = %e,
+                    "Failed to mark cluster as active"
+                );
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to mark cluster as active: {e}"
+                )))
+            })?;
 
         debug!(
             cluster_id = ?cluster_id,
@@ -560,29 +775,32 @@ impl EventProcessor {
             &["cluster_reactivated"],
         );
 
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     // The fee recipient address of a validator has been changed
     fn process_fee_recipient_updated(
         &self,
         log: &Log,
-        tx: &Transaction<'_>,
-    ) -> Result<(), ExecutionError> {
+        cursor: ProcessedEventCursor,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         let SSVContract::FeeRecipientAddressUpdated {
             owner,
             recipientAddress,
-        } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)?;
+        } = SSVContract::FeeRecipientAddressUpdated::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
         // update the fee recipient address in the database
         self.db
-            .update_fee_recipient(owner, recipientAddress, tx)
+            .commit_fee_recipient_updated(owner, recipientAddress, cursor)
             .map_err(|e| {
                 debug!(
                     owner = ?owner,
                     error = %e,
                     "Failed to update fee recipient"
                 );
-                ExecutionError::Database(format!("Failed to update fee recipient: {e}"))
+                EventActionError::Fatal(ExecutionError::Database(format!(
+                    "Failed to update fee recipient: {e}"
+                )))
             })?;
         debug!(
             owner = ?owner,
@@ -593,40 +811,50 @@ impl EventProcessor {
             &metrics::EXECUTION_EVENTS_PROCESSED,
             &["fee_recipient_updated"],
         );
-        Ok(())
+        Ok(EventProcessOutcome::CursorCommitted)
     }
 
     // A validator has exited the beacon chain
-    fn process_validator_exited(&self, log: &Log, live: bool) -> Result<(), ExecutionError> {
+    fn process_validator_exited(
+        &self,
+        log: &Log,
+        live: bool,
+    ) -> Result<EventProcessOutcome, EventActionError> {
         // In KeySplit mode, we don't need to process validator exits
         let Mode::Node { exit_tx, .. } = &self.mode else {
-            return Ok(());
+            return Ok(EventProcessOutcome::NeedsCursorAdvance);
         };
         let SSVContract::ValidatorExited {
             owner,
             operatorIds,
             publicKey,
-        } = SSVContract::ValidatorExited::decode_from_log(log)?;
+        } = SSVContract::ValidatorExited::decode_from_log(log)
+            .map_err(EventActionError::Skippable)?;
 
-        let validator_pubkey = parse_validator_pubkey(&publicKey)?;
+        let validator_pubkey =
+            parse_validator_pubkey(&publicKey).map_err(EventActionError::Skippable)?;
         let computed_cluster_id = compute_cluster_id(owner, &operatorIds);
 
-        self.verify_validator_owner(&owner, &validator_pubkey, &computed_cluster_id)?;
+        self.verify_validator_owner(&owner, &validator_pubkey, &computed_cluster_id)
+            .map_err(EventActionError::Skippable)?;
 
         let operator_ids: Vec<OperatorId> = operatorIds.iter().map(|id| OperatorId(*id)).collect();
 
         // Perform verification on the operator set and make sure they are all registered in the
         // network
-        validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())?;
+        validate_operators(&operator_ids, &computed_cluster_id, &self.db.state())
+            .map_err(EventActionError::Skippable)?;
 
-        let block_timestamp = log
-            .block_timestamp
-            .ok_or_else(|| ExecutionError::InvalidEvent("Block timestamp not set".to_string()))?;
+        let block_timestamp = log.block_timestamp.ok_or_else(|| {
+            EventActionError::Skippable(ExecutionError::InvalidEvent(
+                "Block timestamp not set".to_string(),
+            ))
+        })?;
 
         let validator_index = match self.get_validator_index(&validator_pubkey) {
             Ok(Some(value)) => value,
-            Ok(None) => return Ok(()),
-            Err(value) => return Err(value),
+            Ok(None) => return Ok(EventProcessOutcome::NeedsCursorAdvance),
+            Err(value) => return Err(EventActionError::Skippable(value)),
         };
 
         let is_our_validator = self.is_our_validator(&validator_pubkey);
@@ -640,7 +868,7 @@ impl EventProcessor {
             } else {
                 trace!(%validator_index, "Ignoring historic validator exit");
             }
-            return Ok(());
+            return Ok(EventProcessOutcome::NeedsCursorAdvance);
         }
 
         // Send to exit processor instead of handling in-place
@@ -666,13 +894,13 @@ impl EventProcessor {
                     ?err,
                     "Failed to send validator exit request to processor"
                 );
-                return Err(ExecutionError::Misc(
+                return Err(EventActionError::Fatal(ExecutionError::Misc(
                     "Failed to send validator exit request to processor".to_string(),
-                ));
+                )));
             }
         }
 
-        Ok(())
+        Ok(EventProcessOutcome::NeedsCursorAdvance)
     }
 
     fn is_our_validator(&self, validator_pubkey: &PublicKeyBytes) -> bool {
@@ -762,7 +990,7 @@ impl EventProcessor {
         }
 
         if cluster.liquidated {
-            return Err(ExecutionError::Misc(
+            return Err(ExecutionError::InvalidEvent(
                 "Cluster is liquidated, skipping exit processing".to_string(),
             ));
         }

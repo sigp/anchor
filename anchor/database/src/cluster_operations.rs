@@ -9,7 +9,8 @@ use super::{DatabaseError, NetworkDatabase, NonUniqueIndex, UniqueIndex, sql_ope
 impl NetworkDatabase {
     pub(crate) fn insert_validator_tx(
         &self,
-        cluster: &Cluster,
+        cluster_id: ClusterId,
+        owner: Address,
         validator: &ValidatorMetadata,
         shares: &[Share],
         tx: &Transaction<'_>,
@@ -18,13 +19,13 @@ impl NetworkDatabase {
         // metadata
         tx.prepare_cached(sql_operations::INSERT_CLUSTER)?
             .execute(params![
-                *cluster.cluster_id,       // cluster id
-                cluster.owner.to_string(), // owner
+                *cluster_id,       // cluster id
+                owner.to_string(), // owner
             ])?;
         tx.prepare_cached(sql_operations::INSERT_VALIDATOR)?
             .execute(params![
                 validator.public_key.to_string(), // validator public key
-                *cluster.cluster_id,              // cluster id
+                *cluster_id,                      // cluster id
                 validator.index,                  // validator index
                 validator.graffiti.0.as_slice(),  // graffiti
             ])?;
@@ -32,7 +33,7 @@ impl NetworkDatabase {
         // Insert a fee recipient address if one does not already exist
         tx.execute(
             "INSERT OR IGNORE INTO owners (owner, fee_recipient) VALUES (?, ?)",
-            params![cluster.owner.to_string(), cluster.owner.to_string()],
+            params![owner.to_string(), owner.to_string()],
         )?;
 
         for share in shares {
@@ -85,20 +86,33 @@ impl NetworkDatabase {
 
     pub fn commit_validator_added(
         &self,
-        cluster: Cluster,
+        cluster_id: ClusterId,
+        owner: Address,
         validator: ValidatorMetadata,
         shares: Vec<Share>,
         cursor: crate::ProcessedEventCursor,
     ) -> Result<(), DatabaseError> {
-        let owner = cluster.owner;
         self.commit_db_update(
             super::ProgressUpdate::Event(cursor),
             true,
             |tx| {
                 self.bump_nonce_tx(&owner, tx)?;
-                self.insert_validator_tx(&cluster, &validator, &shares, tx)
+                self.insert_validator_tx(cluster_id, owner, &validator, &shares, tx)
             },
             |state| {
+                // `fee_recipient` is read-model data from `owners`, not part of the validator
+                // insert itself. Reconstruct the full cluster view after commit instead of
+                // forcing `EventProcessor` to read it before the write.
+                let cluster = Cluster {
+                    cluster_id,
+                    owner,
+                    fee_recipient: state.fee_recipient_for_owner(&owner).unwrap_or(owner),
+                    liquidated: false,
+                    cluster_members: shares
+                        .iter()
+                        .map(|share| OperatorId(*share.operator_id))
+                        .collect(),
+                };
                 self.apply_bump_nonce_state(state, &owner);
                 self.apply_insert_validator_state(state, &cluster, &validator, &shares);
             },
@@ -129,7 +143,7 @@ impl NetworkDatabase {
         shares: Vec<Share>,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        self.insert_validator_tx(&cluster, validator, &shares, tx)?;
+        self.insert_validator_tx(cluster.cluster_id, cluster.owner, validator, &shares, tx)?;
         self.modify_state(|state| {
             self.apply_insert_validator_state(state, &cluster, validator, &shares);
         });

@@ -349,9 +349,11 @@ impl SsvEventSyncer {
         deployment_block: u64,
         events: &[&str],
     ) -> Result<(), ExecutionError> {
-        // Start from the contract deployment block or the last block that has been processed
-        let last_processed_block = self.event_processor.db.state().get_last_processed_block();
-        let mut start_block = std::cmp::max(deployment_block, last_processed_block + 1);
+        let mut start_block = self
+            .event_processor
+            .db
+            .state()
+            .next_block_to_fetch(deployment_block);
 
         loop {
             match self.rpc_client.syncing().await {
@@ -385,12 +387,6 @@ impl SsvEventSyncer {
             let end_block = current_block - FOLLOW_DISTANCE;
             if end_block < start_block {
                 debug!("End block less than start block, breaking");
-                break;
-            }
-
-            // Make sure we have blocks to sync
-            if start_block == end_block && start_block - 1 != last_processed_block {
-                info!("Synced up to the tip of the chain, breaking");
                 break;
             }
 
@@ -702,12 +698,15 @@ impl SsvEventSyncer {
 
                 // If the relevant block was already processed, do not process it again. This can
                 // happen if `block_header.number` was seen before due to a reorg.
-                let last_processed_block =
-                    self.event_processor.db.state().get_last_processed_block();
-                if relevant_block <= last_processed_block {
+                let start_block = self
+                    .event_processor
+                    .db
+                    .state()
+                    .next_block_to_fetch(self.network.ssv_contract_block);
+                if relevant_block < start_block {
                     debug!(
                         block_number = block_header.number,
-                        relevant_block, "Already synced block - likely reorg"
+                        relevant_block, start_block, "Already synced block - likely reorg"
                     );
                     continue;
                 }
@@ -723,20 +722,19 @@ impl SsvEventSyncer {
                 );
 
                 let mut logs = self
-                    .fetch_logs(
-                        last_processed_block + 1,
-                        relevant_block,
-                        contract_address,
-                        SSV_EVENTS,
-                    )
+                    .fetch_logs(start_block, relevant_block, contract_address, SSV_EVENTS)
                     .await?;
 
                 self.set_block_timestamps(&mut logs).await?;
 
                 let log_count = logs.len();
 
-                self.event_processor
-                    .process_logs(logs, true, relevant_block)?;
+                let event_processor = self.event_processor.clone();
+                spawn_blocking(move || event_processor.process_logs(logs, true, relevant_block))
+                    .await
+                    .map_err(|e| {
+                        ExecutionError::SyncError(format!("Event Processor Panicked: {e}"))
+                    })??;
 
                 info!(
                     log_count,

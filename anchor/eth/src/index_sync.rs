@@ -10,6 +10,7 @@ use task_executor::TaskExecutor;
 use tokio::{
     select,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    task::spawn_blocking,
     time::sleep,
 };
 use tracing::{debug, error, info, trace, warn};
@@ -127,8 +128,11 @@ async fn validator_index_syncer(
                 .map(|v| (v.validator.pubkey, ValidatorIndex(v.index as usize)))
                 .collect::<HashMap<_, _>>();
             trace!(len = map.len(), "Got validators from BN");
-            if let Err(err) = db.set_validator_indices(map) {
-                error!(?err, "Failed to update validator indices");
+            let db = Arc::clone(&db);
+            match spawn_blocking(move || db.set_validator_indices(map)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => error!(?err, "Failed to update validator indices"),
+                Err(err) => error!(?err, "Validator index update task panicked"),
             }
         }
     }

@@ -1,6 +1,8 @@
 use std::{str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use database::{ProcessedEventCursor, test_utils::generators};
 use ssv_types::*;
 
 mod common;
@@ -138,6 +140,69 @@ async fn test_database_transaction_rollback_on_error() {
 
     // Verify the first operator was stored (malformed events are skipped, not rolled back)
     verify_operator_stored(&test.processor, OperatorId(operator_id));
+}
+
+#[tokio::test]
+async fn test_resume_skips_already_processed_logs_in_same_block() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+
+    let first_operator_id = 1u64;
+    let second_operator_id = 2u64;
+    let first_owner = Address::random();
+    let first_rsa_pubkey = generators::pubkey::random_rsa();
+    let first_public_key = Bytes::from(
+        BASE64_STANDARD
+            .encode(
+                first_rsa_pubkey
+                    .public_key_to_pem()
+                    .expect("Failed to encode RSA public key"),
+            )
+            .into_bytes(),
+    );
+
+    let first_log =
+        create_operator_added_log(first_operator_id, first_owner, first_public_key, 1000);
+    let mut second_log = create_operator_added_log(
+        second_operator_id,
+        Address::random(),
+        create_valid_rsa_public_key_bytes(),
+        1000,
+    );
+    second_log.log_index = Some(1);
+
+    let cursor = ProcessedEventCursor {
+        block_number: 12345,
+        transaction_index: 0,
+        log_index: 0,
+    };
+    test.processor
+        .db
+        .commit_operator_added(
+            &Operator {
+                id: OperatorId(first_operator_id),
+                owner: first_owner,
+                rsa_pubkey: first_rsa_pubkey,
+            },
+            first_operator_id,
+            cursor,
+        )
+        .expect("Failed to seed committed operator state");
+
+    assert_eq!(
+        test.processor.db.state().get_last_processed_event(),
+        Some(cursor)
+    );
+
+    test.processor
+        .process_logs(vec![first_log, second_log], true, 12345)
+        .expect("Processing resumed logs should succeed");
+
+    verify_operator_stored(&test.processor, OperatorId(first_operator_id));
+    verify_operator_stored(&test.processor, OperatorId(second_operator_id));
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12345);
+    assert_eq!(test.processor.db.state().get_last_processed_event(), None);
 }
 
 #[tokio::test]
