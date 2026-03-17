@@ -215,7 +215,7 @@ async fn test_stuck_committee_does_not_block_successful_consensus() {
     // Committee B blocks on VotingContext, so the stream never fully drains. We expect
     // exactly 1 item (committee A) before our timeout.
     let mut results: SignAttestationsResult = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(15), async {
+    let _ = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(item) = stream.next().await {
             results.push(item);
         }
@@ -237,7 +237,9 @@ async fn test_stuck_committee_does_not_block_successful_consensus() {
         results.len()
     );
 
-    let signed_attestations = results[0]
+    let signed_attestations = results
+        .first()
+        .expect("There should be Committee A's stream item present")
         .as_ref()
         .expect("Committee A's stream item should be Ok");
 
@@ -339,7 +341,12 @@ async fn test_committee_attestation_uses_committee_collection_mode() {
         results.len()
     );
 
-    let signed_attestations = results[0].as_ref().expect("stream item should be Ok");
+    let signed_attestations = results
+        .first()
+        .expect("There should be a stream item present")
+        .as_ref()
+        .expect("stream item should be Ok");
+
     assert_eq!(
         signed_attestations.len(),
         num_validators,
