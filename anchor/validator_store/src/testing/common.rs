@@ -429,6 +429,16 @@ impl ValidatorStoreTestHarness {
         committee_index: usize,
         validator_index_in_committee: usize,
     ) -> AttestationToSign<MainnetEthSpec> {
+        self.create_attestation_to_sign_at_slot(committee_index, validator_index_in_committee, TEST_SLOT)
+    }
+
+    /// Constructs an `AttestationToSign` at a specific slot.
+    pub fn create_attestation_to_sign_at_slot(
+        &self,
+        committee_index: usize,
+        validator_index_in_committee: usize,
+        slot: u64,
+    ) -> AttestationToSign<MainnetEthSpec> {
         let setup = &self.committee_setups[committee_index];
         let validator = &setup.validators[validator_index_in_committee];
         let validator_index = validator
@@ -443,7 +453,7 @@ impl ValidatorStoreTestHarness {
                 aggregation_bits: ssz_types::BitList::with_capacity(128)
                     .expect("bitlist capacity should be valid"),
                 data: AttestationData {
-                    slot: Slot::new(TEST_SLOT),
+                    slot: Slot::new(slot),
                     index: 0,
                     beacon_block_root: Hash256::zero(),
                     source: Checkpoint {

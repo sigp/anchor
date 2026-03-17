@@ -130,74 +130,94 @@ async fn test_sign_attestations_produces_one_stream_item_per_committee() {
     }
 }
 
-/// Test 2: All validators in the same committee produce exactly one stream item, not one per
-/// validator.
+/// Test 2: A stuck committee does not prevent another committee from producing its stream item.
 ///
-/// This verifies that `sign_attestations` groups by `CommitteeId`, not by validator. Three
-/// validators in the same committee should result in a single `sign_committee_attestations`
-/// call and therefore a single stream item.
+/// This verifies failure isolation in the `FuturesUnordered` fan-out. Committee B's attestations
+/// use a slot for which no `VotingContext` is seeded, so `get_voting_context` blocks
+/// indefinitely. Committee A's attestations use the seeded slot and proceed to QBFT timeout
+/// normally. The stream should yield committee A's result without waiting for committee B.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_single_committee_batches_all_validators_into_one_stream_item() {
+async fn test_stuck_committee_does_not_block_other_committees() {
     // Arrange
     let rsa_private_key = generate_rsa_keypair();
     let rsa_pubkey = rsa_public_from_private(&rsa_private_key);
     let our_operator_id = OperatorId(1);
 
-    let operator_ids: Vec<OperatorId> =
+    let operator_ids_a: Vec<OperatorId> =
         vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+    let operator_ids_b: Vec<OperatorId> =
+        vec![OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
 
-    let committee = create_committee_setup(
-        &operator_ids,
-        3, // 3 validators, all in the same committee
+    let committee_a = create_committee_setup(
+        &operator_ids_a,
+        2,
         our_operator_id,
         &rsa_pubkey,
         0,
     );
+    let committee_b = create_committee_setup(
+        &operator_ids_b,
+        1,
+        our_operator_id,
+        &rsa_pubkey,
+        100,
+    );
 
     let (executor, _signal) = create_test_executor();
 
-    let harness =
-        ValidatorStoreTestHarness::new(vec![committee], our_operator_id, rsa_private_key, executor);
+    let harness = ValidatorStoreTestHarness::new(
+        vec![committee_a, committee_b],
+        our_operator_id,
+        rsa_private_key,
+        executor,
+    );
 
+    // Only seed VotingContext for TEST_SLOT. Committee B's attestations will use a
+    // different slot, so its `get_voting_context` call will block forever.
     harness.seed_voting_context();
 
-    // Build 3 attestations, all from the same committee
+    // Committee A attestations use the seeded slot (TEST_SLOT).
+    // Committee B attestation uses a slot with no VotingContext, causing it to hang.
+    let unseeded_slot = TEST_SLOT + 999;
     let attestations = vec![
         harness.create_attestation_to_sign(0, 0),
         harness.create_attestation_to_sign(0, 1),
-        harness.create_attestation_to_sign(0, 2),
+        harness.create_attestation_to_sign_at_slot(1, 0, unseeded_slot),
     ];
 
     // Act
     let stream = harness.validator_store.sign_attestations(attestations);
     tokio::pin!(stream);
 
+    // Collect with a timeout. Committee A should complete quickly (QBFT timeout).
+    // Committee B blocks on VotingContext, so the stream never fully drains. We expect
+    // exactly 1 item (committee A) before our timeout.
     let mut results: SignAttestationsResult = Vec::new();
-    let collect_timeout = tokio::time::timeout(Duration::from_secs(60), async {
+    let _ = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(item) = stream.next().await {
             results.push(item);
         }
     })
     .await;
 
-    // Assert
-    if collect_timeout.is_err() {
-        panic!(
-            "Stream collection timed out after 60s. Got {} items before timeout.",
-            results.len()
-        );
-    }
+    // Assert: committee A produced its stream item despite committee B being stuck
+    assert!(
+        !results.is_empty(),
+        "Expected at least 1 stream item from committee A, but got none. \
+         Committee B's hang may have blocked the entire stream."
+    );
 
     assert_eq!(
         results.len(),
         1,
-        "3 validators in the same committee should produce exactly 1 stream item, got {}.",
+        "Expected exactly 1 stream item (committee A). Committee B should still be stuck. \
+         Got {} items.",
         results.len()
     );
 
     assert!(
         results[0].is_ok(),
-        "Stream item should be Ok, but got: {:?}",
+        "Committee A's stream item should be Ok, but got: {:?}",
         results[0]
     );
 }
