@@ -145,12 +145,11 @@ impl NetworkDatabase {
         &self,
         map: HashMap<PublicKeyBytes, ValidatorIndex>,
     ) -> Result<(), DatabaseError> {
-        let tx_map = map.clone();
         self.commit_db_update(
             super::ProgressUpdate::None,
             true,
-            |tx| self.set_validator_indices_tx(&tx_map, tx),
-            |state| self.apply_set_validator_indices_state(state, map),
+            |tx| self.set_validator_indices_tx(&map, tx),
+            |state| self.apply_set_validator_indices_state(state, &map),
         )
     }
 
@@ -175,12 +174,12 @@ impl NetworkDatabase {
     pub(crate) fn apply_set_validator_indices_state(
         &self,
         state: &mut crate::NetworkState,
-        map: HashMap<PublicKeyBytes, ValidatorIndex>,
+        map: &HashMap<PublicKeyBytes, ValidatorIndex>,
     ) {
         for (public_key, index) in map {
             if let Some(validator) = state.multi_state.validator_metadata.get_mut_by(&public_key) {
                 // Update in memory
-                validator.index = Some(index);
+                validator.index = Some(*index);
             } else {
                 // TODO: Distinguish "DB updated 0 rows because the validator was removed while
                 // index sync was in flight" from real DB/cache divergence.

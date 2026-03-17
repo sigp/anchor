@@ -46,7 +46,9 @@ impl NetworkDatabase {
         let encoded = BASE64_STANDARD.encode(&pem_key);
 
         // Insert into the database
-        match tx.prepare_cached(sql_operations::INSERT_OPERATOR)?.execute(params![
+        match tx
+            .prepare_cached(sql_operations::INSERT_OPERATOR)?
+            .execute(params![
                 operator.id,                // The id of the registered operator
                 encoded,                    // RSA public key
                 operator.owner.to_string()  // The owner address of the operator
@@ -106,17 +108,16 @@ impl NetworkDatabase {
         max_operator_id_seen: u64,
         cursor: crate::ProcessedEventCursor,
     ) -> Result<(), DatabaseError> {
-        let operator = operator.clone();
         self.commit_db_update(
             super::ProgressUpdate::Event(cursor),
             true,
             |tx| {
                 self.set_max_operator_id_seen_tx(max_operator_id_seen, tx)?;
-                self.insert_operator_tx(&operator, tx)
+                self.insert_operator_tx(operator, tx)
             },
             |state| {
                 state.single_state.max_operator_id_seen = Some(max_operator_id_seen);
-                self.apply_insert_operator_state(state, &operator);
+                self.apply_insert_operator_state(state, operator);
             },
         )
     }
