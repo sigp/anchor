@@ -367,49 +367,6 @@ pub struct NetworkOptions {
     )]
     pub target_peers: Option<usize>,
 
-    // Prometheus metrics HTTP server related arguments
-    #[clap(
-        long,
-        help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        help_heading = METRICS_OPTIONS,
-        display_order = 0
-    )]
-    pub metrics: bool,
-
-    #[clap(
-        long,
-        value_name = "ADDRESS",
-        help = "Set the listen address for the Prometheus metrics HTTP server.",
-        help_heading = METRICS_OPTIONS,
-        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
-        display_order = 0,
-        requires = "metrics"
-    )]
-    pub metrics_address: Option<IpAddr>,
-
-    #[clap(
-        long,
-        value_name = "PORT",
-        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
-        help_heading = METRICS_OPTIONS,
-        display_order = 0,
-        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
-        requires = "metrics"
-    )]
-    pub metrics_port: Option<u16>,
-
-    #[clap(
-        long,
-        help = "Enable per validator metrics for > 64 validators. \
-                Note: This flag is automatically enabled for <= 64 validators. \
-                Enabling this metric for higher validator counts will lead to higher volume \
-                of prometheus metrics being collected.",
-        help_heading = ADDITIONAL_OPTIONS,
-        display_order = 0
-    )]
-    pub enable_high_validator_count_metrics: bool,
-    // TODO: Metrics CORS Origin
-    // https://github.com/sigp/anchor/issues/249
     #[clap(
         long,
         global = true,
@@ -650,63 +607,6 @@ pub struct Node {
         display_order = 0
     )]
     pub work_queue_size: Vec<String>,
-
-    #[clap(
-        long,
-        value_name = "INTEGER",
-        default_value_t = 36_000_000,
-        requires = "builder_proposals",
-        help = "The gas limit to be used in all builder proposals for all validators managed. \
-                Note this will not necessarily be used if the gas limit \
-                set here moves too far from the previous block's gas limit.",
-        help_heading = PAYLOAD_BUILDING_OPTIONS,
-        display_order = 0
-    )]
-    pub gas_limit: u64,
-
-    #[clap(
-        long,
-        alias = "private-tx-proposals",
-        help = "If this flag is set, Anchor will query the Beacon Node for only block \
-                headers during proposals and will sign over headers. Useful for outsourcing \
-                execution payload construction during proposals.",
-        help_heading = PAYLOAD_BUILDING_OPTIONS,
-        display_order = 0
-    )]
-    pub builder_proposals: bool,
-
-    #[clap(
-        long,
-        value_name = "UINT64",
-        help = "Defines the boost factor, \
-                a percentage multiplier to apply to the builder's payload value \
-                when choosing between a builder payload header and payload from \
-                the local execution node.",
-        help_heading = PAYLOAD_BUILDING_OPTIONS,
-        conflicts_with = "prefer_builder_proposals",
-        display_order = 0
-    )]
-    pub builder_boost_factor: Option<u64>,
-
-    #[clap(
-        long,
-        help = "If this flag is set, Anchor will always prefer blocks \
-                constructed by builders, regardless of payload value.",
-        help_heading = PAYLOAD_BUILDING_OPTIONS,
-        display_order = 0
-    )]
-    pub prefer_builder_proposals: bool,
-
-    #[clap(
-        long,
-        help = "Disables gossipsub peer scoring.",
-        help_heading = ADDITIONAL_OPTIONS,
-        display_order = 0
-    )]
-    pub disable_gossipsub_peer_scoring: bool,
-
-    #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
-    pub disable_gossipsub_topic_scoring: bool,
 
     // Operator Doppelgänger Protection
     #[clap(

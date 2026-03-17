@@ -772,7 +772,6 @@ dependencies = [
  "bls",
  "clap",
  "client",
- "dirs",
  "docgen",
  "ethereum_hashing 0.7.0",
  "futures",
