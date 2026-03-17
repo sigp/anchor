@@ -18,13 +18,14 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use bls::{Hash256, PublicKeyBytes, SecretKey};
 pub use database::test_utils::InMemoryTestFixture;
 use database::{
-    NetworkDatabase,
+    NetworkDatabase, SlashingProtection,
     test_utils::{NoOpSlashingProtection, assertions, generators},
 };
 use eth::{
     event_processor::{EventProcessor, Mode},
     generated::SSVContract,
     util::{BLS_PUBLIC_KEY_LENGTH, BLS_SIGNATURE_LENGTH},
+    voluntary_exit_processor::ExitRequest,
 };
 use ssv_types::{ENCRYPTED_KEY_LENGTH, *};
 use tokio::sync::mpsc::unbounded_channel;
@@ -131,15 +132,25 @@ pub struct ProcessorFixture {
     pub db: Arc<NetworkDatabase>,
     pub processor: EventProcessor,
     pub index_sync_rx: tokio::sync::mpsc::UnboundedReceiver<PublicKeyBytes>,
+    pub exit_rx: tokio::sync::mpsc::UnboundedReceiver<ExitRequest>,
+    pub cluster: Cluster,
+    pub validator: ValidatorMetadata,
+    pub shares: Vec<Share>,
+    pub operators: Vec<Operator>,
 }
 
 impl ProcessorFixture {
-    /// Create a new processor fixture with an empty database
-    pub fn new_empty() -> Self {
-        let fixture = InMemoryTestFixture::new_empty();
+    fn from_fixture(
+        fixture: InMemoryTestFixture,
+        slashing_protection: Arc<dyn SlashingProtection>,
+    ) -> Self {
         let (index_sync_tx, index_sync_rx) = unbounded_channel();
-        let (exit_tx, _exit_rx) = unbounded_channel();
-        let slashing_protection = Arc::new(NoOpSlashingProtection::new());
+        let (exit_tx, exit_rx) = unbounded_channel();
+
+        let cluster = fixture.cluster.clone();
+        let validator = fixture.validator.clone();
+        let shares = fixture.shares.clone();
+        let operators = fixture.operators.clone();
 
         // Wrap database in Arc only here, where EventProcessor needs it
         let db = Arc::new(fixture.data.db);
@@ -157,33 +168,29 @@ impl ProcessorFixture {
             db,
             processor,
             index_sync_rx,
+            exit_rx,
+            cluster,
+            validator,
+            shares,
+            operators,
         }
+    }
+
+    /// Create a new processor fixture with an empty database
+    pub fn new_empty() -> Self {
+        Self::new_empty_with_slashing(Arc::new(NoOpSlashingProtection::new()))
+    }
+
+    /// Create a new empty processor fixture with a custom slashing protection implementation.
+    pub fn new_empty_with_slashing(slashing_protection: Arc<dyn SlashingProtection>) -> Self {
+        let fixture = InMemoryTestFixture::new_empty();
+        Self::from_fixture(fixture, slashing_protection)
     }
 
     /// Create a new processor fixture with a populated database (operators, cluster, validator)
     pub fn new() -> Self {
         let fixture = InMemoryTestFixture::new();
-        let (index_sync_tx, index_sync_rx) = unbounded_channel();
-        let (exit_tx, _exit_rx) = unbounded_channel();
-        let slashing_protection = Arc::new(NoOpSlashingProtection::new());
-
-        // Wrap database in Arc only here, where EventProcessor needs it
-        let db = Arc::new(fixture.data.db);
-
-        let processor = EventProcessor::new(
-            Arc::clone(&db),
-            Mode::Node {
-                index_sync_tx,
-                exit_tx,
-                slashing_protection,
-            },
-        );
-
-        Self {
-            db,
-            processor,
-            index_sync_rx,
-        }
+        Self::from_fixture(fixture, Arc::new(NoOpSlashingProtection::new()))
     }
 
     /// Get all operators from the database
@@ -388,6 +395,29 @@ pub fn create_validator_removed_log(
         Some(12401),
         Some(FixedBytes::default()),
         Some(2),
+    )
+}
+
+/// Helper function to create a ValidatorExited event log
+pub fn create_validator_exited_log(owner: Address, operator_ids: Vec<u64>, public_key: Bytes) -> Log {
+    let event = SSVContract::ValidatorExited {
+        owner,
+        operatorIds: operator_ids,
+        publicKey: public_key,
+    };
+
+    let mut topics = vec![SSVContract::ValidatorExited::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(12402),
+        Some(FixedBytes::default()),
+        Some(3),
     )
 }
 
