@@ -1,5 +1,5 @@
 use base64::prelude::*;
-use rusqlite::{Transaction, params};
+use rusqlite::{Error as SqlError, Transaction, ffi, params};
 use ssv_types::{Operator, OperatorId};
 use tracing::trace;
 
@@ -46,12 +46,21 @@ impl NetworkDatabase {
         let encoded = BASE64_STANDARD.encode(&pem_key);
 
         // Insert into the database
-        tx.prepare_cached(sql_operations::INSERT_OPERATOR)?
-            .execute(params![
+        match tx.prepare_cached(sql_operations::INSERT_OPERATOR)?.execute(params![
                 operator.id,                // The id of the registered operator
                 encoded,                    // RSA public key
                 operator.owner.to_string()  // The owner address of the operator
-            ])?;
+            ]) {
+            Ok(_) => {}
+            Err(SqlError::SqliteFailure(err, _))
+                if err.extended_code == ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                return Err(DatabaseError::AlreadyPresent(
+                    "Operator with this public key already exists".to_string(),
+                ));
+            }
+            Err(err) => return Err(err.into()),
+        }
 
         Ok(())
     }

@@ -6,7 +6,9 @@ use alloy::{
     sol_types::SolEvent,
 };
 use bls::PublicKeyBytes;
-use database::{NetworkDatabase, ProcessedEventCursor, SlashingProtection, UniqueIndex};
+use database::{
+    DatabaseError, NetworkDatabase, ProcessedEventCursor, SlashingProtection, UniqueIndex,
+};
 use ssv_types::{ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -441,9 +443,7 @@ impl EventProcessor {
             }
         };
         if let Err(e) = self.db.commit_operator_added(&operator, operatorId, cursor) {
-            if e.to_string()
-                .contains("UNIQUE constraint failed: operators.public_key")
-            {
+            if matches!(e, DatabaseError::AlreadyPresent(_)) {
                 return skip_with_seen_operator(ExecutionError::InvalidEvent(format!(
                     "Failed to insert operator into database: {e}"
                 )));
