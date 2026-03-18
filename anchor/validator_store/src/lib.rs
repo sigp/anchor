@@ -30,8 +30,8 @@ use openssl::{
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
-    AggregatorCommitteeInstanceId, CommitteeInstanceId, ProposerInstanceId, QbftError, QbftManager,
-    TimeoutMode, ValidatorDutyKind,
+    AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider, ProposerInstanceId,
+    QbftError, QbftManager, TimeoutMode, ValidatorDutyKind,
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
@@ -95,11 +95,15 @@ const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
 const SYNC_SELECTION_PROOF_LOG_NAME: &str = "sync selection proof";
 const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
 
-pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
+pub struct AnchorValidatorStore<
+    T: SlotClock + 'static,
+    E: EthSpec,
+    C: ConsensusDecider<E> = QbftManager<E, T>,
+> {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
     signature_collector: Box<dyn SignatureCollecting>,
-    qbft_manager: Arc<QbftManager<E, T>>,
+    consensus: Arc<C>,
     slashing_protection: Arc<SlashingDatabase>,
     slashing_protection_last_prune: Mutex<Epoch>,
     disable_slashing_protection: bool,
@@ -123,12 +127,12 @@ pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     task_executor: TaskExecutor,
 }
 
-impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
+impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidatorStore<T, E, C> {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         database: Arc<NetworkDatabase>,
         signature_collector: Box<dyn SignatureCollecting>,
-        qbft_manager: Arc<QbftManager<E, T>>,
+        consensus: Arc<C>,
         slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
         slot_clock: T,
@@ -142,12 +146,12 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         strict_mfp: bool,
         is_synced: watch::Receiver<bool>,
         task_executor: TaskExecutor,
-    ) -> Arc<AnchorValidatorStore<T, E>> {
+    ) -> Arc<AnchorValidatorStore<T, E, C>> {
         Arc::new(Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
             signature_collector,
-            qbft_manager,
+            consensus,
             slashing_protection,
             slashing_protection_last_prune: Mutex::new(Epoch::new(0)),
             disable_slashing_protection,
@@ -432,7 +436,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
 
         // Initiate QBFT consensus for this block proposal
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 instance_id,
                 consensus_data,
@@ -797,7 +801,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 AggregatorCommitteeInstanceId {
                     committee: committee_id,
@@ -970,7 +974,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 ProposerInstanceId {
                     validator: validator_pubkey,
@@ -1087,7 +1091,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 AggregatorCommitteeInstanceId {
                     committee: committee_id,
@@ -1268,7 +1272,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 ProposerInstanceId {
                     validator: aggregator_pubkey,
@@ -1466,7 +1470,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 CommitteeInstanceId {
                     committee: committee_id,
@@ -1616,7 +1620,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 CommitteeInstanceId {
                     committee: committee_id,
@@ -2182,7 +2186,9 @@ fn convert_slashing_result(value: Result<Safe, NotSafe>) -> Result<(), Error> {
 
 pub type Error = ValidatorStoreError<SpecificError>;
 
-impl<T: SlotClock, E: EthSpec> ValidatorStore for AnchorValidatorStore<T, E> {
+impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
+    for AnchorValidatorStore<T, E, C>
+{
     type Error = SpecificError;
     type E = E;
 
