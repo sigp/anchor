@@ -135,6 +135,13 @@ enum PubkeyOrId {
 }
 
 #[derive(Debug)]
+struct InsertValidatorStateUpdate {
+    cluster: Cluster,
+    validator: ValidatorMetadata,
+    own_share: Option<Share>,
+}
+
+#[derive(Debug)]
 enum StateUpdate {
     SetLastProcessedBlock(u64),
     SetMaxOperatorIdSeen(u64),
@@ -145,11 +152,7 @@ enum StateUpdate {
     DeleteOperator {
         operator_id: OperatorId,
     },
-    InsertValidator {
-        cluster: Cluster,
-        validator: ValidatorMetadata,
-        own_share: Option<Share>,
-    },
+    InsertValidator(Box<InsertValidatorStateUpdate>),
     UpdateClusterStatus {
         cluster_id: ClusterId,
         status: bool,
@@ -208,11 +211,13 @@ impl PendingStateUpdates {
         validator: ValidatorMetadata,
         own_share: Option<Share>,
     ) {
-        self.updates.push(StateUpdate::InsertValidator {
-            cluster,
-            validator,
-            own_share,
-        });
+        self.updates.push(StateUpdate::InsertValidator(Box::new(
+            InsertValidatorStateUpdate {
+                cluster,
+                validator,
+                own_share,
+            },
+        )));
     }
 
     pub(crate) fn update_cluster_status(&mut self, cluster_id: ClusterId, status: bool) {
@@ -277,11 +282,12 @@ impl StateUpdate {
             Self::DeleteOperator { operator_id } => {
                 state.single_state.operators.remove(&operator_id);
             }
-            Self::InsertValidator {
-                cluster,
-                validator,
-                own_share,
-            } => {
+            Self::InsertValidator(update) => {
+                let InsertValidatorStateUpdate {
+                    cluster,
+                    validator,
+                    own_share,
+                } = *update;
                 let validator_public_key = validator.public_key;
                 let cluster_id = cluster.cluster_id;
                 let cluster_owner = cluster.owner;
