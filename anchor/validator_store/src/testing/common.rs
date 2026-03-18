@@ -39,20 +39,20 @@ const SLOT_DURATION_SECS: u64 = 12;
 
 // ==================== Mock consensus decider ====================
 
-/// Mock that instantly returns `Completed::TimedOut` for any consensus request.
-/// Removes the need for `QbftManager` infrastructure in tests that don't need real consensus.
+/// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
+/// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
 pub struct MockConsensusDecider;
 
 impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
     async fn decide_instance<D: QbftDecidable<E>>(
         &self,
         _id: D::Id,
-        _initial: D,
+        initial: D,
         _validator: Box<dyn QbftDataValidator<D>>,
         _timeout_mode: TimeoutMode,
         _committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
-        Ok(Completed::TimedOut)
+        Ok(Completed::Success(initial))
     }
 }
 

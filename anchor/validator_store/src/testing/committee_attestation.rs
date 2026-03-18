@@ -13,9 +13,9 @@ use crate::Error;
 
 type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
 
-/// `sign_attestations` groups attestations by `CommitteeId` and produces one stream item per
-/// committee. The mock consensus returns `TimedOut` for each committee, and the stream should
-/// still yield one `Ok(empty)` per committee (errors are caught internally).
+/// `sign_attestations` groups attestations by `CommitteeId`, runs consensus once per committee,
+/// collects signatures for each validator, and streams one batch of signed attestations per
+/// committee.
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_produces_one_stream_item_per_committee() {
     // Arrange
@@ -50,15 +50,29 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
         .collect()
         .await;
 
-    // Assert
+    // Assert — 2 stream items (one per committee), 3 total signed attestations
     assert_eq!(results.len(), 2, "expected one stream item per committee");
-    for result in &results {
-        assert!(result.is_ok(), "each item should be Ok (errors are caught)");
+    let all_signed: Vec<_> = results
+        .into_iter()
+        .map(|r| r.expect("each committee batch should succeed"))
+        .collect();
+    let total: usize = all_signed.iter().map(|batch| batch.len()).sum();
+    assert_eq!(total, 3, "expected 3 total signed attestations");
+
+    // Verify the mock signature collector was called via the committee path
+    let captured = harness.captured_calls.lock();
+    assert_eq!(captured.len(), 3, "expected 3 sign_and_collect calls");
+    for call in captured.iter() {
+        assert!(
+            matches!(call.requester, SignatureRequester::Committee { .. }),
+            "expected SignatureRequester::Committee, got: {:?}",
+            call.requester
+        );
     }
 }
 
 /// A committee stuck at `get_voting_context` (no voting context for its slot) does not block
-/// another committee from completing. Verifies `FuturesUnordered` independence.
+/// another committee from signing successfully. Verifies `FuturesUnordered` independence.
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_failure_isolation() {
     // Arrange
