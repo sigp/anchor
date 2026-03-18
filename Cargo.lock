@@ -796,7 +796,6 @@ dependencies = [
  "async-channel 1.9.0",
  "beacon_node_fallback",
  "bls",
- "bls_lagrange",
  "database",
  "eth2",
  "ethereum_ssz",

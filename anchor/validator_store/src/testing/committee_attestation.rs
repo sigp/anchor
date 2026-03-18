@@ -19,20 +19,15 @@ type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_produces_one_stream_item_per_committee() {
     let our_operator_id = OperatorId(1);
-    let (rsa_private, rsa_pubkey) = generate_rsa_keypair();
 
     let committee_a = create_committee_setup(
         &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
         2,
-        our_operator_id,
-        &rsa_pubkey,
         0,
     );
     let committee_b = create_committee_setup(
         &[OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)],
         1,
-        our_operator_id,
-        &rsa_pubkey,
         100,
     );
 
@@ -41,11 +36,7 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
         committee_b.cluster.committee_id(),
     );
 
-    let harness = ValidatorStoreTestHarness::new(
-        vec![committee_a, committee_b],
-        our_operator_id,
-        rsa_private,
-    );
+    let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], our_operator_id);
     harness.seed_voting_context();
     harness.set_clock_for_instant_timeout();
 
@@ -78,28 +69,19 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_failure_isolation() {
     let our_operator_id = OperatorId(1);
-    let (rsa_private, rsa_pubkey) = generate_rsa_keypair();
 
     let committee_a = create_committee_setup(
         &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
         1,
-        our_operator_id,
-        &rsa_pubkey,
         0,
     );
     let committee_b = create_committee_setup(
         &[OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)],
         1,
-        our_operator_id,
-        &rsa_pubkey,
         100,
     );
 
-    let harness = ValidatorStoreTestHarness::new(
-        vec![committee_a, committee_b],
-        our_operator_id,
-        rsa_private,
-    );
+    let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], our_operator_id);
     // Only seed voting context for TEST_SLOT — committee B's attestation uses a different
     // slot, so its `get_voting_context` will block indefinitely.
     harness.seed_voting_context();
@@ -134,17 +116,14 @@ async fn sign_attestations_failure_isolation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_not_synced() {
     let our_operator_id = OperatorId(1);
-    let (rsa_private, rsa_pubkey) = generate_rsa_keypair();
 
     let committee = create_committee_setup(
         &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
         1,
-        our_operator_id,
-        &rsa_pubkey,
         0,
     );
 
-    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id, rsa_private);
+    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id);
     harness.is_synced_tx.send_replace(false);
 
     let attestations = vec![harness.create_attestation(0, 0)];
@@ -167,13 +146,10 @@ async fn sign_attestations_not_synced() {
 #[tokio::test(flavor = "multi_thread")]
 async fn collect_committee_signatures_uses_committee_mode() {
     let our_operator_id = OperatorId(1);
-    let (rsa_private, rsa_pubkey) = generate_rsa_keypair();
 
     let committee = create_committee_setup(
         &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
         3, // 3 validators in this committee
-        our_operator_id,
-        &rsa_pubkey,
         0,
     );
 
@@ -184,7 +160,7 @@ async fn collect_committee_signatures_uses_committee_mode() {
         .map(|v| (v.clone(), Hash256::random()))
         .collect();
 
-    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id, rsa_private);
+    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id);
 
     let base_hash = Hash256::random();
     let num_sigs = 5;

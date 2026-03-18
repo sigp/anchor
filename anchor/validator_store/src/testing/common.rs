@@ -7,12 +7,11 @@ use std::{
     collections::HashMap, future::Future, num::NonZeroU64, pin::Pin, sync::Arc, time::Duration,
 };
 
-use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, SecretKey, Signature};
-use bls_lagrange::{KeyId, split};
+use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::NetworkDatabase;
 use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
-use openssl::rsa::{Padding, Rsa};
+use openssl::rsa::Rsa;
 use parking_lot::Mutex;
 use qbft_manager::QbftManager;
 use signature_collector::{
@@ -78,57 +77,6 @@ pub fn create_mock_collector() -> (Box<dyn SignatureCollecting>, CapturedCalls) 
     (Box::new(mock), captured)
 }
 
-// ==================== Key generation helpers ====================
-
-pub struct SplitKeySet {
-    pub validator_pubkey: PublicKeyBytes,
-    pub shares: HashMap<OperatorId, SecretKey>,
-}
-
-pub fn generate_split_keys(operator_ids: &[OperatorId]) -> SplitKeySet {
-    let master = SecretKey::random();
-    let validator_pubkey = PublicKeyBytes::from(master.public_key().compress());
-
-    let num_operators = operator_ids.len() as u64;
-    let f = (num_operators - 1) / 3;
-    let threshold = 2 * f + 1;
-
-    let key_ids: Vec<KeyId> = operator_ids
-        .iter()
-        .map(|op| KeyId::try_from(op.0).expect("operator ID should be non-zero"))
-        .collect();
-
-    let split_keys = split(&master, threshold, key_ids).expect("BLS key split should succeed");
-
-    let shares: HashMap<OperatorId, SecretKey> = operator_ids
-        .iter()
-        .zip(split_keys.into_iter().map(|(_, sk)| sk))
-        .map(|(op_id, sk)| (*op_id, sk))
-        .collect();
-
-    SplitKeySet {
-        validator_pubkey,
-        shares,
-    }
-}
-
-fn rsa_encrypt_bls_key(
-    secret_key: &SecretKey,
-    rsa_pubkey: &Rsa<openssl::pkey::Public>,
-) -> [u8; ENCRYPTED_KEY_LENGTH] {
-    let key_bytes = secret_key.serialize();
-    let hex_str = hex::encode(key_bytes);
-
-    let mut encrypted = vec![0u8; rsa_pubkey.size() as usize];
-    let len = rsa_pubkey
-        .public_encrypt(hex_str.as_bytes(), &mut encrypted, Padding::PKCS1)
-        .expect("RSA encryption should succeed");
-
-    let mut result = [0u8; ENCRYPTED_KEY_LENGTH];
-    result[..len].copy_from_slice(&encrypted[..len]);
-    result
-}
-
 // ==================== Committee setup ====================
 
 pub struct CommitteeSetup {
@@ -140,8 +88,6 @@ pub struct CommitteeSetup {
 pub fn create_committee_setup(
     operator_ids: &[OperatorId],
     num_validators: usize,
-    our_operator_id: OperatorId,
-    our_rsa_pubkey: &Rsa<openssl::pkey::Public>,
     starting_validator_index: usize,
 ) -> CommitteeSetup {
     let cluster_id_bytes: [u8; 32] = rand::random();
@@ -159,30 +105,28 @@ pub fn create_committee_setup(
     let mut shares = Vec::new();
 
     for i in 0..num_validators {
-        let split_keys = generate_split_keys(operator_ids);
+        let validator_pubkey =
+            PublicKeyBytes::deserialize(&[(starting_validator_index + i) as u8; 48])
+                .expect("valid length");
 
         let validator = ValidatorMetadata {
-            public_key: split_keys.validator_pubkey,
+            public_key: validator_pubkey,
             cluster_id,
             index: Some(ValidatorIndex(starting_validator_index + i)),
             graffiti: Graffiti::default(),
         };
 
-        for &op_id in operator_ids {
-            let sk = &split_keys.shares[&op_id];
-
-            let encrypted_private_key = if op_id == our_operator_id {
-                rsa_encrypt_bls_key(sk, our_rsa_pubkey)
-            } else {
-                [0u8; ENCRYPTED_KEY_LENGTH]
-            };
+        for (j, &op_id) in operator_ids.iter().enumerate() {
+            let mut share_bytes = [0u8; 48];
+            share_bytes[0] = (starting_validator_index + i) as u8;
+            share_bytes[1] = j as u8;
 
             shares.push(Share {
-                validator_pubkey: split_keys.validator_pubkey,
+                validator_pubkey,
                 operator_id: op_id,
                 cluster_id,
-                share_pubkey: PublicKeyBytes::from(sk.public_key().compress()),
-                encrypted_private_key,
+                share_pubkey: PublicKeyBytes::deserialize(&share_bytes).expect("valid length"),
+                encrypted_private_key: [0u8; ENCRYPTED_KEY_LENGTH],
             });
         }
 
@@ -208,13 +152,11 @@ pub struct ValidatorStoreTestHarness {
 }
 
 impl ValidatorStoreTestHarness {
-    pub fn new(
-        committee_setups: Vec<CommitteeSetup>,
-        our_operator_id: OperatorId,
-        rsa_private_key: Rsa<openssl::pkey::Private>,
-    ) -> Self {
+    pub fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
+        // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = {
-            let pem = rsa_private_key
+            let rsa = Rsa::generate(RSA_KEY_SIZE).expect("RSA key generation should succeed");
+            let pem = rsa
                 .public_key_to_pem()
                 .expect("RSA PEM export should succeed");
             Rsa::public_key_from_pem(&pem).expect("RSA PEM import should succeed")
@@ -321,7 +263,7 @@ impl ValidatorStoreTestHarness {
             slot_clock.clone(),
             Arc::new(ChainSpec::mainnet()),
             Hash256::zero(),
-            Some(rsa_private_key),
+            None, // impostor mode: no RSA decryption needed
             fork_schedule,
             30_000_000,
             None,
@@ -435,13 +377,4 @@ fn create_test_executor() -> (TaskExecutor, async_channel::Sender<()>) {
     let (shutdown, _) = futures::channel::mpsc::channel(1);
     let executor = TaskExecutor::new(handle, exit, shutdown);
     (executor, signal)
-}
-
-pub fn generate_rsa_keypair() -> (Rsa<openssl::pkey::Private>, Rsa<openssl::pkey::Public>) {
-    let private = Rsa::generate(RSA_KEY_SIZE).expect("RSA key generation should succeed");
-    let pem = private
-        .public_key_to_pem()
-        .expect("RSA PEM export should succeed");
-    let public = Rsa::public_key_from_pem(&pem).expect("RSA PEM import should succeed");
-    (private, public)
 }

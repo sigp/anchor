@@ -35,7 +35,6 @@ validator_store = { workspace = true }
 
 [dev-dependencies]
 async-channel = { workspace = true }
-bls_lagrange = { workspace = true }
 database = { workspace = true, features = ["test-utils"] }
 message_sender = { workspace = true, features = ["testing"] }
 processor = { workspace = true }
