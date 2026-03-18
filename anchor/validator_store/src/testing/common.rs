@@ -33,7 +33,7 @@ use validator_store::AttestationToSign;
 
 use crate::{AnchorValidatorStore, VotingAssignments, VotingContext};
 
-pub const TEST_SLOT: u64 = 1;
+pub(super) const TEST_SLOT: u64 = 1;
 const RSA_KEY_SIZE: u32 = 2048;
 const SLOT_DURATION_SECS: u64 = 12;
 
@@ -41,7 +41,7 @@ const SLOT_DURATION_SECS: u64 = 12;
 
 /// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
 /// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
-pub struct MockConsensusDecider;
+pub(super) struct MockConsensusDecider;
 
 impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
     async fn decide_instance<D: QbftDecidable<E>>(
@@ -59,10 +59,10 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
 // ==================== Mock signature collector ====================
 
 /// Shared storage for captured `sign_and_collect` calls.
-pub type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
+pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 
-pub struct CapturedSignatureCall {
-    pub requester: SignatureRequester,
+pub(super) struct CapturedSignatureCall {
+    pub(super) requester: SignatureRequester,
 }
 
 /// Mock that captures calls and returns a canned infinity signature.
@@ -86,7 +86,7 @@ impl SignatureCollecting for MockSignatureCollector {
 }
 
 /// Creates a mock signature collector and returns the shared captured calls handle.
-pub fn create_mock_collector() -> (Box<dyn SignatureCollecting>, CapturedCalls) {
+fn create_mock_collector() -> (Box<dyn SignatureCollecting>, CapturedCalls) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
@@ -96,13 +96,13 @@ pub fn create_mock_collector() -> (Box<dyn SignatureCollecting>, CapturedCalls) 
 
 // ==================== Committee setup ====================
 
-pub struct CommitteeSetup {
-    pub cluster: Cluster,
-    pub validators: Vec<ValidatorMetadata>,
-    pub shares: Vec<Share>,
+pub(super) struct CommitteeSetup {
+    pub(super) cluster: Cluster,
+    pub(super) validators: Vec<ValidatorMetadata>,
+    shares: Vec<Share>,
 }
 
-pub fn create_committee_setup(
+pub(super) fn create_committee_setup(
     operator_ids: &[OperatorId],
     num_validators: usize,
     starting_validator_index: usize,
@@ -159,18 +159,18 @@ pub fn create_committee_setup(
 
 // ==================== Test harness ====================
 
-pub struct ValidatorStoreTestHarness {
-    pub validator_store:
+pub(super) struct ValidatorStoreTestHarness {
+    pub(super) validator_store:
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
-    pub committee_setups: Vec<CommitteeSetup>,
-    pub captured_calls: CapturedCalls,
-    pub is_synced_tx: watch::Sender<bool>,
+    committee_setups: Vec<CommitteeSetup>,
+    pub(super) captured_calls: CapturedCalls,
+    pub(super) is_synced_tx: watch::Sender<bool>,
     _slashing_db_dir: TempDir,
     _exit_signal: async_channel::Sender<()>,
 }
 
 impl ValidatorStoreTestHarness {
-    pub fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
+    pub(super) fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = {
             let rsa = Rsa::generate(RSA_KEY_SIZE).expect("RSA key generation should succeed");
@@ -284,7 +284,7 @@ impl ValidatorStoreTestHarness {
     }
 
     /// Seeds the `VotingContext` so `get_voting_context` returns immediately for `TEST_SLOT`.
-    pub fn seed_voting_context(&self) {
+    pub(super) fn seed_voting_context(&self) {
         let mut attesting_committees = HashMap::new();
         let mut attesting_validators = Vec::new();
 
@@ -318,7 +318,7 @@ impl ValidatorStoreTestHarness {
         });
     }
 
-    pub fn create_attestation(
+    pub(super) fn create_attestation(
         &self,
         committee_idx: usize,
         validator_idx: usize,
@@ -326,7 +326,7 @@ impl ValidatorStoreTestHarness {
         self.create_attestation_at_slot(committee_idx, validator_idx, TEST_SLOT)
     }
 
-    pub fn create_attestation_at_slot(
+    pub(super) fn create_attestation_at_slot(
         &self,
         committee_idx: usize,
         validator_idx: usize,
