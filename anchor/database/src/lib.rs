@@ -226,7 +226,8 @@ impl PendingStateUpdates {
     }
 
     pub(crate) fn set_owner_nonce(&mut self, owner: Address, nonce: u16) {
-        self.updates.push(StateUpdate::SetOwnerNonce { owner, nonce });
+        self.updates
+            .push(StateUpdate::SetOwnerNonce { owner, nonce });
     }
 
     pub(crate) fn update_fee_recipient(&mut self, owner: Address, fee_recipient: Address) {
@@ -236,11 +237,7 @@ impl PendingStateUpdates {
         });
     }
 
-    pub(crate) fn update_graffiti(
-        &mut self,
-        validator_pubkey: PublicKeyBytes,
-        graffiti: Graffiti,
-    ) {
+    pub(crate) fn update_graffiti(&mut self, validator_pubkey: PublicKeyBytes, graffiti: Graffiti) {
         self.updates.push(StateUpdate::UpdateGraffiti {
             validator_pubkey,
             graffiti,

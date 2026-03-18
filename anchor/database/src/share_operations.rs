@@ -19,7 +19,9 @@ impl NetworkDatabase {
 
         let exists = tx
             .prepare_cached(sql_operations::HAS_OPERATOR_SHARE_FOR_VALIDATOR)?
-            .query_row(params![validator_pubkey.to_string(), operator_id], |_| Ok(()))
+            .query_row(params![validator_pubkey.to_string(), operator_id], |_| {
+                Ok(())
+            })
             .optional()?
             .is_some();
         Ok(exists)
