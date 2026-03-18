@@ -1,6 +1,8 @@
 use std::{str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
+use database::test_utils::queries;
+use eth::util::compute_cluster_id;
 use ssv_types::*;
 
 mod common;
@@ -107,6 +109,128 @@ async fn test_multiple_events_processing() {
     // Verify processed block was updated using proper database API
     let block_number = test.processor.db.state().get_last_processed_block();
     assert_eq!(block_number, 12350, "Block number should be updated");
+}
+
+#[tokio::test]
+async fn test_same_block_operator_and_validator_processing() {
+    setup_tracing();
+
+    let mut test = ProcessorFixture::new_empty();
+    let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let mut logs = Vec::new();
+
+    for operator_id in &operator_ids {
+        let owner = Address::random();
+        let public_key = create_valid_rsa_public_key_bytes();
+        logs.push(create_operator_added_log(
+            *operator_id,
+            owner,
+            public_key,
+            1000 + *operator_id,
+        ));
+    }
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, cluster_owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    logs.push(create_validator_added_log(
+        cluster_owner,
+        operator_ids.clone(),
+        validator_public_key,
+        shares,
+    ));
+
+    let result = test.processor.process_logs(logs, true, 12360);
+    assert!(
+        result.is_ok(),
+        "same-block operator and validator processing should succeed"
+    );
+
+    for operator_id in operator_ids {
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
+    }
+
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    verify_validator_added(&test.processor, &validator_pubkey_str);
+    verify_cluster_created(&test.processor, cluster_owner, &[1u64, 2u64, 3u64, 4u64]);
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            assert_eq!(
+                validator_key,
+                Some(validator_pubkey_bytes),
+                "validator should be queued for index sync"
+            );
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+            panic!("validator should have been queued for index sync");
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_same_block_validator_add_and_remove_processing() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+    let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_logs: Vec<_> = operator_ids
+        .iter()
+        .map(|operator_id| {
+            create_operator_added_log(
+                *operator_id,
+                Address::random(),
+                create_valid_rsa_public_key_bytes(),
+                1000 + *operator_id,
+            )
+        })
+        .collect();
+
+    let operator_result = test.processor.process_logs(operator_logs, true, 12361);
+    assert!(
+        operator_result.is_ok(),
+        "operator setup batch should succeed"
+    );
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, cluster_owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    let logs = vec![
+        create_validator_added_log(
+            cluster_owner,
+            operator_ids.clone(),
+            validator_public_key.clone(),
+            shares,
+        ),
+        create_validator_removed_log(cluster_owner, operator_ids.clone(), validator_public_key),
+    ];
+
+    let result = test.processor.process_logs(logs, true, 12362);
+    assert!(
+        result.is_ok(),
+        "same-block validator add and remove processing should succeed"
+    );
+
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    let cluster_id = compute_cluster_id(cluster_owner, &operator_ids);
+
+    assert!(
+        queries::get_validator(&validator_pubkey_str, &tx).is_none(),
+        "validator should be removed after the batch completes"
+    );
+    assert!(
+        queries::get_cluster(cluster_id, &tx).is_none(),
+        "cluster should be removed after its only validator is removed"
+    );
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12362);
 }
 
 #[tokio::test]
