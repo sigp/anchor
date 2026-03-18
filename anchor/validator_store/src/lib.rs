@@ -326,7 +326,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// This avoids sequential deadlock while reusing the existing committee counting logic
     /// in the signature collector's `committee_signatures` DashMap.
     #[expect(clippy::too_many_arguments)]
-    async fn collect_committee_signatures(
+    pub(crate) async fn collect_committee_signatures(
         &self,
         signature_kind: PartialSignatureKind,
         role: Role,
@@ -544,7 +544,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         }
     }
 
-    fn update_voting_context(&self, metadata: VotingContext) {
+    pub(crate) fn update_voting_context(&self, metadata: VotingContext) {
         self.voting_context_tx
             .send_replace(Some(Arc::new(metadata)));
     }
@@ -1924,7 +1924,7 @@ fn decrypt_key_share(
         .map_err(|err| error!(?err, validator = %pubkey_bytes, "Invalid secret key decrypted"))
 }
 
-struct VotingContext {
+pub(crate) struct VotingContext {
     /// Cached voting assignments (computed at slot start, reused here)
     voting_assignments: Arc<VotingAssignments>,
     /// The `BeaconVote` (only available at 1/3 slot from beacon node)
@@ -2983,6 +2983,9 @@ impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, BlindedPayload<E>> {
         )))
     }
 }
+
+#[cfg(test)]
+mod testing;
 
 #[cfg(test)]
 mod tests {
