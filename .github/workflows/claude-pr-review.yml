@@ -90,10 +90,14 @@ jobs:
             - name: Read review prompt
               if: steps.check.outputs.is_member == 'true'
               id: review-prompt
+              # Always load the prompt from the default branch (trusted source),
+              # independent of whichever PR/fork ref was checked out above.
+              # Keep this block in sync with .github/workflows/claude-mentions.yml.
               run: |
                   {
                     echo "content<<PROMPT_EOF"
-                    cat .github/prompts/review.md
+                    git fetch https://github.com/${{ github.repository }}.git ${{ github.event.repository.default_branch }} --depth=1
+                    git show FETCH_HEAD:.github/prompts/review.md
                     echo "PROMPT_EOF"
                   } >> "$GITHUB_OUTPUT"
 

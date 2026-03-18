@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use database::{NetworkState, NonUniqueIndex, UniqueIndex};
-use gossipsub::{Message, MessageAcceptance, MessageId};
-use libp2p::PeerId;
+use libp2p::{
+    PeerId,
+    gossipsub::{Message, MessageAcceptance, MessageId},
+};
 use message_validator::{
     DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationResult,
     Validator,
