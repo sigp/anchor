@@ -37,6 +37,11 @@ pub enum Mode {
     KeySplit,
 }
 
+enum PostCommitAction {
+    IndexSync(PublicKeyBytes),
+    ValidatorExit(ExitRequest),
+}
+
 /// The Event Processor. This handles all verification and recording of events.
 /// It will be passed logs from the sync layer to be processed and saved into the database
 ///
@@ -79,6 +84,7 @@ impl EventProcessor {
             .transaction()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
         let mut state_updates = PendingStateUpdates::default();
+        let mut post_commit_actions = Vec::new();
 
         for (index, log) in logs.iter().enumerate() {
             trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
@@ -103,7 +109,12 @@ impl EventProcessor {
                 }
 
                 SSVContract::ValidatorAdded::SIGNATURE_HASH => self
-                    .process_validator_added(log, &tx, &mut state_updates)
+                    .process_validator_added(
+                        log,
+                        &tx,
+                        &mut state_updates,
+                        &mut post_commit_actions,
+                    )
                     .inspect(|_| validators_added += 1),
 
                 SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
@@ -123,7 +134,7 @@ impl EventProcessor {
                 }
 
                 SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                    self.process_validator_exited(log, &tx, live)
+                    self.process_validator_exited(log, &tx, live, &mut post_commit_actions)
                 }
                 _ => {
                     debug!(?topic0, "Unknown event signature, skipping");
@@ -155,6 +166,7 @@ impl EventProcessor {
         tx.commit()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
         self.db.publish_pending_state_updates(state_updates);
+        self.execute_post_commit_actions(post_commit_actions)?;
 
         // Log summaries for validator operations
         if validators_added > 0 {
@@ -165,6 +177,52 @@ impl EventProcessor {
         }
 
         debug!(logs_count = logs.len(), "Completed processing logs");
+        Ok(())
+    }
+
+    fn execute_post_commit_actions(
+        &self,
+        post_commit_actions: Vec<PostCommitAction>,
+    ) -> Result<(), ExecutionError> {
+        let Mode::Node {
+            index_sync_tx,
+            exit_tx,
+            ..
+        } = &self.mode
+        else {
+            debug_assert!(post_commit_actions.is_empty());
+            return Ok(());
+        };
+
+        for action in post_commit_actions {
+            match action {
+                PostCommitAction::IndexSync(validator_pubkey) => {
+                    if let Err(err) = index_sync_tx.send(validator_pubkey) {
+                        error!(?err, "Failed to send validator to index lookup");
+                    }
+                }
+                PostCommitAction::ValidatorExit(request) => {
+                    let validator_pubkey = request.validator_pubkey;
+
+                    exit_tx.send(request).map_err(|err| {
+                        error!(
+                            validator_pubkey = %validator_pubkey,
+                            ?err,
+                            "Failed to send validator exit request to processor"
+                        );
+                        ExecutionError::Misc(
+                            "Failed to send validator exit request to processor".to_string(),
+                        )
+                    })?;
+
+                    info!(
+                        validator_pubkey = %validator_pubkey,
+                        "Queued validator for exit processing"
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -297,6 +355,7 @@ impl EventProcessor {
         log: &Log,
         tx: &Transaction<'_>,
         state_updates: &mut PendingStateUpdates,
+        post_commit_actions: &mut Vec<PostCommitAction>,
     ) -> Result<(), ExecutionError> {
         // Parse and destructure log
         let SSVContract::ValidatorAdded {
@@ -320,7 +379,6 @@ impl EventProcessor {
 
         // During keysplitting, we only care about the nonce
         let Mode::Node {
-            index_sync_tx: index_lookup_queue,
             slashing_protection,
             ..
         } = &self.mode
@@ -391,10 +449,7 @@ impl EventProcessor {
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
             })?;
 
-        // Schedule validator for index lookup
-        if let Err(err) = index_lookup_queue.send(validator_pubkey) {
-            error!(?err, "Failed to send validator to index lookup");
-        }
+        post_commit_actions.push(PostCommitAction::IndexSync(validator_pubkey));
 
         trace!(
             cluster_id = ?cluster_id,
@@ -635,9 +690,10 @@ impl EventProcessor {
         log: &Log,
         tx: &Transaction<'_>,
         live: bool,
+        post_commit_actions: &mut Vec<PostCommitAction>,
     ) -> Result<(), ExecutionError> {
         // In KeySplit mode, we don't need to process validator exits
-        let Mode::Node { exit_tx, .. } = &self.mode else {
+        let Mode::Node { .. } = &self.mode else {
             return Ok(());
         };
         let SSVContract::ValidatorExited {
@@ -689,26 +745,7 @@ impl EventProcessor {
             is_our_validator,
         };
 
-        match exit_tx.send(request) {
-            Ok(_) => {
-                info!(
-                    validator_pubkey = %validator_pubkey,
-                    "Queued validator for exit processing"
-                );
-            }
-            Err(err) => {
-                // If the channel is closed, we can't send the exit request
-                // This is a fatal error and should be handled by the caller
-                error!(
-                    validator_pubkey = %validator_pubkey,
-                    ?err,
-                    "Failed to send validator exit request to processor"
-                );
-                return Err(ExecutionError::Misc(
-                    "Failed to send validator exit request to processor".to_string(),
-                ));
-            }
-        }
+        post_commit_actions.push(PostCommitAction::ValidatorExit(request));
 
         Ok(())
     }
