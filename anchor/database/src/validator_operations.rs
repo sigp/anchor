@@ -1,23 +1,48 @@
 use std::{collections::HashMap, str::FromStr};
 
 use bls::PublicKeyBytes;
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
 use types::{Address, Graffiti};
 
 use crate::{
-    DatabaseError, NetworkDatabase, NonUniqueIndex, multi_index::UniqueIndex, sql_operations,
+    DatabaseError, NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex, sql_operations,
 };
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
-    /// Update the fee recipient address for all validators in a cluster
-    pub fn update_fee_recipient(
+    pub fn get_validator_metadata_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<ssv_types::ValidatorMetadata>, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_VALIDATOR)?
+            .query_row(params![validator_pubkey.to_string()], |row| {
+                ssv_types::ValidatorMetadata::try_from(row)
+            })
+            .optional()
+            .map_err(DatabaseError::from)
+    }
+
+    pub fn get_validator_index_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<ValidatorIndex>, DatabaseError> {
+        Ok(self
+            .get_validator_metadata_tx(validator_pubkey, tx)?
+            .and_then(|metadata| metadata.index))
+    }
+
+    /// Update the fee recipient address in the active transaction and queue the matching state
+    /// update.
+    pub fn update_fee_recipient_tx(
         &self,
         owner: Address,
         fee_recipient: Address,
         tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
     ) -> Result<(), DatabaseError> {
         // Update the database
         tx.prepare_cached(sql_operations::INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT)?
@@ -26,11 +51,20 @@ impl NetworkDatabase {
                 fee_recipient.to_string()  // New fee recipient address for entire cluster
             ])?;
 
-        self.modify_state(|state| {
-            state.multi_state.clusters.modify_all_by(&owner, |cluster| {
-                cluster.fee_recipient = fee_recipient;
-            });
-        });
+        state_updates.update_fee_recipient(owner, fee_recipient);
+        Ok(())
+    }
+
+    /// Update the fee recipient address for all validators in a cluster
+    pub fn update_fee_recipient(
+        &self,
+        owner: Address,
+        fee_recipient: Address,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        let mut state_updates = PendingStateUpdates::default();
+        self.update_fee_recipient_tx(owner, fee_recipient, tx, &mut state_updates)?;
+        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 
@@ -68,11 +102,12 @@ impl NetworkDatabase {
     }
 
     /// Update the Graffiti for a Validator
-    pub fn update_graffiti(
+    pub fn update_graffiti_tx(
         &self,
         validator_pubkey: &PublicKeyBytes,
         graffiti: Graffiti,
         tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
     ) -> Result<(), DatabaseError> {
         // Update the database
         tx.prepare_cached(sql_operations::SET_GRAFFITI)?
@@ -81,16 +116,20 @@ impl NetworkDatabase {
                 validator_pubkey.to_string()  // The public key of the validator
             ])?;
 
-        self.modify_state(|state| {
-            if let Some(validator) = state
-                .multi_state
-                .validator_metadata
-                .get_mut_by(validator_pubkey)
-            {
-                // Update in memory
-                validator.graffiti = graffiti;
-            }
-        });
+        state_updates.update_graffiti(*validator_pubkey, graffiti);
+        Ok(())
+    }
+
+    /// Update the Graffiti for a Validator
+    pub fn update_graffiti(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        graffiti: Graffiti,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        let mut state_updates = PendingStateUpdates::default();
+        self.update_graffiti_tx(validator_pubkey, graffiti, tx, &mut state_updates)?;
+        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 

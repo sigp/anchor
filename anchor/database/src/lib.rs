@@ -4,18 +4,19 @@ use std::{
     time::Duration,
 };
 
+use base64::prelude::*;
 use bls::PublicKeyBytes;
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
 };
-use types::Address;
+use types::{Address, Graffiti};
 
 pub use crate::{
     error::DatabaseError,
@@ -133,6 +134,239 @@ enum PubkeyOrId {
     Id(OperatorId),
 }
 
+#[derive(Debug)]
+enum StateUpdate {
+    SetLastProcessedBlock(u64),
+    SetMaxOperatorIdSeen(u64),
+    InsertOperator {
+        operator: Operator,
+        is_own_operator: bool,
+    },
+    DeleteOperator {
+        operator_id: OperatorId,
+    },
+    InsertValidator {
+        cluster: Cluster,
+        validator: ValidatorMetadata,
+        own_share: Option<Share>,
+    },
+    UpdateClusterStatus {
+        cluster_id: ClusterId,
+        status: bool,
+    },
+    DeleteValidator {
+        validator_pubkey: PublicKeyBytes,
+    },
+    SetOwnerNonce {
+        owner: Address,
+        nonce: u16,
+    },
+    UpdateFeeRecipient {
+        owner: Address,
+        fee_recipient: Address,
+    },
+    UpdateGraffiti {
+        validator_pubkey: PublicKeyBytes,
+        graffiti: Graffiti,
+    },
+}
+
+/// Ordered in-memory state operations to replay once the caller reaches the chosen transaction
+/// boundary. This remains ordered because a block can interleave different kinds of updates in a
+/// single transaction, and replaying them out of order can change the resulting in-memory state.
+#[derive(Default)]
+pub struct PendingStateUpdates {
+    updates: Vec<StateUpdate>,
+}
+
+impl PendingStateUpdates {
+    pub(crate) fn set_last_processed_block(&mut self, block_number: u64) {
+        self.updates
+            .push(StateUpdate::SetLastProcessedBlock(block_number));
+    }
+
+    pub(crate) fn set_max_operator_id_seen(&mut self, operator_id: u64) {
+        self.updates
+            .push(StateUpdate::SetMaxOperatorIdSeen(operator_id));
+    }
+
+    pub(crate) fn insert_operator(&mut self, operator: Operator, is_own_operator: bool) {
+        self.updates.push(StateUpdate::InsertOperator {
+            operator,
+            is_own_operator,
+        });
+    }
+
+    pub(crate) fn delete_operator(&mut self, operator_id: OperatorId) {
+        self.updates
+            .push(StateUpdate::DeleteOperator { operator_id });
+    }
+
+    pub(crate) fn insert_validator(
+        &mut self,
+        cluster: Cluster,
+        validator: ValidatorMetadata,
+        own_share: Option<Share>,
+    ) {
+        self.updates.push(StateUpdate::InsertValidator {
+            cluster,
+            validator,
+            own_share,
+        });
+    }
+
+    pub(crate) fn update_cluster_status(&mut self, cluster_id: ClusterId, status: bool) {
+        self.updates
+            .push(StateUpdate::UpdateClusterStatus { cluster_id, status });
+    }
+
+    pub(crate) fn delete_validator(&mut self, validator_pubkey: PublicKeyBytes) {
+        self.updates
+            .push(StateUpdate::DeleteValidator { validator_pubkey });
+    }
+
+    pub(crate) fn set_owner_nonce(&mut self, owner: Address, nonce: u16) {
+        self.updates.push(StateUpdate::SetOwnerNonce { owner, nonce });
+    }
+
+    pub(crate) fn update_fee_recipient(&mut self, owner: Address, fee_recipient: Address) {
+        self.updates.push(StateUpdate::UpdateFeeRecipient {
+            owner,
+            fee_recipient,
+        });
+    }
+
+    pub(crate) fn update_graffiti(
+        &mut self,
+        validator_pubkey: PublicKeyBytes,
+        graffiti: Graffiti,
+    ) {
+        self.updates.push(StateUpdate::UpdateGraffiti {
+            validator_pubkey,
+            graffiti,
+        });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.updates.is_empty()
+    }
+
+    fn apply(self, state: &mut NetworkState) {
+        for update in self.updates {
+            update.apply(state);
+        }
+    }
+}
+
+impl StateUpdate {
+    fn apply(self, state: &mut NetworkState) {
+        match self {
+            Self::SetLastProcessedBlock(block_number) => {
+                state.single_state.last_processed_block = block_number;
+            }
+            Self::SetMaxOperatorIdSeen(operator_id) => {
+                state.single_state.max_operator_id_seen = Some(operator_id);
+            }
+            Self::InsertOperator {
+                operator,
+                is_own_operator,
+            } => {
+                if state.single_state.id.is_none() && is_own_operator {
+                    state.single_state.id = Some(operator.id);
+                }
+
+                state.single_state.operators.insert(operator.id, operator);
+            }
+            Self::DeleteOperator { operator_id } => {
+                state.single_state.operators.remove(&operator_id);
+            }
+            Self::InsertValidator {
+                cluster,
+                validator,
+                own_share,
+            } => {
+                let validator_public_key = validator.public_key;
+                let cluster_id = cluster.cluster_id;
+                let cluster_owner = cluster.owner;
+                let committee_id = cluster.committee_id();
+
+                if let Some(share) = own_share {
+                    state.single_state.clusters.insert(cluster_id);
+                    state.multi_state.shares.insert_or_update(
+                        &validator_public_key,
+                        &cluster_id,
+                        &cluster_owner,
+                        &committee_id,
+                        share,
+                    );
+                }
+
+                state.multi_state.clusters.insert_or_update(
+                    &cluster_id,
+                    &validator_public_key,
+                    &cluster_owner,
+                    &committee_id,
+                    cluster.clone(),
+                );
+                state.multi_state.validator_metadata.insert_or_update(
+                    &validator_public_key,
+                    &cluster_id,
+                    &cluster_owner,
+                    &committee_id,
+                    validator,
+                );
+            }
+            Self::UpdateClusterStatus { cluster_id, status } => {
+                if let Some(cluster) = state.multi_state.clusters.get_mut_by(&cluster_id) {
+                    cluster.liquidated = status;
+                }
+            }
+            Self::DeleteValidator { validator_pubkey } => {
+                state.multi_state.shares.remove(&validator_pubkey);
+                let metadata = state
+                    .multi_state
+                    .validator_metadata
+                    .remove(&validator_pubkey)
+                    .expect("Data should have existed");
+
+                if state
+                    .multi_state
+                    .validator_metadata
+                    .get_all_by(&metadata.cluster_id)
+                    .next()
+                    .is_none()
+                {
+                    state.multi_state.clusters.remove(&metadata.cluster_id);
+                    state.single_state.clusters.remove(&metadata.cluster_id);
+                }
+            }
+            Self::SetOwnerNonce { owner, nonce } => {
+                state.single_state.nonces.insert(owner, nonce);
+            }
+            Self::UpdateFeeRecipient {
+                owner,
+                fee_recipient,
+            } => {
+                state.multi_state.clusters.modify_all_by(&owner, |cluster| {
+                    cluster.fee_recipient = fee_recipient;
+                });
+            }
+            Self::UpdateGraffiti {
+                validator_pubkey,
+                graffiti,
+            } => {
+                if let Some(validator) = state
+                    .multi_state
+                    .validator_metadata
+                    .get_mut_by(&validator_pubkey)
+                {
+                    validator.graffiti = graffiti;
+                }
+            }
+        }
+    }
+}
+
 /// Top level NetworkDatabase that contains in memory storage for quick access
 /// to relevant information and a connection to the database
 #[derive(Debug)]
@@ -200,6 +434,54 @@ impl NetworkDatabase {
         self.state.subscribe()
     }
 
+    /// Resolve the current operator id using the transaction's view of the database.
+    pub fn get_own_operator_id_tx(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<OperatorId>, DatabaseError> {
+        if let Some(operator_id) = self.state().get_own_id() {
+            return Ok(Some(operator_id));
+        }
+
+        match &self.operator {
+            PubkeyOrId::Id(id) => Ok(Some(*id)),
+            PubkeyOrId::Pubkey(pubkey) => {
+                let encoded = BASE64_STANDARD.encode(
+                    pubkey
+                        .public_key_to_pem()
+                        .expect("Failed to encode RsaPublicKey"),
+                );
+                tx.prepare_cached(sql_operations::GET_OPERATOR_ID)?
+                    .query_row(params![encoded], |row| row.get(0))
+                    .optional()
+                    .map_err(DatabaseError::from)
+            }
+        }
+    }
+
+    /// Read the largest seen OperatorId through the active transaction.
+    pub fn get_max_operator_id_seen_tx(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<u64>, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
+            .query_row(params![], |row| row.get(0))
+            .map_err(DatabaseError::from)
+    }
+
+    /// Update the last processed block number in the database transaction.
+    pub fn processed_block_tx(
+        &self,
+        block_number: u64,
+        tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
+            .execute(params![block_number])?;
+        state_updates.set_last_processed_block(block_number);
+        Ok(())
+    }
+
     /// Update the last processed block number in the database
     /// Also, trigger a notification for other code to act on the new state
     pub fn processed_block(
@@ -207,10 +489,22 @@ impl NetworkDatabase {
         block_number: u64,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
-            .execute(params![block_number])?;
-        self.state
-            .send_modify(|state| state.single_state.last_processed_block = block_number);
+        let mut state_updates = PendingStateUpdates::default();
+        self.processed_block_tx(block_number, tx, &mut state_updates)?;
+        self.publish_pending_state_updates(state_updates);
+        Ok(())
+    }
+
+    /// Update the largest seen OperatorId in the database transaction.
+    pub fn set_max_operator_id_seen_tx(
+        &self,
+        operator_id: u64,
+        tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+            .execute(params![operator_id])?;
+        state_updates.set_max_operator_id_seen(operator_id);
         Ok(())
     }
 
@@ -220,10 +514,9 @@ impl NetworkDatabase {
         operator_id: u64,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
-            .execute(params![operator_id])?;
-        self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
-
+        let mut state_updates = PendingStateUpdates::default();
+        self.set_max_operator_id_seen_tx(operator_id, tx, &mut state_updates)?;
+        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 
@@ -262,6 +555,31 @@ impl NetworkDatabase {
     // Open a new connection
     pub fn connection(&self) -> Result<PoolConn, DatabaseError> {
         Ok(self.conn_pool.get()?)
+    }
+
+    /// Apply accumulated state updates and notify watchers once.
+    /// Call this only after the corresponding database transaction commits successfully.
+    pub fn publish_pending_state_updates(&self, state_updates: PendingStateUpdates) {
+        self.apply_state_updates(state_updates, true);
+    }
+
+    fn apply_pending_state_updates(&self, state_updates: PendingStateUpdates) {
+        self.apply_state_updates(state_updates, false);
+    }
+
+    fn apply_state_updates(&self, state_updates: PendingStateUpdates, publish: bool) {
+        if state_updates.is_empty() {
+            return;
+        }
+
+        if publish {
+            self.state.send_modify(|state| state_updates.apply(state));
+        } else {
+            self.state.send_if_modified(|state| {
+                state_updates.apply(state);
+                false
+            });
+        }
     }
 
     /// for convenience: Apply a modification to the state without triggering a notification
