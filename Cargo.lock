@@ -2494,6 +2494,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "docgen"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cli",
+ "indoc",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4096,6 +4107,15 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "indoc"
+version = "2.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]

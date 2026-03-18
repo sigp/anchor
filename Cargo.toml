@@ -4,6 +4,7 @@ members = [
     "anchor",
     "anchor/cli",
     "anchor/client",
+    "anchor/docgen",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
     "anchor/common/fork",
@@ -46,6 +47,7 @@ api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
 cli = { path = "anchor/cli" }
 client = { path = "anchor/client" }
+docgen = { path = "anchor/docgen" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
