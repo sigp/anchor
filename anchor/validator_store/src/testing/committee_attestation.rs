@@ -44,18 +44,13 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
     ];
 
     // Act
-    let stream = harness.validator_store.sign_attestations(attestations);
-    tokio::pin!(stream);
-    let mut results: SignAttestationsResult = Vec::new();
-    let collected = tokio::time::timeout(Duration::from_secs(60), async {
-        while let Some(item) = stream.next().await {
-            results.push(item);
-        }
-    })
-    .await;
+    let results: SignAttestationsResult = harness
+        .validator_store
+        .sign_attestations(attestations)
+        .collect()
+        .await;
 
     // Assert
-    assert!(collected.is_ok(), "stream should complete within timeout");
     assert_eq!(results.len(), 2, "expected one stream item per committee");
     for result in &results {
         assert!(result.is_ok(), "each item should be Ok (errors are caught)");
@@ -90,7 +85,7 @@ async fn sign_attestations_failure_isolation() {
     // Act
     let stream = harness.validator_store.sign_attestations(attestations);
     tokio::pin!(stream);
-    let first = tokio::time::timeout(Duration::from_secs(30), stream.next()).await;
+    let first = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
     let second = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
 
     // Assert — committee A completes, committee B stays stuck
@@ -119,17 +114,21 @@ async fn sign_attestations_not_synced() {
     let attestations = vec![harness.create_attestation(0, 0)];
 
     // Act
-    let stream = harness.validator_store.sign_attestations(attestations);
-    tokio::pin!(stream);
-    let item = stream.next().await.expect("stream should yield one item");
+    let results: SignAttestationsResult = harness
+        .validator_store
+        .sign_attestations(attestations)
+        .collect()
+        .await;
 
     // Assert
+    assert_eq!(results.len(), 1, "stream should yield exactly one item");
     assert!(
         matches!(
-            &item,
+            &results[0],
             Err(Error::SpecificError(crate::SpecificError::NotSynced))
         ),
-        "expected NotSynced error, got: {item:?}"
+        "expected NotSynced error, got: {:?}",
+        results[0]
     );
 }
 
