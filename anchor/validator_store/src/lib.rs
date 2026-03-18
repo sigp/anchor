@@ -35,7 +35,7 @@ use qbft_manager::{
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
-    CollectionError, SignatureCollectorManager, SignatureMetadata, SignatureRequester,
+    CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
     ValidatorSigningData,
 };
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
@@ -98,7 +98,7 @@ const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution"
 pub struct AnchorValidatorStore<T: SlotClock + 'static, E: EthSpec> {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
-    signature_collector: Arc<SignatureCollectorManager<T>>,
+    signature_collector: Box<dyn SignatureCollecting>,
     qbft_manager: Arc<QbftManager<E, T>>,
     slashing_protection: Arc<SlashingDatabase>,
     slashing_protection_last_prune: Mutex<Epoch>,
@@ -127,7 +127,7 @@ impl<T: SlotClock, E: EthSpec> AnchorValidatorStore<T, E> {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         database: Arc<NetworkDatabase>,
-        signature_collector: Arc<SignatureCollectorManager<T>>,
+        signature_collector: Box<dyn SignatureCollecting>,
         qbft_manager: Arc<QbftManager<E, T>>,
         slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,

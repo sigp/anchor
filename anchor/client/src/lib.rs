@@ -553,7 +553,7 @@ impl Client {
 
         let validator_store = AnchorValidatorStore::<_, E>::new(
             database.clone(),
-            signature_collector,
+            Box::new(signature_collector),
             qbft_manager,
             slashing_protection,
             config.disable_slashing_protection,
