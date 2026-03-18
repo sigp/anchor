@@ -1,19 +1,17 @@
 //! Shared test infrastructure for `AnchorValidatorStore` integration tests.
 //!
 //! Provides a `ValidatorStoreTestHarness` that wires up a real `AnchorValidatorStore` with
-//! in-memory database, single-operator QBFT, and a mock signature collector.
+//! in-memory database, mock consensus, and a mock signature collector.
 
-use std::{
-    collections::HashMap, future::Future, num::NonZeroU64, pin::Pin, sync::Arc, time::Duration,
-};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::NetworkDatabase;
 use fork::{Fork, ForkSchedule};
-use message_sender::testing::MockMessageSender;
 use openssl::rsa::Rsa;
 use parking_lot::Mutex;
-use qbft_manager::QbftManager;
+use qbft::Completed;
+use qbft_manager::{ConsensusDecider, QbftDecidable, QbftError, TimeoutMode};
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
     ValidatorSigningData,
@@ -21,23 +19,42 @@ use signature_collector::{
 use slashing_protection::SlashingDatabase;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
-    Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share, ValidatorIndex,
+    ValidatorMetadata, consensus::QbftDataValidator,
 };
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
 use tokio::sync::watch;
 use types::{
-    Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, Graffiti, Hash256,
-    MainnetEthSpec, Slot,
+    Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
+    Hash256, MainnetEthSpec, Slot,
 };
 use validator_store::AttestationToSign;
 
 use crate::{AnchorValidatorStore, VotingAssignments, VotingContext};
 
 pub const TEST_SLOT: u64 = 1;
-const SLOTS_PER_EPOCH: u64 = 32;
 const RSA_KEY_SIZE: u32 = 2048;
 const SLOT_DURATION_SECS: u64 = 12;
+
+// ==================== Mock consensus decider ====================
+
+/// Mock that instantly returns `Completed::TimedOut` for any consensus request.
+/// Removes the need for `QbftManager` infrastructure in tests that don't need real consensus.
+pub struct MockConsensusDecider;
+
+impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
+    async fn decide_instance<D: QbftDecidable<E>>(
+        &self,
+        _id: D::Id,
+        _initial: D,
+        _validator: Box<dyn QbftDataValidator<D>>,
+        _timeout_mode: TimeoutMode,
+        _committee_members: &IndexSet<OperatorId>,
+    ) -> Result<Completed<D>, QbftError> {
+        Ok(Completed::TimedOut)
+    }
+}
 
 // ==================== Mock signature collector ====================
 
@@ -143,11 +160,11 @@ pub fn create_committee_setup(
 // ==================== Test harness ====================
 
 pub struct ValidatorStoreTestHarness {
-    pub validator_store: Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec>>,
+    pub validator_store:
+        Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     pub committee_setups: Vec<CommitteeSetup>,
     pub captured_calls: CapturedCalls,
     pub is_synced_tx: watch::Sender<bool>,
-    pub slot_clock: ManualSlotClock,
     _slashing_db_dir: TempDir,
     _exit_signal: async_channel::Sender<()>,
 }
@@ -172,31 +189,13 @@ impl ValidatorStoreTestHarness {
         let slot_start = TEST_SLOT * SLOT_DURATION_SECS;
         slot_clock.set_current_time(Duration::from_secs(slot_start + SLOT_DURATION_SECS / 3 + 1));
 
-        // Minimal infrastructure for QbftManager (messages go nowhere)
-        let (network_tx, _network_rx) = tokio::sync::mpsc::unbounded_channel();
-        let processor_config = processor::Config {
-            max_workers: 4,
-            queue_size: Default::default(),
-        };
         let (executor, exit_signal) = create_test_executor();
-        let senders = processor::spawn(processor_config, executor.clone());
 
         let fork_schedule = Arc::new(ForkSchedule::new(
             Fork::Boole,
             ssv_types::domain_type::DomainType::default(),
             "test",
         ));
-
-        let msg_sender = Arc::new(MockMessageSender::new(network_tx, our_operator_id));
-        let qbft_manager = QbftManager::new(
-            senders,
-            our_operator_id.into(),
-            slot_clock.clone(),
-            msg_sender,
-            NonZeroU64::new(SLOTS_PER_EPOCH).expect("non-zero"),
-            fork_schedule.clone(),
-        )
-        .expect("QbftManager creation should succeed");
 
         let (mock_collector, captured_calls) = create_mock_collector();
 
@@ -258,7 +257,7 @@ impl ValidatorStoreTestHarness {
         let validator_store = AnchorValidatorStore::new(
             database,
             mock_collector,
-            qbft_manager,
+            Arc::new(MockConsensusDecider),
             slashing_protection,
             true, // disable slashing protection for simpler testing
             slot_clock.clone(),
@@ -279,7 +278,6 @@ impl ValidatorStoreTestHarness {
             committee_setups,
             captured_calls,
             is_synced_tx,
-            slot_clock,
             _slashing_db_dir: slashing_db_dir,
             _exit_signal: exit_signal,
         }
@@ -362,14 +360,6 @@ impl ValidatorStoreTestHarness {
                 signature: AggregateSignature::infinity(),
             }),
         }
-    }
-
-    /// Advances clock far past QBFT timeouts so single-operator consensus times out instantly.
-    pub fn set_clock_for_instant_timeout(&self) {
-        let one_third = TEST_SLOT * SLOT_DURATION_SECS + SLOT_DURATION_SECS / 3;
-        // Exceeds QBFT max cumulative timeout (rounds 1-8: 16s + rounds 9-12: 480s = 496s)
-        self.slot_clock
-            .set_current_time(Duration::from_secs(one_third + 500));
     }
 }
 

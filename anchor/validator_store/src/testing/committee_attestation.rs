@@ -14,7 +14,7 @@ use crate::Error;
 type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
 
 /// `sign_attestations` groups attestations by `CommitteeId` and produces one stream item per
-/// committee. With a single operator, QBFT times out for each committee, but the stream should
+/// committee. The mock consensus returns `TimedOut` for each committee, and the stream should
 /// still yield one `Ok(empty)` per committee (errors are caught internally).
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_produces_one_stream_item_per_committee() {
@@ -37,7 +37,6 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
     );
     let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], our_operator_id);
     harness.seed_voting_context();
-    harness.set_clock_for_instant_timeout();
     let attestations = vec![
         harness.create_attestation(0, 0),
         harness.create_attestation(0, 1),
@@ -83,7 +82,6 @@ async fn sign_attestations_failure_isolation() {
     // Only seed voting context for TEST_SLOT — committee B's attestation uses a different
     // slot, so its `get_voting_context` will block indefinitely.
     harness.seed_voting_context();
-    harness.set_clock_for_instant_timeout();
     let attestations = vec![
         harness.create_attestation(0, 0), // committee A, TEST_SLOT
         harness.create_attestation_at_slot(1, 0, TEST_SLOT + 1), // committee B, different slot

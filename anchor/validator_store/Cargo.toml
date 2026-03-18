@@ -36,8 +36,6 @@ validator_store = { workspace = true }
 [dev-dependencies]
 async-channel = { workspace = true }
 database = { workspace = true, features = ["test-utils"] }
-message_sender = { workspace = true, features = ["testing"] }
-processor = { workspace = true }
 rand = { workspace = true }
 ssz_types = { workspace = true }
 tempfile = "3.14.0"
