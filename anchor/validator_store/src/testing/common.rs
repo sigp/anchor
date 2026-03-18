@@ -149,6 +149,7 @@ pub struct ValidatorStoreTestHarness {
     pub is_synced_tx: watch::Sender<bool>,
     pub slot_clock: ManualSlotClock,
     _slashing_db_dir: TempDir,
+    _exit_signal: async_channel::Sender<()>,
 }
 
 impl ValidatorStoreTestHarness {
@@ -177,7 +178,7 @@ impl ValidatorStoreTestHarness {
             max_workers: 4,
             queue_size: Default::default(),
         };
-        let (executor, _signal) = create_test_executor();
+        let (executor, exit_signal) = create_test_executor();
         let senders = processor::spawn(processor_config, executor.clone());
 
         let fork_schedule = Arc::new(ForkSchedule::new(
@@ -280,6 +281,7 @@ impl ValidatorStoreTestHarness {
             is_synced_tx,
             slot_clock,
             _slashing_db_dir: slashing_db_dir,
+            _exit_signal: exit_signal,
         }
     }
 
