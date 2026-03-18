@@ -1,0 +1,14 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[dependencies]
+clap = { workspace = true }
+client = { workspace = true }
+ethereum_hashing = "0.7.0"
+global_config = { workspace = true }
+keygen = { workspace = true }
+keysplit = { workspace = true }
+version = { workspace = true }

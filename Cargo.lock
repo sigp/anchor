@@ -771,8 +771,8 @@ dependencies = [
  "async-channel 1.9.0",
  "bls",
  "clap",
+ "cli",
  "client",
- "ethereum_hashing 0.7.0",
  "futures",
  "global_config",
  "keygen",
@@ -786,7 +786,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "types",
- "version",
 ]
 
 [[package]]
@@ -1792,6 +1791,19 @@ name = "clap_lex"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
+
+[[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "client",
+ "ethereum_hashing 0.7.0",
+ "global_config",
+ "keygen",
+ "keysplit",
+ "version",
+]
 
 [[package]]
 name = "client"

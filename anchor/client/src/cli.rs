@@ -12,9 +12,16 @@ use clap::{
 };
 use logging::FileLoggingFlags;
 
-pub const FLAG_HEADER: &str = "Flags";
+pub const SECURITY_OPTIONS: &str = "Security Options";
+pub const EXTERNAL_APIS: &str = "External APIs";
+pub const HTTP_API: &str = "HTTP API";
+pub const NETWORK_OPTIONS: &str = "Network Options";
+pub const METRICS_OPTIONS: &str = "Metrics Options";
+pub const PAYLOAD_BUILDING_OPTIONS: &str = "Payload Building Options";
+pub const ADDITIONAL_OPTIONS: &str = "Additional Options";
 
 #[derive(Parser, Clone, Debug)]
+#[command(next_help_heading = SECURITY_OPTIONS)]
 pub struct SecurityOptions {
     #[clap(
         long,
@@ -40,6 +47,7 @@ pub struct SecurityOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[command(next_help_heading = EXTERNAL_APIS)]
 pub struct ExternalApis {
     #[clap(
         long,
@@ -122,19 +130,18 @@ pub struct ExternalApis {
                 Any sync distance larger than the `Medium` range is considered `Large`. \
                 For example, a value of '8,8,48' would mean: \
                 Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub beacon_nodes_sync_tolerances: Vec<u64>,
 }
 
 #[derive(Parser, Clone, Debug)]
+#[command(next_help_heading = HTTP_API)]
 pub struct HttpApiOptions {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
-        help_heading = FLAG_HEADER,
-        display_order = 0,
+        display_order = 0
     )]
     pub http: bool,
 
@@ -163,8 +170,7 @@ pub struct HttpApiOptions {
         help = "This is a safety flag to ensure that the user is aware that the http \
                 transport is unencrypted and using a custom HTTP address is unsafe.",
         display_order = 0,
-        requires = "http_address",
-        help_heading = FLAG_HEADER,
+        requires = "http_address"
     )]
     pub unencrypted_http_transport: bool,
 
@@ -192,12 +198,12 @@ pub struct HttpApiOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[command(next_help_heading = METRICS_OPTIONS)]
 pub struct MetricsOptions {
     #[clap(
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        display_order = 0
     )]
     pub metrics: bool,
 
@@ -227,8 +233,7 @@ pub struct MetricsOptions {
                 Note: This flag is automatically enabled for <= 64 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub enable_high_validator_count_metrics: bool,
 
@@ -246,6 +251,7 @@ pub struct MetricsOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[command(next_help_heading = NETWORK_OPTIONS)]
 pub struct NetworkOptions {
     #[clap(
         long,
@@ -450,17 +456,11 @@ pub struct NetworkOptions {
     #[clap(
         long,
         help = "Subscribe to all subnets, regardless of committee membership.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        display_order = 0
     )]
     pub subscribe_all_subnets: bool,
 
-    #[clap(
-        long,
-        help = "Disables gossipsub peer scoring.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
+    #[clap(long, help = "Disables gossipsub peer scoring.", display_order = 0)]
     pub disable_gossipsub_peer_scoring: bool,
 
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
@@ -468,6 +468,7 @@ pub struct NetworkOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[command(next_help_heading = PAYLOAD_BUILDING_OPTIONS)]
 pub struct PayloadBuildingOptions {
     #[clap(
         long,
@@ -485,7 +486,6 @@ pub struct PayloadBuildingOptions {
         alias = "private-tx-proposals",
         help = "Deprecated and ignored. Validator registrations are now always created.",
         display_order = 0,
-        help_heading = FLAG_HEADER,
         hide = true
     )]
     pub builder_proposals: bool,
@@ -506,8 +506,7 @@ pub struct PayloadBuildingOptions {
         long,
         help = "If this flag is set, Anchor will always prefer blocks \
                 constructed by builders, regardless of payload value.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub prefer_builder_proposals: bool,
 }
@@ -537,7 +536,7 @@ pub struct Node {
         long,
         help = "Disable the latency measurement service.",
         display_order = 0,
-        help_heading = FLAG_HEADER
+        help_heading = ADDITIONAL_OPTIONS,
     )]
     pub disable_latency_measurement_service: bool,
 
@@ -584,7 +583,7 @@ pub struct Node {
                 to prevent QBFT protocol violations.",
         display_order = 0,
         default_value_t = false,
-        help_heading = FLAG_HEADER,
+        help_heading = ADDITIONAL_OPTIONS,
         action = ArgAction::Set
     )]
     pub operator_dg: bool,
@@ -597,7 +596,8 @@ pub struct Node {
                 messages for slots after startup to detect duplicate operator instances.",
         display_order = 0,
         default_value_t = 2,
-        requires = "operator_dg"
+        requires = "operator_dg",
+        help_heading = ADDITIONAL_OPTIONS,
     )]
     pub operator_dg_wait_epochs: u64,
 
@@ -609,7 +609,7 @@ pub struct Node {
                 Using this flag might reduce validator performance if cluster operators have \
                 struggling nodes, but can help to avoid finalization of a faulty majority fork.",
         display_order = 0,
-        help_heading = FLAG_HEADER,
+        help_heading = ADDITIONAL_OPTIONS,
     )]
     pub strict_mfp: bool,
 

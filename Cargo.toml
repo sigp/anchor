@@ -2,6 +2,7 @@
 # Extra tooling projects will be added.
 members = [
     "anchor",
+    "anchor/cli",
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
@@ -43,6 +44,7 @@ edition = "2024"
 anchor_validator_store = { path = "anchor/validator_store" }
 api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
+cli = { path = "anchor/cli" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
