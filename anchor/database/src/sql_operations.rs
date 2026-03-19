@@ -50,16 +50,6 @@ pub const GET_ALL_CLUSTERS: &str = r#"
     LEFT JOIN owners o ON c.owner = o.owner
     JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
 "#;
-pub const GET_CLUSTER: &str = r#"
-    SELECT
-        c.cluster_id,
-        c.owner,
-        o.fee_recipient,
-        c.liquidated
-    FROM clusters c
-    LEFT JOIN owners o ON c.owner = o.owner
-    WHERE c.cluster_id = ?1
-"#;
 pub const GET_CLUSTER_MEMBERS: &str = r#"
     SELECT operator_id
     FROM cluster_members
@@ -75,12 +65,6 @@ pub const INSERT_VALIDATOR: &str = r#"
 "#;
 pub const DELETE_VALIDATOR: &str = r#"DELETE from validators WHERE validator_pubkey = ?1"#;
 pub const GET_ALL_VALIDATORS: &str = r#"SELECT * FROM validators"#;
-pub const GET_VALIDATOR: &str = r#"
-    SELECT validator_pubkey, cluster_id, validator_index, graffiti
-    FROM validators
-    WHERE validator_pubkey = ?1
-"#;
-
 // Shares
 pub const INSERT_SHARE: &str = r#"
     INSERT INTO shares
@@ -92,13 +76,6 @@ pub const GET_SHARES: &str = r#"
     SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey
     FROM shares WHERE operator_id = ?1
 "#;
-pub const HAS_OPERATOR_SHARE_FOR_VALIDATOR: &str = r#"
-    SELECT 1
-    FROM shares
-    WHERE validator_pubkey = ?1 AND operator_id = ?2
-    LIMIT 1
-"#;
-
 // Misc Datta
 pub const INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT: &str = r#"
     INSERT INTO owners (owner, fee_recipient) VALUES (?1, ?2)

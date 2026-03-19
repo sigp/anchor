@@ -1,7 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use bls::PublicKeyBytes;
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
 use types::{Address, Graffiti};
@@ -12,29 +12,6 @@ use crate::{
 
 /// Implements all validator specific database functionality
 impl NetworkDatabase {
-    pub fn get_validator_metadata_tx(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-        tx: &Transaction<'_>,
-    ) -> Result<Option<ssv_types::ValidatorMetadata>, DatabaseError> {
-        tx.prepare_cached(sql_operations::GET_VALIDATOR)?
-            .query_row(params![validator_pubkey.to_string()], |row| {
-                ssv_types::ValidatorMetadata::try_from(row)
-            })
-            .optional()
-            .map_err(DatabaseError::from)
-    }
-
-    pub fn get_validator_index_tx(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-        tx: &Transaction<'_>,
-    ) -> Result<Option<ValidatorIndex>, DatabaseError> {
-        Ok(self
-            .get_validator_metadata_tx(validator_pubkey, tx)?
-            .and_then(|metadata| metadata.index))
-    }
-
     /// Update the fee recipient address in the active transaction and queue the matching state
     /// update.
     pub fn update_fee_recipient_tx(

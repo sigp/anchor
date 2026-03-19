@@ -1,6 +1,6 @@
 use bls::PublicKeyBytes;
-use rusqlite::{OptionalExtension, Transaction, params};
-use ssv_types::{Cluster, ClusterId, ClusterMember, OperatorId, Share, ValidatorMetadata};
+use rusqlite::{Transaction, params};
+use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::Address;
 
 use super::{DatabaseError, NetworkDatabase, PendingStateUpdates, sql_operations};
@@ -71,53 +71,6 @@ impl NetworkDatabase {
         self.insert_validator_tx(cluster, validator, shares, tx, &mut state_updates)?;
         self.apply_pending_state_updates(state_updates);
         Ok(())
-    }
-
-    pub fn get_cluster_tx(
-        &self,
-        cluster_id: ClusterId,
-        tx: &Transaction<'_>,
-    ) -> Result<Option<Cluster>, DatabaseError> {
-        let cluster_members = self.get_cluster_members_tx(cluster_id, tx)?;
-        if cluster_members.is_empty() {
-            return Ok(None);
-        }
-
-        tx.prepare_cached(sql_operations::GET_CLUSTER)?
-            .query_row(params![*cluster_id], |row| {
-                Cluster::try_from((row, cluster_members.clone()))
-            })
-            .optional()
-            .map_err(DatabaseError::from)
-    }
-
-    pub fn get_cluster_by_validator_tx(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-        tx: &Transaction<'_>,
-    ) -> Result<Option<Cluster>, DatabaseError> {
-        let Some(metadata) = self.get_validator_metadata_tx(validator_pubkey, tx)? else {
-            return Ok(None);
-        };
-
-        self.get_cluster_tx(metadata.cluster_id, tx)
-    }
-
-    fn get_cluster_members_tx(
-        &self,
-        cluster_id: ClusterId,
-        tx: &Transaction<'_>,
-    ) -> Result<Vec<ClusterMember>, DatabaseError> {
-        let mut stmt = tx.prepare_cached(sql_operations::GET_CLUSTER_MEMBERS)?;
-        let members = stmt
-            .query_map([cluster_id.0], |row| {
-                Ok(ClusterMember {
-                    operator_id: row.get(0)?,
-                    cluster_id,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(members)
     }
 
     /// Mark the cluster as liquidated or active in the active transaction and queue the matching
