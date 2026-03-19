@@ -93,18 +93,18 @@ impl EventProcessor {
         for log in logs {
             let block_number = log.block_number.unwrap_or(end_block);
 
-            if let Some(current_block_number) = current_block {
-                if current_block_number != block_number {
-                    self.flush_buffered_block(
-                        &mut conn,
-                        &block_logs,
-                        live,
-                        current_block_number,
-                        &mut validators_added,
-                        &mut validators_removed,
-                    )?;
-                    block_logs.clear();
-                }
+            if let Some(current_block_number) =
+                current_block.filter(|current_block_number| *current_block_number != block_number)
+            {
+                self.flush_buffered_block(
+                    &mut conn,
+                    &block_logs,
+                    live,
+                    current_block_number,
+                    &mut validators_added,
+                    &mut validators_removed,
+                )?;
+                block_logs.clear();
             }
 
             current_block = Some(block_number);
