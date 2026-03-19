@@ -86,46 +86,45 @@ impl EventProcessor {
             .connection()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
-        // Buffer the current block so each call to `process_block_logs` owns exactly one block.
+        // Buffer the current block so each transaction/process step owns exactly one block.
         let mut current_block = None;
         let mut block_logs = Vec::new();
 
         for log in logs {
             let block_number = log.block_number.unwrap_or(end_block);
 
-            if let Some(current_block_number) =
-                current_block.filter(|current_block_number| *current_block_number != block_number)
+            // We hit a block boundary, so flush the previous block before buffering this one.
+            if current_block
+                .is_some_and(|current_block_number| current_block_number != block_number)
             {
-                self.flush_buffered_block(
+                self.flush_current_block_if_any(
                     &mut conn,
-                    &block_logs,
+                    &mut current_block,
+                    &mut block_logs,
                     live,
-                    current_block_number,
                     &mut validators_added,
                     &mut validators_removed,
                 )?;
-                block_logs.clear();
             }
 
             current_block = Some(block_number);
             block_logs.push(log);
         }
 
-        if let Some(block_number) = current_block {
-            self.flush_buffered_block(
-                &mut conn,
-                &block_logs,
-                live,
-                block_number,
-                &mut validators_added,
-                &mut validators_removed,
-            )?;
-        }
+        // Flush the final buffered block. The loop above only flushes when it sees the next block.
+        let last_flushed_block = self.flush_current_block_if_any(
+            &mut conn,
+            &mut current_block,
+            &mut block_logs,
+            live,
+            &mut validators_added,
+            &mut validators_removed,
+        )?;
 
-        if current_block != Some(end_block) {
-            // Flush an empty block so the last processed block still advances when the fetched
-            // range ends on a block with no relevant logs.
-            self.flush_buffered_block(
+        if last_flushed_block != Some(end_block) {
+            // The fetched range ended on a block with no relevant logs, so flush an empty block
+            // to still advance `last_processed_block` to `end_block`.
+            self.process_block_logs(
                 &mut conn,
                 &[],
                 live,
@@ -149,15 +148,19 @@ impl EventProcessor {
         Ok(())
     }
 
-    fn flush_buffered_block(
+    fn flush_current_block_if_any(
         &self,
         conn: &mut Connection,
-        block_logs: &[Log],
+        current_block: &mut Option<u64>,
+        block_logs: &mut Vec<Log>,
         live: bool,
-        block_number: u64,
         validators_added: &mut u64,
         validators_removed: &mut u64,
-    ) -> Result<(), ExecutionError> {
+    ) -> Result<Option<u64>, ExecutionError> {
+        let Some(block_number) = current_block.take() else {
+            return Ok(None);
+        };
+
         self.process_block_logs(
             conn,
             block_logs,
@@ -165,7 +168,9 @@ impl EventProcessor {
             block_number,
             validators_added,
             validators_removed,
-        )
+        )?;
+        block_logs.clear();
+        Ok(Some(block_number))
     }
 
     fn process_block_logs(
