@@ -551,9 +551,9 @@ impl Client {
         // Spawn the network listening task
         executor.spawn(network.run::<E>(), "network");
 
-        let validator_store = AnchorValidatorStore::<_, E>::new(
+        let validator_store = AnchorValidatorStore::<_, E, _>::new(
             database.clone(),
-            signature_collector,
+            Box::new(signature_collector),
             qbft_manager,
             slashing_protection,
             config.disable_slashing_protection,

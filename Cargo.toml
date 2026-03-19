@@ -71,24 +71,23 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse latest from unstable (d62054e)
-# todo: update after https://github.com/sigp/lighthouse/pull/8880 is merged
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "f4b5b03" }
+# Lighthouse latest from unstable (4b3a9d3)
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "4b3a9d3" }
 
 alloy = { version = "1.2.1", features = [
     "sol-types",
@@ -172,26 +171,6 @@ tree_hash = "0.12.0"
 tree_hash_derive = "0.12.0"
 typenum = "1.18"
 zeroize = "1.8.1"
-
-# todo: Remove once streaming ValidatorStore PR is merged
-# https://github.com/sigp/lighthouse/pull/8880
-[patch.'https://github.com/sigp/lighthouse']
-beacon_node_fallback = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-bls = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-eth2 = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-eth2_keystore = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-eth2_network_config = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-health_metrics = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-metrics = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-network_utils = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-slashing_protection = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-slot_clock = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-task_executor = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-types = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-validator_metrics = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-validator_services = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-validator_store = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
-workspace_members = { git = "https://github.com/shane-moore/lighthouse", rev = "66ff63a" }
 
 [patch.crates-io]
 quick-protobuf = { git = "https://github.com/sigp/quick-protobuf.git", rev = "87c4ccb9bb2af494de375f5f6c62850badd26304" }
