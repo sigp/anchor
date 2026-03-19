@@ -441,6 +441,33 @@ pub fn create_validator_removed_log_at_position(
     )
 }
 
+/// Helper function to create a ValidatorExited event log.
+pub fn create_validator_exited_log(
+    owner: Address,
+    operator_ids: Vec<u64>,
+    public_key: Bytes,
+) -> Log {
+    let event = SSVContract::ValidatorExited {
+        owner,
+        operatorIds: operator_ids,
+        publicKey: public_key,
+    };
+
+    let mut topics = vec![SSVContract::ValidatorExited::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(12402),
+        Some(FixedBytes::default()),
+        Some(0),
+    )
+}
+
 /// Verify that an operator is soft deleted (removed from memory but still exists in database with
 /// removed=TRUE)
 pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: OperatorId) {

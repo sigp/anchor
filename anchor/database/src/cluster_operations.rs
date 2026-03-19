@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use bls::PublicKeyBytes;
 use rusqlite::{OptionalExtension, Transaction, params};
 use ssv_types::{Cluster, ClusterId, ClusterMember, OperatorId, Share, ValidatorMetadata};
@@ -142,10 +144,15 @@ impl NetworkDatabase {
         validator_pubkey: &PublicKeyBytes,
         tx: &Transaction<'_>,
     ) -> Result<Option<Cluster>, DatabaseError> {
-        let Some(cluster_id) = tx
+        let Some((cluster_id, owner, fee_recipient, liquidated)) = tx
             .prepare_cached(sql_operations::GET_CLUSTER_BY_VALIDATOR)?
             .query_row(params![validator_pubkey.to_string()], |row| {
-                Ok(ClusterId(row.get("cluster_id")?))
+                Ok((
+                    ClusterId(row.get("cluster_id")?),
+                    row.get::<_, String>("owner")?,
+                    row.get::<_, Option<String>>("fee_recipient")?,
+                    row.get("liquidated")?,
+                ))
             })
             .optional()?
         else {
@@ -162,12 +169,24 @@ impl NetworkDatabase {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        tx.prepare_cached(sql_operations::GET_CLUSTER_BY_VALIDATOR)?
-            .query_row(params![validator_pubkey.to_string()], |row| {
-                Cluster::try_from((row, cluster_members))
-            })
-            .optional()
-            .map_err(DatabaseError::from)
+        let owner =
+            Address::from_str(&owner).map_err(|err| DatabaseError::SQLError(err.to_string()))?;
+        let fee_recipient = match fee_recipient {
+            Some(fee_recipient) => Address::from_str(&fee_recipient)
+                .map_err(|err| DatabaseError::SQLError(err.to_string()))?,
+            None => owner,
+        };
+
+        Ok(Some(Cluster {
+            cluster_id,
+            owner,
+            fee_recipient,
+            liquidated,
+            cluster_members: cluster_members
+                .into_iter()
+                .map(|member| member.operator_id)
+                .collect(),
+        }))
     }
 
     /// Bump the nonce of the owner in the active transaction and queue the matching state update.

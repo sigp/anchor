@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use alloy::primitives::{Address, Bytes};
 use database::test_utils::queries;
@@ -321,4 +321,63 @@ async fn test_keysplit_mode_processing() {
 
     // Verify operator was stored even in KeySplit mode
     verify_operator_stored(&processor, OperatorId(operator_id));
+}
+
+#[tokio::test]
+async fn test_validator_exit_channel_failure_is_non_fatal() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+
+    let operator_logs: Vec<_> = operator_ids
+        .iter()
+        .map(|operator_id| {
+            create_operator_added_log(
+                *operator_id,
+                Address::random(),
+                create_valid_rsa_public_key_bytes(),
+                1000 + *operator_id,
+            )
+        })
+        .collect();
+    let operator_result = test.processor.process_logs(operator_logs, true, 12400);
+    assert!(
+        operator_result.is_ok(),
+        "operator setup batch should succeed"
+    );
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+    let public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    let add_result = test.processor.process_logs(
+        vec![create_validator_added_log(
+            owner,
+            operator_ids.clone(),
+            public_key.clone(),
+            shares,
+        )],
+        true,
+        12401,
+    );
+    assert!(add_result.is_ok(), "validator setup event should succeed");
+    test.processor
+        .db
+        .set_validator_indices(HashMap::from([(
+            validator_pubkey_bytes,
+            ValidatorIndex(123),
+        )]))
+        .expect("validator index should be set before exit processing");
+
+    let result = test.processor.process_logs(
+        vec![create_validator_exited_log(owner, operator_ids, public_key)],
+        true,
+        12402,
+    );
+    assert!(
+        result.is_ok(),
+        "post-commit exit send failures should be logged and not returned"
+    );
+    assert_eq!(test.processor.db.state().get_last_processed_block(), 12402);
 }

@@ -119,6 +119,8 @@ impl EventProcessor {
         }
 
         if current_block != Some(end_block) {
+            // Flush an empty block so the last processed block still advances when the fetched
+            // range ends on a block with no relevant logs.
             self.process_block_logs(
                 &mut conn,
                 &[],
@@ -225,14 +227,11 @@ impl EventProcessor {
         tx.commit()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
         self.db.publish_pending_state_updates(state_updates);
-        self.execute_post_commit_actions(post_commit_actions)?;
+        self.execute_post_commit_actions(post_commit_actions);
         Ok(())
     }
 
-    fn execute_post_commit_actions(
-        &self,
-        post_commit_actions: Vec<PostCommitAction>,
-    ) -> Result<(), ExecutionError> {
+    fn execute_post_commit_actions(&self, post_commit_actions: Vec<PostCommitAction>) {
         let Mode::Node {
             index_sync_tx,
             exit_tx,
@@ -240,9 +239,12 @@ impl EventProcessor {
         } = &self.mode
         else {
             debug_assert!(post_commit_actions.is_empty());
-            return Ok(());
+            return;
         };
 
+        // These side effects run after the block transaction commits and NetworkState is
+        // published, so failures are logged but not returned to the sync loop. Retrying from the
+        // caller would only reprocess already-committed events.
         for action in post_commit_actions {
             match action {
                 PostCommitAction::IndexSync(validator_pubkey) => {
@@ -253,26 +255,21 @@ impl EventProcessor {
                 PostCommitAction::ValidatorExit(request) => {
                     let validator_pubkey = request.validator_pubkey;
 
-                    exit_tx.send(request).map_err(|err| {
+                    if let Err(err) = exit_tx.send(request) {
                         error!(
                             validator_pubkey = %validator_pubkey,
                             ?err,
                             "Failed to send validator exit request to processor"
                         );
-                        ExecutionError::Misc(
-                            "Failed to send validator exit request to processor".to_string(),
-                        )
-                    })?;
-
-                    info!(
-                        validator_pubkey = %validator_pubkey,
-                        "Queued validator for exit processing"
-                    );
+                    } else {
+                        info!(
+                            validator_pubkey = %validator_pubkey,
+                            "Queued validator for exit processing"
+                        );
+                    }
                 }
             }
         }
-
-        Ok(())
     }
 
     // A new Operator has been registered in the network.

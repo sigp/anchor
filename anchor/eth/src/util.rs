@@ -172,9 +172,9 @@ pub fn validate_operators(
             .operator_exists_tx(*operator_id, tx)
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
         if !exists {
-            return Err(ExecutionError::Database(
-                "One or more operators do not exist".to_string(),
-            ));
+            return Err(ExecutionError::Database(format!(
+                "Operator {operator_id} does not exist"
+            )));
         }
     }
 
