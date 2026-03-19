@@ -1,7 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use bls::PublicKeyBytes;
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
 use types::{Address, Graffiti};
@@ -76,6 +76,37 @@ impl NetworkDatabase {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(DatabaseError::from(e)),
         }
+    }
+
+    /// Load validator metadata by public key through the transaction's view of the database.
+    pub fn get_validator_metadata_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<ssv_types::ValidatorMetadata>, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_VALIDATOR)?
+            .query_row(params![validator_pubkey.to_string()], |row| row.try_into())
+            .optional()
+            .map_err(DatabaseError::from)
+    }
+
+    /// Check whether the current operator has a share for a validator in the transaction view.
+    pub fn has_own_share_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        let Some(operator_id) = self.get_own_operator_id_tx(tx)? else {
+            return Ok(false);
+        };
+
+        Ok(tx
+            .prepare_cached(sql_operations::GET_OWN_SHARE)?
+            .query_row(params![validator_pubkey.to_string(), *operator_id], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some())
     }
 
     /// Update the Graffiti for a Validator

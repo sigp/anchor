@@ -4,7 +4,7 @@ use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
 use bls::PublicKeyBytes;
 use database::{NetworkDatabase, PendingStateUpdates, SlashingProtection};
 use indexmap::IndexSet;
-use rusqlite::Transaction;
+use rusqlite::{Connection, Transaction};
 use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
@@ -68,105 +68,68 @@ impl EventProcessor {
         live: bool,
         end_block: u64,
     ) -> Result<(), ExecutionError> {
-        debug!(logs_count = logs.len(), "Starting log processing");
+        let logs_count = logs.len();
+        debug!(logs_count, "Starting log processing");
         let timer = metrics::start_timer(&metrics::EXECUTION_LOG_PROCESSING_TIME);
 
         // Counters for summary logging
         let mut validators_added = 0;
         let mut validators_removed = 0;
 
-        // Open a transaction for the log batch.
         let mut conn = self
             .db
             .connection()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
-        let mut state_updates = PendingStateUpdates::default();
-        let mut post_commit_actions = Vec::new();
 
-        for (index, log) in logs.iter().enumerate() {
-            trace!(log_index = index, topic = ?log.topic0(), "Processing individual log");
+        let mut current_block = None;
+        let mut block_logs = Vec::new();
 
-            // Extract the topic0 to identify the event type
-            let topic0 = match log.topic0() {
-                Some(topic) => topic,
-                None => {
-                    warn!("Log missing topic0, skipping");
-                    continue;
+        for log in logs {
+            let block_number = log.block_number.unwrap_or(end_block);
+
+            match current_block {
+                Some(current_block_number) if current_block_number != block_number => {
+                    self.process_block_logs(
+                        &mut conn,
+                        &block_logs,
+                        live,
+                        current_block_number,
+                        &mut validators_added,
+                        &mut validators_removed,
+                    )?;
+                    block_logs.clear();
+                    current_block = Some(block_number);
                 }
-            };
-
-            // Process log based on signature hash
-            let result = match *topic0 {
-                SSVContract::OperatorAdded::SIGNATURE_HASH => {
-                    self.process_operator_added(log, &tx, &mut state_updates)
-                }
-
-                SSVContract::OperatorRemoved::SIGNATURE_HASH => {
-                    self.process_operator_removed(log, &tx, &mut state_updates)
-                }
-
-                SSVContract::ValidatorAdded::SIGNATURE_HASH => self
-                    .process_validator_added(
-                        log,
-                        &tx,
-                        &mut state_updates,
-                        &mut post_commit_actions,
-                    )
-                    .inspect(|_| validators_added += 1),
-
-                SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
-                    .process_validator_removed(log, &tx, &mut state_updates)
-                    .inspect(|_| validators_removed += 1),
-
-                SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
-                    self.process_cluster_liquidated(log, &tx, &mut state_updates)
-                }
-
-                SSVContract::ClusterReactivated::SIGNATURE_HASH => {
-                    self.process_cluster_reactivated(log, &tx, &mut state_updates)
-                }
-
-                SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
-                    self.process_fee_recipient_updated(log, &tx, &mut state_updates)
-                }
-
-                SSVContract::ValidatorExited::SIGNATURE_HASH => {
-                    self.process_validator_exited(log, &tx, live, &mut post_commit_actions)
-                }
-                _ => {
-                    debug!(?topic0, "Unknown event signature, skipping");
-                    continue;
-                }
-            };
-
-            // Handle any errors from the event processing
-            if let Err(e) = result {
-                let tx_hash = log
-                    .transaction_hash
-                    .map(|hash| hash.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                if live {
-                    warn!(tx_hash, "Malformed event: {e}");
-                } else {
-                    trace!(tx_hash, "Malformed event: {e}");
-                }
-                continue;
+                Some(_) => {}
+                None => current_block = Some(block_number),
             }
+
+            block_logs.push(log);
+        }
+
+        if let Some(block_number) = current_block {
+            self.process_block_logs(
+                &mut conn,
+                &block_logs,
+                live,
+                block_number,
+                &mut validators_added,
+                &mut validators_removed,
+            )?;
+        }
+
+        if current_block != Some(end_block) {
+            self.process_block_logs(
+                &mut conn,
+                &[],
+                live,
+                end_block,
+                &mut validators_added,
+                &mut validators_removed,
+            )?;
         }
 
         metrics::stop_timer(timer);
-        self.db
-            .processed_block_tx(end_block, &tx, &mut state_updates)
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
-
-        // Commit everything!
-        tx.commit()
-            .map_err(|e| ExecutionError::Database(e.to_string()))?;
-        self.db.publish_pending_state_updates(state_updates);
-        self.execute_post_commit_actions(post_commit_actions)?;
 
         // Log summaries for validator operations
         if validators_added > 0 {
@@ -176,7 +139,93 @@ impl EventProcessor {
             debug!(count = validators_removed, "Removed validators");
         }
 
-        debug!(logs_count = logs.len(), "Completed processing logs");
+        debug!(logs_count, "Completed processing logs");
+        Ok(())
+    }
+
+    fn process_block_logs(
+        &self,
+        conn: &mut Connection,
+        logs: &[Log],
+        live: bool,
+        block_number: u64,
+        validators_added: &mut u64,
+        validators_removed: &mut u64,
+    ) -> Result<(), ExecutionError> {
+        let tx = conn
+            .transaction()
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        let mut state_updates = PendingStateUpdates::default();
+        let mut post_commit_actions = Vec::new();
+
+        for (index, log) in logs.iter().enumerate() {
+            trace!(
+                block_number,
+                log_index = index,
+                topic = ?log.topic0(),
+                "Processing individual log"
+            );
+
+            let topic0 = match log.topic0() {
+                Some(topic) => topic,
+                None => {
+                    warn!(block_number, "Log missing topic0, skipping");
+                    continue;
+                }
+            };
+
+            let result = match *topic0 {
+                SSVContract::OperatorAdded::SIGNATURE_HASH => {
+                    self.process_operator_added(log, &tx, &mut state_updates)
+                }
+                SSVContract::OperatorRemoved::SIGNATURE_HASH => {
+                    self.process_operator_removed(log, &tx, &mut state_updates)
+                }
+                SSVContract::ValidatorAdded::SIGNATURE_HASH => self
+                    .process_validator_added(log, &tx, &mut state_updates, &mut post_commit_actions)
+                    .inspect(|_| *validators_added += 1),
+                SSVContract::ValidatorRemoved::SIGNATURE_HASH => self
+                    .process_validator_removed(log, &tx, &mut state_updates)
+                    .inspect(|_| *validators_removed += 1),
+                SSVContract::ClusterLiquidated::SIGNATURE_HASH => {
+                    self.process_cluster_liquidated(log, &tx, &mut state_updates)
+                }
+                SSVContract::ClusterReactivated::SIGNATURE_HASH => {
+                    self.process_cluster_reactivated(log, &tx, &mut state_updates)
+                }
+                SSVContract::FeeRecipientAddressUpdated::SIGNATURE_HASH => {
+                    self.process_fee_recipient_updated(log, &tx, &mut state_updates)
+                }
+                SSVContract::ValidatorExited::SIGNATURE_HASH => {
+                    self.process_validator_exited(log, &tx, live, &mut post_commit_actions)
+                }
+                _ => {
+                    debug!(block_number, ?topic0, "Unknown event signature, skipping");
+                    continue;
+                }
+            };
+
+            if let Err(e) = result {
+                let tx_hash = log
+                    .transaction_hash
+                    .map(|hash| hash.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                if live {
+                    warn!(block_number, tx_hash, "Malformed event: {e}");
+                } else {
+                    trace!(block_number, tx_hash, "Malformed event: {e}");
+                }
+            }
+        }
+
+        self.db
+            .processed_block_tx(block_number, &tx, &mut state_updates)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        self.db.publish_pending_state_updates(state_updates);
+        self.execute_post_commit_actions(post_commit_actions)?;
         Ok(())
     }
 
@@ -298,14 +347,16 @@ impl EventProcessor {
             );
             ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
         })?;
-        self.db.insert_operator_tx(&operator, tx, state_updates).map_err(|e| {
-            debug!(
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to insert operator into database"
-            );
-            ExecutionError::Database(format!("Failed to insert operator into database: {e}"))
-        })?;
+        self.db
+            .insert_operator_tx(&operator, tx, state_updates)
+            .map_err(|e| {
+                debug!(
+                    operator_id = ?operator_id,
+                    error = %e,
+                    "Failed to insert operator into database"
+                );
+                ExecutionError::Database(format!("Failed to insert operator into database: {e}"))
+            })?;
 
         debug!(
             operator_id = ?operator_id,

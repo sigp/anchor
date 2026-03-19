@@ -215,6 +215,27 @@ pub fn create_mock_log(
     transaction_hash: Option<FixedBytes<32>>,
     log_index: Option<u64>,
 ) -> Log {
+    create_mock_log_at_position(
+        address,
+        topics,
+        data,
+        block_number,
+        Some(0),
+        transaction_hash,
+        log_index,
+    )
+}
+
+/// Helper function to create a mock Log object with explicit block and transaction position.
+pub fn create_mock_log_at_position(
+    address: Address,
+    topics: Vec<FixedBytes<32>>,
+    data: Bytes,
+    block_number: Option<u64>,
+    transaction_index: Option<u64>,
+    transaction_hash: Option<FixedBytes<32>>,
+    log_index: Option<u64>,
+) -> Log {
     let log_data = LogData::new(topics, data).expect("Failed to create log data");
 
     Log {
@@ -226,7 +247,7 @@ pub fn create_mock_log(
         block_number,
         block_timestamp: Some(1234567890u64),
         transaction_hash,
-        transaction_index: Some(0u64),
+        transaction_index,
         log_index,
         removed: false,
     }
@@ -281,6 +302,40 @@ pub fn create_operator_added_log(
     )
 }
 
+/// Helper function to create an OperatorAdded event log at an explicit position.
+pub fn create_operator_added_log_at_position(
+    operator_id: u64,
+    owner: Address,
+    public_key: Bytes,
+    fee: u64,
+    block_number: u64,
+    transaction_index: u64,
+    log_index: u64,
+) -> Log {
+    let event = SSVContract::OperatorAdded {
+        operatorId: operator_id,
+        owner,
+        publicKey: public_key,
+        fee: U256::from(fee),
+    };
+
+    let mut topics = vec![SSVContract::OperatorAdded::SIGNATURE_HASH];
+    topics.push(encode_operator_id_topic(operator_id));
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log_at_position(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(block_number),
+        Some(transaction_index),
+        Some(FixedBytes::default()),
+        Some(log_index),
+    )
+}
+
 /// Helper function to create a ValidatorAdded event log
 pub fn create_validator_added_log(
     owner: Address,
@@ -321,6 +376,48 @@ pub fn create_validator_added_log(
     )
 }
 
+/// Helper function to create a ValidatorAdded event log at an explicit position.
+pub fn create_validator_added_log_at_position(
+    owner: Address,
+    operator_ids: Vec<u64>,
+    public_key: Bytes,
+    shares: Bytes,
+    block_number: u64,
+    transaction_index: u64,
+    log_index: u64,
+) -> Log {
+    let cluster = SSVContract::Cluster {
+        validatorCount: 1,
+        networkFeeIndex: 0,
+        index: 0,
+        active: true,
+        balance: U256::from(0),
+    };
+
+    let event = SSVContract::ValidatorAdded {
+        owner,
+        operatorIds: operator_ids,
+        publicKey: public_key,
+        shares,
+        cluster,
+    };
+
+    let mut topics = vec![SSVContract::ValidatorAdded::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log_at_position(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(block_number),
+        Some(transaction_index),
+        Some(FixedBytes::default()),
+        Some(log_index),
+    )
+}
+
 /// Helper function to create an OperatorRemoved event log
 pub fn create_operator_removed_log(operator_id: u64) -> Log {
     let _event = SSVContract::OperatorRemoved {
@@ -341,6 +438,27 @@ pub fn create_operator_removed_log(operator_id: u64) -> Log {
         Some(12400),
         Some(FixedBytes::default()),
         Some(0),
+    )
+}
+
+/// Helper function to create an OperatorRemoved event log at an explicit position.
+pub fn create_operator_removed_log_at_position(
+    operator_id: u64,
+    block_number: u64,
+    transaction_index: u64,
+    log_index: u64,
+) -> Log {
+    let mut topics = vec![SSVContract::OperatorRemoved::SIGNATURE_HASH];
+    topics.push(encode_operator_id_topic(operator_id));
+
+    create_mock_log_at_position(
+        Address::default(),
+        topics,
+        Bytes::new(),
+        Some(block_number),
+        Some(transaction_index),
+        Some(FixedBytes::default()),
+        Some(log_index),
     )
 }
 
@@ -379,6 +497,46 @@ pub fn create_validator_removed_log(
         Some(12401),
         Some(FixedBytes::default()),
         Some(2),
+    )
+}
+
+/// Helper function to create a ValidatorRemoved event log at an explicit position.
+pub fn create_validator_removed_log_at_position(
+    owner: Address,
+    operator_ids: Vec<u64>,
+    public_key: Bytes,
+    block_number: u64,
+    transaction_index: u64,
+    log_index: u64,
+) -> Log {
+    let cluster = SSVContract::Cluster {
+        validatorCount: 0,
+        networkFeeIndex: 0,
+        index: 0,
+        active: false,
+        balance: U256::from(0),
+    };
+
+    let event = SSVContract::ValidatorRemoved {
+        owner,
+        operatorIds: operator_ids,
+        publicKey: public_key,
+        cluster,
+    };
+
+    let mut topics = vec![SSVContract::ValidatorRemoved::SIGNATURE_HASH];
+    topics.push(encode_owner_topic(owner));
+
+    let data = event.encode_data();
+
+    create_mock_log_at_position(
+        Address::default(),
+        topics,
+        data.into(),
+        Some(block_number),
+        Some(transaction_index),
+        Some(FixedBytes::default()),
+        Some(log_index),
     )
 }
 

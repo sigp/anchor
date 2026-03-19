@@ -118,30 +118,37 @@ async fn test_same_block_operator_and_validator_processing() {
     let mut test = ProcessorFixture::new_empty();
     let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
     let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let same_block = 12360;
     let mut logs = Vec::new();
 
-    for operator_id in &operator_ids {
+    for (log_index, operator_id) in operator_ids.iter().enumerate() {
         let owner = Address::random();
         let public_key = create_valid_rsa_public_key_bytes();
-        logs.push(create_operator_added_log(
+        logs.push(create_operator_added_log_at_position(
             *operator_id,
             owner,
             public_key,
             1000 + *operator_id,
+            same_block,
+            0,
+            log_index as u64,
         ));
     }
 
     let (shares, validator_pubkey_bytes) =
         create_valid_shares_data_for_owner_and_nonce(&operator_ids, cluster_owner, 0);
     let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
-    logs.push(create_validator_added_log(
+    logs.push(create_validator_added_log_at_position(
         cluster_owner,
         operator_ids.clone(),
         validator_public_key,
         shares,
+        same_block,
+        1,
+        0,
     ));
 
-    let result = test.processor.process_logs(logs, true, 12360);
+    let result = test.processor.process_logs(logs, true, same_block);
     assert!(
         result.is_ok(),
         "same-block operator and validator processing should succeed"
@@ -154,6 +161,10 @@ async fn test_same_block_operator_and_validator_processing() {
     let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
     verify_validator_added(&test.processor, &validator_pubkey_str);
     verify_cluster_created(&test.processor, cluster_owner, &[1u64, 2u64, 3u64, 4u64]);
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        same_block
+    );
 
     tokio::select! {
         validator_key = test.index_sync_rx.recv() => {
@@ -176,14 +187,19 @@ async fn test_same_block_validator_add_and_remove_processing() {
     let test = ProcessorFixture::new_empty();
     let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
     let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let same_block = 12362;
     let operator_logs: Vec<_> = operator_ids
         .iter()
-        .map(|operator_id| {
-            create_operator_added_log(
+        .enumerate()
+        .map(|(log_index, operator_id)| {
+            create_operator_added_log_at_position(
                 *operator_id,
                 Address::random(),
                 create_valid_rsa_public_key_bytes(),
                 1000 + *operator_id,
+                12361,
+                0,
+                log_index as u64,
             )
         })
         .collect();
@@ -198,16 +214,26 @@ async fn test_same_block_validator_add_and_remove_processing() {
         create_valid_shares_data_for_owner_and_nonce(&operator_ids, cluster_owner, 0);
     let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
     let logs = vec![
-        create_validator_added_log(
+        create_validator_added_log_at_position(
             cluster_owner,
             operator_ids.clone(),
             validator_public_key.clone(),
             shares,
+            same_block,
+            0,
+            0,
         ),
-        create_validator_removed_log(cluster_owner, operator_ids.clone(), validator_public_key),
+        create_validator_removed_log_at_position(
+            cluster_owner,
+            operator_ids.clone(),
+            validator_public_key,
+            same_block,
+            1,
+            0,
+        ),
     ];
 
-    let result = test.processor.process_logs(logs, true, 12362);
+    let result = test.processor.process_logs(logs, true, same_block);
     assert!(
         result.is_ok(),
         "same-block validator add and remove processing should succeed"
@@ -230,7 +256,10 @@ async fn test_same_block_validator_add_and_remove_processing() {
         queries::get_cluster(cluster_id, &tx).is_none(),
         "cluster should be removed after its only validator is removed"
     );
-    assert_eq!(test.processor.db.state().get_last_processed_block(), 12362);
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        same_block
+    );
 }
 
 #[tokio::test]

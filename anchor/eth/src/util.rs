@@ -8,8 +8,8 @@ use alloy::{
 };
 use bls::{PublicKeyBytes, Signature};
 use database::NetworkDatabase;
-use rusqlite::Transaction;
 use reqwest::Client;
+use rusqlite::Transaction;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tower::ServiceBuilder;

@@ -1,5 +1,7 @@
+use std::str::FromStr;
+
 use bls::PublicKeyBytes;
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
 use types::Address;
 
@@ -134,6 +136,51 @@ impl NetworkDatabase {
         self.delete_validator_tx(validator_pubkey, tx, &mut state_updates)?;
         self.apply_pending_state_updates(state_updates);
         Ok(())
+    }
+
+    /// Load a cluster by validator public key through the transaction's view of the database.
+    pub fn get_cluster_by_validator_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<Cluster>, DatabaseError> {
+        let cluster_row = tx
+            .prepare_cached(sql_operations::GET_CLUSTER_BY_VALIDATOR)?
+            .query_row(params![validator_pubkey.to_string()], |row| {
+                Ok((
+                    ClusterId(row.get("cluster_id")?),
+                    row.get::<_, String>("owner")?,
+                    row.get::<_, Option<String>>("fee_recipient")?,
+                    row.get::<_, bool>("liquidated")?,
+                ))
+            })
+            .optional()?;
+
+        let Some((cluster_id, owner, fee_recipient, liquidated)) = cluster_row else {
+            return Ok(None);
+        };
+
+        let cluster_members = tx
+            .prepare_cached(sql_operations::GET_CLUSTER_MEMBERS)?
+            .query_map([cluster_id.0], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let owner = Address::from_str(&owner).map_err(|e| {
+            DatabaseError::SQLError(format!("Failed to parse cluster owner from database: {e}"))
+        })?;
+        let fee_recipient = match fee_recipient {
+            Some(fee_recipient) => Address::from_str(&fee_recipient).map_err(|e| {
+                DatabaseError::SQLError(format!("Failed to parse fee recipient from database: {e}"))
+            })?,
+            None => owner,
+        };
+
+        Ok(Some(Cluster {
+            cluster_id,
+            owner,
+            fee_recipient,
+            liquidated,
+            cluster_members: cluster_members.into_iter().collect(),
+        }))
     }
 
     /// Bump the nonce of the owner in the active transaction and queue the matching state update.
