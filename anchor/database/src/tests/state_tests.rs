@@ -4,7 +4,7 @@ mod state_database_tests {
     use types::Address;
 
     use crate::{
-        NetworkDatabase,
+        NetworkDatabase, PendingStateUpdates,
         multi_index::UniqueIndex,
         test_utils::{FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, generators},
     };
@@ -156,6 +156,31 @@ mod state_database_tests {
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
         assert_eq!(fixture.data.db.state().get_last_processed_block(), 10);
+    }
+
+    #[test]
+    fn test_processed_block_tx_defers_publication_until_explicit_publish() {
+        let fixture = InMemoryTestFixture::new_empty();
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
+
+        fixture
+            .db
+            .processed_block_tx(42, &tx, &mut pending)
+            .expect("Failed to stage block number");
+
+        let staged_block: u64 = tx
+            .query_row("SELECT block_number FROM metadata", [], |row| row.get(0))
+            .expect("Block number should be visible in the active transaction");
+        assert_eq!(staged_block, 42);
+        assert_eq!(fixture.db.state().get_last_processed_block(), 0);
+
+        tx.commit().unwrap();
+        assert_eq!(fixture.db.state().get_last_processed_block(), 0);
+
+        fixture.db.publish_pending_state_updates(pending);
+        assert_eq!(fixture.db.state().get_last_processed_block(), 42);
     }
 
     #[test]
