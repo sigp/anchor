@@ -1181,7 +1181,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             };
 
             let completed = self
-                .qbft_manager
+                .consensus
                 .decide_instance(
                     ProposerInstanceId {
                         validator: aggregate.pubkey,
@@ -1644,7 +1644,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         };
 
         let completed = self
-            .qbft_manager
+            .consensus
             .decide_instance(
                 AggregatorCommitteeInstanceId {
                     committee: committee_id,
