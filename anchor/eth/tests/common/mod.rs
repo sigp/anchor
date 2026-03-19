@@ -277,29 +277,7 @@ pub fn create_operator_added_log(
     public_key: Bytes,
     fee: u64,
 ) -> Log {
-    let event = SSVContract::OperatorAdded {
-        operatorId: operator_id,
-        owner,
-        publicKey: public_key,
-        fee: U256::from(fee),
-    };
-
-    // Create topics array with the event signature and indexed parameters
-    let mut topics = vec![SSVContract::OperatorAdded::SIGNATURE_HASH];
-    topics.push(encode_operator_id_topic(operator_id));
-    topics.push(encode_owner_topic(owner));
-
-    // Encode the non-indexed data
-    let data = event.encode_data();
-
-    create_mock_log(
-        Address::default(), // contract address
-        topics,
-        data.into(),
-        Some(12345),
-        Some(FixedBytes::default()),
-        Some(0),
-    )
+    create_operator_added_log_at_position(operator_id, owner, public_key, fee, 12345, 0, 0)
 }
 
 /// Helper function to create an OperatorAdded event log at an explicit position.
@@ -343,37 +321,7 @@ pub fn create_validator_added_log(
     public_key: Bytes,
     shares: Bytes,
 ) -> Log {
-    let cluster = SSVContract::Cluster {
-        validatorCount: 1,
-        networkFeeIndex: 0,
-        index: 0,
-        active: true,
-        balance: U256::from(0),
-    };
-
-    let event = SSVContract::ValidatorAdded {
-        owner,
-        operatorIds: operator_ids,
-        publicKey: public_key,
-        shares,
-        cluster,
-    };
-
-    // Create topics array with the event signature and indexed parameters
-    let mut topics = vec![SSVContract::ValidatorAdded::SIGNATURE_HASH];
-    topics.push(encode_owner_topic(owner)); // indexed owner
-
-    // Encode the non-indexed data
-    let data = event.encode_data();
-
-    create_mock_log(
-        Address::default(), // contract address
-        topics,
-        data.into(),
-        Some(12346),
-        Some(FixedBytes::default()),
-        Some(1),
-    )
+    create_validator_added_log_at_position(owner, operator_ids, public_key, shares, 12346, 0, 1)
 }
 
 /// Helper function to create a ValidatorAdded event log at an explicit position.
@@ -420,25 +368,7 @@ pub fn create_validator_added_log_at_position(
 
 /// Helper function to create an OperatorRemoved event log
 pub fn create_operator_removed_log(operator_id: u64) -> Log {
-    let _event = SSVContract::OperatorRemoved {
-        operatorId: operator_id,
-    };
-
-    // Create topics array with the event signature and indexed parameters
-    let mut topics = vec![SSVContract::OperatorRemoved::SIGNATURE_HASH];
-    topics.push(encode_operator_id_topic(operator_id));
-
-    // OperatorRemoved has no non-indexed data
-    let data = Bytes::new();
-
-    create_mock_log(
-        Address::default(), // contract address
-        topics,
-        data,
-        Some(12400),
-        Some(FixedBytes::default()),
-        Some(0),
-    )
+    create_operator_removed_log_at_position(operator_id, 12400, 0, 0)
 }
 
 /// Helper function to create an OperatorRemoved event log at an explicit position.
@@ -468,36 +398,7 @@ pub fn create_validator_removed_log(
     operator_ids: Vec<u64>,
     public_key: Bytes,
 ) -> Log {
-    let cluster = SSVContract::Cluster {
-        validatorCount: 0, // 0 after removal
-        networkFeeIndex: 0,
-        index: 0,
-        active: false, // inactive after removal
-        balance: U256::from(0),
-    };
-
-    let event = SSVContract::ValidatorRemoved {
-        owner,
-        operatorIds: operator_ids,
-        publicKey: public_key,
-        cluster,
-    };
-
-    // Create topics array with the event signature and indexed parameters
-    let mut topics = vec![SSVContract::ValidatorRemoved::SIGNATURE_HASH];
-    topics.push(encode_owner_topic(owner)); // indexed owner
-
-    // Encode the non-indexed data
-    let data = event.encode_data();
-
-    create_mock_log(
-        Address::default(), // contract address
-        topics,
-        data.into(),
-        Some(12401),
-        Some(FixedBytes::default()),
-        Some(2),
-    )
+    create_validator_removed_log_at_position(owner, operator_ids, public_key, 12401, 0, 2)
 }
 
 /// Helper function to create a ValidatorRemoved event log at an explicit position.
