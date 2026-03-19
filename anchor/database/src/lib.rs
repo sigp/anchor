@@ -451,8 +451,7 @@ impl NetworkDatabase {
             PubkeyOrId::Pubkey(pubkey) => {
                 let encoded = BASE64_STANDARD.encode(
                     pubkey
-                        .public_key_to_pem()
-                        .expect("Failed to encode RsaPublicKey"),
+                        .public_key_to_pem()?,
                 );
                 tx.prepare_cached(sql_operations::GET_OPERATOR_ID)?
                     .query_row(params![encoded], |row| row.get(0))

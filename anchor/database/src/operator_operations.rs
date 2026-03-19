@@ -33,11 +33,12 @@ impl NetworkDatabase {
         }
 
         // Base64 encode the key for storage
-        let pem_key = operator
-            .rsa_pubkey
-            .public_key_to_pem()
-            .expect("Failed to encode RsaPublicKey");
+        let pem_key = operator.rsa_pubkey.public_key_to_pem()?;
         let encoded = BASE64_STANDARD.encode(&pem_key);
+        let is_own_operator = match &self.operator {
+            PubkeyOrId::Pubkey(pubkey) => pem_key == pubkey.public_key_to_pem()?,
+            PubkeyOrId::Id(id) => *id == operator.id,
+        };
 
         // Insert into the database
         tx.prepare_cached(sql_operations::INSERT_OPERATOR)?
@@ -46,11 +47,6 @@ impl NetworkDatabase {
                 encoded,                    // RSA public key
                 operator.owner.to_string()  // The owner address of the operator
             ])?;
-
-        let is_own_operator = match &self.operator {
-            PubkeyOrId::Pubkey(pubkey) => pem_key == pubkey.public_key_to_pem().unwrap_or_default(),
-            PubkeyOrId::Id(id) => *id == operator.id,
-        };
         state_updates.insert_operator(operator.to_owned(), is_own_operator);
         Ok(())
     }
