@@ -2960,6 +2960,9 @@ impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, BlindedPayload<E>> {
 }
 
 #[cfg(test)]
+mod testing;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
