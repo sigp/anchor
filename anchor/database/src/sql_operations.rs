@@ -56,7 +56,7 @@ pub const GET_CLUSTER_MEMBERS: &str = r#"
     WHERE cluster_id = ?1
 "#;
 pub const GET_CLUSTER_BY_VALIDATOR: &str = r#"
-    SELECT DISTINCT
+    SELECT
         c.cluster_id,
         c.owner,
         o.fee_recipient,
