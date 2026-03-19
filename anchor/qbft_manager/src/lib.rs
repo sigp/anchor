@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, num::NonZeroU64, sync::Arc};
+use std::{fmt::Debug, future::Future, hash::Hash, num::NonZeroU64, sync::Arc};
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
@@ -382,6 +382,35 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             self.aggregator_committee_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
+    }
+}
+
+/// Abstraction over QBFT consensus. Allows swapping in a mock for tests that don't
+/// need real consensus (e.g., testing signing pipelines).
+///
+/// Uses static dispatch (not `dyn`) because `decide_instance` is generic over
+/// `D: QbftDecidable<E>`, which prevents object safety.
+pub trait ConsensusDecider<E: EthSpec>: Send + Sync {
+    fn decide_instance<D: QbftDecidable<E>>(
+        &self,
+        id: D::Id,
+        initial: D,
+        validator: Box<dyn QbftDataValidator<D>>,
+        timeout_mode: TimeoutMode,
+        committee_members: &IndexSet<OperatorId>,
+    ) -> impl Future<Output = Result<Completed<D>, QbftError>> + Send;
+}
+
+impl<E: EthSpec, S: SlotClock + 'static> ConsensusDecider<E> for QbftManager<E, S> {
+    fn decide_instance<D: QbftDecidable<E>>(
+        &self,
+        id: D::Id,
+        initial: D,
+        validator: Box<dyn QbftDataValidator<D>>,
+        timeout_mode: TimeoutMode,
+        committee_members: &IndexSet<OperatorId>,
+    ) -> impl Future<Output = Result<Completed<D>, QbftError>> + Send {
+        self.decide_instance(id, initial, validator, timeout_mode, committee_members)
     }
 }
 
