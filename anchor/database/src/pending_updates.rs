@@ -196,7 +196,11 @@ impl StateUpdate {
             }
             Self::DeleteValidator { validator_pubkey } => {
                 state.multi_state.shares.remove(&validator_pubkey);
-                // This assumes the validator was already present in memory for the pending tx flow.
+                // Invariant: callers only enqueue validator removal after validating the
+                // validator through the current tx/database view, and replay assumes
+                // NetworkState is still aligned with that state at this point. If the metadata
+                // is missing here, silently continuing would hide an invariant break after the
+                // share removal above and leave NetworkState partially updated.
                 let metadata = state
                     .multi_state
                     .validator_metadata
