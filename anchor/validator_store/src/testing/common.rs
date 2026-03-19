@@ -8,7 +8,6 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Durat
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::NetworkDatabase;
 use fork::{Fork, ForkSchedule};
-use openssl::rsa::Rsa;
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{ConsensusDecider, QbftDecidable, QbftError, TimeoutMode};
@@ -34,7 +33,6 @@ use validator_store::AttestationToSign;
 use crate::{AnchorValidatorStore, VotingAssignments, VotingContext};
 
 pub(super) const TEST_SLOT: u64 = 1;
-const RSA_KEY_SIZE: u32 = 2048;
 const SLOT_DURATION_SECS: u64 = 12;
 
 // ==================== Mock consensus decider ====================
@@ -172,13 +170,7 @@ pub(super) struct ValidatorStoreTestHarness {
 impl ValidatorStoreTestHarness {
     pub(super) fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
-        let rsa_pubkey = {
-            let rsa = Rsa::generate(RSA_KEY_SIZE).expect("RSA key generation should succeed");
-            let pem = rsa
-                .public_key_to_pem()
-                .expect("RSA PEM export should succeed");
-            Rsa::public_key_from_pem(&pem).expect("RSA PEM import should succeed")
-        };
+        let rsa_pubkey = database::test_utils::generators::pubkey::random_rsa();
 
         // Slot clock positioned just past the 1/3 mark of TEST_SLOT
         let slot_clock = ManualSlotClock::new(
