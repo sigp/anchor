@@ -196,6 +196,7 @@ impl StateUpdate {
             }
             Self::DeleteValidator { validator_pubkey } => {
                 state.multi_state.shares.remove(&validator_pubkey);
+                // This assumes the validator was already present in memory for the pending tx flow.
                 let metadata = state
                     .multi_state
                     .validator_metadata
