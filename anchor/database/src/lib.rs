@@ -4,18 +4,19 @@ use std::{
     time::Duration,
 };
 
+use base64::prelude::*;
 use bls::PublicKeyBytes;
 use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
     watch,
     watch::{Receiver, Ref},
 };
-use types::Address;
+use types::{Address, Graffiti};
 
 pub use crate::{
     error::DatabaseError,
@@ -29,6 +30,7 @@ mod error;
 mod keysplit_operations;
 mod multi_index;
 mod operator_operations;
+mod pending_updates;
 mod schema;
 mod share_operations;
 pub mod slashing;
@@ -46,6 +48,8 @@ mod tests;
 pub mod test_utils {
     pub use super::{slashing::NoOpSlashingProtection, tests::utils::*};
 }
+
+pub use pending_updates::PendingStateUpdates;
 
 const POOL_SIZE: u32 = 1;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -200,6 +204,40 @@ impl NetworkDatabase {
         self.state.subscribe()
     }
 
+    /// Resolve the current operator id using the transaction's view of the database.
+    pub fn get_own_operator_id_tx(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<OperatorId>, DatabaseError> {
+        if let Some(operator_id) = self.state().get_own_id() {
+            return Ok(Some(operator_id));
+        }
+
+        match &self.operator {
+            PubkeyOrId::Id(id) => Ok(Some(*id)),
+            PubkeyOrId::Pubkey(pubkey) => {
+                let encoded = BASE64_STANDARD.encode(pubkey.public_key_to_pem()?);
+                tx.prepare_cached(sql_operations::GET_OPERATOR_ID)?
+                    .query_row(params![encoded], |row| row.get(0))
+                    .optional()
+                    .map_err(DatabaseError::from)
+            }
+        }
+    }
+
+    /// Update the last processed block number in the database transaction.
+    pub fn processed_block_tx(
+        &self,
+        block_number: u64,
+        tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
+            .execute(params![block_number])?;
+        state_updates.set_last_processed_block(block_number);
+        Ok(())
+    }
+
     /// Update the last processed block number in the database
     /// Also, trigger a notification for other code to act on the new state
     pub fn processed_block(
@@ -207,10 +245,22 @@ impl NetworkDatabase {
         block_number: u64,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::UPDATE_BLOCK_NUMBER)?
-            .execute(params![block_number])?;
-        self.state
-            .send_modify(|state| state.single_state.last_processed_block = block_number);
+        let mut state_updates = PendingStateUpdates::default();
+        self.processed_block_tx(block_number, tx, &mut state_updates)?;
+        self.publish_pending_state_updates(state_updates);
+        Ok(())
+    }
+
+    /// Update the largest seen OperatorId in the database transaction.
+    pub fn set_max_operator_id_seen_tx(
+        &self,
+        operator_id: u64,
+        tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
+            .execute(params![operator_id])?;
+        state_updates.set_max_operator_id_seen(operator_id);
         Ok(())
     }
 
@@ -220,10 +270,9 @@ impl NetworkDatabase {
         operator_id: u64,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
-        tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
-            .execute(params![operator_id])?;
-        self.modify_state(|state| state.single_state.max_operator_id_seen = Some(operator_id));
-
+        let mut state_updates = PendingStateUpdates::default();
+        self.set_max_operator_id_seen_tx(operator_id, tx, &mut state_updates)?;
+        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 
@@ -262,6 +311,31 @@ impl NetworkDatabase {
     // Open a new connection
     pub fn connection(&self) -> Result<PoolConn, DatabaseError> {
         Ok(self.conn_pool.get()?)
+    }
+
+    /// Apply accumulated state updates and notify watchers once.
+    /// Call this only after the corresponding database transaction commits successfully.
+    pub fn publish_pending_state_updates(&self, state_updates: PendingStateUpdates) {
+        self.apply_state_updates(state_updates, true);
+    }
+
+    fn apply_pending_state_updates(&self, state_updates: PendingStateUpdates) {
+        self.apply_state_updates(state_updates, false);
+    }
+
+    fn apply_state_updates(&self, state_updates: PendingStateUpdates, publish: bool) {
+        if state_updates.is_empty() {
+            return;
+        }
+
+        if publish {
+            self.state.send_modify(|state| state_updates.apply(state));
+        } else {
+            self.state.send_if_modified(|state| {
+                state_updates.apply(state);
+                false
+            });
+        }
     }
 
     /// for convenience: Apply a modification to the state without triggering a notification

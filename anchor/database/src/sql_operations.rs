@@ -65,7 +65,6 @@ pub const INSERT_VALIDATOR: &str = r#"
 "#;
 pub const DELETE_VALIDATOR: &str = r#"DELETE from validators WHERE validator_pubkey = ?1"#;
 pub const GET_ALL_VALIDATORS: &str = r#"SELECT * FROM validators"#;
-
 // Shares
 pub const INSERT_SHARE: &str = r#"
     INSERT INTO shares
@@ -77,7 +76,6 @@ pub const GET_SHARES: &str = r#"
     SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey
     FROM shares WHERE operator_id = ?1
 "#;
-
 // Misc Datta
 pub const INSERT_OR_UPDATE_OWNER_FEE_RECIPIENT: &str = r#"
     INSERT INTO owners (owner, fee_recipient) VALUES (?1, ?2)
