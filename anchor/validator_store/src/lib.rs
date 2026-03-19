@@ -376,6 +376,52 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Ok(signatures)
     }
 
+    /// Run `AggregatorCommittee` QBFT consensus for a committee at 2/3 slot.
+    ///
+    /// Shared by `sign_committee_aggregate_and_proofs` and
+    /// `sign_committee_sync_committee_contributions`.
+    async fn run_aggregator_committee_consensus(
+        &self,
+        committee_id: CommitteeId,
+        slot: Slot,
+        cluster: &Cluster,
+        metric_label: &str,
+    ) -> Result<AggregatorCommitteeConsensusData<E>, Error> {
+        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
+        let our_consensus_data = aggregation_assignments
+            .get_consensus_data(&committee_id)
+            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
+
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metric_label]);
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?,
+        };
+
+        let completed = self
+            .consensus
+            .decide_instance(
+                AggregatorCommitteeInstanceId {
+                    committee: committee_id,
+                    instance_height: slot.as_usize().into(),
+                },
+                (*our_consensus_data).clone(),
+                Box::new(AggregatorCommitteeDataValidator::new()),
+                timeout_mode,
+                &cluster.cluster_members,
+            )
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        match completed {
+            Completed::TimedOut => Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => Ok(data),
+        }
+    }
+
     /// Compute the signing root for a sync committee selection proof.
     ///
     /// Each subnet has a different signing root based on `SyncAggregatorSelectionData{Slot,
@@ -1143,46 +1189,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let slot = first.contribution.slot;
         let epoch = slot.epoch(E::slots_per_epoch());
 
-        // Get pre-built consensus data from AggregationAssignments (populated at 2/3 slot)
-        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
-        let our_consensus_data = aggregation_assignments
-            .get_consensus_data(&committee_id)
-            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
-
-        // Run QBFT consensus once for the entire committee
-        let timer = metrics::start_timer_vec(
-            &metrics::CONSENSUS_TIMES,
-            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
-        );
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self.get_instant_in_slot(
+        let decided_data = self
+            .run_aggregator_committee_consensus(
+                committee_id,
                 slot,
-                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-            )?,
-        };
-
-        let completed = self
-            .consensus
-            .decide_instance(
-                AggregatorCommitteeInstanceId {
-                    committee: committee_id,
-                    instance_height: slot.as_usize().into(),
-                },
-                (*our_consensus_data).clone(),
-                Box::new(AggregatorCommitteeDataValidator::new()),
-                timeout_mode,
-                &cluster.cluster_members,
+                &cluster,
+                metrics::SYNC_CONTRIBUTION_AND_PROOF,
             )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let decided_data = match completed {
-            Completed::TimedOut => {
-                return Err(Error::SpecificError(SpecificError::Timeout));
-            }
-            Completed::Success(data) => data,
-        };
+            .await?;
 
         let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
 
@@ -1634,44 +1648,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let slot = first.aggregate.data().slot;
         let signing_epoch = first.aggregate.data().target.epoch;
 
-        // Get pre-built consensus data from AggregationAssignments (populated at 2/3 slot)
-        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
-        let our_consensus_data = aggregation_assignments
-            .get_consensus_data(&committee_id)
-            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
-
-        // Run QBFT consensus once for the entire committee
-        let timer =
-            metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self.get_instant_in_slot(
+        let decided_data = self
+            .run_aggregator_committee_consensus(
+                committee_id,
                 slot,
-                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-            )?,
-        };
-
-        let completed = self
-            .consensus
-            .decide_instance(
-                AggregatorCommitteeInstanceId {
-                    committee: committee_id,
-                    instance_height: slot.as_usize().into(),
-                },
-                (*our_consensus_data).clone(),
-                Box::new(AggregatorCommitteeDataValidator::new()),
-                timeout_mode,
-                &cluster.cluster_members,
+                &cluster,
+                metrics::AGGREGATE_AND_PROOF,
             )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let decided_data = match completed {
-            Completed::TimedOut => {
-                return Err(Error::SpecificError(SpecificError::Timeout));
-            }
-            Completed::Success(data) => data,
-        };
+            .await?;
 
         let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
 
@@ -2994,6 +2978,9 @@ impl<E: EthSpec> SignableBlock<E> for BeaconBlock<E, BlindedPayload<E>> {
         )))
     }
 }
+
+#[cfg(test)]
+mod testing;
 
 #[cfg(test)]
 mod tests {
