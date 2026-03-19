@@ -60,7 +60,12 @@ impl EventProcessor {
         Self { db, mode }
     }
 
-    /// Process a new set of logs
+    /// Process a fetched batch of logs.
+    ///
+    /// The fetch layer can hand us logs spanning multiple blocks, but PR2 commits and publishes
+    /// one block at a time. We therefore buffer each block's logs, flush them when the block
+    /// number changes, and finally flush `end_block` even if it had no relevant logs so
+    /// `last_processed_block` still advances across empty blocks.
     #[instrument(skip(self, logs), fields(logs_count = logs.len()), level = "debug")]
     pub fn process_logs(
         &self,
@@ -81,15 +86,16 @@ impl EventProcessor {
             .connection()
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
+        // Buffer the current block so each call to `process_block_logs` owns exactly one block.
         let mut current_block = None;
         let mut block_logs = Vec::new();
 
         for log in logs {
             let block_number = log.block_number.unwrap_or(end_block);
 
-            match current_block {
-                Some(current_block_number) if current_block_number != block_number => {
-                    self.process_block_logs(
+            if let Some(current_block_number) = current_block {
+                if current_block_number != block_number {
+                    self.flush_buffered_block(
                         &mut conn,
                         &block_logs,
                         live,
@@ -98,17 +104,15 @@ impl EventProcessor {
                         &mut validators_removed,
                     )?;
                     block_logs.clear();
-                    current_block = Some(block_number);
                 }
-                Some(_) => {}
-                None => current_block = Some(block_number),
             }
 
+            current_block = Some(block_number);
             block_logs.push(log);
         }
 
         if let Some(block_number) = current_block {
-            self.process_block_logs(
+            self.flush_buffered_block(
                 &mut conn,
                 &block_logs,
                 live,
@@ -121,7 +125,7 @@ impl EventProcessor {
         if current_block != Some(end_block) {
             // Flush an empty block so the last processed block still advances when the fetched
             // range ends on a block with no relevant logs.
-            self.process_block_logs(
+            self.flush_buffered_block(
                 &mut conn,
                 &[],
                 live,
@@ -143,6 +147,25 @@ impl EventProcessor {
 
         debug!(logs_count, "Completed processing logs");
         Ok(())
+    }
+
+    fn flush_buffered_block(
+        &self,
+        conn: &mut Connection,
+        block_logs: &[Log],
+        live: bool,
+        block_number: u64,
+        validators_added: &mut u64,
+        validators_removed: &mut u64,
+    ) -> Result<(), ExecutionError> {
+        self.process_block_logs(
+            conn,
+            block_logs,
+            live,
+            block_number,
+            validators_added,
+            validators_removed,
+        )
     }
 
     fn process_block_logs(
