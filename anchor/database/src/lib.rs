@@ -30,9 +30,9 @@ mod error;
 mod keysplit_operations;
 mod multi_index;
 mod operator_operations;
+mod pending_updates;
 mod schema;
 mod share_operations;
-mod pending_updates;
 pub mod slashing;
 mod sql_operations;
 mod state;
@@ -216,10 +216,7 @@ impl NetworkDatabase {
         match &self.operator {
             PubkeyOrId::Id(id) => Ok(Some(*id)),
             PubkeyOrId::Pubkey(pubkey) => {
-                let encoded = BASE64_STANDARD.encode(
-                    pubkey
-                        .public_key_to_pem()?,
-                );
+                let encoded = BASE64_STANDARD.encode(pubkey.public_key_to_pem()?);
                 tx.prepare_cached(sql_operations::GET_OPERATOR_ID)?
                     .query_row(params![encoded], |row| row.get(0))
                     .optional()
