@@ -1,11 +1,10 @@
 //! Integration tests for the committee-batching attestation path in `sign_attestations()`.
-
 use std::time::Duration;
 
 use futures::StreamExt;
 use signature_collector::SignatureRequester;
-use ssv_types::{OperatorId, msgid::Role, partial_sig::PartialSignatureKind};
-use types::{Attestation, Hash256, MainnetEthSpec, Slot};
+use ssv_types::OperatorId;
+use types::{Attestation, MainnetEthSpec};
 use validator_store::ValidatorStore;
 
 use super::common::*;
@@ -59,16 +58,27 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
     let total: usize = all_signed.iter().map(|batch| batch.len()).sum();
     assert_eq!(total, 3, "expected 3 total signed attestations");
 
-    // Verify the mock signature collector was called via the committee path
+    // Verify the mock signature collector was called via the committee path with the expected
+    // per-committee request counts. In this harness all validators are attesters and there are no
+    // sync committee duties, so the expected counts are the number of validators per committee.
     let captured = harness.captured_calls.lock();
     assert_eq!(captured.len(), 3, "expected 3 sign_and_collect calls");
-    for call in captured.iter() {
-        assert!(
-            matches!(call.requester, SignatureRequester::Committee { .. }),
-            "expected SignatureRequester::Committee, got: {:?}",
-            call.requester
-        );
-    }
+    let mut requested_counts: Vec<_> = captured
+        .iter()
+        .map(|call| match &call.requester {
+            SignatureRequester::Committee {
+                num_signatures_to_collect,
+                ..
+            } => *num_signatures_to_collect,
+            other => panic!("expected SignatureRequester::Committee, got: {other:?}"),
+        })
+        .collect();
+    requested_counts.sort_unstable();
+    assert_eq!(
+        requested_counts,
+        vec![1, 2, 2],
+        "expected committee requester counts to match validators per committee"
+    );
 }
 
 /// A committee stuck at `get_voting_context` (no voting context for its slot) does not block
@@ -144,62 +154,4 @@ async fn sign_attestations_not_synced() {
         "expected NotSynced error, got: {:?}",
         results[0]
     );
-}
-
-/// `collect_committee_signatures` passes `SignatureRequester::Committee` (not `SingleValidator`)
-/// to the signature collector for each validator in the committee.
-#[tokio::test(flavor = "multi_thread")]
-async fn collect_committee_signatures_uses_committee_mode() {
-    // Arrange
-    let our_operator_id = OperatorId(1);
-    let committee = create_committee_setup(
-        &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
-        3, // 3 validators in this committee
-        0,
-    );
-    let cluster = committee.cluster.clone();
-    let validators: Vec<_> = committee
-        .validators
-        .iter()
-        .map(|v| (v.clone(), Hash256::random()))
-        .collect();
-    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id);
-    let base_hash = Hash256::random();
-    let num_sigs = 5;
-
-    // Act
-    let result = harness
-        .validator_store
-        .collect_committee_signatures(
-            PartialSignatureKind::PostConsensus,
-            Role::Committee,
-            Slot::new(TEST_SLOT),
-            &cluster,
-            num_sigs,
-            base_hash,
-            validators,
-        )
-        .await;
-
-    // Assert
-    let signatures = result.expect("collect_committee_signatures should succeed");
-    assert_eq!(
-        signatures.len(),
-        3,
-        "should have one signature per validator"
-    );
-    let captured = harness.captured_calls.lock();
-    assert_eq!(captured.len(), 3, "mock should have been called 3 times");
-    for call in captured.iter() {
-        match &call.requester {
-            SignatureRequester::Committee {
-                num_signatures_to_collect,
-                base_hash: captured_hash,
-            } => {
-                assert_eq!(*num_signatures_to_collect, num_sigs);
-                assert_eq!(*captured_hash, base_hash);
-            }
-            other => panic!("expected SignatureRequester::Committee, got: {other:?}"),
-        }
-    }
 }
