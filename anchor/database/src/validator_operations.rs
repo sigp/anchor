@@ -1,4 +1,4 @@
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -7,7 +7,8 @@ use tracing::debug;
 use types::{Address, Graffiti};
 
 use crate::{
-    DatabaseError, NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex, sql_operations,
+    DatabaseError, NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex,
+    parse_optional_text_column, sql_operations,
 };
 
 /// Implements all validator specific database functionality
@@ -55,20 +56,7 @@ impl NetworkDatabase {
         let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
-            let address_str: Option<String> = row.get(0)?;
-            // If the address is None, return None
-            if let Some(address_str) = address_str {
-                let address = Address::from_str(&address_str).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?;
-                Ok(Some(address))
-            } else {
-                Ok(None)
-            }
+            parse_optional_text_column(row, 0)
         });
 
         match result {

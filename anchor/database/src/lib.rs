@@ -10,7 +10,7 @@ use once_cell::sync::OnceCell;
 use openssl::{pkey::Public, rsa::Rsa};
 use r2d2::CustomizeConnection;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params, types::Type};
 use ssv_types::{Cluster, ClusterId, CommitteeId, Operator, OperatorId, Share, ValidatorMetadata};
 use tokio::sync::{
     watch,
@@ -56,6 +56,34 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
 type PoolConn = r2d2::PooledConnection<SqliteConnectionManager>;
+
+pub(crate) fn parse_text_column<T>(row: &Row<'_>, column: usize) -> rusqlite::Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    let value = row.get::<_, String>(column)?;
+    value.parse().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(column, Type::Text, Box::new(e))
+    })
+}
+
+pub(crate) fn parse_optional_text_column<T>(
+    row: &Row<'_>,
+    column: usize,
+) -> rusqlite::Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    row.get::<_, Option<String>>(column)?
+        .map(|value| {
+            value.parse().map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(column, Type::Text, Box::new(e))
+            })
+        })
+        .transpose()
+}
 
 /// All the shares that belong to the current operator.
 /// IMPORTANT: There are parts of the code that assume this only contains shares that belong to the
