@@ -4,6 +4,7 @@
 use std::{net::IpAddr, path::PathBuf};
 
 use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
+use cli::{NetworkOptions, Node};
 use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
 use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
@@ -14,8 +15,6 @@ use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
-
-use cli::{NetworkOptions, Node};
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";

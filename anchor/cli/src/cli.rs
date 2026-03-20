@@ -521,7 +521,7 @@ pub struct Node {
     #[clap(
         long,
         help = "Disable the latency measurement service.",
-        display_order = 0,
+        display_order = 0
     )]
     pub disable_latency_measurement_service: bool,
 
@@ -580,7 +580,7 @@ pub struct Node {
                 messages for slots after startup to detect duplicate operator instances.",
         display_order = 0,
         default_value_t = 2,
-        requires = "operator_dg",
+        requires = "operator_dg"
     )]
     pub operator_dg_wait_epochs: u64,
 
@@ -591,7 +591,7 @@ pub struct Node {
                 participate in attestation production if the checkpoint roots mismatch. \
                 Using this flag might reduce validator performance if cluster operators have \
                 struggling nodes, but can help to avoid finalization of a faulty majority fork.",
-        display_order = 0,
+        display_order = 0
     )]
     pub strict_mfp: bool,
 
