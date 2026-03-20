@@ -25,7 +25,7 @@ enum StateUpdate {
     InsertValidator(Box<InsertValidatorStateUpdate>),
     UpdateClusterStatus {
         cluster_id: ClusterId,
-        status: bool,
+        liquidated: bool,
     },
     DeleteValidator {
         validator_pubkey: PublicKeyBytes,
@@ -90,9 +90,11 @@ impl PendingStateUpdates {
         )));
     }
 
-    pub(crate) fn update_cluster_status(&mut self, cluster_id: ClusterId, status: bool) {
-        self.updates
-            .push(StateUpdate::UpdateClusterStatus { cluster_id, status });
+    pub(crate) fn update_cluster_status(&mut self, cluster_id: ClusterId, liquidated: bool) {
+        self.updates.push(StateUpdate::UpdateClusterStatus {
+            cluster_id,
+            liquidated,
+        });
     }
 
     pub(crate) fn delete_validator(&mut self, validator_pubkey: PublicKeyBytes) {
@@ -189,9 +191,12 @@ impl StateUpdate {
                     validator,
                 );
             }
-            Self::UpdateClusterStatus { cluster_id, status } => {
+            Self::UpdateClusterStatus {
+                cluster_id,
+                liquidated,
+            } => {
                 if let Some(cluster) = state.multi_state.clusters.get_mut_by(&cluster_id) {
-                    cluster.liquidated = status;
+                    cluster.liquidated = liquidated;
                 }
             }
             Self::DeleteValidator { validator_pubkey } => {

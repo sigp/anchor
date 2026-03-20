@@ -80,17 +80,17 @@ impl NetworkDatabase {
     pub fn update_status_tx(
         &self,
         cluster_id: ClusterId,
-        status: bool,
+        liquidated: bool,
         tx: &Transaction<'_>,
         state_updates: &mut PendingStateUpdates,
     ) -> Result<(), DatabaseError> {
         tx.prepare_cached(sql_operations::UPDATE_CLUSTER_STATUS)?
             .execute(params![
-                status,      // status of the cluster (liquidated = false, active = true)
+                liquidated,  // liquidated flag
                 *cluster_id  // Id of the cluster
             ])?;
 
-        state_updates.update_cluster_status(cluster_id, status);
+        state_updates.update_cluster_status(cluster_id, liquidated);
 
         Ok(())
     }
@@ -99,11 +99,11 @@ impl NetworkDatabase {
     pub fn update_status(
         &self,
         cluster_id: ClusterId,
-        status: bool,
+        liquidated: bool,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         let mut state_updates = PendingStateUpdates::default();
-        self.update_status_tx(cluster_id, status, tx, &mut state_updates)?;
+        self.update_status_tx(cluster_id, liquidated, tx, &mut state_updates)?;
         self.apply_pending_state_updates(state_updates);
         Ok(())
     }
