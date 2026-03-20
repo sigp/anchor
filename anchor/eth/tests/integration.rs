@@ -198,12 +198,14 @@ async fn test_same_block_operator_and_validator_processing() {
     }
 }
 
-/// Ensures a single `process_logs` call flushes block `N` before processing block `N+1`.
+/// Ensures a single `process_logs` call can span multiple blocks successfully.
 ///
-/// This is the core new behavior in PR2: a validator added in the second block of the fetched
-/// batch must be able to observe the operators committed from the first block in that same call.
+/// This is the multi-block happy path for PR2: a validator added in the second block of the
+/// fetched batch can observe the operators created in the first block within the same
+/// `process_logs` call. The stronger commit-boundary guarantee is covered separately by
+/// `test_cross_block_failure_preserves_previous_block_commit`.
 #[tokio::test]
-async fn test_cross_block_operator_and_validator_processing() {
+async fn test_cross_block_operator_and_validator_processing_succeeds() {
     setup_tracing();
 
     // Arrange: build one fetched batch containing operator events in block N and a validator add
@@ -243,7 +245,8 @@ async fn test_cross_block_operator_and_validator_processing() {
     // Act: process both blocks together in one fetched batch.
     let result = test.processor.process_logs(logs, true, validator_block);
 
-    // Assert: the validator add succeeds, proving block N was committed before block N+1 ran.
+    // Assert: the multi-block batch succeeds and the later block can depend on state created in
+    // the earlier block.
     assert!(
         result.is_ok(),
         "cross-block operator and validator processing should succeed"
