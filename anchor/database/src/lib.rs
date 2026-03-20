@@ -63,9 +63,9 @@ where
     T::Err: std::error::Error + Send + Sync + 'static,
 {
     let value = row.get::<_, String>(column)?;
-    value.parse().map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(column, Type::Text, Box::new(e))
-    })
+    value
+        .parse()
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(column, Type::Text, Box::new(e)))
 }
 
 pub(crate) fn parse_optional_text_column<T>(
