@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     num::NonZeroU64,
-    sync::{Arc, LazyLock, RwLock, RwLockWriteGuard},
+    sync::{Arc, LazyLock, Mutex, RwLock, RwLockWriteGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -9,6 +9,7 @@ use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
 use qbft::InstanceHeight;
+use rand::prelude::*;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
@@ -64,14 +65,25 @@ where
     D: QbftDecidable<E>,
     D::Id: Send + Sync + Clone,
 {
-    // Create a new test context with default setup
+    // Create a new test context with default setup (no delivery shuffling)
     pub async fn new(
         clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
     ) -> Self {
-        Self::new_with_delays(clock, executor, size, test_data, HashMap::new()).await
+        Self::new_inner(clock, executor, size, test_data, HashMap::new(), None).await
+    }
+
+    // Create a new test context with seeded delivery order shuffling
+    pub async fn new_seeded(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+        seed: u64,
+    ) -> Self {
+        Self::new_inner(clock, executor, size, test_data, HashMap::new(), Some(seed)).await
     }
 
     pub async fn new_with_delays(
@@ -81,7 +93,18 @@ where
         test_data: Vec<(D, D::Id)>,
         delay_initialization: HashMap<OperatorId, Duration>,
     ) -> Self {
-        let (mut tester, network_rx) = QbftTester::new(clock, executor, size);
+        Self::new_inner(clock, executor, size, test_data, delay_initialization, None).await
+    }
+
+    async fn new_inner(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
+        seed: Option<u64>,
+    ) -> Self {
+        let (mut tester, network_rx) = QbftTester::new(clock, executor, size, seed);
         let result_rx = tester.start_instance(test_data, delay_initialization).await;
         let (consensus_tx, consensus_rx) = mpsc::unbounded_channel();
 
@@ -214,6 +237,10 @@ where
     behavior: HashMap<OperatorId, Arc<RwLock<OperatorBehavior>>>,
     // Cluster that all instances use
     cluster: Cluster,
+    // Seeded RNG for shuffling message delivery order. When set, each message is
+    // delivered to operators in a different (but reproducible) order, simulating
+    // realistic network topology where messages don't arrive at all nodes simultaneously.
+    rng: Option<Mutex<StdRng>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default, Copy)]
@@ -279,11 +306,14 @@ where
     D: QbftDecidable<E> + 'static,
     D::Id: Send + Sync + Clone,
 {
-    /// Create a new QBFT tester instance
+    /// Create a new QBFT tester instance. When `seed` is `Some`, message delivery
+    /// order to operators is shuffled using the seeded RNG, exploring different
+    /// network interleavings. `None` preserves the original fixed-order delivery.
     pub fn new(
         slot_clock: ManualSlotClock,
         executor: TaskExecutor,
         size: CommitteeSize,
+        seed: Option<u64>,
     ) -> (Self, mpsc::UnboundedReceiver<SignedSSVMessage>) {
         // Setup the processor
         let config = processor::Config {
@@ -341,6 +371,7 @@ where
                 num_running: RwLock::new(HashMap::new()),
                 cluster,
                 behavior,
+                rng: seed.map(|s| Mutex::new(StdRng::seed_from_u64(s))),
             },
             network_rx,
         )
@@ -576,8 +607,13 @@ where
         // Check for byzantine behavior where we should modify the message/send more
         let messages = self.modify_for_byzantine(&mut wrapped_msg, &sender_read.byzantine);
 
-        // for each operator, send the message to the instance for the data
-        for id in 1..=(self.size as u64) {
+        // Build operator delivery order, shuffled when a seed is set
+        let mut recipients: Vec<u64> = (1..=(self.size as u64)).collect();
+        if let Some(ref rng) = self.rng {
+            recipients.shuffle(&mut *rng.lock().unwrap());
+        }
+
+        for id in recipients {
             let operator_id = OperatorId::from(id);
             let manager = self.managers.get(&operator_id).unwrap().clone();
 
@@ -911,6 +947,72 @@ mod manager_tests {
         .await;
 
         context.verify_consensus().await;
+    }
+
+    // Run basic consensus across 10 seeds to explore different delivery orderings.
+    // Each seed produces a different operator delivery order per message, exercising
+    // interleavings that the fixed-order tests never reach.
+    #[tokio::test]
+    async fn test_seeded_basic_consensus() {
+        for seed in 0..10u64 {
+            let setup = setup_test(1);
+            let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_seeded(
+                setup.clock,
+                setup.executor,
+                CommitteeSize::Four,
+                setup.all_data,
+                seed,
+            )
+            .await;
+
+            context.verify_consensus().await;
+        }
+    }
+
+    // Run f-faulty consensus across multiple seeds and committee sizes.
+    #[tokio::test]
+    async fn test_seeded_f_faulty() {
+        let sizes = vec![
+            (CommitteeSize::Four, vec![1]),
+            (CommitteeSize::Seven, vec![1, 3]),
+            (CommitteeSize::Ten, vec![1, 3, 4]),
+            (CommitteeSize::Thirteen, vec![1, 3, 4, 5]),
+        ];
+
+        for seed in 0..5u64 {
+            let setup = setup_test(1);
+            for (size, faulty) in &sizes {
+                let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_seeded(
+                    setup.clock.clone(),
+                    setup.executor.clone(),
+                    *size,
+                    setup.all_data.clone(),
+                    seed,
+                )
+                .await;
+
+                context.set_operators_offline(faulty);
+                context.verify_consensus().await;
+            }
+        }
+    }
+
+    // Run concurrent instances across seeds.
+    #[tokio::test]
+    async fn test_seeded_concurrent() {
+        for seed in 0..10u64 {
+            let setup = setup_test(2);
+            let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_seeded(
+                setup.clock,
+                setup.executor,
+                CommitteeSize::Four,
+                setup.all_data,
+                seed,
+            )
+            .await;
+
+            context.verify_consensus().await;
+        }
     }
 
     /// Test that AggregatorCommittee messages are rejected before the Boole fork.

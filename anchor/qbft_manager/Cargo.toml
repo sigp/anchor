@@ -23,6 +23,7 @@ types = { workspace = true }
 async-channel = { workspace = true }
 futures = { workspace = true }
 message_sender = { workspace = true, features = ["testing"] }
+rand = { workspace = true }
 task_executor = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
