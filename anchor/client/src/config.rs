@@ -15,7 +15,7 @@ use ssv_types::OperatorId;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
 
-use crate::cli::{NetworkOptions, Node};
+use cli::{NetworkOptions, Node};
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";

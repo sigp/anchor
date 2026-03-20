@@ -1796,12 +1796,14 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 name = "cli"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "beacon_node_fallback",
  "clap",
- "client",
  "ethereum_hashing 0.7.0",
  "global_config",
  "keygen",
  "keysplit",
+ "logging 0.1.0",
  "version",
 ]
 
@@ -1810,9 +1812,9 @@ name = "client"
 version = "1.2.2"
 dependencies = [
  "anchor_validator_store",
- "axum",
  "beacon_node_fallback",
  "clap",
+ "cli",
  "database",
  "duties_tracker",
  "eth",
@@ -1823,7 +1825,6 @@ dependencies = [
  "http_api",
  "http_metrics",
  "hyper",
- "logging 0.1.0",
  "message_receiver",
  "message_sender",
  "message_validator",

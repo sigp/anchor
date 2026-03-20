@@ -4,12 +4,14 @@ use clap::{
     Parser,
     builder::{Styles, styling::AnsiColor},
 };
-use client::Node;
+pub use cli::{NetworkOptions, Node};
 use ethereum_hashing::have_sha_extensions;
 use global_config::GlobalFlags;
 use keygen::Keygen;
 use keysplit::Keysplit;
 use version::VERSION;
+
+pub mod cli;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {

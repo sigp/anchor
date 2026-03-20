@@ -1,8 +1,8 @@
 use std::backtrace::Backtrace;
 
 use clap::Parser;
-use cli::{AnchorSubcommands, Cli};
-use client::{Client, Node, config};
+use cli::{AnchorSubcommands, Cli, Node};
+use client::{Client, config};
 use environment::Environment;
 use global_config::GlobalConfig;
 use logging::{

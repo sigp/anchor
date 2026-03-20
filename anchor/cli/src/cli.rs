@@ -12,16 +12,7 @@ use clap::{
 };
 use logging::FileLoggingFlags;
 
-pub const SECURITY_OPTIONS: &str = "Security Options";
-pub const EXTERNAL_APIS: &str = "External APIs";
-pub const HTTP_API: &str = "HTTP API";
-pub const NETWORK_OPTIONS: &str = "Network Options";
-pub const METRICS_OPTIONS: &str = "Metrics Options";
-pub const PAYLOAD_BUILDING_OPTIONS: &str = "Payload Building Options";
-pub const ADDITIONAL_OPTIONS: &str = "Additional Options";
-
 #[derive(Parser, Clone, Debug)]
-#[command(next_help_heading = SECURITY_OPTIONS)]
 pub struct SecurityOptions {
     #[clap(
         long,
@@ -47,7 +38,6 @@ pub struct SecurityOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[command(next_help_heading = EXTERNAL_APIS)]
 pub struct ExternalApis {
     #[clap(
         long,
@@ -136,7 +126,6 @@ pub struct ExternalApis {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[command(next_help_heading = HTTP_API)]
 pub struct HttpApiOptions {
     #[clap(
         long,
@@ -198,7 +187,6 @@ pub struct HttpApiOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[command(next_help_heading = METRICS_OPTIONS)]
 pub struct MetricsOptions {
     #[clap(
         long,
@@ -251,7 +239,6 @@ pub struct MetricsOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[command(next_help_heading = NETWORK_OPTIONS)]
 pub struct NetworkOptions {
     #[clap(
         long,
@@ -468,7 +455,6 @@ pub struct NetworkOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
-#[command(next_help_heading = PAYLOAD_BUILDING_OPTIONS)]
 pub struct PayloadBuildingOptions {
     #[clap(
         long,
@@ -536,7 +522,6 @@ pub struct Node {
         long,
         help = "Disable the latency measurement service.",
         display_order = 0,
-        help_heading = ADDITIONAL_OPTIONS,
     )]
     pub disable_latency_measurement_service: bool,
 
@@ -583,7 +568,6 @@ pub struct Node {
                 to prevent QBFT protocol violations.",
         display_order = 0,
         default_value_t = false,
-        help_heading = ADDITIONAL_OPTIONS,
         action = ArgAction::Set
     )]
     pub operator_dg: bool,
@@ -597,7 +581,6 @@ pub struct Node {
         display_order = 0,
         default_value_t = 2,
         requires = "operator_dg",
-        help_heading = ADDITIONAL_OPTIONS,
     )]
     pub operator_dg_wait_epochs: u64,
 
@@ -609,7 +592,6 @@ pub struct Node {
                 Using this flag might reduce validator performance if cluster operators have \
                 struggling nodes, but can help to avoid finalization of a faulty majority fork.",
         display_order = 0,
-        help_heading = ADDITIONAL_OPTIONS,
     )]
     pub strict_mfp: bool,
 
