@@ -792,6 +792,7 @@ dependencies = [
 name = "anchor_validator_store"
 version = "0.1.0"
 dependencies = [
+ "async-channel 1.9.0",
  "beacon_node_fallback",
  "bls",
  "database",
@@ -806,6 +807,7 @@ dependencies = [
  "parking_lot",
  "qbft",
  "qbft_manager",
+ "rand 0.9.2",
  "safe_arith",
  "signature_collector",
  "slashing_protection",
@@ -813,6 +815,7 @@ dependencies = [
  "ssv_types",
  "ssz_types",
  "task_executor",
+ "tempfile",
  "tokio",
  "tracing",
  "tree_hash",

@@ -3,7 +3,7 @@ use rusqlite::{Transaction, params};
 use ssv_types::{Operator, OperatorId};
 use tracing::trace;
 
-use super::{DatabaseError, NetworkDatabase, PubkeyOrId, sql_operations};
+use super::{DatabaseError, NetworkDatabase, PendingStateUpdates, PubkeyOrId, sql_operations};
 
 /// Represents the status of an operator in the database
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,14 +17,15 @@ pub enum OperatorStatus {
 }
 /// Implements all operator related functionality on the database
 impl NetworkDatabase {
-    /// Insert a new Operator into the database
-    pub fn insert_operator(
+    /// Insert a new operator in the active transaction and queue the matching state update.
+    pub fn insert_operator_tx(
         &self,
         operator: &Operator,
         tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
     ) -> Result<(), DatabaseError> {
         // Make sure that this operator does not already exist
-        if self.state().operator_exists(&operator.id) {
+        if self.operator_exists_tx(operator.id, tx)? {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} already in database",
                 *operator.id
@@ -32,11 +33,12 @@ impl NetworkDatabase {
         }
 
         // Base64 encode the key for storage
-        let pem_key = operator
-            .rsa_pubkey
-            .public_key_to_pem()
-            .expect("Failed to encode RsaPublicKey");
+        let pem_key = operator.rsa_pubkey.public_key_to_pem()?;
         let encoded = BASE64_STANDARD.encode(&pem_key);
+        let is_own_operator = match &self.operator {
+            PubkeyOrId::Pubkey(pubkey) => pem_key == pubkey.public_key_to_pem()?,
+            PubkeyOrId::Id(id) => *id == operator.id,
+        };
 
         // Insert into the database
         tx.prepare_cached(sql_operations::INSERT_OPERATOR)?
@@ -45,38 +47,31 @@ impl NetworkDatabase {
                 encoded,                    // RSA public key
                 operator.owner.to_string()  // The owner address of the operator
             ])?;
-
-        self.state.send_modify(|state| {
-            // Check to see if this operator is the current operator
-            if state.single_state.id.is_none() {
-                // If the keys match, this is the current operator so we want to save the id
-                let keys_match = match &self.operator {
-                    PubkeyOrId::Pubkey(pubkey) => {
-                        pem_key == pubkey.public_key_to_pem().unwrap_or_default()
-                    }
-                    PubkeyOrId::Id(id) => *id == operator.id,
-                };
-                if keys_match {
-                    state.single_state.id = Some(operator.id);
-                }
-            }
-            // Store the operator in memory
-            state
-                .single_state
-                .operators
-                .insert(operator.id, operator.to_owned());
-        });
+        state_updates.insert_operator(operator.to_owned(), is_own_operator);
         Ok(())
     }
 
-    /// Delete an operator
-    pub fn delete_operator(
+    /// Insert a new Operator into the database
+    pub fn insert_operator(
+        &self,
+        operator: &Operator,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        let mut state_updates = PendingStateUpdates::default();
+        self.insert_operator_tx(operator, tx, &mut state_updates)?;
+        self.publish_pending_state_updates(state_updates);
+        Ok(())
+    }
+
+    /// Delete an operator in the active transaction and queue the matching state update.
+    pub fn delete_operator_tx(
         &self,
         id: OperatorId,
         tx: &Transaction<'_>,
+        state_updates: &mut PendingStateUpdates,
     ) -> Result<(), DatabaseError> {
         // Make sure that this operator exists
-        if !self.state().operator_exists(&id) {
+        if !self.operator_exists_tx(id, tx)? {
             return Err(DatabaseError::NotFound(format!(
                 "Operator with id {} not in database",
                 *id
@@ -101,10 +96,19 @@ impl NetworkDatabase {
                 .execute(params![id])?;
         }
 
-        self.state.send_modify(|state| {
-            // Remove the operator
-            state.single_state.operators.remove(&id);
-        });
+        state_updates.delete_operator(id);
+        Ok(())
+    }
+
+    /// Delete an operator
+    pub fn delete_operator(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        let mut state_updates = PendingStateUpdates::default();
+        self.delete_operator_tx(id, tx, &mut state_updates)?;
+        self.publish_pending_state_updates(state_updates);
         Ok(())
     }
 
@@ -136,6 +140,18 @@ impl NetworkDatabase {
         Ok(matches!(
             self.get_operator_status(id, tx)?,
             OperatorStatus::SoftDeleted
+        ))
+    }
+
+    /// Check if an operator exists in the active transaction and is not soft-deleted.
+    pub fn operator_exists_tx(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        Ok(matches!(
+            self.get_operator_status(id, tx)?,
+            OperatorStatus::Active
         ))
     }
 
