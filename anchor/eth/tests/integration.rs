@@ -1,13 +1,31 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    panic::{AssertUnwindSafe, catch_unwind},
+    str::FromStr,
+    sync::Arc,
+};
 
 use alloy::primitives::{Address, Bytes};
 use database::test_utils::queries;
-use eth::util::compute_cluster_id;
+use eth::{
+    SlashingProtection,
+    event_processor::{EventProcessor, Mode},
+    util::compute_cluster_id,
+};
 use ssv_types::*;
 
 mod common;
 
 use common::*;
+
+#[derive(Debug, Default)]
+struct PanicSlashingProtection;
+
+impl SlashingProtection for PanicSlashingProtection {
+    fn register_validator(&self, _public_key: bls::PublicKeyBytes) -> Result<(), String> {
+        panic!("intentional panic for block-boundary regression test");
+    }
+}
 
 #[tokio::test]
 async fn test_operator_added_event_processing() {
@@ -178,6 +196,197 @@ async fn test_same_block_operator_and_validator_processing() {
             panic!("validator should have been queued for index sync");
         }
     }
+}
+
+/// Ensures a single `process_logs` call flushes block `N` before processing block `N+1`.
+///
+/// This is the core new behavior in PR2: a validator added in the second block of the fetched
+/// batch must be able to observe the operators committed from the first block in that same call.
+#[tokio::test]
+async fn test_cross_block_operator_and_validator_processing() {
+    setup_tracing();
+
+    // Arrange: build one fetched batch containing operator events in block N and a validator add
+    // in block N+1 that depends on those operators.
+    let mut test = ProcessorFixture::new_empty();
+    let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_block = 12363;
+    let validator_block = 12364;
+    let mut logs = Vec::new();
+
+    for (log_index, operator_id) in operator_ids.iter().enumerate() {
+        logs.push(create_operator_added_log_at_position(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000 + *operator_id,
+            operator_block,
+            0,
+            log_index as u64,
+        ));
+    }
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, cluster_owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    logs.push(create_validator_added_log_at_position(
+        cluster_owner,
+        operator_ids.clone(),
+        validator_public_key,
+        shares,
+        validator_block,
+        0,
+        0,
+    ));
+
+    // Act: process both blocks together in one fetched batch.
+    let result = test.processor.process_logs(logs, true, validator_block);
+
+    // Assert: the validator add succeeds, proving block N was committed before block N+1 ran.
+    assert!(
+        result.is_ok(),
+        "cross-block operator and validator processing should succeed"
+    );
+
+    for operator_id in operator_ids {
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
+    }
+
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    verify_validator_added(&test.processor, &validator_pubkey_str);
+    verify_cluster_created(&test.processor, cluster_owner, &[1u64, 2u64, 3u64, 4u64]);
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        validator_block
+    );
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            assert_eq!(
+                validator_key,
+                Some(validator_pubkey_bytes),
+                "validator should be queued for index sync after the later block commits"
+            );
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+            panic!("validator should have been queued for index sync");
+        }
+    }
+}
+
+/// Ensures a fatal error in block `N+1` does not roll back the already flushed state from block
+/// `N` in the same `process_logs` call.
+#[tokio::test]
+async fn test_cross_block_failure_preserves_previous_block_commit() {
+    setup_tracing();
+
+    // Arrange: first block adds operators, second block panics during validator registration.
+    // Catching that unwind lets us distinguish a real block-boundary commit from "one tx for the
+    // whole fetched batch", because block `N` should remain committed afterwards.
+    let fixture = InMemoryTestFixture::new_empty();
+    let (index_sync_tx, _index_sync_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (exit_tx, _exit_rx) = tokio::sync::mpsc::unbounded_channel();
+    let db = Arc::new(fixture.data.db);
+    let processor = EventProcessor::new(
+        Arc::clone(&db),
+        Mode::Node {
+            index_sync_tx,
+            exit_tx,
+            slashing_protection: Arc::new(PanicSlashingProtection),
+        },
+    );
+
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_block = 12365;
+    let panicking_block = 12366;
+    let cluster_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, cluster_owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    let mut logs = Vec::new();
+
+    for (log_index, operator_id) in operator_ids.iter().enumerate() {
+        logs.push(create_operator_added_log_at_position(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000 + *operator_id,
+            operator_block,
+            0,
+            log_index as u64,
+        ));
+    }
+
+    logs.push(create_validator_added_log_at_position(
+        cluster_owner,
+        operator_ids.clone(),
+        validator_public_key,
+        shares,
+        panicking_block,
+        0,
+        0,
+    ));
+
+    // Act: process both blocks in one fetched batch and catch the intentional panic from block
+    // N+1.
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        processor.process_logs(logs, true, panicking_block)
+    }));
+
+    // Assert: block N+1 panics before its transaction commits, but block N remains durably
+    // committed.
+    assert!(
+        result.is_err(),
+        "the second block should panic during slashing registration"
+    );
+
+    for operator_id in operator_ids {
+        verify_operator_stored(&processor, OperatorId(operator_id));
+    }
+
+    assert_eq!(
+        db.state().get_last_processed_block(),
+        operator_block,
+        "the committed progress boundary should stop at the last successfully flushed block"
+    );
+}
+
+/// Ensures `process_logs` still advances progress through `end_block` when the fetched range ends
+/// on blocks that contain no relevant logs.
+#[tokio::test]
+async fn test_cross_block_empty_tail_advances_processed_block() {
+    setup_tracing();
+
+    // Arrange: only the first block in the fetched range has relevant logs.
+    let test = ProcessorFixture::new_empty();
+    let operator_block = 12367;
+    let end_block = 12369;
+    let operator_id = 1u64;
+    let log = create_operator_added_log_at_position(
+        operator_id,
+        Address::random(),
+        create_valid_rsa_public_key_bytes(),
+        1000 + operator_id,
+        operator_block,
+        0,
+        0,
+    );
+
+    // Act: process a range whose final block is empty from Anchor's point of view.
+    let result = test.processor.process_logs(vec![log], true, end_block);
+
+    // Assert: the relevant log commits, and progress still advances through the empty tail.
+    assert!(
+        result.is_ok(),
+        "processing should succeed even when the fetched range ends on empty blocks"
+    );
+    verify_operator_stored(&test.processor, OperatorId(operator_id));
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        end_block,
+        "the empty tail block should still be marked as processed"
+    );
 }
 
 #[tokio::test]
