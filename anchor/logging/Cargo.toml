@@ -6,8 +6,8 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = [
-  "clock",
-  "std",
+    "clock",
+    "std",
 ] }
 clap = { workspace = true }
 logroller = "0.1.8"

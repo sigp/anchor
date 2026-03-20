@@ -12,6 +12,8 @@ use clap::{
 };
 use logging::FileLoggingFlags;
 
+pub const FLAG_HEADER: &str = "Flags";
+
 #[derive(Parser, Clone, Debug)]
 pub struct SecurityOptions {
     #[clap(
@@ -120,7 +122,8 @@ pub struct ExternalApis {
                 Any sync distance larger than the `Medium` range is considered `Large`. \
                 For example, a value of '8,8,48' would mean: \
                 Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER
     )]
     pub beacon_nodes_sync_tolerances: Vec<u64>,
 }
@@ -130,7 +133,8 @@ pub struct HttpApiOptions {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
-        display_order = 0
+        help_heading = FLAG_HEADER,
+        display_order = 0,
     )]
     pub http: bool,
 
@@ -159,7 +163,8 @@ pub struct HttpApiOptions {
         help = "This is a safety flag to ensure that the user is aware that the http \
                 transport is unencrypted and using a custom HTTP address is unsafe.",
         display_order = 0,
-        requires = "http_address"
+        requires = "http_address",
+        help_heading = FLAG_HEADER,
     )]
     pub unencrypted_http_transport: bool,
 
@@ -191,7 +196,8 @@ pub struct MetricsOptions {
     #[clap(
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER,
     )]
     pub metrics: bool,
 
@@ -221,7 +227,8 @@ pub struct MetricsOptions {
                 Note: This flag is automatically enabled for <= 64 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER
     )]
     pub enable_high_validator_count_metrics: bool,
 
@@ -443,11 +450,17 @@ pub struct NetworkOptions {
     #[clap(
         long,
         help = "Subscribe to all subnets, regardless of committee membership.",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER,
     )]
     pub subscribe_all_subnets: bool,
 
-    #[clap(long, help = "Disables gossipsub peer scoring.", display_order = 0)]
+    #[clap(
+        long,
+        help = "Disables gossipsub peer scoring.",
+        display_order = 0,
+        help_heading = FLAG_HEADER
+    )]
     pub disable_gossipsub_peer_scoring: bool,
 
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
@@ -472,6 +485,7 @@ pub struct PayloadBuildingOptions {
         alias = "private-tx-proposals",
         help = "Deprecated and ignored. Validator registrations are now always created.",
         display_order = 0,
+        help_heading = FLAG_HEADER,
         hide = true
     )]
     pub builder_proposals: bool,
@@ -492,7 +506,8 @@ pub struct PayloadBuildingOptions {
         long,
         help = "If this flag is set, Anchor will always prefer blocks \
                 constructed by builders, regardless of payload value.",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER
     )]
     pub prefer_builder_proposals: bool,
 }
@@ -521,7 +536,8 @@ pub struct Node {
     #[clap(
         long,
         help = "Disable the latency measurement service.",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER
     )]
     pub disable_latency_measurement_service: bool,
 
@@ -568,6 +584,7 @@ pub struct Node {
                 to prevent QBFT protocol violations.",
         display_order = 0,
         default_value_t = false,
+        help_heading = FLAG_HEADER,
         action = ArgAction::Set
     )]
     pub operator_dg: bool,
@@ -591,7 +608,8 @@ pub struct Node {
                 participate in attestation production if the checkpoint roots mismatch. \
                 Using this flag might reduce validator performance if cluster operators have \
                 struggling nodes, but can help to avoid finalization of a faulty majority fork.",
-        display_order = 0
+        display_order = 0,
+        help_heading = FLAG_HEADER,
     )]
     pub strict_mfp: bool,
 

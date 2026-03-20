@@ -11,7 +11,7 @@ use keygen::Keygen;
 use keysplit::Keysplit;
 use version::VERSION;
 
-pub mod cli;
+mod cli;
 
 pub static SHORT_VERSION: LazyLock<String> = LazyLock::new(|| VERSION.replace("Anchor/", ""));
 pub static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
