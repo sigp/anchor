@@ -474,8 +474,10 @@ async fn test_same_block_validator_add_and_remove_processing() {
     );
 }
 
+/// Ensures pre-existing malformed-event semantics are preserved: malformed events are skipped,
+/// while valid events in the same `process_logs` call still commit.
 #[tokio::test]
-async fn test_database_transaction_rollback_on_error() {
+async fn test_malformed_events_skipped_without_affecting_valid_events() {
     // Setup test fixture with processor
     let test = ProcessorFixture::new_empty();
 
