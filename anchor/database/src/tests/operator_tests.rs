@@ -2,7 +2,10 @@
 mod operator_database_tests {
     use ssv_types::{Operator, OperatorId};
 
-    use crate::test_utils::{InMemoryTestFixture, assertions, generators};
+    use crate::{
+        NetworkDatabase, PendingStateUpdates,
+        test_utils::{InMemoryTestFixture, TEST_NETWORK, assertions, generators},
+    };
 
     #[test]
     // Test to make sure we can insert new operators into the database and they are present in the
@@ -24,6 +27,27 @@ mod operator_database_tests {
         // Confirm that it exists both in the db and the state store
         assertions::operator::exists_in_db(&operator, &tx);
         assertions::operator::exists_in_memory(&fixture.db, &operator);
+    }
+
+    #[test]
+    fn test_insert_operator_tx_reads_own_id_before_publish() {
+        let operator = generators::operator::with_id(1);
+        let db = NetworkDatabase::new_in_memory(&operator.rsa_pubkey, TEST_NETWORK)
+            .expect("Failed to create in-memory database");
+
+        let mut conn = db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
+
+        db.insert_operator_tx(&operator, &tx, &mut pending)
+            .expect("Failed to stage operator insert");
+
+        assert_eq!(db.state().get_own_id(), None);
+        assert_eq!(
+            db.get_own_operator_id_tx(&tx)
+                .expect("Failed to read own operator id"),
+            Some(operator.id)
+        );
     }
 
     #[test]
