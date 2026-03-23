@@ -150,7 +150,7 @@ mod state_database_tests {
             .db
             .processed_block_tx(10, &tx, &mut pending)
             .expect("Failed to update the block number");
-        tx.commit().unwrap();
+        commit_and_publish(&fixture.data.db, tx, pending);
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
@@ -227,8 +227,7 @@ mod state_database_tests {
             .db
             .bump_and_get_nonce_tx(&owner, &tx, &mut pending)
             .expect("Failed in increment nonce");
-
-        tx.commit().unwrap();
+        commit_and_publish(&fixture.data.db, tx, pending);
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
