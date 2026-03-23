@@ -1,6 +1,6 @@
 use bls::PublicKeyBytes;
-use rusqlite::{Transaction, params};
-use ssv_types::{Cluster, ClusterId, OperatorId, Share, ValidatorMetadata};
+use rusqlite::{OptionalExtension, Transaction, params};
+use ssv_types::{Cluster, ClusterId, ClusterMember, OperatorId, Share, ValidatorMetadata};
 use types::Address;
 
 use super::{DatabaseError, NetworkDatabase, PendingStateUpdates, sql_operations};
@@ -78,17 +78,17 @@ impl NetworkDatabase {
     pub fn update_status_tx(
         &self,
         cluster_id: ClusterId,
-        status: bool,
+        liquidated: bool,
         tx: &Transaction<'_>,
         state_updates: &mut PendingStateUpdates,
     ) -> Result<(), DatabaseError> {
         tx.prepare_cached(sql_operations::UPDATE_CLUSTER_STATUS)?
             .execute(params![
-                status,      // status of the cluster (liquidated = false, active = true)
+                liquidated,  // liquidated flag
                 *cluster_id  // Id of the cluster
             ])?;
 
-        state_updates.update_cluster_status(cluster_id, status);
+        state_updates.update_cluster_status(cluster_id, liquidated);
 
         Ok(())
     }
@@ -97,11 +97,11 @@ impl NetworkDatabase {
     pub fn update_status(
         &self,
         cluster_id: ClusterId,
-        status: bool,
+        liquidated: bool,
         tx: &Transaction<'_>,
     ) -> Result<(), DatabaseError> {
         let mut state_updates = PendingStateUpdates::default();
-        self.update_status_tx(cluster_id, status, tx, &mut state_updates)?;
+        self.update_status_tx(cluster_id, liquidated, tx, &mut state_updates)?;
         self.apply_pending_state_updates(state_updates);
         Ok(())
     }
@@ -134,6 +134,32 @@ impl NetworkDatabase {
         self.delete_validator_tx(validator_pubkey, tx, &mut state_updates)?;
         self.apply_pending_state_updates(state_updates);
         Ok(())
+    }
+
+    /// Load a cluster by validator public key through the transaction's view of the database.
+    pub fn get_cluster_by_validator_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<Cluster>, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_CLUSTER_BY_VALIDATOR)?
+            .query_row(params![validator_pubkey.to_string()], |row| {
+                let cluster_id = ClusterId(row.get("cluster_id")?);
+
+                let cluster_members = tx
+                    .prepare_cached(sql_operations::GET_CLUSTER_MEMBERS)?
+                    .query_map([cluster_id.0], |member_row| {
+                        Ok(ClusterMember {
+                            cluster_id,
+                            operator_id: member_row.get(0)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Cluster::try_from((row, cluster_members))
+            })
+            .optional()
+            .map_err(DatabaseError::from)
     }
 
     /// Bump the nonce of the owner in the active transaction and queue the matching state update.

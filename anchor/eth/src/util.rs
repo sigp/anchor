@@ -7,8 +7,9 @@ use alloy::{
     transports::{Transport, http::Http, layers::FallbackLayer},
 };
 use bls::{PublicKeyBytes, Signature};
-use database::NetworkState;
+use database::NetworkDatabase;
 use reqwest::Client;
+use rusqlite::Transaction;
 use sensitive_url::SensitiveUrl;
 use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
 use tower::ServiceBuilder;
@@ -130,7 +131,8 @@ pub fn verify_signature(
 pub fn validate_operators(
     operator_ids: &[OperatorId],
     cluster_id: &ClusterId,
-    network_state: &NetworkState,
+    db: &NetworkDatabase,
+    tx: &Transaction<'_>,
 ) -> Result<(), ExecutionError> {
     trace!(cluster_id = ?cluster_id, "Validating operators");
 
@@ -165,13 +167,15 @@ pub fn validate_operators(
         ));
     }
 
-    if operator_ids
-        .iter()
-        .any(|id| !network_state.operator_exists(id))
-    {
-        return Err(ExecutionError::Database(
-            "One or more operators do not exist".to_string(),
-        ));
+    for operator_id in operator_ids {
+        let exists = db
+            .operator_exists_tx(*operator_id, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?;
+        if !exists {
+            return Err(ExecutionError::Database(format!(
+                "Operator {operator_id} does not exist"
+            )));
+        }
     }
 
     Ok(())
