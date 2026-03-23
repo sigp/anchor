@@ -376,6 +376,52 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Ok(signatures)
     }
 
+    /// Run `AggregatorCommittee` QBFT consensus for a committee at 2/3 slot.
+    ///
+    /// Shared by `sign_committee_aggregate_and_proofs` and
+    /// `sign_committee_sync_committee_contributions`.
+    async fn run_aggregator_committee_consensus(
+        &self,
+        committee_id: CommitteeId,
+        slot: Slot,
+        cluster: &Cluster,
+        metric_label: &str,
+    ) -> Result<AggregatorCommitteeConsensusData<E>, Error> {
+        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
+        let our_consensus_data = aggregation_assignments
+            .get_consensus_data(&committee_id)
+            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
+
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metric_label]);
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self.get_instant_in_slot(
+                slot,
+                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+            )?,
+        };
+
+        let completed = self
+            .consensus
+            .decide_instance(
+                AggregatorCommitteeInstanceId {
+                    committee: committee_id,
+                    instance_height: slot.as_usize().into(),
+                },
+                (*our_consensus_data).clone(),
+                Box::new(AggregatorCommitteeDataValidator::new()),
+                timeout_mode,
+                &cluster.cluster_members,
+            )
+            .await
+            .map_err(SpecificError::from)?;
+        drop(timer);
+
+        match completed {
+            Completed::TimedOut => Err(Error::SpecificError(SpecificError::Timeout)),
+            Completed::Success(data) => Ok(data),
+        }
+    }
+
     /// Compute the signing root for a sync committee selection proof.
     ///
     /// Each subnet has a different signing root based on `SyncAggregatorSelectionData{Slot,
@@ -856,299 +902,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .collect::<HashMap<_, _>>()
     }
 
-    /// Boole+ path for `produce_signed_contribution_and_proof`: committee-based consensus using
-    /// `AggregatorCommitteeConsensusData`.
-    #[expect(clippy::too_many_arguments)]
-    async fn produce_signed_contribution_and_proof_boole(
-        &self,
-        aggregator_index: u64,
-        aggregator_pubkey: PublicKeyBytes,
-        subcommittee_index: u64,
-        slot: Slot,
-        epoch: Epoch,
-        validator: ValidatorMetadata,
-        cluster: Cluster,
-        committee_id: CommitteeId,
-    ) -> Result<SignedContributionAndProof<E>, Error> {
-        // Get pre-built consensus data from AggregationAssignments (waits until 2/3 slot)
-        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
-
-        // Get pre-built consensus data for this committee
-        let our_consensus_data = aggregation_assignments
-            .get_consensus_data(&committee_id)
-            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
-
-        // Run QBFT consensus with committee-based instance ID
-        let timer = metrics::start_timer_vec(
-            &metrics::CONSENSUS_TIMES,
-            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
-        );
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self.get_instant_in_slot(
-                slot,
-                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-            )?,
-        };
-
-        let completed = self
-            .consensus
-            .decide_instance(
-                AggregatorCommitteeInstanceId {
-                    committee: committee_id,
-                    instance_height: slot.as_usize().into(),
-                },
-                (*our_consensus_data).clone(),
-                Box::new(AggregatorCommitteeDataValidator::new()),
-                timeout_mode,
-                &cluster.cluster_members,
-            )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let decided_data: AggregatorCommitteeConsensusData<E> = match completed {
-            Completed::TimedOut => {
-                return Err(Error::SpecificError(SpecificError::Timeout));
-            }
-            Completed::Success(data) => data,
-        };
-
-        // Extract this validator's decided selection proof by matching `validator_index`
-        // AND `subcommittee_index`. Unlike attestation aggregators where each validator
-        // has one entry, sync contributors may have multiple entries (one per
-        // subcommittee). If this validator+subcommittee is not in the
-        // decided data (e.g., another operator's proposal won with fewer
-        // validators), we return `ValidatorNotInConsensus` early. This
-        // prevents us from creating a post-consensus partial signature for a
-        // validator that won't be counted in `num_signatures_to_collect`, which would cause
-        // the signature collector to wait forever for signatures that will never arrive.
-        let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
-
-        let Some(decided_contributor) = decided_data.contributors.iter().find(|contrib| {
-            contrib.validator_index == validator_index
-                && contrib.committee_index == subcommittee_index
-        }) else {
-            debug!(
-                ?validator_index,
-                subcommittee_index,
-                "Validator not in decided data, skipping due to divergent operator views"
-            );
-            return Err(Error::SpecificError(
-                SpecificError::ValidatorNotInConsensus(validator_index),
-            ));
-        };
-
-        // Look up the actual contribution from decided data by subcommittee_index
-        let Some(decided_contribution) = decided_data
-            .sync_committee_contributions
-            .iter()
-            .find(|c| c.subcommittee_index == subcommittee_index)
-        else {
-            // This can happen when the beacon API failed to return the sync
-            // contribution during consensus data building, causing this subcommittee
-            // to be filtered out.
-            debug!(
-                subcommittee_index,
-                ?aggregator_pubkey,
-                "Contribution not in consensus data - likely filtered due to beacon API failure"
-            );
-            return Err(Error::SpecificError(
-                SpecificError::ContributionNotInConsensus(subcommittee_index),
-            ));
-        };
-
-        // Build the ContributionAndProof with decided values
-        let message = ContributionAndProof {
-            aggregator_index,
-            contribution: decided_contribution.clone(),
-            selection_proof: decided_contributor.selection_proof.clone(),
-        };
-
-        debug!(
-            aggregator_index = ?message.aggregator_index,
-            slot = %message.contribution.slot,
-            block_root = ?message.contribution.beacon_block_root,
-            subcommittee_index = message.contribution.subcommittee_index,
-            num_set_aggregation_bits = message.contribution.aggregation_bits.num_set_bits(),
-            "Decided on ContributionAndProof to sign (Boole+ committee consensus)"
-        );
-
-        // Calculate signature count for post-consensus committee collection
-        let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-
-        // Count all post-consensus signatures (aggregators + contributors) in decided data
-        // that we have shares for. This uses the combined count to ensure all signatures
-        // are batched into a single message, avoiding validation failures from split
-        // messages. The count uses `decided_data` (QBFT consensus result)
-        // filtered by our shares, rather than local views, to correctly
-        // handle divergent operator views.
-        let num_signatures_to_collect = decided_data
-            .post_consensus_signature_count(|idx| committee_validator_indices.contains(idx));
-
-        let data_hash = decided_data.hash();
-
-        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-        let signing_root = message.signing_root(domain_hash);
-
-        let signature = self
-            .collect_signature(
-                PartialSignatureKind::PostConsensus,
-                Role::AggregatorCommittee,
-                CollectionMode::Committee {
-                    num_signatures_to_collect,
-                    base_hash: data_hash,
-                },
-                &validator,
-                &cluster,
-                signing_root,
-                slot,
-            )
-            .await?;
-
-        Ok(SignedContributionAndProof { message, signature })
-    }
-
-    /// Pre-Boole path for `produce_signed_contribution_and_proof`: per-validator consensus.
-    #[expect(clippy::too_many_arguments)]
-    async fn produce_signed_contribution_and_proof_alan(
-        &self,
-        aggregator_index: u64,
-        aggregator_pubkey: PublicKeyBytes,
-        contribution: SyncCommitteeContribution<E>,
-        selection_proof: SyncSelectionProof,
-        slot: Slot,
-        epoch: Epoch,
-        subcommittee_index: u64,
-        validator: ValidatorMetadata,
-        cluster: Cluster,
-    ) -> Result<SignedContributionAndProof<E>, Error> {
-        let signing_data = ContributionAndProofSigningData {
-            contribution,
-            selection_proof,
-        };
-
-        // Get aggregator voting assignments from Phase 3 (published at 2/3 slot)
-        let aggregator_info = self.get_aggregation_assignments(slot).await?;
-
-        let signing_data = match aggregator_info
-            .multi_sync_aggregators
-            .get(&aggregator_pubkey)
-        {
-            None => vec![signing_data],
-            Some(contribution_waiter) => {
-                let mut data = contribution_waiter.submit_and_wait(signing_data).await;
-                data.sort_by(|a, b| {
-                    a.contribution
-                        .subcommittee_index
-                        .cmp(&b.contribution.subcommittee_index)
-                });
-                data
-            }
-        };
-
-        let data = Contributions::new(
-            signing_data
-                .iter()
-                .map(|signing_data| {
-                    // Wrap contribution to match Go-SSV's encoding
-                    ContributionWrapper::from(Contribution {
-                        selection_proof_sig: signing_data.selection_proof.clone().into(),
-                        contribution: signing_data.contribution.clone(),
-                    })
-                })
-                .collect(),
-        )
-        .map_err(|_| SpecificError::TooManySyncSubnetsToSign)?;
-
-        let timer = metrics::start_timer_vec(
-            &metrics::CONSENSUS_TIMES,
-            &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
-        );
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self.get_instant_in_slot(
-                slot,
-                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-            )?,
-        };
-
-        let completed = self
-            .consensus
-            .decide_instance(
-                ProposerInstanceId {
-                    validator: aggregator_pubkey,
-                    duty: ValidatorDutyKind::SyncCommitteeAggregator,
-                    instance_height: slot.as_usize().into(),
-                },
-                ProposerConsensusData {
-                    duty: ValidatorDuty {
-                        r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
-                        pub_key: aggregator_pubkey,
-                        slot,
-                        validator_index: validator.index.ok_or(SpecificError::MissingIndex)?,
-                        committee_index: 0,
-                        committee_length: 0,
-                        committees_at_slot: 0,
-                        validator_committee_index: aggregator_index,
-                        validator_sync_committee_indices: Default::default(),
-                    },
-                    version: ForkName::Altair.into(),
-                    data_ssz: try_to_variable_list(data.as_ssz_bytes(), |provided, max| {
-                        Error::SpecificError(SpecificError::DataTooLarge(format!(
-                            "Sync committee data too large for consensus: {} > {}",
-                            provided, max
-                        )))
-                    })?,
-                },
-                self.create_proposer_consensus_data_validator(aggregator_pubkey),
-                timeout_mode,
-                &cluster.cluster_members,
-            )
-            .await;
-        drop(timer);
-
-        let data = match completed {
-            Ok(Completed::Success(data)) => data,
-            Ok(Completed::TimedOut) => return Err(SpecificError::Timeout.into()),
-            Err(err) => return Err(SpecificError::QbftError(err).into()),
-        };
-
-        let data = Contributions::<E>::from_ssz_bytes(&data.data_ssz)
-            .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
-
-        let data = data
-            .into_iter()
-            .map(Contribution::from)
-            .find(|data| data.contribution.subcommittee_index == subcommittee_index)
-            .ok_or(SpecificError::NoDataAgreed)?;
-
-        debug!(
-            slot = %data.contribution.slot,
-            block_root = ?data.contribution.beacon_block_root,
-            subcommittee_index = data.contribution.subcommittee_index,
-            num_set_aggregation_bits = data.contribution.aggregation_bits.num_set_bits(),
-            "Decided on Contribution to sign"
-        );
-
-        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-        let message = ContributionAndProof {
-            aggregator_index,
-            contribution: data.contribution,
-            selection_proof: data.selection_proof_sig,
-        };
-        let signing_root = message.signing_root(domain_hash);
-        self.collect_signature(
-            PartialSignatureKind::PostConsensus,
-            Role::SyncCommittee,
-            CollectionMode::SingleValidator,
-            &validator,
-            &cluster,
-            signing_root,
-            slot,
-        )
-        .await
-        .map(|signature| SignedContributionAndProof { message, signature })
-    }
-
     /// Sign a single aggregate and proof (pre-Boole per-validator path).
     async fn sign_single_aggregate_and_proof(
         self: &Arc<Self>,
@@ -1270,7 +1023,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .await
     }
 
-    /// Sign a single sync committee contribution, handling fork-aware production and metrics.
+    /// Sign a single sync committee contribution (pre-Boole per-validator path).
     async fn sign_single_sync_committee_contribution(
         self: &Arc<Self>,
         contribution: ContributionToSign<E>,
@@ -1278,37 +1031,136 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let future = async {
             let slot = contribution.contribution.slot;
             let epoch = slot.epoch(E::slots_per_epoch());
-            let (validator, cluster) =
-                self.get_validator_and_cluster(contribution.aggregator_pubkey)?;
-            let committee_id = cluster.committee_id();
+            let aggregator_index = contribution.aggregator_index;
+            let aggregator_pubkey = contribution.aggregator_pubkey;
             let subcommittee_index = contribution.contribution.subcommittee_index;
+            let (validator, cluster) = self.get_validator_and_cluster(aggregator_pubkey)?;
 
-            if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
-                self.produce_signed_contribution_and_proof_boole(
-                    contribution.aggregator_index,
-                    contribution.aggregator_pubkey,
-                    subcommittee_index,
+            let signing_data = ContributionAndProofSigningData {
+                contribution: contribution.contribution,
+                selection_proof: contribution.selection_proof,
+            };
+
+            // Get aggregator voting assignments from Phase 3 (published at 2/3 slot)
+            let aggregator_info = self.get_aggregation_assignments(slot).await?;
+
+            let signing_data = match aggregator_info
+                .multi_sync_aggregators
+                .get(&aggregator_pubkey)
+            {
+                None => vec![signing_data],
+                Some(contribution_waiter) => {
+                    let mut data = contribution_waiter.submit_and_wait(signing_data).await;
+                    data.sort_by(|a, b| {
+                        a.contribution
+                            .subcommittee_index
+                            .cmp(&b.contribution.subcommittee_index)
+                    });
+                    data
+                }
+            };
+
+            let data = Contributions::new(
+                signing_data
+                    .iter()
+                    .map(|signing_data| {
+                        // Wrap contribution to match Go-SSV's encoding
+                        ContributionWrapper::from(Contribution {
+                            selection_proof_sig: signing_data.selection_proof.clone().into(),
+                            contribution: signing_data.contribution.clone(),
+                        })
+                    })
+                    .collect(),
+            )
+            .map_err(|_| SpecificError::TooManySyncSubnetsToSign)?;
+
+            let timer = metrics::start_timer_vec(
+                &metrics::CONSENSUS_TIMES,
+                &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
+            );
+            let timeout_mode = TimeoutMode::SlotTime {
+                instance_start_time: self.get_instant_in_slot(
                     slot,
-                    epoch,
-                    validator,
-                    cluster,
-                    committee_id,
+                    Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+                )?,
+            };
+
+            let completed = self
+                .consensus
+                .decide_instance(
+                    ProposerInstanceId {
+                        validator: aggregator_pubkey,
+                        duty: ValidatorDutyKind::SyncCommitteeAggregator,
+                        instance_height: slot.as_usize().into(),
+                    },
+                    ProposerConsensusData {
+                        duty: ValidatorDuty {
+                            r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+                            pub_key: aggregator_pubkey,
+                            slot,
+                            validator_index: validator.index.ok_or(SpecificError::MissingIndex)?,
+                            committee_index: 0,
+                            committee_length: 0,
+                            committees_at_slot: 0,
+                            validator_committee_index: aggregator_index,
+                            validator_sync_committee_indices: Default::default(),
+                        },
+                        version: ForkName::Altair.into(),
+                        data_ssz: try_to_variable_list(data.as_ssz_bytes(), |provided, max| {
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Sync committee data too large for consensus: {} > {}",
+                                provided, max
+                            )))
+                        })?,
+                    },
+                    self.create_proposer_consensus_data_validator(aggregator_pubkey),
+                    timeout_mode,
+                    &cluster.cluster_members,
                 )
-                .await
-            } else {
-                self.produce_signed_contribution_and_proof_alan(
-                    contribution.aggregator_index,
-                    contribution.aggregator_pubkey,
-                    contribution.contribution,
-                    contribution.selection_proof,
-                    slot,
-                    epoch,
-                    subcommittee_index,
-                    validator,
-                    cluster,
-                )
-                .await
-            }
+                .await;
+            drop(timer);
+
+            let data = match completed {
+                Ok(Completed::Success(data)) => data,
+                Ok(Completed::TimedOut) => return Err(SpecificError::Timeout.into()),
+                Err(err) => return Err(SpecificError::QbftError(err).into()),
+            };
+
+            let data = Contributions::<E>::from_ssz_bytes(&data.data_ssz)
+                .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
+
+            let data = data
+                .into_iter()
+                .map(Contribution::from)
+                .find(|data| data.contribution.subcommittee_index == subcommittee_index)
+                .ok_or(SpecificError::NoDataAgreed)?;
+
+            debug!(
+                slot = %data.contribution.slot,
+                block_root = ?data.contribution.beacon_block_root,
+                subcommittee_index = data.contribution.subcommittee_index,
+                num_set_aggregation_bits = data.contribution.aggregation_bits.num_set_bits(),
+                "Decided on Contribution to sign"
+            );
+
+            let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
+            let message = ContributionAndProof {
+                aggregator_index,
+                contribution: data.contribution,
+                selection_proof: data.selection_proof_sig,
+            };
+            let signing_root = message.signing_root(domain_hash);
+            self.collect_signature(
+                PartialSignatureKind::PostConsensus,
+                Role::SyncCommittee,
+                CollectionMode::SingleValidator,
+                &validator,
+                &cluster,
+                signing_root,
+                slot,
+            )
+            .await
+            .map(|signature| SignedContributionAndProof { message, signature })
         };
         run_and_update_metrics(
             SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME,
@@ -1316,6 +1168,175 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             future,
         )
         .await
+    }
+
+    /// Boole+ committee-based contribution signing: single QBFT consensus per committee,
+    /// batch signature collection for all contributors.
+    ///
+    /// Cannot use `collect_prepared_signatures` because a validator in multiple subcommittees
+    /// needs multiple signatures with different signing roots, but that helper deduplicates
+    /// by `ValidatorIndex`. Uses `collect_signature` directly instead.
+    async fn sign_committee_sync_committee_contributions(
+        &self,
+        committee_id: CommitteeId,
+        cluster: Cluster,
+        contributions: Vec<(ValidatorMetadata, ContributionToSign<E>)>,
+    ) -> Result<Vec<SignedContributionAndProof<E>>, Error> {
+        let Some((_, first)) = contributions.first() else {
+            warn!("sign_committee_sync_committee_contributions called with empty contributions");
+            return Ok(vec![]);
+        };
+        let slot = first.contribution.slot;
+        let epoch = slot.epoch(E::slots_per_epoch());
+
+        let decided_data = self
+            .run_aggregator_committee_consensus(
+                committee_id,
+                slot,
+                &cluster,
+                metrics::SYNC_CONTRIBUTION_AND_PROOF,
+            )
+            .await?;
+
+        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
+
+        // Prepare all validators: find each in decided data, build ContributionAndProof
+        // (metadata already resolved by `group_by_committee`)
+        let mut prepared: Vec<SigningRequest<ContributionAndProof<E>>> =
+            Vec::with_capacity(contributions.len());
+
+        for (validator, contrib) in &contributions {
+            let validator_index = match validator.index {
+                Some(idx) => idx,
+                None => {
+                    debug!(
+                        pubkey = ?contrib.aggregator_pubkey,
+                        "Validator missing index, skipping contribution"
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                        &[metrics::OTHER_ERROR],
+                    );
+                    continue;
+                }
+            };
+
+            let subcommittee_index = contrib.contribution.subcommittee_index;
+
+            // Find this validator+subcommittee in the decided data
+            let Some(decided_contributor) = decided_data.contributors.iter().find(|c| {
+                c.validator_index == validator_index && c.committee_index == subcommittee_index
+            }) else {
+                debug!(
+                    ?validator_index,
+                    subcommittee_index,
+                    "Validator not in decided data, skipping due to divergent operator views"
+                );
+                validator_metrics::inc_counter_vec(
+                    &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                    &[metrics::OTHER_ERROR],
+                );
+                continue;
+            };
+
+            // Find the contribution for this subcommittee
+            let Some(decided_contribution) = decided_data
+                .sync_committee_contributions
+                .iter()
+                .find(|c| c.subcommittee_index == subcommittee_index)
+            else {
+                debug!(
+                    subcommittee_index,
+                    pubkey = ?contrib.aggregator_pubkey,
+                    "Contribution not in consensus data - likely filtered due to beacon API failure"
+                );
+                validator_metrics::inc_counter_vec(
+                    &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                    &[metrics::OTHER_ERROR],
+                );
+                continue;
+            };
+
+            let message = ContributionAndProof {
+                aggregator_index: contrib.aggregator_index,
+                contribution: decided_contribution.clone(),
+                selection_proof: decided_contributor.selection_proof.clone(),
+            };
+
+            let signing_root = message.signing_root(domain_hash);
+            prepared.push(SigningRequest {
+                validator: validator.clone(),
+                signing_root,
+                duty_data: message,
+            });
+        }
+
+        // Collect signatures — using `collect_signature` directly because a validator in
+        // multiple subcommittees produces multiple `SigningRequest`s with different signing
+        // roots, which `collect_prepared_signatures` cannot handle (it deduplicates by
+        // `ValidatorIndex`).
+        let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
+        let num_signatures_to_collect = decided_data
+            .post_consensus_signature_count(|idx| committee_validator_indices.contains(idx));
+        let data_hash = decided_data.hash();
+        let collection_mode = CollectionMode::Committee {
+            num_signatures_to_collect,
+            base_hash: data_hash,
+        };
+
+        let sig_futures: Vec<_> = prepared
+            .iter()
+            .map(|req| async {
+                self.collect_signature(
+                    PartialSignatureKind::PostConsensus,
+                    Role::AggregatorCommittee,
+                    collection_mode,
+                    &req.validator,
+                    &cluster,
+                    req.signing_root,
+                    slot,
+                )
+                .await
+            })
+            .collect();
+
+        let signature_results = join_all(sig_futures).await;
+
+        // Assemble results
+        let mut results = Vec::with_capacity(prepared.len());
+        for (req, sig_result) in prepared.into_iter().zip(signature_results) {
+            match sig_result {
+                Ok(signature) => {
+                    let message = req.duty_data;
+                    debug!(
+                        aggregator_index = ?message.aggregator_index,
+                        slot = %message.contribution.slot,
+                        block_root = ?message.contribution.beacon_block_root,
+                        subcommittee_index = message.contribution.subcommittee_index,
+                        num_set_aggregation_bits = message.contribution.aggregation_bits.num_set_bits(),
+                        "Signed ContributionAndProof (Boole+ committee consensus)"
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                        &[validator_metrics::SUCCESS],
+                    );
+                    results.push(SignedContributionAndProof { message, signature });
+                }
+                Err(e) => {
+                    error!(
+                        pubkey = ?req.validator.public_key,
+                        error = ?e,
+                        "Failed to collect signature for sync contribution"
+                    );
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                        &[metrics::OTHER_ERROR],
+                    );
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     /// Sign sync committee messages for all validators in a single SSV committee.
@@ -1627,44 +1648,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let slot = first.aggregate.data().slot;
         let signing_epoch = first.aggregate.data().target.epoch;
 
-        // Get pre-built consensus data from AggregationAssignments (populated at 2/3 slot)
-        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
-        let our_consensus_data = aggregation_assignments
-            .get_consensus_data(&committee_id)
-            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
-
-        // Run QBFT consensus once for the entire committee
-        let timer =
-            metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATE_AND_PROOF]);
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self.get_instant_in_slot(
+        let decided_data = self
+            .run_aggregator_committee_consensus(
+                committee_id,
                 slot,
-                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-            )?,
-        };
-
-        let completed = self
-            .consensus
-            .decide_instance(
-                AggregatorCommitteeInstanceId {
-                    committee: committee_id,
-                    instance_height: slot.as_usize().into(),
-                },
-                (*our_consensus_data).clone(),
-                Box::new(AggregatorCommitteeDataValidator::new()),
-                timeout_mode,
-                &cluster.cluster_members,
+                &cluster,
+                metrics::AGGREGATE_AND_PROOF,
             )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let decided_data = match completed {
-            Completed::TimedOut => {
-                return Err(Error::SpecificError(SpecificError::Timeout));
-            }
-            Completed::Success(data) => data,
-        };
+            .await?;
 
         let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
 
@@ -2752,22 +2743,51 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         contributions: Vec<ContributionToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<SignedContributionAndProof<E>>, Error>> + Send {
-        let this = Arc::clone(self);
-        stream::once(async move {
-            let futures = contributions.into_iter().map(|contribution| {
-                let this = Arc::clone(&this);
-                async move {
-                    this.sign_single_sync_committee_contribution(contribution)
+        // Early return for empty input — no fork to determine, nothing to sign
+        let Some(first) = contributions.first() else {
+            return Either::Right(FuturesUnordered::new());
+        };
+
+        let epoch = first.contribution.slot.epoch(E::slots_per_epoch());
+
+        if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
+            // Boole+: group by committee, stream per committee via FuturesUnordered
+            let _span = info_span!("sign_sync_committee_contributions").entered();
+            let committee_mapping = self.group_by_committee(contributions, |c| c.aggregator_pubkey);
+
+            let committee_futures: FuturesUnordered<_> = committee_mapping
+                .into_iter()
+                .map(|(committee_id, (cluster, contributions))| {
+                    let this = Arc::clone(self);
+                    async move {
+                        run_committee_signing(
+                            committee_id,
+                            contributions.len(),
+                            &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
+                            this.sign_committee_sync_committee_contributions(
+                                committee_id,
+                                cluster,
+                                contributions,
+                            ),
+                        )
                         .await
-                }
-            });
+                    }
+                })
+                .collect();
 
-            let results = join_all(futures).await;
-
-            let signed: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
-
-            Ok(signed)
-        })
+            Either::Right(committee_futures)
+        } else {
+            // Pre-Boole: per-validator processing, no committee grouping needed
+            let this = Arc::clone(self);
+            Either::Left(stream::once(async move {
+                let futures = contributions.into_iter().map(|contrib| {
+                    let this = Arc::clone(&this);
+                    async move { this.sign_single_sync_committee_contribution(contrib).await }
+                });
+                let results = join_all(futures).await;
+                Ok(results.into_iter().filter_map(|r| r.ok()).collect())
+            }))
+        }
     }
 
     // stolen from lighthouse
