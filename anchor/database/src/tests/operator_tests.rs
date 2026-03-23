@@ -26,13 +26,10 @@ mod operator_database_tests {
             .db
             .insert_operator_tx(&operator, &tx, &mut pending)
             .expect("Failed to insert operator");
-        commit_and_publish(&fixture.db, tx, pending);
-
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
 
         // Confirm that it exists both in the db and the state store
         assertions::operator::exists_in_db(&operator, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
         assertions::operator::exists_in_memory(&fixture.db, &operator);
     }
 
@@ -105,14 +102,11 @@ mod operator_database_tests {
             .db
             .delete_operator_tx(operator.id, &tx, &mut pending)
             .expect("Failed to delete operator");
-        commit_and_publish(&fixture.db, tx, pending);
-
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
 
         // Confirm that it is gone
-        assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
         assertions::operator::exists_not_in_db(operator.id, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
+        assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
     }
 
     #[test]
@@ -141,14 +135,12 @@ mod operator_database_tests {
                 .delete_operator_tx(operator.id, &tx, &mut pending)
                 .expect("Failed to delete operator");
         }
+        for operator in &operators {
+            assertions::operator::exists_not_in_db(operator.id, &tx);
+        }
         commit_and_publish(&fixture.db, tx, pending);
-
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
-
         for operator in operators {
             assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
-            assertions::operator::exists_not_in_db(operator.id, &tx);
         }
     }
 

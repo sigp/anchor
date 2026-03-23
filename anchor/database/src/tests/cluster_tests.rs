@@ -42,17 +42,14 @@ mod cluster_database_tests {
                 .delete_validator_tx(&pubkey, &tx, &mut pending)
                 .is_ok()
         );
-        commit_and_publish(&fixture.db, tx, pending);
-
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
 
         // Since there was only one validator in the cluster, everything should be removed
         assertions::cluster::exists_not_in_db(fixture.cluster.cluster_id, &tx);
-        assertions::cluster::exists_not_in_memory(&fixture.db, fixture.cluster.cluster_id);
         assertions::validator::exists_not_in_db(&fixture.validator, &tx);
-        assertions::validator::exists_not_in_memory(&fixture.db, &fixture.validator);
         assertions::share::exists_not_in_db(&pubkey, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
+        assertions::cluster::exists_not_in_memory(&fixture.db, fixture.cluster.cluster_id);
+        assertions::validator::exists_not_in_memory(&fixture.db, &fixture.validator);
         assertions::share::exists_not_in_memory(&fixture.db, &pubkey);
     }
 
@@ -189,11 +186,6 @@ mod cluster_database_tests {
             ..fixture.cluster.clone()
         };
         assertions::cluster::exists_in_db(&expected_cluster, &tx);
-        commit_and_publish(&fixture.db, tx, pending);
-        assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
-
-        let mut conn = fixture.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
 
         // Confirm that we have set the correct fee recipient for the owner
         let stored_fee_recipient = fixture
@@ -201,6 +193,9 @@ mod cluster_database_tests {
             .fee_recipient_for_owner(&fixture.cluster.owner, &tx)
             .unwrap();
         assert_eq!(stored_fee_recipient, Some(new_fee_recipient));
+
+        commit_and_publish(&fixture.db, tx, pending);
+        assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
     }
 
     #[test]
