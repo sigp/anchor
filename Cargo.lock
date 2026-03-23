@@ -773,6 +773,7 @@ dependencies = [
  "clap",
  "cli",
  "client",
+ "ethereum_hashing 0.7.0",
  "futures",
  "global_config",
  "keygen",

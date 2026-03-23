@@ -110,6 +110,7 @@ derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
 discv5 = { version = "0.10", features = ["libp2p"] }
 enr = "0.13.0"
+ethereum_hashing = "0.7.0"
 ethereum_ssz = "0.10.0"
 ethereum_ssz_derive = "0.10.0"
 futures = "0.3.30"
@@ -130,7 +131,7 @@ libp2p = { version = "0.56", default-features = false, features = [
     "dns",
     "metrics",
     "gossipsub",
-    "upnp",
+    "upnp"
 ] }
 lru = "0.16.0"
 multiaddr = "0.18.2"

@@ -8,7 +8,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 axum = { workspace = true }
 beacon_node_fallback = { workspace = true }
 clap = { workspace = true }
-ethereum_hashing = "0.7.0"
+ethereum_hashing = { workspace = true }
 global_config = { workspace = true }
 keygen = { workspace = true }
 keysplit = { workspace = true }

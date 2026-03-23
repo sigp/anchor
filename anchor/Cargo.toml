@@ -20,6 +20,7 @@ bls = { workspace = true }
 clap = { workspace = true }
 cli = { workspace = true }
 client = { workspace = true }
+ethereum_hashing = { workspace = true }
 futures = { workspace = true }
 global_config = { workspace = true }
 keygen = { workspace = true }
