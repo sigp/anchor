@@ -1,4 +1,3 @@
-pub mod cli;
 pub mod config;
 mod key;
 mod metrics;
@@ -21,7 +20,6 @@ use anchor_validator_store::{
 use beacon_node_fallback::{
     BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
 };
-pub use cli::Node;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};

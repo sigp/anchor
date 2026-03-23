@@ -2,6 +2,7 @@
 # Extra tooling projects will be added.
 members = [
     "anchor",
+    "anchor/cli",
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
@@ -43,6 +44,7 @@ edition = "2024"
 anchor_validator_store = { path = "anchor/validator_store" }
 api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
+cli = { path = "anchor/cli" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
@@ -108,6 +110,7 @@ derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
 discv5 = { version = "0.10", features = ["libp2p"] }
 enr = "0.13.0"
+ethereum_hashing = "0.7.0"
 ethereum_ssz = "0.10.0"
 ethereum_ssz_derive = "0.10.0"
 futures = "0.3.30"
