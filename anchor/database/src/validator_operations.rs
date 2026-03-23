@@ -1,7 +1,7 @@
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
-use rusqlite::{Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use ssv_types::ValidatorIndex;
 use tracing::debug;
 use types::{Address, Graffiti};
@@ -55,20 +55,17 @@ impl NetworkDatabase {
         let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
-            let address_str: Option<String> = row.get(0)?;
-            // If the address is None, return None
-            if let Some(address_str) = address_str {
-                let address = Address::from_str(&address_str).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?;
-                Ok(Some(address))
-            } else {
-                Ok(None)
-            }
+            row.get::<_, Option<String>>(0)?
+                .map(|value| {
+                    value.parse().map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })
+                })
+                .transpose()
         });
 
         match result {
@@ -76,6 +73,37 @@ impl NetworkDatabase {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(DatabaseError::from(e)),
         }
+    }
+
+    /// Load validator metadata by public key through the transaction's view of the database.
+    pub fn get_validator_metadata_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<ssv_types::ValidatorMetadata>, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_VALIDATOR)?
+            .query_row(params![validator_pubkey.to_string()], |row| row.try_into())
+            .optional()
+            .map_err(DatabaseError::from)
+    }
+
+    /// Check whether the current operator has a share for a validator in the transaction view.
+    pub fn has_own_share_tx(
+        &self,
+        validator_pubkey: &PublicKeyBytes,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        let Some(operator_id) = self.get_own_operator_id_tx(tx)? else {
+            return Ok(false);
+        };
+
+        Ok(tx
+            .prepare_cached(sql_operations::GET_OWN_SHARE)?
+            .query_row(params![validator_pubkey.to_string(), *operator_id], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some())
     }
 
     /// Update the Graffiti for a Validator

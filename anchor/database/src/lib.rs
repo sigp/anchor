@@ -225,6 +225,16 @@ impl NetworkDatabase {
         }
     }
 
+    /// Read the largest seen OperatorId through the transaction's view of the database.
+    pub fn get_max_operator_id_seen_tx(
+        &self,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<u64>, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_MAX_OPERATOR_ID_SEEN)?
+            .query_row([], |row| row.get(0))
+            .map_err(DatabaseError::from)
+    }
+
     /// Update the last processed block number in the database transaction.
     pub fn processed_block_tx(
         &self,
