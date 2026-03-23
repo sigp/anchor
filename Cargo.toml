@@ -133,7 +133,7 @@ libp2p = { version = "0.56", default-features = false, features = [
     "dns",
     "metrics",
     "gossipsub",
-    "upnp",
+    "upnp"
 ] }
 lru = "0.16.0"
 multiaddr = "0.18.2"
