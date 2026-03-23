@@ -1,7 +1,10 @@
 use ssv_types::{Cluster, OperatorId};
 use types::Address;
 
-use crate::test_utils::{InMemoryTestFixture, assertions, generators};
+use crate::{
+    PendingStateUpdates,
+    test_utils::{InMemoryTestFixture, assertions, commit_and_publish, generators},
+};
 
 #[cfg(test)]
 mod cluster_database_tests {
@@ -31,8 +34,18 @@ mod cluster_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
-        assert!(fixture.db.delete_validator(&pubkey, &tx).is_ok());
+        assert!(
+            fixture
+                .db
+                .delete_validator_tx(&pubkey, &tx, &mut pending)
+                .is_ok()
+        );
+        commit_and_publish(&fixture.db, tx, pending);
+
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
 
         // Since there was only one validator in the cluster, everything should be removed
         assertions::cluster::exists_not_in_db(fixture.cluster.cluster_id, &tx);
@@ -51,12 +64,18 @@ mod cluster_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Update fee recipient
         assert!(
             fixture
                 .db
-                .update_fee_recipient(fixture.cluster.owner, new_fee_recipient, &tx)
+                .update_fee_recipient_tx(
+                    fixture.cluster.owner,
+                    new_fee_recipient,
+                    &tx,
+                    &mut pending,
+                )
                 .is_ok()
         );
 
@@ -66,6 +85,7 @@ mod cluster_database_tests {
             ..fixture.cluster.clone()
         };
         assertions::cluster::exists_in_db(&expected_cluster, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
         assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
     }
 
@@ -82,9 +102,10 @@ mod cluster_database_tests {
         )];
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
         fixture
             .db
-            .insert_validator(cluster, &metadata, shares, &tx)
+            .insert_validator_tx(cluster, &metadata, shares, &tx, &mut pending)
             .expect_err("Insertion should fail");
     }
 
@@ -95,11 +116,12 @@ mod cluster_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Test updating to liquidated
         fixture
             .db
-            .update_status(fixture.cluster.cluster_id, true, &tx)
+            .update_status_tx(fixture.cluster.cluster_id, true, &tx, &mut pending)
             .expect("Failed to update cluster status");
 
         // Create expected cluster state for assertions
@@ -108,6 +130,7 @@ mod cluster_database_tests {
             ..fixture.cluster.clone()
         };
         assertions::cluster::exists_in_db(&expected_cluster, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
         assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
     }
 
@@ -117,13 +140,15 @@ mod cluster_database_tests {
         let fixture = InMemoryTestFixture::new();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
         fixture
             .db
-            .insert_validator(
+            .insert_validator_tx(
                 fixture.cluster.clone(),
                 &fixture.validator,
                 fixture.shares.clone(),
                 &tx,
+                &mut pending,
             )
             .expect_err("Expected failure when inserting cluster that already exists");
     }
@@ -135,6 +160,7 @@ mod cluster_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Confirm that the fee recipient was inserted when the cluster was made
         let fee_recipient = fixture
@@ -148,7 +174,12 @@ mod cluster_database_tests {
         assert!(
             fixture
                 .db
-                .update_fee_recipient(fixture.cluster.owner, new_fee_recipient, &tx)
+                .update_fee_recipient_tx(
+                    fixture.cluster.owner,
+                    new_fee_recipient,
+                    &tx,
+                    &mut pending,
+                )
                 .is_ok()
         );
 
@@ -158,7 +189,11 @@ mod cluster_database_tests {
             ..fixture.cluster.clone()
         };
         assertions::cluster::exists_in_db(&expected_cluster, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
         assertions::cluster::exists_in_memory(&fixture.db, &expected_cluster);
+
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
 
         // Confirm that we have set the correct fee recipient for the owner
         let stored_fee_recipient = fixture
@@ -176,13 +211,17 @@ mod cluster_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Initially, the owner doesn't exist, so fee_recipient should be None
         let fee_recipient = fixture.db.fee_recipient_for_owner(&owner, &tx).unwrap();
         assert_eq!(fee_recipient, None);
 
         // Call BUMP_NONCE, which creates an entry with owner and nonce but NULL fee_recipient
-        let nonce = fixture.db.bump_and_get_nonce(&owner, &tx).unwrap();
+        let nonce = fixture
+            .db
+            .bump_and_get_nonce_tx(&owner, &tx, &mut pending)
+            .unwrap();
         assert_eq!(nonce, 0);
 
         // Now fee_recipient_for_owner should handle the NULL value and return None
@@ -193,7 +232,7 @@ mod cluster_database_tests {
         let test_fee_recipient = Address::random();
         fixture
             .db
-            .update_fee_recipient(owner, test_fee_recipient, &tx)
+            .update_fee_recipient_tx(owner, test_fee_recipient, &tx, &mut pending)
             .unwrap();
 
         let fee_recipient_after_update = fixture.db.fee_recipient_for_owner(&owner, &tx).unwrap();
@@ -209,24 +248,31 @@ mod cluster_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Scenario 1: Owner1 sets fee_recipient first, then BUMP_NONCE
         let fee_recipient1 = Address::random();
         fixture
             .db
-            .update_fee_recipient(owner1, fee_recipient1, &tx)
+            .update_fee_recipient_tx(owner1, fee_recipient1, &tx, &mut pending)
             .unwrap();
 
         // Now bump the nonce
-        fixture.db.bump_and_get_nonce(&owner1, &tx).unwrap();
+        fixture
+            .db
+            .bump_and_get_nonce_tx(&owner1, &tx, &mut pending)
+            .unwrap();
 
         // Scenario 2: Owner2 calls BUMP_NONCE first, then sets fee_recipient
-        fixture.db.bump_and_get_nonce(&owner2, &tx).unwrap();
+        fixture
+            .db
+            .bump_and_get_nonce_tx(&owner2, &tx, &mut pending)
+            .unwrap();
 
         let fee_recipient2 = Address::random();
         fixture
             .db
-            .update_fee_recipient(owner2, fee_recipient2, &tx)
+            .update_fee_recipient_tx(owner2, fee_recipient2, &tx, &mut pending)
             .unwrap();
 
         tx.commit().unwrap();
