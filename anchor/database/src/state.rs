@@ -13,7 +13,7 @@ use types::Address;
 use crate::{
     ClusterMultiIndexMap, DatabaseError, MetadataMultiIndexMap, MultiIndexMap, MultiState,
     NonUniqueIndex, Pool, PoolConn, PubkeyOrId, ShareMultiIndexMap, SingleState, UniqueIndex,
-    parse_text_column, sql_operations,
+    sql_operations,
 };
 
 // Container to hold all network state
@@ -250,7 +250,13 @@ impl NetworkState {
         let mut stmt = conn.prepare(sql_operations::GET_ALL_NONCES)?;
         let nonces = stmt
             .query_map([], |row| {
-                let owner = parse_text_column(row, 0)?;
+                let owner = row.get::<_, String>(0)?.parse().map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
                 // Get the nonce from column 1
                 let nonce = row.get(1)?;
                 Ok((owner, nonce))

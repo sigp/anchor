@@ -7,8 +7,7 @@ use tracing::debug;
 use types::{Address, Graffiti};
 
 use crate::{
-    DatabaseError, NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex,
-    parse_optional_text_column, sql_operations,
+    DatabaseError, NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex, sql_operations,
 };
 
 /// Implements all validator specific database functionality
@@ -56,7 +55,17 @@ impl NetworkDatabase {
         let mut stmt = tx.prepare_cached(sql_operations::GET_OWNER_FEE_RECIPIENT)?;
 
         let result = stmt.query_row(params![owner.to_string()], |row| {
-            parse_optional_text_column(row, 0)
+            row.get::<_, Option<String>>(0)?
+                .map(|value| {
+                    value.parse().map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })
+                })
+                .transpose()
         });
 
         match result {
