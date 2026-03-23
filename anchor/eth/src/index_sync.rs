@@ -1,15 +1,8 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
-use database::{ClusterMultiIndexMap, NetworkDatabase, UniqueIndex};
+use database::{ClusterMultiIndexMap, DatabaseError, NetworkDatabase, UniqueIndex};
 use eth2::types::{StateId, ValidatorId};
 use slot_clock::SlotClock;
 use ssv_types::{ValidatorIndex, ValidatorMetadata};
@@ -30,14 +23,22 @@ const MAX_BATCH_SIZE: usize = 512;
 const BATCHING_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(45);
 
+#[derive(Debug)]
+enum StoreValidatorIndicesError {
+    RuntimeShuttingDown,
+    Join(tokio::task::JoinError),
+    Database(DatabaseError),
+}
+
 pub fn start_validator_index_syncer(
     nodes: Arc<BeaconNodeFallback<impl SlotClock + 'static>>,
     db: Arc<NetworkDatabase>,
     executor: TaskExecutor,
 ) -> Tx {
     let (tx, rx) = unbounded_channel();
+    let sync_executor = executor.clone();
     executor.spawn(
-        validator_index_syncer(nodes, db, rx, executor.clone()),
+        validator_index_syncer(nodes, db, rx, sync_executor),
         INDEX_SYNCER_NAME,
     );
     tx
@@ -53,11 +54,7 @@ async fn validator_index_syncer(
 
     // counter to remember where we are in the sorted validator list
     // not perfect, as removed/added validators shift the list itself, but good enough for this
-    let mut missing_index_scan_cursor = 0;
-
-    // Track if there are store tasks waiting. If there are any waiting tasks, we do not fill up
-    // batches from the database to avoid redundant work.
-    let pending_store_writes = Arc::new(AtomicUsize::new(0));
+    let mut db_sweep = 0;
 
     loop {
         let mut batch = vec![];
@@ -92,12 +89,29 @@ async fn validator_index_syncer(
 
         // next, fill up the rest of the batch with older validators that are unknown from the
         // database
-        fill_batch_with_missing_indices_from_db(
-            &mut batch,
-            &db,
-            &pending_store_writes,
-            &mut missing_index_scan_cursor,
-        );
+        let space = MAX_BATCH_SIZE - batch.len();
+        if space > 0 {
+            let state = db.state();
+            let clusters = state.clusters();
+            let mut from_database = state
+                .metadata()
+                .values()
+                .filter_map(|v| needs_index(v, &batch, clusters))
+                .collect::<Vec<_>>();
+            drop(state);
+            let count = from_database.len();
+            debug!(len = count, db_sweep, "Found unset index validators");
+
+            // sort and skip to current position
+            from_database.sort_unstable_by_key(|x| x.serialize());
+            batch.extend(from_database.into_iter().skip(db_sweep).take(space));
+
+            // update sweep, resetting it if necessary
+            db_sweep += space;
+            if db_sweep >= count {
+                db_sweep = 0;
+            }
+        }
 
         if !batch.is_empty() {
             trace!(len = batch.len(), "Sending request");
@@ -125,28 +139,41 @@ async fn validator_index_syncer(
                 .flat_map(|v| v.data)
                 .map(|v| (v.validator.pubkey, ValidatorIndex(v.index as usize)))
                 .collect::<HashMap<_, _>>();
-            trace!(len = map.len(), "Got validators from BN");
-
-            // `set_validator_indices` may block as it starts a database transaction and updates the
-            // in memory database. We do not want to do that on the async runtime, so we
-            // spawn a blocking task.
-            let db = db.clone();
-            let pending_store_writes = pending_store_writes.clone();
-            pending_store_writes.fetch_add(1, Ordering::Relaxed);
-            executor.spawn_blocking(
-                move || {
-                    let len = map.len();
-                    if let Err(err) = db.set_validator_indices(map) {
-                        error!(?err, "Failed to update validator indices");
-                    } else {
-                        trace!(len, "Stored indices from BN");
-                    }
-                    pending_store_writes.fetch_sub(1, Ordering::Relaxed);
-                },
-                INDEX_SYNCER_STORE_NAME,
-            );
+            let len = map.len();
+            trace!(len, "Got validators from BN");
+            match store_validator_indices_blocking(&executor, Arc::clone(&db), map).await {
+                Ok(()) => trace!(len, "Stored indices from BN"),
+                Err(StoreValidatorIndicesError::RuntimeShuttingDown) => {
+                    error!(
+                        "Failed to spawn blocking validator index store task: runtime shutting down"
+                    );
+                    return;
+                }
+                Err(StoreValidatorIndicesError::Join(err)) => {
+                    error!(?err, "Blocking validator index store task failed");
+                }
+                Err(StoreValidatorIndicesError::Database(err)) => {
+                    error!(?err, "Failed to update validator indices");
+                }
+            }
         }
     }
+}
+
+async fn store_validator_indices_blocking(
+    executor: &TaskExecutor,
+    db: Arc<NetworkDatabase>,
+    map: HashMap<PublicKeyBytes, ValidatorIndex>,
+) -> Result<(), StoreValidatorIndicesError> {
+    let Some(store_task) = executor.spawn_blocking_handle(
+        move || db.set_validator_indices(map),
+        INDEX_SYNCER_STORE_NAME,
+    ) else {
+        return Err(StoreValidatorIndicesError::RuntimeShuttingDown);
+    };
+
+    let store_result = store_task.await.map_err(StoreValidatorIndicesError::Join)?;
+    store_result.map_err(StoreValidatorIndicesError::Database)
 }
 
 fn needs_index(
@@ -162,69 +189,58 @@ fn needs_index(
     .then_some(metadata.public_key)
 }
 
-/// If there is space left in the batch, look up validators from the database that are missing
-/// indices. This is skipped if there are any pending store writes, as these store writes might
-/// add missing indices, and we want to avoid double lookups.
-fn fill_batch_with_missing_indices_from_db(
-    batch: &mut Vec<PublicKeyBytes>,
-    db: &NetworkDatabase,
-    pending_store_writes: &AtomicUsize,
-    missing_index_scan_cursor: &mut usize,
-) {
-    let space = MAX_BATCH_SIZE - batch.len();
-    // Only do this if we have any space remaining and there are no store tasks that might wait
-    // to write missing indices. If the count is 1, only we hold the Arc (no other tasks).
-    // We do this to avoid DB candidates while writes are active.
-    if space > 0 && pending_store_writes.load(Ordering::Relaxed) == 0 {
-        let state = db.state();
-        let clusters = state.clusters();
-        let mut from_database = state
-            .metadata()
-            .values()
-            .filter_map(|v| needs_index(v, batch, clusters))
-            .collect::<Vec<_>>();
-        drop(state);
-        let count = from_database.len();
-        debug!(
-            len = count,
-            missing_index_scan_cursor, "Found unset index validators"
-        );
-
-        // sort and skip to current position
-        from_database.sort_unstable_by_key(|x| x.serialize());
-        batch.extend(
-            from_database
-                .into_iter()
-                .skip(*missing_index_scan_cursor)
-                .take(space),
-        );
-
-        // update sweep, resetting it if necessary
-        *missing_index_scan_cursor += space;
-        if *missing_index_scan_cursor >= count {
-            *missing_index_scan_cursor = 0;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use database::test_utils::InMemoryTestFixture;
+    use database::test_utils::{InMemoryTestFixture, queries};
+    use task_executor::test_utils::TestRuntime;
 
     use super::*;
 
-    #[test]
-    fn do_not_fill_up_batch_if_store_tasks_are_waiting() {
-        let mut batch = vec![];
-        let fixture = InMemoryTestFixture::new();
+    const UPDATED_VALIDATOR_INDEX: usize = 777;
 
-        fill_batch_with_missing_indices_from_db(
-            &mut batch,
-            &fixture.db,
-            &AtomicUsize::new(1),
-            &mut 0,
+    fn create_test_executor() -> TaskExecutor {
+        let test_runtime = TestRuntime::default();
+        test_runtime.task_executor.clone()
+    }
+
+    // ==================== Blocking store tests ====================
+
+    /// Ensures validator index writes run on the blocking pool while still completing before the
+    /// sync loop continues.
+    #[tokio::test]
+    async fn test_store_validator_indices_blocking_updates_database_and_state() {
+        // Arrange: create a populated DB with a known validator and a test executor.
+        let fixture = InMemoryTestFixture::new();
+        let validator_pubkey = fixture.validator.public_key;
+        let db = Arc::new(fixture.data.db);
+        let executor = create_test_executor();
+        let updated_index = ValidatorIndex(UPDATED_VALIDATOR_INDEX);
+        let index_updates = HashMap::from([(validator_pubkey, updated_index)]);
+
+        // Act: offload the write to the blocking pool and await its completion.
+        let result =
+            store_validator_indices_blocking(&executor, Arc::clone(&db), index_updates).await;
+
+        // Assert: both the durable DB row and the in-memory state reflect the new index.
+        assert!(
+            result.is_ok(),
+            "blocking validator-index store should complete successfully"
         );
 
-        assert_eq!(batch, vec![]);
+        let state = db.state();
+        let stored_state_index = state
+            .metadata()
+            .get_by(&validator_pubkey)
+            .and_then(|metadata| metadata.index);
+        drop(state);
+        assert_eq!(stored_state_index, Some(updated_index));
+
+        let mut conn = db
+            .connection()
+            .expect("test should get a database connection");
+        let tx = conn.transaction().expect("test should open a transaction");
+        let stored_validator = queries::get_validator(&validator_pubkey.to_string(), &tx)
+            .expect("validator should remain present in the database");
+        assert_eq!(stored_validator.index, Some(updated_index));
     }
 }
