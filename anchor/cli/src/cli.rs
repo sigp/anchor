@@ -10,6 +10,7 @@ use clap::{
     Parser,
     builder::{ArgAction, ArgPredicate},
 };
+use global_config::{DEFAULT_BEACON_NODE, DEFAULT_EXECUTION_NODE, DEFAULT_EXECUTION_NODE_WS};
 use logging::FileLoggingFlags;
 
 pub const FLAG_HEADER: &str = "Flags";
@@ -43,10 +44,11 @@ pub struct SecurityOptions {
 pub struct ExternalApis {
     #[clap(
         long,
+        default_value = DEFAULT_BEACON_NODE,
         value_name = "NETWORK_ADDRESSES",
         value_delimiter = ',',
-        help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
-                Default is http://localhost:5052.",
+        help = "Comma-separated addresses to one or more beacon node HTTP APIs.",
+
         display_order = 0
     )]
     pub beacon_nodes: Option<Vec<String>>,
@@ -54,9 +56,9 @@ pub struct ExternalApis {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        default_value = DEFAULT_EXECUTION_NODE,
         value_delimiter = ',',
-        help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
-                Default is http://localhost:8545.",
+        help = "Comma-separated addresses to one or more execution node JSON-RPC APIs.",
         display_order = 0
     )]
     pub execution_rpc: Option<Vec<String>>,
@@ -65,8 +67,8 @@ pub struct ExternalApis {
         long,
         value_name = "NETWORK_ADDRESSES",
         value_delimiter = ',',
-        help = "Address of execution node WS API. \
-                Default is ws://localhost:8546.",
+        default_value = DEFAULT_EXECUTION_NODE_WS,
+        help = "Address of execution node WS API.",
         display_order = 0
     )]
     pub execution_ws: Option<String>,
@@ -172,7 +174,7 @@ pub struct HttpApiOptions {
         long,
         value_name = "PORT",
         requires = "http",
-        help = "Set the listen TCP port for the RESTful HTTP API server.",
+        help = "Set the listen TCP port for the RESTful HTTP API server. Defaults to 5062 if --http is set.",
         display_order = 0,
         default_value_if("http", ArgPredicate::IsPresent, "5062")
     )]
@@ -204,7 +206,7 @@ pub struct MetricsOptions {
     #[clap(
         long,
         value_name = "ADDRESS",
-        help = "Set the listen address for the Prometheus metrics HTTP server.",
+        help = "Set the listen address for the Prometheus metrics HTTP server. Defaults to 127.0.0.1 if --metrics is set.",
         default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
         display_order = 0,
         requires = "metrics"
@@ -214,7 +216,7 @@ pub struct MetricsOptions {
     #[clap(
         long,
         value_name = "PORT",
-        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
+        help = "Set the listen TCP port for the Prometheus metrics HTTP server. Defaults to 5164 if --metrics is set.",
         display_order = 0,
         default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
         requires = "metrics"
@@ -224,7 +226,7 @@ pub struct MetricsOptions {
     #[clap(
         long,
         help = "Enable per validator metrics for > 64 validators. \
-                Note: This flag is automatically enabled for <= 64 validators. \
+                Note: This flag is automatically enabled for < 65 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
         display_order = 0,

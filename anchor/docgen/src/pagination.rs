@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{collections::HashSet, fmt::Write};
 
 use clap::{Arg, ArgAction, Command};
 
@@ -9,23 +9,87 @@ use crate::errors::DocGenError;
 pub const CLI_REFERENCE_START: &str = "{/* CLI_REFERENCE_START */}";
 pub const CLI_REFERENCE_END: &str = "{/* CLI_REFERENCE_END */}";
 
-/// Groups arguments by their `help_heading` value, preserving definition order.
-fn group_args_by_help_heading<'a>(args: &[&'a Arg]) -> Vec<(Option<&'a str>, Vec<&'a Arg>)> {
-    let mut groups: Vec<(Option<&'a str>, Vec<&'a Arg>)> = Vec::new();
-    for arg in args {
-        let heading = arg.get_help_heading();
-        if let Some(group) = groups.iter_mut().find(|(h, _)| *h == heading) {
-            group.1.push(arg);
-        } else {
-            groups.push((heading, vec![arg]));
+/// Convert a clap ArgGroup ID (PascalCase struct name) to a human-readable heading.
+/// Overrides are provided for group names where simple word splitting is wrong.
+fn group_display_name(group_id: &str) -> String {
+    match group_id {
+        "ExternalApis" => "External APIs".to_string(),
+        "HttpApiOptions" => "HTTP API".to_string(),
+        "FileLoggingFlags" => "Logging Options".to_string(),
+        _ => split_pascal_case(group_id),
+    }
+}
+
+/// Split a PascalCase identifier into space-separated words.
+/// e.g. "SecurityOptions" → "Security Options"
+fn split_pascal_case(s: &str) -> String {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for ch in s.chars() {
+        if ch.is_uppercase() && !current.is_empty() {
+            words.push(current);
+            current = String::new();
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words.join(" ")
+}
+
+/// Group arguments by the ArgGroups registered on the command.
+///
+/// clap_derive automatically creates an ArgGroup for each `#[derive(Args)]` struct,
+/// with the struct's kebab-cased name as the group ID and the struct's direct args
+/// as members. This lets us detect semantic grouping from struct boundaries without
+/// requiring `help_heading` annotations.
+fn group_args_by_clap_groups<'a>(
+    cmd: &Command,
+    args: &[&'a Arg],
+) -> Vec<(Option<String>, Vec<&'a Arg>)> {
+    // Collect groups that have members (sub-structs with direct args, not parent
+    // structs that contain flatten fields — those get empty groups per clap's design).
+    let groups: Vec<_> = cmd
+        .get_groups()
+        .filter(|g| g.get_args().next().is_some())
+        .collect();
+
+    let mut result: Vec<(Option<String>, Vec<&'a Arg>)> = Vec::new();
+    let mut assigned: HashSet<&str> = HashSet::new();
+
+    for group in &groups {
+        let group_arg_ids: HashSet<_> = group.get_args().map(|id| id.as_str()).collect();
+        let matching: Vec<_> = args
+            .iter()
+            .filter(|a| group_arg_ids.contains(a.get_id().as_str()))
+            .copied()
+            .collect();
+        if !matching.is_empty() {
+            let name = group_display_name(group.get_id().as_str());
+            for a in &matching {
+                assigned.insert(a.get_id().as_str());
+            }
+            result.push((Some(name), matching));
         }
     }
-    groups
+
+    // Remaining args not in any group
+    let remaining: Vec<_> = args
+        .iter()
+        .filter(|a| !assigned.contains(a.get_id().as_str()))
+        .copied()
+        .collect();
+    if !remaining.is_empty() {
+        result.push((Some("Additional Options".to_string()), remaining));
+    }
+
+    result
 }
 
 /// Create markdown tables from grouped CLI arguments.
 fn generate_formatted_option_table_doc(
-    groups: &[(Option<&str>, Vec<&Arg>)],
+    groups: &[(Option<String>, Vec<&Arg>)],
     heading_prefix: &str,
 ) -> Result<String, DocGenError> {
     let mut output = String::new();
@@ -39,35 +103,36 @@ fn generate_formatted_option_table_doc(
                 }
             })?;
         }
+        let group_name = heading.as_deref().unwrap_or("Ungrouped").to_string();
         writeln!(output, "| Option | Description | Default |").map_err(|e| {
             DocGenError::RenderOptionGroup {
-                group: heading.unwrap_or("Ungrouped").to_string(),
+                group: group_name.clone(),
                 source: e,
             }
         })?;
         writeln!(output, "| --- | --- | --- |").map_err(|e| DocGenError::RenderOptionGroup {
-            group: heading.unwrap_or("Ungrouped").to_string(),
+            group: group_name.clone(),
             source: e,
         })?;
         for arg in group_args {
             write_arg_table_row(&mut output, arg)?;
         }
         writeln!(output).map_err(|e| DocGenError::RenderOptionGroup {
-            group: heading.unwrap_or("Ungrouped").to_string(),
+            group: group_name,
             source: e,
         })?;
     }
     Ok(output)
 }
 
-/// Render a command's options as markdown tables grouped by `help_heading`.
+/// Render a command's options as markdown tables grouped by struct-derived ArgGroups.
 pub fn render_options_tables(cmd: &Command, heading_prefix: &str) -> Result<String, DocGenError> {
     let args: Vec<_> = cmd
         .get_arguments()
         .filter(|a| !a.is_positional() && !a.is_hide_set())
         .collect();
 
-    let groups = group_args_by_help_heading(&args);
+    let groups = group_args_by_clap_groups(cmd, &args);
     generate_formatted_option_table_doc(&groups, heading_prefix)
 }
 
@@ -166,7 +231,7 @@ fn format_description(arg: &Arg) -> Result<String, DocGenError> {
 fn format_default(arg: &Arg) -> String {
     let defaults = arg.get_default_values();
     if defaults.is_empty() {
-        return String::new();
+        return "None".to_string();
     }
 
     defaults
@@ -284,20 +349,35 @@ mod tests {
     }
 
     #[test]
-    fn test_group_args_by_help_heading_outputs_correct_groupings() {
+    fn test_group_args_by_clap_groups_outputs_correct_groupings() {
         let cmd = TestCli::command();
         let args: Vec<_> = cmd.get_arguments().collect();
-        let result = group_args_by_help_heading(&args);
+        let result = group_args_by_clap_groups(&cmd, &args);
 
-        assert_eq!(result[0].0, Some("Test Group"));
-        assert_eq!(result[0].1[0], cmd.get_arguments().next().unwrap());
+        // The TestFlag struct creates a "TestFlag" ArgGroup with its arg.
+        assert!(!result.is_empty());
+        // The group should contain the test_flag arg with display name "Test Flag".
+        let test_flag_group = result
+            .iter()
+            .find(|(name, _)| name.as_deref() == Some("Test Flag"));
+        assert!(
+            test_flag_group.is_some(),
+            "Expected a 'Test Flag' group, got: {:?}",
+            result.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        );
+        let (_, group_args) = test_flag_group.unwrap();
+        assert!(
+            group_args
+                .iter()
+                .any(|a| a.get_id().as_str() == "test_flag")
+        );
     }
 
     #[test]
     fn test_generate_formatted_option_table_doc_returns_valid_help_string() {
         let cmd = TestCli::command();
         let arg = cmd.get_arguments().next().unwrap();
-        let groups = Vec::from([(Some("Test Group"), vec![arg])]);
+        let groups = Vec::from([(Some("Test Group".to_string()), vec![arg])]);
         let result = generate_formatted_option_table_doc(&groups, "####").unwrap();
 
         assert!(result.contains("| Option | Description | Default |"));
@@ -350,5 +430,23 @@ mod tests {
             result.contains("### manual Subcommand"),
             "Missing manual subcommand section:\n{result}"
         );
+    }
+
+    #[test]
+    fn test_node_groups_cover_all_visible_args() {
+        let cmd = anchor_command();
+        let node = cmd.find_subcommand("node").unwrap();
+        let result = generate_subcommand_page_content(&cmd, "node").unwrap();
+
+        // Every visible non-positional arg should appear in the output.
+        for arg in node.get_arguments() {
+            if !arg.is_positional() && !arg.is_hide_set() {
+                let long = arg.get_long().unwrap();
+                assert!(
+                    result.contains(&format!("--{long}")),
+                    "Arg '--{long}' missing from generated node docs"
+                );
+            }
+        }
     }
 }

@@ -11,6 +11,11 @@ use crate::data_dir::DataDir;
 /// Default network, used to partition the data storage
 pub const DEFAULT_HARDCODED_NETWORK: &str = "mainnet";
 
+/// Default node endpoints.
+pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
+pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
+pub const DEFAULT_EXECUTION_NODE_WS: &str = "ws://localhost:8546/";
+
 /// Config that applies to all subcommands: The resolved network and datadir. This avoids repeated
 /// logic matching the datadir from the actual CLI definition.
 #[derive(Debug, Clone)]
