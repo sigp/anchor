@@ -771,6 +771,7 @@ dependencies = [
  "async-channel 1.9.0",
  "bls",
  "clap",
+ "cli",
  "client",
  "ethereum_hashing 0.7.0",
  "futures",
@@ -786,7 +787,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "types",
- "version",
 ]
 
 [[package]]
@@ -1797,13 +1797,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "beacon_node_fallback",
+ "clap",
+ "ethereum_hashing 0.7.0",
+ "global_config",
+ "keygen",
+ "keysplit",
+ "logging 0.1.0",
+ "version",
+]
+
+[[package]]
 name = "client"
 version = "1.2.2"
 dependencies = [
  "anchor_validator_store",
- "axum",
  "beacon_node_fallback",
  "clap",
+ "cli",
  "database",
  "duties_tracker",
  "eth",
@@ -1814,7 +1829,6 @@ dependencies = [
  "http_api",
  "http_metrics",
  "hyper",
- "logging 0.1.0",
  "message_receiver",
  "message_sender",
  "message_validator",
