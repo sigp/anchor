@@ -165,6 +165,10 @@ async fn store_validator_indices_blocking(
     db: Arc<NetworkDatabase>,
     map: HashMap<PublicKeyBytes, ValidatorIndex>,
 ) -> Result<(), StoreValidatorIndicesError> {
+    if map.is_empty() {
+        return Ok(());
+    }
+
     let Some(store_task) = executor.spawn_blocking_handle(
         move || db.set_validator_indices(map),
         INDEX_SYNCER_STORE_NAME,
