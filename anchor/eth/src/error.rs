@@ -19,8 +19,6 @@ pub enum ExecutionError {
     Duplicate(String),
     #[error("Database error: {0}")]
     Database(String),
-    #[error("Exit processor unavailable: {0}")]
-    ExitProcessorUnavailable(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,8 +38,7 @@ impl ExecutionError {
             Self::SyncError(_)
             | Self::RpcError(_)
             | Self::WsError(_)
-            | Self::Database(_)
-            | Self::ExitProcessorUnavailable(_) => LogErrorDisposition::AbortBatch,
+            | Self::Database(_) => LogErrorDisposition::AbortBatch,
         }
     }
 }

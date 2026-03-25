@@ -1,7 +1,9 @@
 mod manager;
 
-use gossipsub::{Message, MessageId};
-use libp2p::PeerId;
+use libp2p::{
+    PeerId,
+    gossipsub::{Message, MessageId},
+};
 pub use message_validator::TopicContext;
 use thiserror::Error;
 

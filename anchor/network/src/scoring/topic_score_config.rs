@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use gossipsub::TopicScoreParams;
+use libp2p::gossipsub::TopicScoreParams;
 use subnet_service::SubnetId;
 use tracing::{debug, warn};
 use types::{ChainSpec, EthSpec};
@@ -339,7 +339,7 @@ pub fn topic_score_params_for_subnet_with_rate<E: EthSpec>(
 
 #[cfg(test)]
 mod tests {
-    use gossipsub::TopicScoreParams;
+    use libp2p::gossipsub::TopicScoreParams;
 
     use super::*;
 
