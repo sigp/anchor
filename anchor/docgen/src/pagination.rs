@@ -10,7 +10,9 @@ pub const CLI_REFERENCE_START: &str = "{/* CLI_REFERENCE_START */}";
 pub const CLI_REFERENCE_END: &str = "{/* CLI_REFERENCE_END */}";
 
 /// Convert a clap ArgGroup ID (PascalCase struct name) to a human-readable heading.
-/// Overrides are provided for group names where simple word splitting is wrong.
+///
+/// Hard-coded display names feature for certain groups for styling preferences.
+/// For example -> "...Apis" to "... APIs".
 fn group_display_name(group_id: &str) -> String {
     match group_id {
         "ExternalApis" => "External APIs".to_string(),
@@ -42,8 +44,7 @@ fn split_pascal_case(s: &str) -> String {
 ///
 /// clap_derive automatically creates an ArgGroup for each `#[derive(Args)]` struct,
 /// with the struct's kebab-cased name as the group ID and the struct's direct args
-/// as members. This lets us detect semantic grouping from struct boundaries without
-/// requiring `help_heading` annotations.
+/// as members.
 fn group_args_by_clap_groups<'a>(
     cmd: &Command,
     args: &[&'a Arg],
@@ -59,12 +60,17 @@ fn group_args_by_clap_groups<'a>(
     let mut assigned: HashSet<&str> = HashSet::new();
 
     for group in &groups {
+        // Collects IDs of command args in a group.
         let group_arg_ids: HashSet<_> = group.get_args().map(|id| id.as_str()).collect();
+
+        // Finds command args that belong to this group.
         let matching: Vec<_> = args
             .iter()
             .filter(|a| group_arg_ids.contains(a.get_id().as_str()))
             .copied()
             .collect();
+
+        // Tracks assigned args and adds matching group and args to result.
         if !matching.is_empty() {
             let name = group_display_name(group.get_id().as_str());
             for a in &matching {
@@ -74,7 +80,7 @@ fn group_args_by_clap_groups<'a>(
         }
     }
 
-    // Remaining args not in any group
+    // Remaining args not in any other group are added at the end under "Additional Options".
     let remaining: Vec<_> = args
         .iter()
         .filter(|a| !assigned.contains(a.get_id().as_str()))
@@ -87,7 +93,14 @@ fn group_args_by_clap_groups<'a>(
     result
 }
 
-/// Create markdown tables from grouped CLI arguments.
+/// A postprocessing function that creates styled `.mdx` markdown tables from grouped CLI arguments.
+///
+/// The output is formatted to match the style
+/// ```markdown
+/// | Option | Description | Default |
+/// | --- | --- | --- |
+/// | --option | Option description (possible values: ...) | `default` |
+/// ```
 fn generate_formatted_option_table_doc(
     groups: &[(Option<String>, Vec<&Arg>)],
     heading_prefix: &str,
@@ -151,6 +164,8 @@ fn write_arg_table_row(output: &mut String, arg: &Arg) -> Result<(), DocGenError
 }
 
 /// Format the option name column (short/long flags and value name).
+///
+/// Short and long flags are checked and formatted as part of the return value.
 fn format_option(arg: &Arg) -> String {
     let value_name = arg
         .get_value_names()
@@ -185,6 +200,9 @@ fn format_option(arg: &Arg) -> String {
 }
 
 /// Format the description column, including possible values.
+///
+/// This uses the `help` string and appends possible values if they exist. The string is
+/// formatted to be suitable for markdown table cells.
 fn format_description(arg: &Arg) -> Result<String, DocGenError> {
     let mut desc = arg.get_help().map(|h| h.to_string()).unwrap_or_default();
 
@@ -200,7 +218,7 @@ fn format_description(arg: &Arg) -> Result<String, DocGenError> {
     // Escape curly braces for MDX (unescaped braces are interpreted as JSX expressions).
     desc = desc.replace('{', "\\{").replace('}', "\\}");
 
-    // Append possible values if present.
+    // Append possible values inferred from the clap struct if present.
     let possible_values: Vec<_> = arg
         .get_possible_values()
         .into_iter()
@@ -244,11 +262,7 @@ fn format_default(arg: &Arg) -> String {
 /// Generate the CLI reference content for `cli.mdx` (global options).
 pub fn generate_cli_page_content(cmd: &Command) -> Result<String, DocGenError> {
     let mut output = String::new();
-    writeln!(output, "### Global Options\n").map_err(|e| DocGenError::RenderOptionGroup {
-        group: "Global Options".to_string(),
-        source: e,
-    })?;
-    output.push_str(&render_options_tables(cmd, "####")?);
+    output.push_str(&render_options_tables(cmd, "###")?);
     Ok(output)
 }
 
@@ -264,20 +278,18 @@ fn generate_flat_command_page_content(cmd: &Command) -> Result<String, DocGenErr
 }
 
 /// Generate CLI help content for a command with nested subcommands.
+///
+/// Builds up a string with doc sections for each subcommand in `cmd`.
+/// Each subcommand name, about message, and help description are rendered.
 fn generate_nested_command_page_content(cmd: &Command) -> Result<String, DocGenError> {
-    let parent_name = cmd.get_name();
     let mut output = String::new();
     for sub in cmd.get_subcommands() {
+        // Skip hidden subcommands.
         if sub.is_hide_set() {
             continue;
         }
         let name = sub.get_name();
         let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
-        let usage = sub
-            .clone()
-            .render_usage()
-            .to_string()
-            .replace("Usage: ", "");
 
         writeln!(output, "### {name} Subcommand\n").map_err(|e| {
             DocGenError::RenderOptionGroup {
@@ -288,12 +300,6 @@ fn generate_nested_command_page_content(cmd: &Command) -> Result<String, DocGenE
         writeln!(output, "{about}\n").map_err(|e| DocGenError::RenderOptionGroup {
             group: name.to_string(),
             source: e,
-        })?;
-        writeln!(output, "```bash\nanchor {parent_name} {usage}\n```\n").map_err(|e| {
-            DocGenError::RenderOptionGroup {
-                group: name.to_string(),
-                source: e,
-            }
         })?;
         output.push_str(&render_options_tables(sub, "####")?);
     }

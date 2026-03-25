@@ -102,7 +102,6 @@ pub struct ExternalApis {
         value_name = "API_TOPICS",
         value_delimiter = ',',
         help = "Comma-separated list of beacon API topics to broadcast to all beacon nodes. \
-                Possible values are: none, attestations, blocks, subscriptions, sync-committee. \
                 Default (when flag is omitted) is to broadcast subscriptions only.",
         display_order = 0
     )]

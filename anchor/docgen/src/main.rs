@@ -43,6 +43,7 @@ enum DocGenCommand {
     },
 }
 
+/// Path to the directory where auto-generated .mdx files are created.
 const DOCS_PATH: &str = "docs/docs/pages";
 
 /// Subcommand-to-file mapping for CLI reference pages.
@@ -52,25 +53,36 @@ const SUBCOMMAND_PAGES: [(&str, &str); 3] = [
     ("keysplit", "cli-keysplit.mdx"),
 ];
 
-fn main() {
-    let args = DocGen::parse();
-    let cmd = anchor_command();
-
-    let result = match args.command.unwrap_or(DocGenCommand::Generate) {
+/// Renders documentation and updates/checks existing documentation based on the provided
+/// `DocGenCommand`.
+fn render_docs(
+    docgen_command: Option<DocGenCommand>,
+    anchor_command: &Command,
+) -> Result<(), DocGenError> {
+    match docgen_command.unwrap_or(DocGenCommand::Generate) {
         DocGenCommand::Generate => {
-            let cli_content = generate_cli_page_content(&cmd).expect("Failed to generate content");
+            let cli_content = generate_cli_page_content(&anchor_command)?;
             print!("{cli_content}");
             for (name, _) in SUBCOMMAND_PAGES {
-                let content = generate_subcommand_page_content(&cmd, name)
-                    .expect("Failed to generate content");
+                let content = generate_subcommand_page_content(&anchor_command, name)?;
                 println!("---\n## {name}\n");
                 print!("{content}");
             }
-            Ok(())
         }
-        DocGenCommand::Update { docs_dir } => run_update(&cmd, &docs_dir),
-        DocGenCommand::Check { docs_dir } => run_check(&cmd, &docs_dir),
+        DocGenCommand::Update { docs_dir } => {
+            run_update(&anchor_command, &docs_dir)?;
+        }
+        DocGenCommand::Check { docs_dir } => {
+            run_check(&anchor_command, &docs_dir)?;
+        }
     };
+    Ok(())
+}
+
+fn main() {
+    let args = DocGen::parse();
+    let cmd = anchor_command();
+    let result = render_docs(args.command, &cmd);
 
     if let Err(e) = result {
         eprintln!("Error: {e}");
@@ -78,6 +90,7 @@ fn main() {
     }
 }
 
+/// Updates the .mdx files with the latest CLI documentation.
 fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     let cli_content = generate_cli_page_content(cmd)?;
     update_file(&docs_dir.join("cli.mdx"), &cli_content)?;
@@ -91,6 +104,7 @@ fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     Ok(())
 }
 
+/// Checks if the .mdx files are up to date with the current CLI definitions.
 fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     let mut out_of_date = Vec::new();
 
