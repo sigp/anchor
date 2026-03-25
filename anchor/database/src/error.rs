@@ -3,6 +3,7 @@ use std::{
     io::{Error as IOError, ErrorKind},
 };
 
+use openssl::error::ErrorStack;
 use rusqlite::Error as SQLError;
 
 #[derive(Debug)]
@@ -10,6 +11,7 @@ pub enum DatabaseError {
     NotFound(String),
     AlreadyPresent(String),
     IOError(ErrorKind),
+    OpenSSLError(String),
     SQLError(String),
     SQLPoolError(String),
 }
@@ -23,6 +25,12 @@ impl From<IOError> for DatabaseError {
 impl From<SQLError> for DatabaseError {
     fn from(error: SQLError) -> DatabaseError {
         DatabaseError::SQLError(error.to_string())
+    }
+}
+
+impl From<ErrorStack> for DatabaseError {
+    fn from(error: ErrorStack) -> DatabaseError {
+        DatabaseError::OpenSSLError(error.to_string())
     }
 }
 

@@ -1,8 +1,8 @@
 use std::{hash::Hasher, time::Duration};
 
 use fork::ForkLifecycle;
-use gossipsub::{ConfigBuilderError, MessageAuthenticity, ValidationMode};
 use libp2p::{
+    gossipsub::{self, ConfigBuilderError, MessageAuthenticity, ValidationMode},
     identify, ping,
     swarm::{NetworkBehaviour, behaviour::toggle::Toggle},
     upnp::tokio::Behaviour as Upnp,
@@ -202,8 +202,7 @@ impl AnchorBehaviour {
 
 #[cfg(test)]
 mod tests {
-    use gossipsub::Message;
-    use libp2p::PeerId;
+    use libp2p::{PeerId, gossipsub::Message};
 
     use super::*;
 
