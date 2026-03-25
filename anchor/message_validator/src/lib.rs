@@ -13,7 +13,7 @@ use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
 use fork::{Fork, ForkSchedule};
-pub use gossipsub::MessageAcceptance;
+pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Public},

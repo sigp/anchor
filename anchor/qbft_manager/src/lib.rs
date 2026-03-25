@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, num::NonZeroU64, sync::Arc};
+use std::{fmt::Debug, future::Future, hash::Hash, num::NonZeroU64, sync::Arc};
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
@@ -12,7 +12,7 @@ use qbft::{
 };
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, CommitteeId,
+    CommitteeId, IndexSet, OperatorId,
     consensus::{
         AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
         QbftDataValidator,
@@ -238,7 +238,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         initial: D,
         validator: Box<dyn QbftDataValidator<D>>,
         timeout_mode: TimeoutMode,
-        committee: &Cluster,
+        committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
         let Some(operator_id) = self.operator_id.get() else {
             return Err(QbftError::OwnOperatorIdUnknown);
@@ -261,15 +261,14 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let slot = types::Slot::new(*initial.instance_height(&id) as u64);
         let deadline = calculate_deadline(role, slot, self.slots_per_epoch);
 
-        // General the qbft configuration
+        // Generate the qbft configuration
         let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
             instance_height,
-            committee.cluster_members.iter().copied().collect(),
+            committee_members.iter().copied().collect(),
             leader_fn,
         );
         let config = config
-            .with_quorum_size(committee.cluster_members.len() - committee.get_f() as usize)
             .with_max_rounds(role.max_round().ok_or(QbftError::InconsistentMessageId)? as usize)
             .build()?;
 
@@ -458,6 +457,35 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                 break;
             }
         }
+    }
+}
+
+/// Abstraction over QBFT consensus. Allows swapping in a mock for tests that don't
+/// need real consensus (e.g., testing signing pipelines).
+///
+/// Uses static dispatch (not `dyn`) because `decide_instance` is generic over
+/// `D: QbftDecidable<E>`, which prevents object safety.
+pub trait ConsensusDecider<E: EthSpec>: Send + Sync {
+    fn decide_instance<D: QbftDecidable<E>>(
+        &self,
+        id: D::Id,
+        initial: D,
+        validator: Box<dyn QbftDataValidator<D>>,
+        timeout_mode: TimeoutMode,
+        committee_members: &IndexSet<OperatorId>,
+    ) -> impl Future<Output = Result<Completed<D>, QbftError>> + Send;
+}
+
+impl<E: EthSpec, S: SlotClock + 'static> ConsensusDecider<E> for QbftManager<E, S> {
+    fn decide_instance<D: QbftDecidable<E>>(
+        &self,
+        id: D::Id,
+        initial: D,
+        validator: Box<dyn QbftDataValidator<D>>,
+        timeout_mode: TimeoutMode,
+        committee_members: &IndexSet<OperatorId>,
+    ) -> impl Future<Output = Result<Completed<D>, QbftError>> + Send {
+        self.decide_instance(id, initial, validator, timeout_mode, committee_members)
     }
 }
 

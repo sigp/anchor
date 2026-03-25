@@ -403,7 +403,7 @@ where
                                 TimeoutMode::SlotTime {
                                     instance_start_time: Instant::now(),
                                 },
-                                &cluster,
+                                &cluster.cluster_members,
                             )
                             .await;
                         let _ = tx_clone.send((data_clone.hash(), result));
