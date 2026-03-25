@@ -1124,15 +1124,17 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     ) -> Result<ScoredAttestationData, String> {
         let client_addr = client.to_string();
 
-        let _timer = validator_metrics::start_timer_vec(
-            &validator_metrics::ATTESTATION_SERVICE_TIMES,
-            &[validator_metrics::ATTESTATIONS_HTTP_GET],
-        );
-        let attestation_data = client
-            .get_validator_attestation_data(slot, 0)
-            .await
-            .map_err(|e| format!("{client_addr}: {e:?}"))?
-            .data;
+        let attestation_data = {
+            let _timer = validator_metrics::start_timer_vec(
+                &validator_metrics::ATTESTATION_SERVICE_TIMES,
+                &[validator_metrics::ATTESTATIONS_HTTP_GET],
+            );
+            client
+                .get_validator_attestation_data(slot, 0)
+                .await
+                .map_err(|e| format!("{client_addr}: {e:?}"))?
+                .data
+        };
 
         let head_slot = Self::get_block_slot(client, attestation_data.beacon_block_root).await;
         let score = calculate_attestation_score(&attestation_data, head_slot);
