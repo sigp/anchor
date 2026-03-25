@@ -49,7 +49,11 @@ type SyncByCommitteeMap = HashMap<CommitteeId, Vec<(SyncSubnetId, SyncAggregator
 /// because SSV has additional latency for QBFT consensus and P2P propagation.
 const BEACON_API_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 
-// Weighted Attestation Data (WAD) timeouts - inspired by SSV-Go but shorter
+// Weighted Attestation Data (WAD) timeouts.
+//
+// SSV-Go uses 5s hard / 2s soft / 1s block-lookup (derived from `CommonTimeout`).
+// We halve these because our Rust implementation has lower per-request overhead
+// and we want to minimise the delay before QBFT consensus begins.
 const WAD_SOFT_TIMEOUT: Duration = Duration::from_secs(1);
 const WAD_HARD_TIMEOUT: Duration = Duration::from_secs(3);
 const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
@@ -62,9 +66,22 @@ struct AttestationScore {
     bonus: Option<f64>,
 }
 
+/// Score attestation data for weighted selection across multiple beacon nodes.
+///
+/// Implements the same formula as SSV-Go's `scoreAttestationData` for cross-client
+/// compatibility (see `beacon/goclient/attest.go`). Inspired by Vouch (Attestant).
+///
+/// **Base score** = `source.epoch + target.epoch`. Reflects the expected attestation
+/// reward: higher checkpoint epochs indicate a more up-to-date view of the chain.
+///
+/// **Proximity bonus** = `1 / (1 + attestation_slot - head_slot)`. Rewards beacon
+/// nodes whose head block is closer to the attestation slot. The bonus is always in
+/// (0, 1], so it only acts as a tie-breaker between responses with identical
+/// checkpoint epochs — it cannot override a higher base score.
+///
+/// When the block header lookup fails or times out, only the base score is used.
 fn calculate_attestation_score(
     attestation_data: &AttestationData,
-    attestation_slot: Slot,
     head_slot: Option<Slot>,
 ) -> AttestationScore {
     let base_score =
@@ -72,7 +89,7 @@ fn calculate_attestation_score(
 
     match head_slot {
         Some(head_slot) => {
-            let attestation_slot_u64 = attestation_slot.as_u64();
+            let attestation_slot_u64 = attestation_data.slot.as_u64();
             let head_slot_u64 = head_slot.as_u64();
 
             if head_slot_u64 <= attestation_slot_u64 {
@@ -988,6 +1005,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
     /// Query all beacon nodes in parallel and select the best attestation data by score.
     async fn weighted_calculation(&self, slot: Slot) -> Result<AttestationData, String> {
+        let _timer = metrics::start_timer(&metrics::WAD_FETCH_TIMES);
         let started = Instant::now();
 
         let clients: Vec<(String, BeaconNodeHttpClient)> = {
@@ -1063,6 +1081,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                         "Soft timeout reached"
                     );
                     if best_data.is_some() {
+                        metrics::inc_counter(&metrics::WAD_SOFT_TIMEOUT_TOTAL);
                         break;
                     }
                 }
@@ -1105,6 +1124,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     ) -> Result<ScoredAttestationData, String> {
         let client_addr = client.to_string();
 
+        let _timer = validator_metrics::start_timer_vec(
+            &validator_metrics::ATTESTATION_SERVICE_TIMES,
+            &[validator_metrics::ATTESTATIONS_HTTP_GET],
+        );
         let attestation_data = client
             .get_validator_attestation_data(slot, 0)
             .await
@@ -1112,7 +1135,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .data;
 
         let head_slot = Self::get_block_slot(client, attestation_data.beacon_block_root).await;
-        let score = calculate_attestation_score(&attestation_data, slot, head_slot);
+        let score = calculate_attestation_score(&attestation_data, head_slot);
 
         trace!(
             client = %client_addr,
@@ -1132,17 +1155,40 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 
     async fn get_block_slot(client: &BeaconNodeHttpClient, block_root: Hash256) -> Option<Slot> {
-        tokio::time::timeout(BLOCK_SLOT_LOOKUP_TIMEOUT, async {
+        match tokio::time::timeout(BLOCK_SLOT_LOOKUP_TIMEOUT, async {
             client
                 .get_beacon_headers_block_id(BlockId::Root(block_root))
                 .await
-                .ok()
-                .flatten()
-                .map(|resp| resp.data.header.message.slot)
         })
         .await
-        .ok()
-        .flatten()
+        {
+            Ok(Ok(Some(resp))) => Some(resp.data.header.message.slot),
+            Ok(Ok(None)) => {
+                debug!(
+                    client = %client,
+                    ?block_root,
+                    "Block header not found for root"
+                );
+                None
+            }
+            Ok(Err(e)) => {
+                debug!(
+                    client = %client,
+                    ?block_root,
+                    error = %e,
+                    "Failed to fetch block header"
+                );
+                None
+            }
+            Err(_) => {
+                debug!(
+                    client = %client,
+                    ?block_root,
+                    "Block header lookup timed out"
+                );
+                None
+            }
+        }
     }
 }
 
@@ -2110,9 +2156,13 @@ mod tests {
     // Weighted Attestation Data (WAD) Scoring Tests
     // ═══════════════════════════════════════════════════════════════════════════════════
 
-    fn create_wad_attestation_data(source_epoch: u64, target_epoch: u64) -> AttestationData {
+    fn create_wad_attestation_data(
+        source_epoch: u64,
+        target_epoch: u64,
+        slot: u64,
+    ) -> AttestationData {
         AttestationData {
-            slot: Slot::new(0),
+            slot: Slot::new(slot),
             index: 0,
             beacon_block_root: Hash256::zero(),
             source: Checkpoint {
@@ -2128,16 +2178,16 @@ mod tests {
 
     #[test]
     fn test_scoring_higher_epochs_win() {
-        let newer = create_wad_attestation_data(100, 101);
+        let newer = create_wad_attestation_data(100, 101, 3232);
         let newer_result =
-            calculate_attestation_score(&newer, Slot::new(3232), Some(Slot::new(3230)));
+            calculate_attestation_score(&newer, Some(Slot::new(3230)));
 
         // base = 100 + 101 = 201, distance = 2, bonus = 1/(1+2) = 0.333...
         assert!((newer_result.score - 201.333333).abs() < 0.001);
 
-        let older = create_wad_attestation_data(99, 100);
+        let older = create_wad_attestation_data(99, 100, 3232);
         let older_result =
-            calculate_attestation_score(&older, Slot::new(3232), Some(Slot::new(3230)));
+            calculate_attestation_score(&older, Some(Slot::new(3230)));
 
         // base = 199, distance = 2, bonus = 0.333...
         assert!((older_result.score - 199.333333).abs() < 0.001);
@@ -2147,16 +2197,15 @@ mod tests {
 
     #[test]
     fn test_scoring_proximity_bonus() {
-        let data = create_wad_attestation_data(100, 101);
-        let attestation_slot = Slot::new(3232);
+        let data = create_wad_attestation_data(100, 101, 3232);
 
         let result_distance_zero =
-            calculate_attestation_score(&data, attestation_slot, Some(Slot::new(3232)));
+            calculate_attestation_score(&data, Some(Slot::new(3232)));
         // distance = 0, bonus = 1/(1+0) = 1.0, score = 202.0
         assert_eq!(result_distance_zero.score, 202.0);
 
         let result_distance_one =
-            calculate_attestation_score(&data, attestation_slot, Some(Slot::new(3231)));
+            calculate_attestation_score(&data, Some(Slot::new(3231)));
         // distance = 1, bonus = 0.5, score = 201.5
         assert_eq!(result_distance_one.score, 201.5);
 
@@ -2165,31 +2214,30 @@ mod tests {
 
     #[test]
     fn test_scoring_no_head_slot() {
-        let data = create_wad_attestation_data(100, 101);
-        let result = calculate_attestation_score(&data, Slot::new(3232), None);
+        let data = create_wad_attestation_data(100, 101, 3232);
+        let result = calculate_attestation_score(&data, None);
         // no head slot = no bonus, score = 201.0
         assert_eq!(result.score, 201.0);
     }
 
     #[test]
     fn test_scoring_head_after_attestation_slot() {
-        let data = create_wad_attestation_data(100, 101);
         // head_slot (3232) > attestation_slot (3230), no bonus
-        let result = calculate_attestation_score(&data, Slot::new(3230), Some(Slot::new(3232)));
+        let data = create_wad_attestation_data(100, 101, 3230);
+        let result = calculate_attestation_score(&data, Some(Slot::new(3232)));
         assert_eq!(result.score, 201.0);
     }
 
     #[test]
     fn test_scoring_same_base_different_proximity() {
-        let data = create_wad_attestation_data(100, 101);
-        let attestation_slot = Slot::new(3232);
+        let data = create_wad_attestation_data(100, 101, 3232);
 
         let result_distance_1 =
-            calculate_attestation_score(&data, attestation_slot, Some(Slot::new(3231)));
+            calculate_attestation_score(&data, Some(Slot::new(3231)));
         assert_eq!(result_distance_1.score, 201.5);
 
         let result_distance_2 =
-            calculate_attestation_score(&data, attestation_slot, Some(Slot::new(3230)));
+            calculate_attestation_score(&data, Some(Slot::new(3230)));
         assert!((result_distance_2.score - 201.333333).abs() < 0.001);
     }
 }
