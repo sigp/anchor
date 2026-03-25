@@ -35,10 +35,9 @@ impl ExecutionError {
                 LogErrorDisposition::SkipMalformed
             }
             Self::SkippedEvent(_) => LogErrorDisposition::SkipExpected,
-            Self::SyncError(_)
-            | Self::RpcError(_)
-            | Self::WsError(_)
-            | Self::Database(_) => LogErrorDisposition::AbortBatch,
+            Self::SyncError(_) | Self::RpcError(_) | Self::WsError(_) | Self::Database(_) => {
+                LogErrorDisposition::AbortBatch
+            }
         }
     }
 }

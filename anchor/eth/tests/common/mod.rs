@@ -468,7 +468,6 @@ pub fn create_validator_exited_log(
     )
 }
 
-
 /// Verify that an operator is soft deleted (removed from memory but still exists in database with
 /// removed=TRUE)
 pub fn verify_operator_soft_deleted(processor: &EventProcessor, operator_id: OperatorId) {
