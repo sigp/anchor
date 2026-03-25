@@ -2179,15 +2179,13 @@ mod tests {
     #[test]
     fn test_scoring_higher_epochs_win() {
         let newer = create_wad_attestation_data(100, 101, 3232);
-        let newer_result =
-            calculate_attestation_score(&newer, Some(Slot::new(3230)));
+        let newer_result = calculate_attestation_score(&newer, Some(Slot::new(3230)));
 
         // base = 100 + 101 = 201, distance = 2, bonus = 1/(1+2) = 0.333...
         assert!((newer_result.score - 201.333333).abs() < 0.001);
 
         let older = create_wad_attestation_data(99, 100, 3232);
-        let older_result =
-            calculate_attestation_score(&older, Some(Slot::new(3230)));
+        let older_result = calculate_attestation_score(&older, Some(Slot::new(3230)));
 
         // base = 199, distance = 2, bonus = 0.333...
         assert!((older_result.score - 199.333333).abs() < 0.001);
@@ -2199,13 +2197,11 @@ mod tests {
     fn test_scoring_proximity_bonus() {
         let data = create_wad_attestation_data(100, 101, 3232);
 
-        let result_distance_zero =
-            calculate_attestation_score(&data, Some(Slot::new(3232)));
+        let result_distance_zero = calculate_attestation_score(&data, Some(Slot::new(3232)));
         // distance = 0, bonus = 1/(1+0) = 1.0, score = 202.0
         assert_eq!(result_distance_zero.score, 202.0);
 
-        let result_distance_one =
-            calculate_attestation_score(&data, Some(Slot::new(3231)));
+        let result_distance_one = calculate_attestation_score(&data, Some(Slot::new(3231)));
         // distance = 1, bonus = 0.5, score = 201.5
         assert_eq!(result_distance_one.score, 201.5);
 
@@ -2232,12 +2228,10 @@ mod tests {
     fn test_scoring_same_base_different_proximity() {
         let data = create_wad_attestation_data(100, 101, 3232);
 
-        let result_distance_1 =
-            calculate_attestation_score(&data, Some(Slot::new(3231)));
+        let result_distance_1 = calculate_attestation_score(&data, Some(Slot::new(3231)));
         assert_eq!(result_distance_1.score, 201.5);
 
-        let result_distance_2 =
-            calculate_attestation_score(&data, Some(Slot::new(3230)));
+        let result_distance_2 = calculate_attestation_score(&data, Some(Slot::new(3230)));
         assert!((result_distance_2.score - 201.333333).abs() < 0.001);
     }
 }
