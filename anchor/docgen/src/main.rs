@@ -61,19 +61,19 @@ fn render_docs(
 ) -> Result<(), DocGenError> {
     match docgen_command.unwrap_or(DocGenCommand::Generate) {
         DocGenCommand::Generate => {
-            let cli_content = generate_cli_page_content(&anchor_command)?;
+            let cli_content = generate_cli_page_content(anchor_command)?;
             print!("{cli_content}");
             for (name, _) in SUBCOMMAND_PAGES {
-                let content = generate_subcommand_page_content(&anchor_command, name)?;
+                let content = generate_subcommand_page_content(anchor_command, name)?;
                 println!("---\n## {name}\n");
                 print!("{content}");
             }
         }
         DocGenCommand::Update { docs_dir } => {
-            run_update(&anchor_command, &docs_dir)?;
+            run_update(anchor_command, &docs_dir)?;
         }
         DocGenCommand::Check { docs_dir } => {
-            run_check(&anchor_command, &docs_dir)?;
+            run_check(anchor_command, &docs_dir)?;
         }
     };
     Ok(())

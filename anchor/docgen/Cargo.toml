@@ -14,5 +14,4 @@ cli = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-indoc = "2"
-tempfile = "3.12"
+tempfile = { workspace = true }
