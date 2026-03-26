@@ -765,7 +765,7 @@ mod manager_tests {
         let contributions = Contributions::<types::MainnetEthSpec>::empty();
 
         let id = ProposerInstanceId {
-            validator: validator.clone(),
+            validator,
             duty: ValidatorDutyKind::SyncCommitteeAggregator,
             instance_height: (slot as usize).into(),
         };
