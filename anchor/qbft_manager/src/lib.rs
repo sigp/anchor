@@ -204,10 +204,10 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         });
 
         // Start a long running task that will clean up old instances
-        manager.processor.permitless.send_async(
-            Arc::clone(&manager).cleaner(),
-            QBFT_CLEANER_NAME,
-        )?;
+        manager
+            .processor
+            .permitless
+            .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
         Ok(manager)
     }
@@ -481,9 +481,7 @@ pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 's
                 let sender = entry.insert(managed).sender.clone();
                 let message_sender = manager.message_sender.clone();
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(
-                        qbft_instance(rx, message_sender).instrument(span),
-                    ),
+                    Box::pin(qbft_instance(rx, message_sender).instrument(span)),
                     QBFT_INSTANCE_NAME,
                 );
                 sender
