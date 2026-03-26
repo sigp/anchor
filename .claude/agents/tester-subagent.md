@@ -203,6 +203,9 @@ if ENABLE_TEST_LOGGING {
 **Resource Management:**
 - Use unique identifiers for concurrent test resources
 - Clean up test resources properly
+- Default to `#[tokio::test(start_paused = true)]` for Tokio tests whenever the code under test can run against simulated time
+- Prefer `tokio::time::advance()` plus `tokio::task::yield_now()` over real sleeps when driving timers in paused tests
+- Only use non-paused Tokio tests when behavior depends on wall-clock time or runtime setup that is incompatible with paused time
 - Avoid sleep/delay-based synchronization
 
 **Error Handling Testing:**
