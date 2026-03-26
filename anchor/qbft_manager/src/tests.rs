@@ -835,11 +835,7 @@ mod manager_tests {
         }
     }
 
-    async fn advance_to_slot_boundary(
-        clock: &ManualSlotClock,
-        slot: u64,
-        slot_duration: Duration,
-    ) {
+    async fn advance_to_slot_boundary(clock: &ManualSlotClock, slot: u64, slot_duration: Duration) {
         clock.set_slot(slot);
         tokio::time::advance(slot_duration).await;
         tokio::task::yield_now().await;
