@@ -829,6 +829,22 @@ mod manager_tests {
         }
     }
 
+    fn sync_committee_timeout_mode(slot_duration: Duration) -> TimeoutMode {
+        TimeoutMode::SlotTime {
+            instance_start_time: Instant::now() + slot_duration * 2 / 3,
+        }
+    }
+
+    async fn advance_to_slot_boundary(
+        clock: &ManualSlotClock,
+        slot: u64,
+        slot_duration: Duration,
+    ) {
+        clock.set_slot(slot);
+        tokio::time::advance(slot_duration).await;
+        tokio::task::yield_now().await;
+    }
+
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
@@ -1340,7 +1356,7 @@ mod manager_tests {
     #[tokio::test(start_paused = true)]
     // Sync committee contributions start late in the slot but must still remain alive long enough
     // to finish consensus for inclusion in the next slot's block.
-    async fn test_sync_committee_can_finish_after_crossing_slot_boundary() {
+    async fn test_sync_committee_survives_next_slot_cleanup_and_expires_after_deadline() {
         const DUTY_SLOT: u64 = 0;
         const NEXT_SLOT: u64 = 1;
         const CLEANUP_SLOT: u64 = 2;
@@ -1348,42 +1364,37 @@ mod manager_tests {
         const EXPECTED_REGISTERED_INSTANCES_BEFORE_CLEANUP: usize = 1;
         const EXPECTED_REGISTERED_INSTANCES_AFTER_CLEANUP: usize = 0;
 
+        // Arrange: start a sync committee instance with the real late-in-slot timeout mode and
+        // keep quorum offline so the instance must survive the first slot boundary.
         let setup = setup_test(0);
         let clock = setup.clock.clone();
         let slot_duration = clock.slot_duration();
-        let manager_slot_duration = slot_duration * 2 / 3;
-
         let mut context =
             TestContext::<types::MainnetEthSpec, ProposerConsensusData>::new_with_timeout_mode(
                 setup.clock,
                 setup.executor,
                 CommitteeSize::Four,
                 vec![generate_sync_committee_test_data(DUTY_SLOT)],
-                TimeoutMode::SlotTime {
-                    instance_start_time: Instant::now() + manager_slot_duration,
-                },
+                sync_committee_timeout_mode(slot_duration),
             )
             .await;
-
         let manager = context
             .tester
             .managers
             .get(&OperatorId(1))
             .expect("manager should exist")
             .clone();
-
         context.set_operators_offline(&[2, 3, 4]);
 
-        clock.set_slot(NEXT_SLOT);
-        tokio::time::advance(slot_duration).await;
-        tokio::task::yield_now().await;
-
+        // Act: cross the first cleanup boundary without quorum, then restore quorum and let the
+        // instance finish inside the next slot.
+        advance_to_slot_boundary(&clock, NEXT_SLOT, slot_duration).await;
         context.set_operators_online(&[2, 3, 4]);
         tokio::time::advance(Duration::from_secs(POST_BOUNDARY_PROGRESS_SECS)).await;
         tokio::task::yield_now().await;
-
         context.verify_consensus().await;
 
+        // Assert: the decided instance remains registered through the inclusion slot.
         assert_eq!(
             manager.proposer_consensus_data_instances.len(),
             EXPECTED_REGISTERED_INSTANCES_BEFORE_CLEANUP,
@@ -1391,10 +1402,8 @@ mod manager_tests {
             NEXT_SLOT
         );
 
-        clock.set_slot(CLEANUP_SLOT);
-        tokio::time::advance(slot_duration).await;
-        tokio::task::yield_now().await;
-
+        // Act + Assert: the next cleanup boundary removes the expired instance.
+        advance_to_slot_boundary(&clock, CLEANUP_SLOT, slot_duration).await;
         assert_eq!(
             manager.proposer_consensus_data_instances.len(),
             EXPECTED_REGISTERED_INSTANCES_AFTER_CLEANUP,
