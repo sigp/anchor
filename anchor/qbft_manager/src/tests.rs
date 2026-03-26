@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use bls::PublicKeyBytes;
 use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
@@ -12,12 +13,15 @@ use qbft::InstanceHeight;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
-    consensus::{BeaconVote, NoDataValidation, QbftMessage, QbftMessageType},
+    consensus::{
+        BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote, Contributions, NoDataValidation,
+        ProposerConsensusData, QbftMessage, QbftMessageType, ValidatorDuty,
+    },
     domain_type::DomainType,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
 };
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::{
     pin, select,
@@ -32,8 +36,9 @@ use tracing::{debug, error};
 use types::{EthSpec, Hash256, Slot};
 
 use super::{
-    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftInitialization, QbftManager,
-    QbftMessageKind, TimeoutMode, WrappedQbftMessage,
+    CommitteeInstanceId, Completed, ProposerInstanceId, QbftDecidable, QbftError,
+    QbftInitialization, QbftManager, QbftMessageKind, TimeoutMode, ValidatorDutyKind,
+    WrappedQbftMessage,
 };
 use crate::instance::qbft_instance;
 
@@ -89,6 +94,34 @@ where
         let tester_clone = tester.clone();
 
         // Run the instance in background
+        tokio::spawn(async move {
+            tester_clone
+                .run_until_complete(network_rx, result_rx, consensus_tx)
+                .await;
+        });
+
+        Self {
+            tester,
+            consensus_rx,
+        }
+    }
+
+    pub async fn new_with_timeout_mode(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+        timeout_mode: TimeoutMode,
+    ) -> Self {
+        let (mut tester, network_rx) = QbftTester::new(clock, executor, size);
+        let result_rx = tester
+            .start_instance_with_timeout_mode(test_data, HashMap::new(), timeout_mode)
+            .await;
+        let (consensus_tx, consensus_rx) = mpsc::unbounded_channel();
+
+        let tester = Arc::new(tester);
+        let tester_clone = tester.clone();
+
         tokio::spawn(async move {
             tester_clone
                 .run_until_complete(network_rx, result_rx, consensus_tx)
@@ -415,6 +448,64 @@ where
         result_rx
     }
 
+    pub async fn start_instance_with_timeout_mode(
+        &mut self,
+        all_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
+        timeout_mode: TimeoutMode,
+    ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+        for (data, data_id) in all_data {
+            let height = *data.instance_height(&data_id) as u64;
+            self.identifiers.insert(height, data_id.clone());
+
+            let min_for_consensus = self.size as u64 - self.size.get_f();
+            self.results.write().unwrap().insert(
+                data.hash(),
+                ConsensusResult {
+                    min_for_consensus,
+                    ..Default::default()
+                },
+            );
+
+            self.num_running
+                .write()
+                .unwrap()
+                .insert(data.hash(), self.size as u64);
+
+            for (operator, manager) in self.managers.iter() {
+                let manager_clone = manager.clone();
+                let cluster = self.cluster.clone();
+                let data_clone = data.clone();
+                let id_clone = data_id.clone();
+                let tx_clone = result_tx.clone();
+                let delay_initialization = delay_initialization
+                    .get(operator)
+                    .copied()
+                    .unwrap_or(Duration::ZERO);
+
+                let _ = self.senders.permitless.send_async(
+                    async move {
+                        sleep(delay_initialization).await;
+                        let result = manager_clone
+                            .decide_instance(
+                                id_clone,
+                                data_clone.clone(),
+                                Box::new(NoDataValidation),
+                                timeout_mode,
+                                &cluster.cluster_members,
+                            )
+                            .await;
+                        let _ = tx_clone.send((data_clone.hash(), result));
+                    },
+                    "qbft_tests",
+                );
+            }
+        }
+        result_rx
+    }
+
     // Get a write lock to the behavior so that we can modify it while the instance is running
     fn modify_behavior(&self, id: OperatorId) -> RwLockWriteGuard<'_, OperatorBehavior> {
         self.behavior
@@ -662,6 +753,40 @@ mod manager_tests {
             block_root: Hash256::random(),
             source: types::Checkpoint::default(),
             target: types::Checkpoint::default(),
+        };
+
+        (data, id)
+    }
+
+    pub(crate) fn generate_sync_committee_test_data(
+        slot: u64,
+    ) -> (ProposerConsensusData, ProposerInstanceId) {
+        let validator = PublicKeyBytes::empty();
+        let contributions = Contributions::<types::MainnetEthSpec>::empty();
+
+        let id = ProposerInstanceId {
+            validator: validator.clone(),
+            duty: ValidatorDutyKind::SyncCommitteeAggregator,
+            instance_height: (slot as usize).into(),
+        };
+
+        let data = ProposerConsensusData {
+            duty: ValidatorDuty {
+                r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+                pub_key: validator,
+                slot: Slot::new(slot),
+                validator_index: 0usize.into(),
+                committee_index: 0,
+                committee_length: 0,
+                committees_at_slot: 0,
+                validator_committee_index: 0,
+                validator_sync_committee_indices: Default::default(),
+            },
+            version: types::ForkName::Altair.into(),
+            data_ssz: contributions
+                .as_ssz_bytes()
+                .try_into()
+                .expect("sync committee test data fits in proposer consensus payload"),
         };
 
         (data, id)
@@ -1212,6 +1337,72 @@ mod manager_tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    // Sync committee contributions start late in the slot but must still remain alive long enough
+    // to finish consensus for inclusion in the next slot's block.
+    async fn test_sync_committee_can_finish_after_crossing_slot_boundary() {
+        const DUTY_SLOT: u64 = 0;
+        const NEXT_SLOT: u64 = 1;
+        const CLEANUP_SLOT: u64 = 2;
+        const POST_BOUNDARY_PROGRESS_SECS: u64 = 4;
+        const EXPECTED_REGISTERED_INSTANCES_BEFORE_CLEANUP: usize = 1;
+        const EXPECTED_REGISTERED_INSTANCES_AFTER_CLEANUP: usize = 0;
+
+        let setup = setup_test(0);
+        let clock = setup.clock.clone();
+        let slot_duration = clock.slot_duration();
+        let manager_slot_duration = slot_duration * 2 / 3;
+
+        let mut context =
+            TestContext::<types::MainnetEthSpec, ProposerConsensusData>::new_with_timeout_mode(
+                setup.clock,
+                setup.executor,
+                CommitteeSize::Four,
+                vec![generate_sync_committee_test_data(DUTY_SLOT)],
+                TimeoutMode::SlotTime {
+                    instance_start_time: Instant::now() + manager_slot_duration,
+                },
+            )
+            .await;
+
+        let manager = context
+            .tester
+            .managers
+            .get(&OperatorId(1))
+            .expect("manager should exist")
+            .clone();
+
+        context.set_operators_offline(&[2, 3, 4]);
+
+        clock.set_slot(NEXT_SLOT);
+        tokio::time::advance(slot_duration).await;
+        tokio::task::yield_now().await;
+
+        context.set_operators_online(&[2, 3, 4]);
+        tokio::time::advance(Duration::from_secs(POST_BOUNDARY_PROGRESS_SECS)).await;
+        tokio::task::yield_now().await;
+
+        context.verify_consensus().await;
+
+        assert_eq!(
+            manager.proposer_consensus_data_instances.len(),
+            EXPECTED_REGISTERED_INSTANCES_BEFORE_CLEANUP,
+            "Completed sync committee instance should remain registered through slot {}",
+            NEXT_SLOT
+        );
+
+        clock.set_slot(CLEANUP_SLOT);
+        tokio::time::advance(slot_duration).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            manager.proposer_consensus_data_instances.len(),
+            EXPECTED_REGISTERED_INSTANCES_AFTER_CLEANUP,
+            "Sync committee instance should be cleaned when slot {} begins",
+            CLEANUP_SLOT
+        );
+    }
+
     #[test]
     // Test deadline calculation for Committee role
     fn test_committee_role_deadline_calculation() {
@@ -1333,9 +1524,10 @@ mod manager_tests {
         use ssv_types::msgid::Role;
         use types::Slot;
 
-        // SETUP: Define test constants for SyncCommittee role (deadline = same slot)
+        // SETUP: Define test constants for SyncCommittee role (deadline = next slot)
         const SLOTS_PER_EPOCH: u64 = 32;
         const SLOT_MID_EPOCH: u64 = 50;
+        const EXPECTED_DEADLINE: u64 = SLOT_MID_EPOCH + 1;
 
         // EXECUTE: Calculate deadline
         let deadline = super::super::calculate_deadline(
@@ -1344,11 +1536,13 @@ mod manager_tests {
             std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
         );
 
-        // ASSERT: SyncCommittee deadline should be same slot for immediate inclusion
+        // ASSERT: SyncCommittee deadline should keep the instance alive through the next slot
         assert_eq!(
             deadline,
-            Slot::new(SLOT_MID_EPOCH),
-            "SyncCommittee deadline should be same slot for immediate inclusion"
+            Slot::new(EXPECTED_DEADLINE),
+            "SyncCommittee at slot {} should keep a deadline of {}",
+            SLOT_MID_EPOCH,
+            EXPECTED_DEADLINE
         );
     }
 

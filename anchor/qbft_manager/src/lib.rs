@@ -58,9 +58,14 @@ fn calculate_deadline(role: Role, slot: types::Slot, slots_per_epoch: NonZeroU64
             let epoch = slot.epoch(spe);
             types::Slot::new((epoch.as_u64() + 2) * spe - 1)
         }
-        Role::Proposer | Role::SyncCommittee => {
-            // Must be in the same slot
+        Role::Proposer => {
+            // Block proposals must be included in the same slot.
             slot
+        }
+        Role::SyncCommittee => {
+            // Sync committee contributions start at `2/3` of the slot and are included in the
+            // next block, so keep the instance alive through the following slot.
+            types::Slot::new(slot.as_u64() + 1)
         }
         Role::VoluntaryExit | Role::ValidatorRegistration => {
             // One epoch to complete
