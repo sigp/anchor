@@ -683,6 +683,14 @@ impl Client {
             executor.clone(),
         );
 
+        if config.with_weighted_attestation_data && num_nodes < 2 {
+            warn!(
+                "Weighted attestation data enabled with only {} beacon node. \
+                 WAD is only useful with multiple beacon nodes.",
+                num_nodes
+            );
+        }
+
         let metadata_service = MetadataService::new(
             duties_service.clone(),
             validator_store.clone(),
@@ -691,6 +699,7 @@ impl Client {
             executor.clone(),
             spec.clone(),
             fork_schedule.clone(),
+            config.with_weighted_attestation_data,
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
