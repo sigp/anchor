@@ -613,6 +613,17 @@ pub struct Node {
     )]
     pub strict_mfp: bool,
 
+    #[clap(
+        long,
+        help = "Enable parallel querying and scoring of attestation data across multiple beacon \
+                nodes. When enabled, Anchor queries all configured beacon nodes simultaneously \
+                and selects the attestation data with the highest score based on checkpoint \
+                epochs and head block proximity. Only useful with multiple beacon nodes.",
+        display_order = 0,
+        help_heading = FLAG_HEADER,
+    )]
+    pub with_weighted_attestation_data: bool,
+
     #[clap(flatten)]
     pub logging_flags: FileLoggingFlags,
 }
