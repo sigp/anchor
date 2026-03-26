@@ -1191,10 +1191,9 @@ mod manager_tests {
     #[tokio::test]
     // Test that instance completing successfully is cleaned immediately via completion notification
     // Verifies that completion notification cleanup happens before deadline-based cleanup
-    async fn test_instance_completion_notification() {
+    async fn test_instance_stays_alive_after_completion() {
         // SETUP: Create instance at slot 0 with beacon chain deadline = 63
         // All operators online so consensus completes quickly
-        const EXPECTED_INSTANCES_AFTER_COMPLETION: usize = 0;
         const CONSENSUS_COMPLETION_TIME: Duration = Duration::from_millis(100);
 
         let setup = setup_test(SINGLE_INSTANCE);
@@ -1211,11 +1210,12 @@ mod manager_tests {
         // EXECUTE: Wait for consensus to complete
         tokio::time::sleep(CONSENSUS_COMPLETION_TIME).await;
 
-        // ASSERT: Instance should be cleaned via completion notification, not deadline
+        // ASSERT: Instance should remain in the registry to serve late callers
+        // It will only be removed when the deadline-based cleaner runs
         assert_eq!(
             manager.beacon_vote_instances.len(),
-            EXPECTED_INSTANCES_AFTER_COMPLETION,
-            "Instance should be cleaned immediately after completion via notification, not waiting for deadline"
+            1,
+            "Instance should stay alive after completion to serve late callers"
         );
     }
 
@@ -1480,9 +1480,8 @@ mod manager_tests {
     #[tokio::test]
     // Test multiple instances completing in rapid succession
     // Verifies completion notification channel handles burst of completions
-    async fn test_multiple_instances_completing_rapidly() {
+    async fn test_multiple_instances_stay_alive_after_completion() {
         // SETUP: Create 5 instances that will all complete rapidly
-        const EXPECTED_INSTANCES_AFTER_COMPLETION: usize = 0;
         const CLEANUP_PROCESSING_TIME: u64 = 200;
 
         let setup = setup_test(FIVE_INSTANCES);
@@ -1496,21 +1495,16 @@ mod manager_tests {
         .await;
 
         // All operators online - instances should complete quickly
-        // No artificial delays, all instances racing to consensus
 
-        // EXECUTE: Wait for all instances to complete and cleanup to process
-        // This implicitly tests that:
-        // 1. All completion notifications are sent
-        // 2. Channel doesn't saturate or drop notifications
-        // 3. Cleanup processes all notifications correctly
+        // EXECUTE: Wait for all instances to complete
         tokio::time::sleep(Duration::from_millis(CLEANUP_PROCESSING_TIME)).await;
 
-        // ASSERT: All instances should be cleaned after rapid completion
+        // ASSERT: All instances should remain in the registry to serve late callers
         let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
         assert_eq!(
             manager.beacon_vote_instances.len(),
-            EXPECTED_INSTANCES_AFTER_COMPLETION,
-            "All instances should be cleaned after rapid completion"
+            FIVE_INSTANCES,
+            "All instances should stay alive after completion to serve late callers"
         );
     }
 }
@@ -1527,17 +1521,10 @@ async fn test_timeout(round_timeout_to_test: usize) {
     let (sender_tx, _sender_rx) = unbounded_channel();
     let (message_tx, message_rx) = unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
-    let (completion_tx, _completion_rx) = unbounded_channel();
     let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-    let instance_id = super::InstanceId::BeaconVote(CommitteeInstanceId {
-        committee: CommitteeId::default(),
-        instance_height: 0.into(),
-    });
     let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
         message_rx,
         Arc::new(message_sender),
-        completion_tx,
-        instance_id,
     ));
 
     // create a slot clock at slot 0 with a slot duration of 12 seconds
@@ -1611,17 +1598,10 @@ async fn test_relative_mode_timeout() {
     let (sender_tx, _sender_rx) = unbounded_channel();
     let (message_tx, message_rx) = unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
-    let (completion_tx, _completion_rx) = unbounded_channel();
     let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-    let instance_id = super::InstanceId::BeaconVote(CommitteeInstanceId {
-        committee: CommitteeId::default(),
-        instance_height: 0.into(),
-    });
     let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
         message_rx,
         Arc::new(message_sender),
-        completion_tx,
-        instance_id,
     ));
 
     let slot_start_time = Instant::now();
@@ -1689,17 +1669,10 @@ async fn test_relative_vs_slottime_timing_difference() {
         let (sender_tx, _sender_rx) = unbounded_channel();
         let (message_tx, message_rx) = unbounded_channel();
         let (result_tx, result_rx) = oneshot::channel();
-        let (completion_tx, _completion_rx) = unbounded_channel();
         let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-        let instance_id = super::InstanceId::BeaconVote(CommitteeInstanceId {
-            committee: CommitteeId::default(),
-            instance_height: 0.into(),
-        });
         let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
             message_rx,
             Arc::new(message_sender),
-            completion_tx,
-            instance_id,
         ));
 
         let now = Instant::now();

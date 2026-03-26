@@ -280,8 +280,6 @@ impl<D: QbftData<Hash = Hash256>> Initialized<D> {
 pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     mut rx: UnboundedReceiver<QbftMessage<D>>,
     message_sender: Arc<dyn MessageSender>,
-    completion_tx: mpsc::UnboundedSender<crate::InstanceId>,
-    instance_id: crate::InstanceId,
 ) {
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized(Uninitialized::default());
@@ -367,12 +365,6 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
         // If the instance is ongoing, check whether it is done.
         if let QbftInstance::Initialized(initialized) = instance {
             instance = initialized.complete_if_done(&message_sender);
-
-            // If we just transitioned to Decided, notify cleaner for immediate cleanup
-            if matches!(instance, QbftInstance::Decided(_)) {
-                let _ = completion_tx.send(instance_id);
-                break;
-            }
         }
 
         // Drop guard as late as possible to keep the processor permit.
