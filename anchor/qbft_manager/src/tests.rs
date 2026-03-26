@@ -640,7 +640,6 @@ mod manager_tests {
     // Test constants for number of QBFT instances
     const SINGLE_INSTANCE: usize = 1;
     const TWO_INSTANCES: usize = 2;
-    const FIVE_INSTANCES: usize = 5;
 
     // Provides test setup
     struct Setup {
@@ -1107,7 +1106,7 @@ mod manager_tests {
         // This triggers cleanup logic which should NOT remove the active instance
         for slot in 1..=25 {
             clock.set_slot(slot);
-            tokio::time::sleep(slot_duration).await;
+            tokio::time::advance(slot_duration).await;
 
             // Round timeout calculation:
             // - Rounds 1-8: 2s each = 16s total
@@ -1159,10 +1158,9 @@ mod manager_tests {
         // EXECUTE: Advance past old 2-slot deadline to slot 3
         for slot in 1..=OLD_CLEANUP_SLOT {
             clock.set_slot(slot);
-            sleep(slot_duration).await;
+            tokio::time::advance(slot_duration).await;
         }
-        sleep(Duration::from_millis(100)).await;
-
+        tokio::task::yield_now().await;
         // ASSERT: Instance should still exist (new deadline is 63, not 3)
         assert_eq!(
             manager.beacon_vote_instances.len(),
@@ -1175,10 +1173,9 @@ mod manager_tests {
         // EXECUTE: Advance past actual beacon chain deadline
         for slot in (OLD_CLEANUP_SLOT + 1)..=SLOT_AFTER_DEADLINE {
             clock.set_slot(slot);
-            tokio::time::sleep(slot_duration).await;
+            tokio::time::advance(slot_duration).await;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
+        tokio::task::yield_now().await;
         // ASSERT: Instance should now be cleaned after its beacon chain deadline
         assert_eq!(
             manager.beacon_vote_instances.len(),
@@ -1188,16 +1185,14 @@ mod manager_tests {
         );
     }
 
-    #[tokio::test]
-    // Test that instance completing successfully is cleaned immediately via completion notification
-    // Verifies that completion notification cleanup happens before deadline-based cleanup
-    async fn test_instance_stays_alive_after_completion() {
-        // SETUP: Create instance at slot 0 with beacon chain deadline = 63
-        // All operators online so consensus completes quickly
-        const CONSENSUS_COMPLETION_TIME: Duration = Duration::from_millis(100);
+    #[tokio::test(start_paused = true)]
+    // Test that a completed instance remains registered until its deadline expires.
+    async fn test_completed_instance_remains_registered_until_deadline() {
+        // SETUP: Create a single instance that will complete successfully
+        const EXPECTED_REGISTERED_INSTANCES: usize = 1;
 
         let setup = setup_test(SINGLE_INSTANCE);
-        let context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -1205,17 +1200,15 @@ mod manager_tests {
         )
         .await;
 
+        // EXECUTE: Wait for the instance to complete consensus
+        context.verify_consensus().await;
+
+        // ASSERT: The completed instance should still be registered until deadline-based cleanup
         let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
-
-        // EXECUTE: Wait for consensus to complete
-        tokio::time::sleep(CONSENSUS_COMPLETION_TIME).await;
-
-        // ASSERT: Instance should remain in the registry to serve late callers
-        // It will only be removed when the deadline-based cleaner runs
         assert_eq!(
             manager.beacon_vote_instances.len(),
-            1,
-            "Instance should stay alive after completion to serve late callers"
+            EXPECTED_REGISTERED_INSTANCES,
+            "Completed instance should remain registered until its deadline expires"
         );
     }
 
@@ -1427,7 +1420,6 @@ mod manager_tests {
         const SLOT_DURATION_SECS: u64 = 12;
         const EXPECTED_INSTANCES_BEFORE_DEADLINE: usize = 1;
         const EXPECTED_INSTANCES_AFTER_DEADLINE: usize = 0;
-        const STABILIZATION_DELAY_MS: u64 = 100;
 
         let setup = setup_test(0);
         let clock = setup.clock.clone();
@@ -1450,10 +1442,9 @@ mod manager_tests {
         // EXECUTE: Advance through epoch boundary to slot 32
         for slot in 31..=EPOCH_BOUNDARY_SLOT {
             clock.set_slot(slot);
-            tokio::time::sleep(slot_duration).await;
+            tokio::time::advance(slot_duration).await;
         }
-        tokio::time::sleep(Duration::from_millis(STABILIZATION_DELAY_MS)).await;
-
+        tokio::task::yield_now().await;
         // ASSERT: Instance should survive across epoch boundary
         assert_eq!(
             manager.beacon_vote_instances.len(),
@@ -1464,10 +1455,9 @@ mod manager_tests {
         // EXECUTE: Advance to slot 64 (past deadline of 63)
         for slot in (EPOCH_BOUNDARY_SLOT + 1)..=SLOT_AFTER_DEADLINE {
             clock.set_slot(slot);
-            tokio::time::sleep(slot_duration).await;
+            tokio::time::advance(slot_duration).await;
         }
-        tokio::time::sleep(Duration::from_millis(STABILIZATION_DELAY_MS)).await;
-
+        tokio::task::yield_now().await;
         // ASSERT: Instance should be cleaned after deadline
         assert_eq!(
             manager.beacon_vote_instances.len(),
@@ -1477,16 +1467,15 @@ mod manager_tests {
         );
     }
 
-    #[tokio::test]
-    // Test multiple instances completing in rapid succession
-    // Verifies completion notification channel handles burst of completions
-    async fn test_multiple_instances_stay_alive_after_completion() {
-        // SETUP: Create 5 instances that will all complete rapidly
-        const CLEANUP_PROCESSING_TIME: u64 = 200;
+    #[tokio::test(start_paused = true)]
+    // Test that multiple completed instances remain registered until their deadlines expire.
+    async fn test_multiple_completed_instances_remain_registered_until_deadline() {
+        // SETUP: Create two instances that will both complete successfully
+        const EXPECTED_REGISTERED_INSTANCES: usize = TWO_INSTANCES;
 
-        let setup = setup_test(FIVE_INSTANCES);
+        let setup = setup_test(TWO_INSTANCES);
 
-        let context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
             CommitteeSize::Four,
@@ -1494,17 +1483,15 @@ mod manager_tests {
         )
         .await;
 
-        // All operators online - instances should complete quickly
+        // EXECUTE: Wait for both instances to complete
+        context.verify_consensus().await;
 
-        // EXECUTE: Wait for all instances to complete
-        tokio::time::sleep(Duration::from_millis(CLEANUP_PROCESSING_TIME)).await;
-
-        // ASSERT: All instances should remain in the registry to serve late callers
+        // ASSERT: Both completed instances should still be registered until deadline-based cleanup
         let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
         assert_eq!(
             manager.beacon_vote_instances.len(),
-            FIVE_INSTANCES,
-            "All instances should stay alive after completion to serve late callers"
+            EXPECTED_REGISTERED_INSTANCES,
+            "Completed instances should remain registered until their deadlines expire"
         );
     }
 }
