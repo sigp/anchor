@@ -79,6 +79,8 @@ pub struct Config {
     pub operator_dg_wait_epochs: u64,
     /// Whether to check for matching checkpoint roots in QBFT.
     pub strict_mfp: bool,
+    /// Enable attestation data scoring across multiple beacon nodes.
+    pub with_weighted_attestation_data: bool,
 }
 
 impl Config {
@@ -126,6 +128,7 @@ impl Config {
             operator_dg: false,
             operator_dg_wait_epochs: 2,
             strict_mfp: false,
+            with_weighted_attestation_data: false,
         }
     }
 }
@@ -286,6 +289,9 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
 
     // Majority fork protection
     config.strict_mfp = cli_args.strict_mfp;
+
+    // Weighted attestation data
+    config.with_weighted_attestation_data = cli_args.with_weighted_attestation_data;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {
