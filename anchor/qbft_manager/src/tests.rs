@@ -652,6 +652,33 @@ mod manager_tests {
 
     type BeaconVoteTestContext = TestContext<types::MainnetEthSpec, BeaconVote>;
 
+    const DEFAULT_BEACON_VOTE_COMMITTEE_SIZE: CommitteeSize = CommitteeSize::Four;
+    const PARTITION_TEST_COMMITTEE_SIZE: CommitteeSize = CommitteeSize::Ten;
+    const SINGLE_BEACON_VOTE_DUTY: usize = 1;
+    const TWO_BEACON_VOTE_DUTIES: usize = 2;
+    const FIRST_OPERATOR: u64 = 1;
+    // With the default leader function, round 1 at instance height 1 selects operator 2.
+    const ROUND_ONE_LEADER_AT_HEIGHT_ONE: u64 = 2;
+    const THIRD_OPERATOR: u64 = 3;
+    const FOURTH_OPERATOR: u64 = 4;
+    const FIFTH_OPERATOR: u64 = 5;
+    const SIXTH_OPERATOR: u64 = 6;
+    const SEVENTH_OPERATOR: u64 = 7;
+    const EIGHTH_OPERATOR: u64 = 8;
+    const ROUND_CHANGE_OFFLINE_OPERATOR: [u64; 1] = [ROUND_ONE_LEADER_AT_HEIGHT_ONE];
+    const SINGLE_FAULTY_OPERATOR: [u64; 1] = [FIRST_OPERATOR];
+    const RECOVERY_OFFLINE_OPERATORS: [u64; 2] = [FIRST_OPERATOR, ROUND_ONE_LEADER_AT_HEIGHT_ONE];
+    const INITIAL_PARTITION_OFFLINE_OPERATORS: [u64; 4] = [
+        THIRD_OPERATOR,
+        FOURTH_OPERATOR,
+        FIFTH_OPERATOR,
+        SIXTH_OPERATOR,
+    ];
+    const FOLLOW_UP_PARTITION_OFFLINE_OPERATORS: [u64; 3] =
+        [SIXTH_OPERATOR, SEVENTH_OPERATOR, EIGHTH_OPERATOR];
+    const MID_ROUND_TWO_DELAY: Duration = Duration::from_secs(3);
+    const MID_ROUND_THREE_DELAY: Duration = Duration::from_secs(5);
+
     // Provides the runtime pieces the test harness needs to start in-memory managers.
     struct TestRuntime {
         executor: TaskExecutor,
@@ -733,6 +760,12 @@ mod manager_tests {
         context
     }
 
+    async fn start_single_beacon_vote_cluster(
+        committee_size: CommitteeSize,
+    ) -> BeaconVoteTestContext {
+        start_beacon_vote_cluster(committee_size, SINGLE_BEACON_VOTE_DUTY).await
+    }
+
     async fn start_beacon_vote_cluster_with_delays(
         committee_size: CommitteeSize,
         num_instances: usize,
@@ -757,10 +790,23 @@ mod manager_tests {
         context
     }
 
+    async fn start_single_beacon_vote_cluster_with_delays(
+        committee_size: CommitteeSize,
+        initialization_delays: HashMap<OperatorId, Duration>,
+    ) -> BeaconVoteTestContext {
+        start_beacon_vote_cluster_with_delays(
+            committee_size,
+            SINGLE_BEACON_VOTE_DUTY,
+            initialization_delays,
+        )
+        .await
+    }
+
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
         context
             .assert_all_started_instances_reached_consensus()
@@ -770,9 +816,10 @@ mod manager_tests {
     #[tokio::test]
     // Take the leader offline to test a round change
     async fn test_round_change() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_offline(&[2]);
+        context.set_operators_offline(&ROUND_CHANGE_OFFLINE_OPERATOR);
         context
             .assert_all_started_instances_reached_consensus()
             .await;
@@ -781,9 +828,10 @@ mod manager_tests {
     #[tokio::test]
     // Test one offline operator
     async fn test_fault_operator() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_offline(&[1]);
+        context.set_operators_offline(&SINGLE_FAULTY_OPERATOR);
         context
             .assert_all_started_instances_reached_consensus()
             .await;
@@ -792,17 +840,29 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        let sizes = vec![
-            (CommitteeSize::Four, vec![1]),
-            (CommitteeSize::Seven, vec![1, 3]),
-            (CommitteeSize::Ten, vec![1, 3, 4]),
-            (CommitteeSize::Thirteen, vec![1, 3, 4, 5]),
+        let faulty_operators_for_four = [FIRST_OPERATOR];
+        let faulty_operators_for_seven = [FIRST_OPERATOR, THIRD_OPERATOR];
+        let faulty_operators_for_ten = [FIRST_OPERATOR, THIRD_OPERATOR, FOURTH_OPERATOR];
+        let faulty_operators_for_thirteen = [
+            FIRST_OPERATOR,
+            THIRD_OPERATOR,
+            FOURTH_OPERATOR,
+            FIFTH_OPERATOR,
+        ];
+        let sizes = [
+            (CommitteeSize::Four, faulty_operators_for_four.as_slice()),
+            (CommitteeSize::Seven, faulty_operators_for_seven.as_slice()),
+            (CommitteeSize::Ten, faulty_operators_for_ten.as_slice()),
+            (
+                CommitteeSize::Thirteen,
+                faulty_operators_for_thirteen.as_slice(),
+            ),
         ];
 
         for (size, faulty) in sizes {
-            let mut context = start_beacon_vote_cluster(size, 1).await;
+            let mut context = start_single_beacon_vote_cluster(size).await;
 
-            context.set_operators_offline(&faulty);
+            context.set_operators_offline(faulty);
             context
                 .assert_all_started_instances_reached_consensus()
                 .await;
@@ -812,7 +872,9 @@ mod manager_tests {
     #[tokio::test]
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 2).await;
+        let mut context =
+            start_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE, TWO_BEACON_VOTE_DUTIES)
+                .await;
 
         context
             .assert_all_started_instances_reached_consensus()
@@ -822,12 +884,13 @@ mod manager_tests {
     #[tokio::test(start_paused = true)]
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_offline(&[1, 2]);
+        context.set_operators_offline(&RECOVERY_OFFLINE_OPERATORS);
 
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        context.set_operators_online(&[1, 2]);
+        tokio::time::sleep(MID_ROUND_TWO_DELAY).await;
+        context.set_operators_online(&RECOVERY_OFFLINE_OPERATORS);
 
         context
             .assert_all_started_instances_reached_consensus()
@@ -837,10 +900,11 @@ mod manager_tests {
     #[tokio::test]
     // Test commit message suppression for an operator
     async fn test_commit_suppression() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
         context.set_operators_byzantine(
-            &[1],
+            &SINGLE_FAULTY_OPERATOR,
             ByzantineBehavior::MessageSuppression(QbftMessageType::Commit),
         );
         context
@@ -851,9 +915,10 @@ mod manager_tests {
     #[tokio::test]
     // Test sending double messages
     async fn test_send_double() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_byzantine(&[1], ByzantineBehavior::DoubleVote);
+        context.set_operators_byzantine(&SINGLE_FAULTY_OPERATOR, ByzantineBehavior::DoubleVote);
         context
             .assert_all_started_instances_reached_consensus()
             .await;
@@ -862,9 +927,10 @@ mod manager_tests {
     #[tokio::test]
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Four, 1).await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_byzantine(&[1], ByzantineBehavior::InvalidMessage);
+        context.set_operators_byzantine(&SINGLE_FAULTY_OPERATOR, ByzantineBehavior::InvalidMessage);
         context
             .assert_all_started_instances_reached_consensus()
             .await;
@@ -874,18 +940,18 @@ mod manager_tests {
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        let mut context = start_beacon_vote_cluster(CommitteeSize::Ten, 1).await;
+        let mut context = start_single_beacon_vote_cluster(PARTITION_TEST_COMMITTEE_SIZE).await;
 
         // Initial partition. We have > f offline so we will not be able to reach consensus
-        context.set_operators_offline(&[3, 4, 5, 6]);
+        context.set_operators_offline(&INITIAL_PARTITION_OFFLINE_OPERATORS);
 
         // Wait and change partition
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(MID_ROUND_TWO_DELAY).await;
 
         // Bring original back online, and then take = f offline. Should be able to reach consensus
         // now
-        context.set_operators_online(&[3, 4, 5, 6]);
-        context.set_operators_offline(&[6, 7, 8]);
+        context.set_operators_online(&INITIAL_PARTITION_OFFLINE_OPERATORS);
+        context.set_operators_offline(&FOLLOW_UP_PARTITION_OFFLINE_OPERATORS);
 
         context
             .assert_all_started_instances_reached_consensus()
@@ -902,13 +968,18 @@ mod manager_tests {
     // of dropped.
     async fn test_late_initialization() {
         let initialization_delays = HashMap::from([
-            (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
-            (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
+            (
+                OperatorId(ROUND_ONE_LEADER_AT_HEIGHT_ONE),
+                MID_ROUND_TWO_DELAY,
+            ),
+            (OperatorId(THIRD_OPERATOR), MID_ROUND_THREE_DELAY),
         ]);
 
-        let mut context =
-            start_beacon_vote_cluster_with_delays(CommitteeSize::Four, 1, initialization_delays)
-                .await;
+        let mut context = start_single_beacon_vote_cluster_with_delays(
+            DEFAULT_BEACON_VOTE_COMMITTEE_SIZE,
+            initialization_delays,
+        )
+        .await;
 
         context
             .assert_all_started_instances_reached_consensus()
