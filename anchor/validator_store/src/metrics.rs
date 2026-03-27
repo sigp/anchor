@@ -84,3 +84,23 @@ pub static AGGREGATOR_COMMITTEE_FETCH_SUCCESS: LazyLock<Result<IntCounterVec>> =
             &["type", "status"],
         )
     });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Weighted Attestation Data (WAD) metrics
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// End-to-end time for the WAD fetch (from start to best-data selection).
+pub static WAD_FETCH_TIMES: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram(
+        "anchor_wad_fetch_times_seconds",
+        "End-to-end duration of weighted attestation data fetch",
+    )
+});
+
+/// Count of WAD fetches that returned at soft timeout instead of waiting for all BNs.
+pub static WAD_SOFT_TIMEOUT_TOTAL: LazyLock<Result<IntCounter>> = LazyLock::new(|| {
+    try_create_int_counter(
+        "anchor_wad_soft_timeout_total",
+        "Number of WAD fetches that returned at soft timeout with partial responses",
+    )
+});
