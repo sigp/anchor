@@ -105,14 +105,6 @@ check-benches:
 # test vectors.
 test: test-release
 
-# Update CLI reference docs from current clap definitions
-cli-reference:
-	cargo run --bin anchor-docgen -- update
-
-# Check CLI reference docs are up to date
-cli-reference-check:
-	cargo run --bin anchor-docgen -- check
-
 # Updates the CLI help text pages in the Anchor book, building with Docker.
 cli:
 	docker run --rm --user=root \
