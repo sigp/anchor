@@ -176,9 +176,9 @@ pub struct HttpApiOptions {
         long,
         value_name = "PORT",
         requires = "http",
-        help = format!("Set the listen TCP port for the RESTful HTTP API server. Defaults to {} if --http is set.", DEFAULT_HTTP_API.port),
+        help = format!("Set the listen TCP port for the RESTful HTTP API server. Defaults to {} if --http is set.", DEFAULT_HTTP_API.port_str),
         display_order = 0,
-        default_value_if("http", ArgPredicate::IsPresent, DEFAULT_HTTP_API.port)
+        default_value_if("http", ArgPredicate::IsPresent, DEFAULT_HTTP_API.port_str)
     )]
     pub http_port: Option<u16>,
 
@@ -218,9 +218,9 @@ pub struct MetricsOptions {
     #[clap(
         long,
         value_name = "PORT",
-        help = format!("Set the listen TCP port for the Prometheus metrics HTTP server. Defaults to {} if --metrics is set.", DEFAULT_METRICS.port),
+        help = format!("Set the listen TCP port for the Prometheus metrics HTTP server. Defaults to {} if --metrics is set.", DEFAULT_METRICS.port_str),
         display_order = 0,
-        default_value_if("metrics", ArgPredicate::IsPresent, DEFAULT_METRICS.port),
+        default_value_if("metrics", ArgPredicate::IsPresent, DEFAULT_METRICS.port_str),
         requires = "metrics"
     )]
     pub metrics_port: Option<u16>,

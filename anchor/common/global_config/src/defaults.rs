@@ -17,22 +17,32 @@ pub const DEFAULT_NODE_ENDPOINTS: NodeEndpoints = NodeEndpoints {
 };
 
 pub struct MetricsDefaults {
-    pub port: &'static str,
+    pub port: u16,
+    pub port_str: &'static str, /* Used as an alternative to .parse().expect() risking runtime
+                                 * panics. */
     pub host: &'static str,
 }
 
 /// Default metrics configuration.
 pub const DEFAULT_METRICS: MetricsDefaults = MetricsDefaults {
-    port: "5164",
+    port: 5164,
+    port_str: "5164",
     host: "127.0.0.1",
 };
 
 pub struct HttpApiDefaults {
-    pub port: &'static str,
+    pub host: &'static str,
+    pub port: u16,
+    pub port_str: &'static str, /* Used as an alternative to .parse().expect() risking runtime
+                                 * panics. */
 }
 
 /// Default HTTP API configuration.
-pub const DEFAULT_HTTP_API: HttpApiDefaults = HttpApiDefaults { port: "5062" };
+pub const DEFAULT_HTTP_API: HttpApiDefaults = HttpApiDefaults {
+    host: "127.0.0.1",
+    port: 5062,
+    port_str: "5062", // Used as an alternative to .parse().expect() risking runtime panics.
+};
 
 pub struct NetworkDefaults {
     pub address: &'static str,

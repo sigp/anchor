@@ -3735,6 +3735,7 @@ dependencies = [
  "axum",
  "database",
  "eth2",
+ "global_config",
  "health_metrics",
  "hex",
  "parking_lot",
@@ -3754,6 +3755,7 @@ version = "0.1.0"
 dependencies = [
  "anchor_validator_store",
  "axum",
+ "global_config",
  "health_metrics",
  "libp2p",
  "metrics",

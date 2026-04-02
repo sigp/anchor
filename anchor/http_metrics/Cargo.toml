@@ -7,6 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 anchor_validator_store = { workspace = true }
 axum = { workspace = true }
+global_config = { workspace = true }
 health_metrics = { workspace = true }
 libp2p = { workspace = true, default-features = false, features = ["metrics"] }
 metrics = { workspace = true }
