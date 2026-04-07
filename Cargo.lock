@@ -2830,6 +2830,7 @@ dependencies = [
  "ssv_network_config",
  "ssv_types",
  "task_executor",
+ "thiserror 2.0.18",
  "tokio",
  "tower",
  "tracing",

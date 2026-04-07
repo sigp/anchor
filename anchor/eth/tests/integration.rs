@@ -6,6 +6,7 @@ use std::{
 };
 
 use alloy::primitives::{Address, Bytes};
+use bls::PublicKeyBytes;
 use database::test_utils::queries;
 use eth::{
     SlashingProtection,
@@ -25,6 +26,23 @@ impl SlashingProtection for PanicSlashingProtection {
     fn register_validator(&self, _public_key: bls::PublicKeyBytes) -> Result<(), String> {
         panic!("intentional panic for block-boundary regression test");
     }
+}
+
+fn delete_validator_row(processor: &EventProcessor, validator_pubkey: &PublicKeyBytes) {
+    let mut conn = processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+
+    tx.execute(
+        "DELETE FROM validators WHERE validator_pubkey = ?1",
+        [validator_pubkey.to_string()],
+    )
+    .expect("Failed to delete validator row from database");
+
+    tx.commit()
+        .expect("Failed to commit validator row deletion");
 }
 
 #[tokio::test]
@@ -505,6 +523,187 @@ async fn test_malformed_events_skipped_without_affecting_valid_events() {
 
     // Verify the first operator was stored (malformed events are skipped, not rolled back)
     verify_operator_stored(&test.processor, OperatorId(operator_id));
+}
+
+/// Regression for `#351`: ambiguous missing-operator state must remain non-fatal until `#930`
+/// decides whether it represents malformed history or local inconsistency.
+#[tokio::test]
+async fn test_missing_operator_state_is_skipped_without_rolling_back_prior_logs() {
+    setup_tracing();
+
+    // Arrange: create three operators, then process a validator add that references a fourth
+    // operator missing from committed state.
+    let test = ProcessorFixture::new_empty();
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let block_number = 12403;
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let mut logs = Vec::new();
+
+    for (log_index, operator_id) in operator_ids.iter().take(3).enumerate() {
+        logs.push(create_operator_added_log_at_position(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000 + *operator_id,
+            block_number,
+            0,
+            log_index as u64,
+        ));
+    }
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    logs.push(create_validator_added_log_at_position(
+        owner,
+        operator_ids.clone(),
+        validator_public_key,
+        shares,
+        block_number,
+        1,
+        0,
+    ));
+
+    // Act: process the block containing both valid operator additions and the ambiguous validator
+    // add.
+    let result = test.processor.process_logs(logs, true, block_number);
+
+    // Assert: the missing operator is skipped, but the earlier valid logs in the block still
+    // commit.
+    assert!(
+        result.is_ok(),
+        "missing committed operators should not abort the block"
+    );
+
+    for operator_id in [1u64, 2u64, 3u64] {
+        verify_operator_stored(&test.processor, OperatorId(operator_id));
+    }
+
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    assert!(
+        queries::get_validator(&validator_pubkey_str, &tx).is_none(),
+        "validator should not be inserted when one operator is missing from committed state"
+    );
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        block_number,
+        "the block should still be marked as processed after skipping the validator add"
+    );
+}
+
+/// Regression for `#351`: ambiguous missing committed validator state must remain non-fatal until
+/// `#930` decides whether it represents malformed history or local inconsistency.
+#[tokio::test]
+async fn test_validator_removed_missing_committed_state_is_skipped_without_rolling_back_prior_logs()
+{
+    setup_tracing();
+
+    // Arrange: add a validator normally, then remove its metadata from committed state before
+    // processing a later `ValidatorRemoved` event.
+    let test = ProcessorFixture::new_empty();
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_block = 12404;
+    let add_block = 12405;
+    let removal_block = 12406;
+
+    let operator_logs: Vec<_> = operator_ids
+        .iter()
+        .enumerate()
+        .map(|(log_index, operator_id)| {
+            create_operator_added_log_at_position(
+                *operator_id,
+                Address::random(),
+                create_valid_rsa_public_key_bytes(),
+                1000 + *operator_id,
+                operator_block,
+                0,
+                log_index as u64,
+            )
+        })
+        .collect();
+    let operator_result = test
+        .processor
+        .process_logs(operator_logs, true, operator_block);
+    assert!(
+        operator_result.is_ok(),
+        "operator setup batch should succeed"
+    );
+
+    let (shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+    let add_result = test.processor.process_logs(
+        vec![create_validator_added_log_at_position(
+            owner,
+            operator_ids.clone(),
+            validator_public_key.clone(),
+            shares,
+            add_block,
+            0,
+            0,
+        )],
+        true,
+        add_block,
+    );
+    assert!(add_result.is_ok(), "validator setup event should succeed");
+
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    verify_validator_added(&test.processor, &validator_pubkey_str);
+    delete_validator_row(&test.processor, &validator_pubkey_bytes);
+
+    let logs = vec![
+        create_operator_added_log_at_position(
+            5,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1005,
+            removal_block,
+            0,
+            0,
+        ),
+        create_validator_removed_log_at_position(
+            owner,
+            operator_ids,
+            validator_public_key,
+            removal_block,
+            1,
+            0,
+        ),
+    ];
+
+    // Act: process a later block containing one valid log and one ambiguous `ValidatorRemoved`.
+    let result = test.processor.process_logs(logs, true, removal_block);
+
+    // Assert: the missing committed validator state is skipped, but the valid operator add still
+    // commits.
+    assert!(
+        result.is_ok(),
+        "missing committed validator state should not abort the block"
+    );
+    verify_operator_stored(&test.processor, OperatorId(5));
+
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    assert!(
+        queries::get_validator(&validator_pubkey_str, &tx).is_none(),
+        "validator metadata should remain absent after the skipped removal event"
+    );
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        removal_block,
+        "the block should still be marked as processed after skipping the removal"
+    );
 }
 
 #[tokio::test]
