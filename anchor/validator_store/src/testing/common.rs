@@ -6,7 +6,7 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
-use database::NetworkDatabase;
+use database::{NetworkDatabase, PendingStateUpdates};
 use fork::{Fork, ForkSchedule};
 use parking_lot::Mutex;
 use qbft::Completed;
@@ -200,6 +200,7 @@ impl ValidatorStoreTestHarness {
         {
             let mut conn = database.connection().expect("connection should succeed");
             let tx = conn.transaction().expect("transaction should start");
+            let mut pending = PendingStateUpdates::default();
 
             let mut inserted_operators = std::collections::HashSet::new();
             for setup in &committee_setups {
@@ -215,7 +216,7 @@ impl ValidatorStoreTestHarness {
                             database::test_utils::generators::operator::with_id(op_id.0)
                         };
                         database
-                            .insert_operator(&operator, &tx)
+                            .insert_operator_tx(&operator, &tx, &mut pending)
                             .expect("operator insertion should succeed");
                     }
                 }
@@ -229,12 +230,19 @@ impl ValidatorStoreTestHarness {
                         .collect();
 
                     database
-                        .insert_validator(setup.cluster.clone(), validator, validator_shares, &tx)
+                        .insert_validator_tx(
+                            setup.cluster.clone(),
+                            validator,
+                            validator_shares,
+                            &tx,
+                            &mut pending,
+                        )
                         .expect("validator insertion should succeed");
                 }
             }
 
             tx.commit().expect("commit should succeed");
+            database.publish_pending_state_updates(pending);
         }
 
         // Slashing DB

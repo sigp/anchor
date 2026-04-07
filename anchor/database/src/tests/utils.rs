@@ -14,7 +14,7 @@ use types::{
     test_utils::{SeedableRng, XorShiftRng},
 };
 
-use crate::{NetworkDatabase, multi_index::UniqueIndex};
+use crate::{NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex};
 
 /// Default number of operators for test clusters
 /// 4 operators allows for QBFT quorum (3) with 1 fault tolerance (f=1, n=3f+1=4)
@@ -150,6 +150,11 @@ impl std::ops::DerefMut for FileTestFixture {
 
 // === Modular fixture building blocks ===
 
+pub fn commit_and_publish(db: &NetworkDatabase, tx: Transaction<'_>, pending: PendingStateUpdates) {
+    tx.commit().expect("Failed to commit transaction");
+    db.publish_pending_state_updates(pending);
+}
+
 // Generate default set of operators with pubkey for testing
 fn generate_default_operators() -> (Vec<Operator>, Rsa<Public>) {
     let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
@@ -172,10 +177,11 @@ fn build_populated_fixture(
 ) -> TestFixtureData {
     let mut conn = db.connection().unwrap();
     let tx = conn.transaction().unwrap();
+    let mut pending = PendingStateUpdates::default();
 
     // Insert operators into database
     operators.iter().for_each(|op| {
-        db.insert_operator(op, &tx)
+        db.insert_operator_tx(op, &tx, &mut pending)
             .expect("Failed to insert operator");
     });
 
@@ -192,10 +198,16 @@ fn build_populated_fixture(
         .collect();
 
     // Insert validator with cluster and shares
-    db.insert_validator(cluster.clone(), &validator, shares.clone(), &tx)
-        .expect("Failed to insert validator");
+    db.insert_validator_tx(
+        cluster.clone(),
+        &validator,
+        shares.clone(),
+        &tx,
+        &mut pending,
+    )
+    .expect("Failed to insert validator");
 
-    tx.commit().unwrap();
+    commit_and_publish(&db, tx, pending);
 
     TestFixtureData {
         db,

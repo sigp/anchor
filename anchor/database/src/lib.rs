@@ -248,19 +248,6 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Update the last processed block number in the database
-    /// Also, trigger a notification for other code to act on the new state
-    pub fn processed_block(
-        &self,
-        block_number: u64,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.processed_block_tx(block_number, tx, &mut state_updates)?;
-        self.publish_pending_state_updates(state_updates);
-        Ok(())
-    }
-
     /// Update the largest seen OperatorId in the database transaction.
     pub fn set_max_operator_id_seen_tx(
         &self,
@@ -271,18 +258,6 @@ impl NetworkDatabase {
         tx.prepare_cached(sql_operations::SET_MAX_OPERATOR_ID_SEEN)?
             .execute(params![operator_id])?;
         state_updates.set_max_operator_id_seen(operator_id);
-        Ok(())
-    }
-
-    /// Update the largest seen OperatorId in the database
-    pub fn set_max_operator_id_seen(
-        &self,
-        operator_id: u64,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.set_max_operator_id_seen_tx(operator_id, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 
@@ -326,26 +301,10 @@ impl NetworkDatabase {
     /// Apply accumulated state updates and notify watchers once.
     /// Call this only after the corresponding database transaction commits successfully.
     pub fn publish_pending_state_updates(&self, state_updates: PendingStateUpdates) {
-        self.apply_state_updates(state_updates, true);
-    }
-
-    fn apply_pending_state_updates(&self, state_updates: PendingStateUpdates) {
-        self.apply_state_updates(state_updates, false);
-    }
-
-    fn apply_state_updates(&self, state_updates: PendingStateUpdates, publish: bool) {
         if state_updates.is_empty() {
             return;
         }
-
-        if publish {
-            self.state.send_modify(|state| state_updates.apply(state));
-        } else {
-            self.state.send_if_modified(|state| {
-                state_updates.apply(state);
-                false
-            });
-        }
+        self.state.send_modify(|state| state_updates.apply(state));
     }
 
     /// for convenience: Apply a modification to the state without triggering a notification
