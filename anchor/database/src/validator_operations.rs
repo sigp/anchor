@@ -32,19 +32,6 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Update the fee recipient address for all validators in a cluster
-    pub fn update_fee_recipient(
-        &self,
-        owner: Address,
-        fee_recipient: Address,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.update_fee_recipient_tx(owner, fee_recipient, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
-        Ok(())
-    }
-
     /// Get the fee recipient for an owner
     /// Returns Some(address) if found, None otherwise
     pub fn fee_recipient_for_owner(
@@ -122,19 +109,6 @@ impl NetworkDatabase {
             ])?;
 
         state_updates.update_graffiti(*validator_pubkey, graffiti);
-        Ok(())
-    }
-
-    /// Update the Graffiti for a Validator
-    pub fn update_graffiti(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-        graffiti: Graffiti,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.update_graffiti_tx(validator_pubkey, graffiti, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 

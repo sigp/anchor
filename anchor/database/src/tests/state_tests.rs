@@ -6,7 +6,10 @@ mod state_database_tests {
     use crate::{
         NetworkDatabase, PendingStateUpdates,
         multi_index::UniqueIndex,
-        test_utils::{FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, generators},
+        test_utils::{
+            FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, commit_and_publish,
+            generators,
+        },
     };
 
     #[test]
@@ -94,12 +97,13 @@ mod state_database_tests {
         });
         let mut conn = fixture.data.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
         fixture
             .data
             .db
-            .insert_validator(cluster, &new_validator, shares, &tx)
+            .insert_validator_tx(cluster, &new_validator, shares, &tx, &mut pending)
             .expect("Insert should not fail");
-        tx.commit().unwrap();
+        commit_and_publish(&fixture.data.db, tx, pending);
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
@@ -124,11 +128,12 @@ mod state_database_tests {
         assert_eq!(fixture.db.state().get_last_processed_block(), 0);
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
         fixture
             .db
-            .processed_block(10, &tx)
+            .processed_block_tx(10, &tx, &mut pending)
             .expect("Failed to update the block number");
-        tx.commit().unwrap();
+        commit_and_publish(&fixture.db, tx, pending);
 
         assert_eq!(fixture.db.state().get_last_processed_block(), 10);
     }
@@ -139,12 +144,13 @@ mod state_database_tests {
         let mut fixture = FileTestFixture::new();
         let mut conn = fixture.data.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
         fixture
             .data
             .db
-            .processed_block(10, &tx)
+            .processed_block_tx(10, &tx, &mut pending)
             .expect("Failed to update the block number");
-        tx.commit().unwrap();
+        commit_and_publish(&fixture.data.db, tx, pending);
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
@@ -190,18 +196,19 @@ mod state_database_tests {
         let owner = Address::random();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // this is the first time getting the nonce, so it should be zero
         let nonce = fixture
             .db
-            .bump_and_get_nonce(&owner, &tx)
+            .bump_and_get_nonce_tx(&owner, &tx, &mut pending)
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 0);
 
         // increment the nonce and then confirm that is is one
         let nonce = fixture
             .db
-            .bump_and_get_nonce(&owner, &tx)
+            .bump_and_get_nonce_tx(&owner, &tx, &mut pending)
             .expect("Failed in increment nonce");
         assert_eq!(nonce, 1);
     }
@@ -214,13 +221,13 @@ mod state_database_tests {
         let mut conn = fixture.data.db.connection().unwrap();
 
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
         fixture
             .data
             .db
-            .bump_and_get_nonce(&owner, &tx)
+            .bump_and_get_nonce_tx(&owner, &tx, &mut pending)
             .expect("Failed in increment nonce");
-
-        tx.commit().unwrap();
+        commit_and_publish(&fixture.data.db, tx, pending);
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
@@ -232,13 +239,14 @@ mod state_database_tests {
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
         let mut conn = fixture.data.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // confirm that nonce is 1
         assert_eq!(
             fixture
                 .data
                 .db
-                .bump_and_get_nonce(&owner, &tx)
+                .bump_and_get_nonce_tx(&owner, &tx, &mut pending)
                 .expect("Failed in increment nonce"),
             1
         );
