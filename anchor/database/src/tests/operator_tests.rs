@@ -4,7 +4,9 @@ mod operator_database_tests {
 
     use crate::{
         NetworkDatabase, PendingStateUpdates,
-        test_utils::{InMemoryTestFixture, TEST_NETWORK, assertions, generators},
+        test_utils::{
+            InMemoryTestFixture, TEST_NETWORK, assertions, commit_and_publish, generators,
+        },
     };
 
     #[test]
@@ -16,16 +18,18 @@ mod operator_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Generate a new operator and insert it
         let operator = generators::operator::with_id(1);
         fixture
             .db
-            .insert_operator(&operator, &tx)
+            .insert_operator_tx(&operator, &tx, &mut pending)
             .expect("Failed to insert operator");
 
         // Confirm that it exists both in the db and the state store
         assertions::operator::exists_in_db(&operator, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
         assertions::operator::exists_in_memory(&fixture.db, &operator);
     }
 
@@ -58,16 +62,22 @@ mod operator_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Generate a new operator and insert it
         let operator = generators::operator::with_id(1);
         fixture
             .db
-            .insert_operator(&operator, &tx)
+            .insert_operator_tx(&operator, &tx, &mut pending)
             .expect("Failed to insert operator");
 
         // Try to insert it again, this should fail
-        assert!(fixture.db.insert_operator(&operator, &tx).is_err());
+        assert!(
+            fixture
+                .db
+                .insert_operator_tx(&operator, &tx, &mut pending)
+                .is_err()
+        );
     }
 
     #[test]
@@ -78,23 +88,25 @@ mod operator_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Generate a new operator and insert it
         let operator = generators::operator::with_id(1);
         fixture
             .db
-            .insert_operator(&operator, &tx)
+            .insert_operator_tx(&operator, &tx, &mut pending)
             .expect("Failed to insert operator");
 
         // Now, delete the operator
         fixture
             .db
-            .delete_operator(operator.id, &tx)
+            .delete_operator_tx(operator.id, &tx, &mut pending)
             .expect("Failed to delete operator");
 
         // Confirm that it is gone
-        assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
         assertions::operator::exists_not_in_db(operator.id, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
+        assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
     }
 
     #[test]
@@ -105,24 +117,30 @@ mod operator_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // Generate and insert operators
         let operators: Vec<Operator> = (0..4).map(generators::operator::with_id).collect();
         for operator in &operators {
             fixture
                 .db
-                .insert_operator(operator, &tx)
+                .insert_operator_tx(operator, &tx, &mut pending)
                 .expect("Failed to insert operator");
         }
 
         // Delete them all and confirm deletion
-        for operator in operators {
+        for operator in &operators {
             fixture
                 .db
-                .delete_operator(operator.id, &tx)
+                .delete_operator_tx(operator.id, &tx, &mut pending)
                 .expect("Failed to delete operator");
-            assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
+        }
+        for operator in &operators {
             assertions::operator::exists_not_in_db(operator.id, &tx);
+        }
+        commit_and_publish(&fixture.db, tx, pending);
+        for operator in operators {
+            assertions::operator::exists_not_in_memory(&fixture.db, operator.id);
         }
     }
 
@@ -132,6 +150,12 @@ mod operator_database_tests {
         let fixture = InMemoryTestFixture::new_empty();
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
-        assert!(fixture.db.delete_operator(OperatorId(1), &tx).is_err())
+        let mut pending = PendingStateUpdates::default();
+        assert!(
+            fixture
+                .db
+                .delete_operator_tx(OperatorId(1), &tx, &mut pending)
+                .is_err()
+        )
     }
 }

@@ -11,7 +11,7 @@ use crate::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NetworkDatabase;
+    use crate::{NetworkDatabase, PendingStateUpdates, test_utils::commit_and_publish};
 
     const TEST_NETWORK_1: &str = "testnet1";
     const TEST_NETWORK_2: &str = "testnet2";
@@ -143,9 +143,10 @@ mod tests {
         let new_block = 12345u64;
         let mut conn = db.connection().expect("Failed to get connection");
         let tx = conn.transaction().expect("Failed to start transaction");
-        db.processed_block(new_block, &tx)
+        let mut pending = PendingStateUpdates::default();
+        db.processed_block_tx(new_block, &tx, &mut pending)
             .expect("Failed to update block");
-        tx.commit().expect("Failed to commit transaction");
+        commit_and_publish(&db, tx, pending);
 
         // Verify update
         let updated_block = db.state().get_last_processed_block();

@@ -51,18 +51,6 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Insert a new Operator into the database
-    pub fn insert_operator(
-        &self,
-        operator: &Operator,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.insert_operator_tx(operator, tx, &mut state_updates)?;
-        self.publish_pending_state_updates(state_updates);
-        Ok(())
-    }
-
     /// Delete an operator in the active transaction and queue the matching state update.
     pub fn delete_operator_tx(
         &self,
@@ -97,18 +85,6 @@ impl NetworkDatabase {
         }
 
         state_updates.delete_operator(id);
-        Ok(())
-    }
-
-    /// Delete an operator
-    pub fn delete_operator(
-        &self,
-        id: OperatorId,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.delete_operator_tx(id, tx, &mut state_updates)?;
-        self.publish_pending_state_updates(state_updates);
         Ok(())
     }
 
