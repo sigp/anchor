@@ -58,21 +58,6 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Inserts a new validator into the database. A new cluster will be created if this is the
-    /// first validator for the cluster
-    pub fn insert_validator(
-        &self,
-        cluster: Cluster,
-        validator: &ValidatorMetadata,
-        shares: Vec<Share>,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.insert_validator_tx(cluster, validator, shares, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
-        Ok(())
-    }
-
     /// Mark the cluster as liquidated or active in the active transaction and queue the matching
     /// state update.
     pub fn update_status_tx(
@@ -93,19 +78,6 @@ impl NetworkDatabase {
         Ok(())
     }
 
-    /// Mark the cluster as liquidated or active
-    pub fn update_status(
-        &self,
-        cluster_id: ClusterId,
-        liquidated: bool,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.update_status_tx(cluster_id, liquidated, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
-        Ok(())
-    }
-
     /// Delete a validator in the active transaction and queue the matching state update.
     pub fn delete_validator_tx(
         &self,
@@ -119,20 +91,6 @@ impl NetworkDatabase {
 
         state_updates.delete_validator(*validator_pubkey);
 
-        Ok(())
-    }
-
-    /// Delete a validator from a cluster. This will cascade and remove all corresponding share
-    /// data for this validator. If this validator is the last one in the cluster, the cluster
-    /// and all corresponding cluster members will also be removed
-    pub fn delete_validator(
-        &self,
-        validator_pubkey: &PublicKeyBytes,
-        tx: &Transaction<'_>,
-    ) -> Result<(), DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        self.delete_validator_tx(validator_pubkey, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
         Ok(())
     }
 
@@ -178,18 +136,6 @@ impl NetworkDatabase {
             .query_row(params![owner.to_string()], |row| row.get(0))?;
 
         state_updates.set_owner_nonce(*owner, nonce);
-        Ok(nonce)
-    }
-
-    /// Bump the nonce of the owner
-    pub fn bump_and_get_nonce(
-        &self,
-        owner: &Address,
-        tx: &Transaction<'_>,
-    ) -> Result<u16, DatabaseError> {
-        let mut state_updates = PendingStateUpdates::default();
-        let nonce = self.bump_and_get_nonce_tx(owner, tx, &mut state_updates)?;
-        self.apply_pending_state_updates(state_updates);
         Ok(nonce)
     }
 }
