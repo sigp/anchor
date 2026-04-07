@@ -28,6 +28,8 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         committee_b.cluster.committee_id(),
     );
     let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], OUR_OPERATOR_ID);
+    // Seed aggregate assignments for both committees at TEST_SLOT so both committee batches can
+    // resolve their decided aggregate data.
     harness.seed_aggregation_assignments_for_slot(
         TEST_SLOT,
         &[PRIMARY_COMMITTEE_INDEX, SECONDARY_COMMITTEE_INDEX],
@@ -74,6 +76,8 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         })
         .collect();
     requested_counts.sort_unstable();
+    // Committee A has two aggregators and committee B has one, so the per-validator collection
+    // requests should be [2, 2, 1] irrespective of stream ordering.
     assert_eq!(
         requested_counts, EXPECTED_REQUESTED_COUNTS,
         "expected committee requester counts to match aggregators per committee"
@@ -88,9 +92,13 @@ async fn sign_aggregate_and_proofs_failure_isolation() {
     let committee_a = create_primary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
     let committee_b = create_secondary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
     let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], OUR_OPERATOR_ID);
+    // Only the primary committee gets aggregate assignments for TEST_SLOT.
     harness.seed_aggregation_assignments_for_slot(TEST_SLOT, &[PRIMARY_COMMITTEE_INDEX]);
     let aggregates = vec![
+        // Committee A uses TEST_SLOT and should complete.
         harness.create_aggregate(PRIMARY_COMMITTEE_INDEX, FIRST_VALIDATOR_INDEX),
+        // Committee B uses NEXT_SLOT, where no aggregate assignments were seeded, so it should
+        // stay blocked in the aggregate-assignment lookup.
         harness.create_aggregate_at_slot(
             SECONDARY_COMMITTEE_INDEX,
             FIRST_VALIDATOR_INDEX,
