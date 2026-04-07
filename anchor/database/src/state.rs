@@ -1,12 +1,9 @@
-use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
-};
+use std::collections::{HashMap, HashSet};
 
 use base64::prelude::*;
 use bls::PublicKeyBytes;
 use openssl::{pkey::Public, rsa::Rsa};
-use rusqlite::{Error as SqlError, OptionalExtension, params, types::Type};
+use rusqlite::{OptionalExtension, params};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
     Share, ValidatorIndex, ValidatorMetadata,
@@ -253,11 +250,13 @@ impl NetworkState {
         let mut stmt = conn.prepare(sql_operations::GET_ALL_NONCES)?;
         let nonces = stmt
             .query_map([], |row| {
-                // Get the owner from column 0
-                let owner_str = row.get::<_, String>(0)?;
-                let owner = Address::from_str(&owner_str)
-                    .map_err(|e| SqlError::FromSqlConversionFailure(1, Type::Text, Box::new(e)))?;
-
+                let owner = row.get::<_, String>(0)?.parse().map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
                 // Get the nonce from column 1
                 let nonce = row.get(1)?;
                 Ok((owner, nonce))

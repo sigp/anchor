@@ -34,4 +34,13 @@ validator_services = { workspace = true }
 validator_store = { workspace = true }
 
 [dev-dependencies]
+async-channel = { workspace = true }
+database = { workspace = true, features = ["test-utils"] }
+rand = { workspace = true }
 ssz_types = { workspace = true }
+tempfile = "3.14.0"
+tokio = { workspace = true, features = [
+    "test-util",
+    "macros",
+    "rt-multi-thread",
+] }

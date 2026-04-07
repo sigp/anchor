@@ -4,6 +4,7 @@
 use std::{net::IpAddr, path::PathBuf};
 
 use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
+use cli::{NetworkOptions, Node};
 use global_config::GlobalConfig;
 use multiaddr::{Multiaddr, Protocol};
 use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
@@ -14,8 +15,6 @@ use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
-
-use crate::cli::{NetworkOptions, Node};
 
 pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
 pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
@@ -82,6 +81,8 @@ pub struct Config {
     pub operator_dg_wait_epochs: u64,
     /// Whether to check for matching checkpoint roots in QBFT.
     pub strict_mfp: bool,
+    /// Enable attestation data scoring across multiple beacon nodes.
+    pub with_weighted_attestation_data: bool,
 }
 
 impl Config {
@@ -129,6 +130,7 @@ impl Config {
             operator_dg: false,
             operator_dg_wait_epochs: 2,
             strict_mfp: false,
+            with_weighted_attestation_data: false,
         }
     }
 }
@@ -289,6 +291,9 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
 
     // Majority fork protection
     config.strict_mfp = cli_args.strict_mfp;
+
+    // Weighted attestation data
+    config.with_weighted_attestation_data = cli_args.with_weighted_attestation_data;
 
     // Performance options
     if let Some(max_workers) = cli_args.max_workers {

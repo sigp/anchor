@@ -1,6 +1,6 @@
 [package]
 name = "anchor"
-version = "1.2.2"
+version = "1.2.3"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 rust-version = "1.91.0"
@@ -18,8 +18,9 @@ spec-minimal = []
 async-channel = { workspace = true }
 bls = { workspace = true }
 clap = { workspace = true }
+cli = { workspace = true }
 client = { workspace = true }
-ethereum_hashing = "0.7.0"
+ethereum_hashing = { workspace = true }
 futures = { workspace = true }
 global_config = { workspace = true }
 keygen = { workspace = true }
@@ -31,7 +32,6 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 types = { workspace = true }
-version = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0"

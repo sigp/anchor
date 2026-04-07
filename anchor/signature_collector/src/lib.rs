@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet, hash_map},
+    future::Future,
     mem,
+    pin::Pin,
     sync::Arc,
 };
 
@@ -524,6 +526,35 @@ impl From<RecvError> for CollectionError {
 impl From<bls_lagrange::Error> for CollectionError {
     fn from(err: bls_lagrange::Error) -> Self {
         CollectionError::RecoverError(err)
+    }
+}
+
+/// Trait abstracting signature collection for testability.
+///
+/// Production code uses `Arc<SignatureCollectorManager<S>>` which implements this trait.
+/// Tests can provide a mock that returns canned signatures or errors.
+pub trait SignatureCollecting: Send + Sync {
+    fn sign_and_collect(
+        &self,
+        metadata: SignatureMetadata,
+        requester: SignatureRequester,
+        signing_data: ValidatorSigningData,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>>;
+}
+
+impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollectorManager<S>> {
+    fn sign_and_collect(
+        &self,
+        metadata: SignatureMetadata,
+        requester: SignatureRequester,
+        signing_data: ValidatorSigningData,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
+        Box::pin(SignatureCollectorManager::sign_and_collect(
+            self,
+            metadata,
+            requester,
+            signing_data,
+        ))
     }
 }
 

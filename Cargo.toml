@@ -2,6 +2,7 @@
 # Extra tooling projects will be added.
 members = [
     "anchor",
+    "anchor/cli",
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
@@ -43,6 +44,7 @@ edition = "2024"
 anchor_validator_store = { path = "anchor/validator_store" }
 api_types = { path = "anchor/common/api_types" }
 bls_lagrange = { path = "anchor/common/bls_lagrange" }
+cli = { path = "anchor/cli" }
 client = { path = "anchor/client" }
 database = { path = "anchor/database" }
 duties_tracker = { path = "anchor/duties_tracker" }
@@ -108,6 +110,7 @@ derive_more = { version = "2.0.1", features = ["full"] }
 dirs = "6.0.0"
 discv5 = { version = "0.10", features = ["libp2p"] }
 enr = "0.13.0"
+ethereum_hashing = "0.7.0"
 ethereum_ssz = "0.10.0"
 ethereum_ssz_derive = "0.10.0"
 futures = "0.3.30"
@@ -172,14 +175,12 @@ zeroize = "1.8.1"
 
 [patch.crates-io]
 quick-protobuf = { git = "https://github.com/sigp/quick-protobuf.git", rev = "87c4ccb9bb2af494de375f5f6c62850badd26304" }
-yamux = { git = "https://github.com/sigp/rust-yamux", rev = "29efa6aebd4bdfcb16bfb21969ec0c785e570b74" }
-quinn = { git = "https://github.com/sigp/quinn", rev = "59af87979c8411864c1cb68613222f54ed2930a7" }
-libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
-libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
-libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
-libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
-libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
-quick-protobuf-codec = { git = "https://github.com/sigp/rust-libp2p.git", rev = "f88e43de9eba00b416d0374b1a1fb2de47b65864" }
+libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
+libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
+libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
+libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
+libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
+quick-protobuf-codec = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
 
 [profile.maxperf]
 inherits = "release"
