@@ -255,6 +255,23 @@ impl EventProcessor {
                             trace!(block_number, tx_hash, error = %e, "Skipping event");
                         }
                     }
+                    LogErrorDisposition::SkipAmbiguous => {
+                        if live {
+                            warn!(
+                                block_number,
+                                tx_hash,
+                                error = %e,
+                                "Skipping event with missing committed state"
+                            );
+                        } else {
+                            trace!(
+                                block_number,
+                                tx_hash,
+                                error = %e,
+                                "Skipping event with missing committed state"
+                            );
+                        }
+                    }
                     LogErrorDisposition::AbortBatch => {
                         error!(block_number, tx_hash, error = %e, "Event processing failed");
                         return Err(e);
@@ -556,7 +573,7 @@ impl EventProcessor {
         {
             Some(data) => data,
             None => {
-                return Err(ExecutionError::Database(
+                return Err(ExecutionError::MissingCommittedState(
                     "Failed to fetch validator metadata from database".to_string(),
                 ));
             }
@@ -570,7 +587,7 @@ impl EventProcessor {
         {
             Some(data) => data,
             None => {
-                return Err(ExecutionError::Database(
+                return Err(ExecutionError::MissingCommittedState(
                     "Failed to fetch cluster from database".to_string(),
                 ));
             }

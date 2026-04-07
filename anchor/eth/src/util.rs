@@ -172,7 +172,7 @@ pub fn validate_operators(
             .operator_exists_tx(*operator_id, tx)
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
         if !exists {
-            return Err(ExecutionError::Database(format!(
+            return Err(ExecutionError::MissingCommittedState(format!(
                 "Operator {operator_id} does not exist"
             )));
         }

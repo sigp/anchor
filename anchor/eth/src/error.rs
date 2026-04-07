@@ -7,6 +7,8 @@ pub enum ExecutionError {
     SyncError(String),
     #[error("Invalid event: {0}")]
     InvalidEvent(String),
+    #[error("Missing committed state: {0}")]
+    MissingCommittedState(String),
     #[error("RPC error: {0}")]
     RpcError(String),
     #[error("WebSocket error: {0}")]
@@ -25,6 +27,7 @@ pub enum ExecutionError {
 pub enum LogErrorDisposition {
     SkipMalformed,
     SkipExpected,
+    SkipAmbiguous,
     AbortBatch,
 }
 
@@ -35,6 +38,7 @@ impl ExecutionError {
                 LogErrorDisposition::SkipMalformed
             }
             Self::SkippedEvent(_) => LogErrorDisposition::SkipExpected,
+            Self::MissingCommittedState(_) => LogErrorDisposition::SkipAmbiguous,
             Self::SyncError(_) | Self::RpcError(_) | Self::WsError(_) | Self::Database(_) => {
                 LogErrorDisposition::AbortBatch
             }
