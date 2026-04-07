@@ -38,7 +38,22 @@ use validator_store::{AggregateToSign, AttestationToSign};
 use crate::{AggregationAssignments, AnchorValidatorStore, VotingAssignments, VotingContext};
 
 pub(super) const TEST_SLOT: u64 = 1;
+pub(super) const NEXT_SLOT: u64 = TEST_SLOT + 1;
+pub(super) const OUR_OPERATOR_ID: OperatorId = OperatorId(1);
+pub(super) const PRIMARY_COMMITTEE_INDEX: usize = 0;
+pub(super) const SECONDARY_COMMITTEE_INDEX: usize = 1;
+pub(super) const FIRST_VALIDATOR_INDEX: usize = 0;
+pub(super) const SECOND_VALIDATOR_INDEX: usize = 1;
+pub(super) const STREAM_ITEM_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const BLOCKED_STREAM_TIMEOUT: Duration = Duration::from_millis(500);
+
 const SLOT_DURATION_SECS: u64 = 12;
+const PRIMARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
+    [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+const SECONDARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
+    [OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
+const PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 0;
+const SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 100;
 
 // ==================== Mock consensus decider ====================
 
@@ -105,6 +120,12 @@ pub(super) struct CommitteeSetup {
     shares: Vec<Share>,
 }
 
+/// Builds a synthetic SSV committee for tests.
+///
+/// - `operator_ids`: committee members in the cluster.
+/// - `num_validators`: validators assigned to that SSV committee in the harness.
+/// - `starting_validator_index`: first validator index/public-key seed, used to keep committees
+///   distinct in tests.
 pub(super) fn create_committee_setup(
     operator_ids: &[OperatorId],
     num_validators: usize,
@@ -158,6 +179,22 @@ pub(super) fn create_committee_setup(
         validators,
         shares,
     }
+}
+
+pub(super) fn create_primary_committee_setup(num_validators: usize) -> CommitteeSetup {
+    create_committee_setup(
+        &PRIMARY_COMMITTEE_OPERATOR_IDS,
+        num_validators,
+        PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
+    )
+}
+
+pub(super) fn create_secondary_committee_setup(num_validators: usize) -> CommitteeSetup {
+    create_committee_setup(
+        &SECONDARY_COMMITTEE_OPERATOR_IDS,
+        num_validators,
+        SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
+    )
 }
 
 // ==================== Test harness ====================

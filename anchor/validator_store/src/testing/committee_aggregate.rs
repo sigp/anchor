@@ -1,9 +1,6 @@
 //! Integration tests for the committee-batching aggregate path in `sign_aggregate_and_proofs()`.
-use std::time::Duration;
-
 use futures::StreamExt;
 use signature_collector::SignatureRequester;
-use ssv_types::OperatorId;
 use types::{MainnetEthSpec, SignedAggregateAndProof};
 use validator_store::ValidatorStore;
 
@@ -12,33 +9,33 @@ use crate::Error;
 
 type SignAggregatesResult = Vec<Result<Vec<SignedAggregateAndProof<MainnetEthSpec>>, Error>>;
 
+const PRIMARY_COMMITTEE_VALIDATOR_COUNT: usize = 2;
+const SECONDARY_COMMITTEE_VALIDATOR_COUNT: usize = 1;
+const EXPECTED_TOTAL_SIGNED_AGGREGATES: usize = 3;
+const EXPECTED_SIGN_AND_COLLECT_CALLS: usize = 3;
+const EXPECTED_REQUESTED_COUNTS: [usize; 3] = [1, 2, 2];
+
 /// `sign_aggregate_and_proofs` groups aggregates by `CommitteeId`, runs consensus once per
 /// committee, collects committee signatures for each validator, and streams one batch per
 /// committee.
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
     // Arrange
-    let our_operator_id = OperatorId(1);
-    let committee_a = create_committee_setup(
-        &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
-        2,
-        0,
-    );
-    let committee_b = create_committee_setup(
-        &[OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)],
-        1,
-        100,
-    );
+    let committee_a = create_primary_committee_setup(PRIMARY_COMMITTEE_VALIDATOR_COUNT);
+    let committee_b = create_secondary_committee_setup(SECONDARY_COMMITTEE_VALIDATOR_COUNT);
     assert_ne!(
         committee_a.cluster.committee_id(),
         committee_b.cluster.committee_id(),
     );
-    let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], our_operator_id);
-    harness.seed_aggregation_assignments_for_slot(TEST_SLOT, &[0, 1]);
+    let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], OUR_OPERATOR_ID);
+    harness.seed_aggregation_assignments_for_slot(
+        TEST_SLOT,
+        &[PRIMARY_COMMITTEE_INDEX, SECONDARY_COMMITTEE_INDEX],
+    );
     let aggregates = vec![
-        harness.create_aggregate(0, 0),
-        harness.create_aggregate(0, 1),
-        harness.create_aggregate(1, 0),
+        harness.create_aggregate(PRIMARY_COMMITTEE_INDEX, FIRST_VALIDATOR_INDEX),
+        harness.create_aggregate(PRIMARY_COMMITTEE_INDEX, SECOND_VALIDATOR_INDEX),
+        harness.create_aggregate(SECONDARY_COMMITTEE_INDEX, FIRST_VALIDATOR_INDEX),
     ];
 
     // Act
@@ -55,10 +52,17 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         .map(|r| r.expect("each committee batch should succeed"))
         .collect();
     let total: usize = all_signed.iter().map(|batch| batch.len()).sum();
-    assert_eq!(total, 3, "expected 3 total signed aggregates");
+    assert_eq!(
+        total, EXPECTED_TOTAL_SIGNED_AGGREGATES,
+        "expected 3 total signed aggregates"
+    );
 
     let captured = harness.captured_calls.lock();
-    assert_eq!(captured.len(), 3, "expected 3 sign_and_collect calls");
+    assert_eq!(
+        captured.len(),
+        EXPECTED_SIGN_AND_COLLECT_CALLS,
+        "expected 3 sign_and_collect calls"
+    );
     let mut requested_counts: Vec<_> = captured
         .iter()
         .map(|call| match &call.requester {
@@ -71,8 +75,7 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         .collect();
     requested_counts.sort_unstable();
     assert_eq!(
-        requested_counts,
-        vec![1, 2, 2],
+        requested_counts, EXPECTED_REQUESTED_COUNTS,
         "expected committee requester counts to match aggregators per committee"
     );
 }
@@ -82,22 +85,17 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_aggregate_and_proofs_failure_isolation() {
     // Arrange
-    let our_operator_id = OperatorId(1);
-    let committee_a = create_committee_setup(
-        &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
-        1,
-        0,
-    );
-    let committee_b = create_committee_setup(
-        &[OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)],
-        1,
-        100,
-    );
-    let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], our_operator_id);
-    harness.seed_aggregation_assignments_for_slot(TEST_SLOT, &[0]);
+    let committee_a = create_primary_committee_setup(SECONDARY_COMMITTEE_VALIDATOR_COUNT);
+    let committee_b = create_secondary_committee_setup(SECONDARY_COMMITTEE_VALIDATOR_COUNT);
+    let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], OUR_OPERATOR_ID);
+    harness.seed_aggregation_assignments_for_slot(TEST_SLOT, &[PRIMARY_COMMITTEE_INDEX]);
     let aggregates = vec![
-        harness.create_aggregate(0, 0),
-        harness.create_aggregate_at_slot(1, 0, TEST_SLOT + 1),
+        harness.create_aggregate(PRIMARY_COMMITTEE_INDEX, FIRST_VALIDATOR_INDEX),
+        harness.create_aggregate_at_slot(
+            SECONDARY_COMMITTEE_INDEX,
+            FIRST_VALIDATOR_INDEX,
+            NEXT_SLOT,
+        ),
     ];
 
     // Act
@@ -105,8 +103,8 @@ async fn sign_aggregate_and_proofs_failure_isolation() {
         .validator_store
         .sign_aggregate_and_proofs(aggregates);
     tokio::pin!(stream);
-    let first = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
-    let second = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+    let first = tokio::time::timeout(STREAM_ITEM_TIMEOUT, stream.next()).await;
+    let second = tokio::time::timeout(BLOCKED_STREAM_TIMEOUT, stream.next()).await;
 
     // Assert
     let first_item = first
