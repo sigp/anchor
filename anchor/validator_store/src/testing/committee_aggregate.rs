@@ -86,7 +86,7 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
 
 /// A committee blocked waiting for `AggregationAssignments` does not prevent another committee
 /// from producing its aggregate batch. Verifies the committee futures are isolated.
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn sign_aggregate_and_proofs_failure_isolation() {
     // Arrange
     let committee_a = create_primary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
