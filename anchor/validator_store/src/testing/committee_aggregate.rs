@@ -10,7 +10,7 @@ use crate::Error;
 type SignAggregatesResult = Vec<Result<Vec<SignedAggregateAndProof<MainnetEthSpec>>, Error>>;
 
 const PRIMARY_COMMITTEE_VALIDATOR_COUNT: usize = 2;
-const SECONDARY_COMMITTEE_VALIDATOR_COUNT: usize = 1;
+const SINGLE_VALIDATOR_COMMITTEE_COUNT: usize = 1;
 const EXPECTED_TOTAL_SIGNED_AGGREGATES: usize = 3;
 const EXPECTED_SIGN_AND_COLLECT_CALLS: usize = 3;
 const EXPECTED_REQUESTED_COUNTS: [usize; 3] = [1, 2, 2];
@@ -22,7 +22,7 @@ const EXPECTED_REQUESTED_COUNTS: [usize; 3] = [1, 2, 2];
 async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
     // Arrange
     let committee_a = create_primary_committee_setup(PRIMARY_COMMITTEE_VALIDATOR_COUNT);
-    let committee_b = create_secondary_committee_setup(SECONDARY_COMMITTEE_VALIDATOR_COUNT);
+    let committee_b = create_secondary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
     assert_ne!(
         committee_a.cluster.committee_id(),
         committee_b.cluster.committee_id(),
@@ -85,8 +85,8 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_aggregate_and_proofs_failure_isolation() {
     // Arrange
-    let committee_a = create_primary_committee_setup(SECONDARY_COMMITTEE_VALIDATOR_COUNT);
-    let committee_b = create_secondary_committee_setup(SECONDARY_COMMITTEE_VALIDATOR_COUNT);
+    let committee_a = create_primary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
+    let committee_b = create_secondary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
     let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], OUR_OPERATOR_ID);
     harness.seed_aggregation_assignments_for_slot(TEST_SLOT, &[PRIMARY_COMMITTEE_INDEX]);
     let aggregates = vec![
