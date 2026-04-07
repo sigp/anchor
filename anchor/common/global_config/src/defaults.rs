@@ -31,7 +31,6 @@ pub const DEFAULT_METRICS: MetricsDefaults = MetricsDefaults {
 };
 
 pub struct HttpApiDefaults {
-    pub host: &'static str,
     pub port: u16,
     pub port_str: &'static str, /* Used as an alternative to .parse().expect() risking runtime
                                  * panics. */
@@ -39,7 +38,6 @@ pub struct HttpApiDefaults {
 
 /// Default HTTP API configuration.
 pub const DEFAULT_HTTP_API: HttpApiDefaults = HttpApiDefaults {
-    host: "127.0.0.1",
     port: 5062,
     port_str: "5062", // Used as an alternative to .parse().expect() risking runtime panics.
 };
@@ -59,3 +57,22 @@ pub struct ExternalApiDefaults {
 pub const DEFAULT_EXTERNAL_API: ExternalApiDefaults = ExternalApiDefaults {
     sync_tolerances: "8,8,48",
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_HTTP_API, DEFAULT_METRICS};
+
+    #[test]
+    fn test_port_and_port_str_are_consistent() {
+        assert_eq!(
+            DEFAULT_HTTP_API.port.to_string(),
+            DEFAULT_HTTP_API.port_str,
+            "HTTP API port and port_str must match."
+        );
+        assert_eq!(
+            DEFAULT_METRICS.port.to_string(),
+            DEFAULT_METRICS.port_str,
+            "Metrics port and port_str must match."
+        );
+    }
+}
