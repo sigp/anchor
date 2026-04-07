@@ -19,6 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use global_config::defaults::DEFAULT_METRICS;
 use libp2p::metrics::Registry;
 use parking_lot::RwLock;
 use prometheus_client::encoding::text::encode;
@@ -53,7 +54,7 @@ impl Default for Config {
         Self {
             enabled: false,
             listen_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
-            listen_port: 5164,
+            listen_port: DEFAULT_METRICS.port,
             allow_origin: None,
         }
     }

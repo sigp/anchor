@@ -2,6 +2,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use global_config::defaults::DEFAULT_HTTP_API;
 use tower_http::cors::AllowOrigin;
 
 /// Configuration for the HTTP server.
@@ -17,8 +18,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            listen_port: 5062,
+            listen_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            listen_port: DEFAULT_HTTP_API.port,
             allow_origin: None,
         }
     }

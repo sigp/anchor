@@ -10,6 +10,10 @@ use clap::{
     Parser,
     builder::{ArgAction, ArgPredicate},
 };
+use global_config::defaults::{
+    DEFAULT_EXTERNAL_API, DEFAULT_HTTP_API, DEFAULT_METRICS, DEFAULT_NETWORK,
+    DEFAULT_NODE_ENDPOINTS,
+};
 use logging::FileLoggingFlags;
 
 pub const FLAG_HEADER: &str = "Flags";
@@ -43,10 +47,11 @@ pub struct SecurityOptions {
 pub struct ExternalApis {
     #[clap(
         long,
+        default_value = DEFAULT_NODE_ENDPOINTS.beacon_node,
         value_name = "NETWORK_ADDRESSES",
         value_delimiter = ',',
-        help = "Comma-separated addresses to one or more beacon node HTTP APIs. \
-                Default is http://localhost:5052.",
+        help = "Comma-separated addresses to one or more beacon node HTTP APIs.",
+
         display_order = 0
     )]
     pub beacon_nodes: Option<Vec<String>>,
@@ -54,9 +59,9 @@ pub struct ExternalApis {
     #[clap(
         long,
         value_name = "NETWORK_ADDRESSES",
+        default_value = DEFAULT_NODE_ENDPOINTS.execution_node,
         value_delimiter = ',',
-        help = "Comma-separated addresses to one or more execution node JSON-RPC APIs. \
-                Default is http://localhost:8545.",
+        help = "Comma-separated addresses to one or more execution node JSON-RPC APIs.",
         display_order = 0
     )]
     pub execution_rpc: Option<Vec<String>>,
@@ -65,8 +70,8 @@ pub struct ExternalApis {
         long,
         value_name = "NETWORK_ADDRESSES",
         value_delimiter = ',',
-        help = "Address of execution node WS API. \
-                Default is ws://localhost:8546.",
+        default_value = DEFAULT_NODE_ENDPOINTS.execution_node_ws,
+        help = "Address of execution node WS API.",
         display_order = 0
     )]
     pub execution_ws: Option<String>,
@@ -100,7 +105,6 @@ pub struct ExternalApis {
         value_name = "API_TOPICS",
         value_delimiter = ',',
         help = "Comma-separated list of beacon API topics to broadcast to all beacon nodes. \
-                Possible values are: none, attestations, blocks, subscriptions, sync-committee. \
                 Default (when flag is omitted) is to broadcast subscriptions only.",
         display_order = 0
     )]
@@ -110,7 +114,7 @@ pub struct ExternalApis {
         long,
         value_name = "SYNC_TOLERANCES",
         value_delimiter = ',',
-        default_value = "8,8,48",
+        default_value = DEFAULT_EXTERNAL_API.sync_tolerances,
         help = "A comma-separated list of 3 values which sets the size of each sync distance range when \
                 determining the health of each connected beacon node. \
                 The first value determines the `Synced` range. If a connected beacon node is synced to within \
@@ -172,9 +176,9 @@ pub struct HttpApiOptions {
         long,
         value_name = "PORT",
         requires = "http",
-        help = "Set the listen TCP port for the RESTful HTTP API server.",
+        help = format!("Set the listen TCP port for the RESTful HTTP API server. Defaults to {} if --http is set.", DEFAULT_HTTP_API.port_str),
         display_order = 0,
-        default_value_if("http", ArgPredicate::IsPresent, "5062")
+        default_value_if("http", ArgPredicate::IsPresent, DEFAULT_HTTP_API.port_str)
     )]
     pub http_port: Option<u16>,
 
@@ -204,8 +208,8 @@ pub struct MetricsOptions {
     #[clap(
         long,
         value_name = "ADDRESS",
-        help = "Set the listen address for the Prometheus metrics HTTP server.",
-        default_value_if("metrics", ArgPredicate::IsPresent, "127.0.0.1"),
+        help = format!("Set the listen address for the Prometheus metrics HTTP server. Defaults to {} if --metrics is set.", DEFAULT_METRICS.host),
+        default_value_if("metrics", ArgPredicate::IsPresent, DEFAULT_METRICS.host),
         display_order = 0,
         requires = "metrics"
     )]
@@ -214,9 +218,9 @@ pub struct MetricsOptions {
     #[clap(
         long,
         value_name = "PORT",
-        help = "Set the listen TCP port for the Prometheus metrics HTTP server.",
+        help = format!("Set the listen TCP port for the Prometheus metrics HTTP server. Defaults to {} if --metrics is set.", DEFAULT_METRICS.port_str),
         display_order = 0,
-        default_value_if("metrics", ArgPredicate::IsPresent, "5164"),
+        default_value_if("metrics", ArgPredicate::IsPresent, DEFAULT_METRICS.port_str),
         requires = "metrics"
     )]
     pub metrics_port: Option<u16>,
@@ -224,7 +228,7 @@ pub struct MetricsOptions {
     #[clap(
         long,
         help = "Enable per validator metrics for > 64 validators. \
-                Note: This flag is automatically enabled for <= 64 validators. \
+                Note: This flag is automatically enabled for < 65 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
         display_order = 0,
@@ -261,7 +265,7 @@ pub struct NetworkOptions {
                       multiple IPv4, or multiple IPv6 addresses will not be accepted.",
         num_args(0..=2),
         action = ArgAction::Append,
-        default_value = "0.0.0.0",
+        default_value = DEFAULT_NETWORK.address,
     )]
     pub listen_addresses: Vec<IpAddr>,
 
