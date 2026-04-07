@@ -19,7 +19,10 @@ use slashing_protection::SlashingDatabase;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata, consensus::QbftDataValidator,
+    ValidatorMetadata,
+    consensus::{
+        AggregatorCommitteeConsensusData, AssignedAggregator, DataVersion, QbftDataValidator,
+    },
 };
 use ssz::Encode;
 use ssz_types::VariableList;
@@ -30,11 +33,9 @@ use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
     Hash256, MainnetEthSpec, SelectionProof, Slot,
 };
-use validator_store::AggregateToSign;
-use validator_store::AttestationToSign;
+use validator_store::{AggregateToSign, AttestationToSign};
 
 use crate::{AggregationAssignments, AnchorValidatorStore, VotingAssignments, VotingContext};
-use ssv_types::consensus::{AggregatorCommitteeConsensusData, AssignedAggregator, DataVersion};
 
 pub(super) const TEST_SLOT: u64 = 1;
 const SLOT_DURATION_SECS: u64 = 12;
