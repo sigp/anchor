@@ -364,7 +364,6 @@ impl SsvEventSyncer {
                     continue;
                 }
                 Err(e) => {
-                    error!(?e, "Failed to fetch EL sync status");
                     return Err(ExecutionError::RpcError(format!(
                         "Failed to fetch EL sync status: {e}"
                     )));
@@ -372,7 +371,6 @@ impl SsvEventSyncer {
             }
 
             let current_block = self.rpc_client.get_block_number().await.map_err(|e| {
-                error!(?e, "Failed to fetch block number");
                 ExecutionError::RpcError(format!("Failed to fetch block number: {e}"))
             })?;
             metrics::set_gauge(&metrics::EXECUTION_CURRENT_BLOCK, current_block as i64);

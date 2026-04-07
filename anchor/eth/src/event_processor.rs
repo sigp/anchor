@@ -9,7 +9,7 @@ use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    error::ExecutionError,
+    error::{ExecutionError, LogErrorDisposition},
     event_parser::EventDecoder,
     generated::SSVContract,
     index_sync, metrics,
@@ -240,10 +240,42 @@ impl EventProcessor {
                     .transaction_hash
                     .map(|hash| hash.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                if live {
-                    warn!(block_number, tx_hash, "Malformed event: {e}");
-                } else {
-                    trace!(block_number, tx_hash, "Malformed event: {e}");
+                match e.log_disposition() {
+                    LogErrorDisposition::SkipMalformed => {
+                        if live {
+                            warn!(block_number, tx_hash, error = %e, "Malformed event");
+                        } else {
+                            trace!(block_number, tx_hash, error = %e, "Malformed event");
+                        }
+                    }
+                    LogErrorDisposition::SkipExpected => {
+                        if live {
+                            debug!(block_number, tx_hash, error = %e, "Skipping event");
+                        } else {
+                            trace!(block_number, tx_hash, error = %e, "Skipping event");
+                        }
+                    }
+                    LogErrorDisposition::SkipAmbiguous => {
+                        if live {
+                            warn!(
+                                block_number,
+                                tx_hash,
+                                error = %e,
+                                "Skipping event with missing committed state"
+                            );
+                        } else {
+                            trace!(
+                                block_number,
+                                tx_hash,
+                                error = %e,
+                                "Skipping event with missing committed state"
+                            );
+                        }
+                    }
+                    LogErrorDisposition::AbortBatch => {
+                        error!(block_number, tx_hash, error = %e, "Event processing failed");
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -364,22 +396,11 @@ impl EventProcessor {
 
         // Construct the Operator and insert it into the database
         let operator = Operator::new(data, operator_id, owner).map_err(|e| {
-            debug!(
-                operator_pubkey = ?publicKey,
-                operator_id = ?operator_id,
-                error = %e,
-                "Failed to construct operator"
-            );
             ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
         })?;
         self.db
             .insert_operator_tx(&operator, tx, state_updates)
             .map_err(|e| {
-                debug!(
-                    operator_id = ?operator_id,
-                    error = %e,
-                    "Failed to insert operator into database"
-                );
                 ExecutionError::Database(format!("Failed to insert operator into database: {e}"))
             })?;
 
@@ -408,14 +429,7 @@ impl EventProcessor {
         // Delete the operator from database and in memory
         self.db
             .delete_operator_tx(operator_id, tx, state_updates)
-            .map_err(|e| {
-                debug!(
-                    operator_id = ?operator_id,
-                    error = %e,
-                    "Failed to remove operator"
-                );
-                ExecutionError::Database(format!("Failed to remove operator: {e}"))
-            })?;
+            .map_err(|e| ExecutionError::Database(format!("Failed to remove operator: {e}")))?;
 
         debug!(operator_id = ?operatorId, "Operator removed from network");
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["operator_removed"]);
@@ -448,10 +462,7 @@ impl EventProcessor {
         let nonce = self
             .db
             .bump_and_get_nonce_tx(&owner, tx, state_updates)
-            .map_err(|e| {
-                debug!(owner = ?owner, "Failed to bump nonce");
-                ExecutionError::Database(format!("Failed to bump nonce: {e}"))
-            })?;
+            .map_err(|e| ExecutionError::Database(format!("Failed to bump nonce: {e}")))?;
 
         // During keysplitting, we only care about the nonce
         let Mode::Node {
@@ -475,12 +486,10 @@ impl EventProcessor {
         trace!(cluster_id = ?cluster_id, "Parsing and verifying shares");
         let (signature, shares) =
             parse_shares(&shares, &operator_ids, &cluster_id, &validator_pubkey).map_err(|e| {
-                debug!(cluster_id = ?cluster_id, error = %e, "Failed to parse shares");
                 ExecutionError::InvalidEvent(format!("Failed to parse shares. {e}"))
             })?;
 
         if !verify_signature(signature, nonce, &owner, &validator_pubkey) {
-            debug!(cluster_id = ?cluster_id, "Signature verification failed");
             return Err(ExecutionError::InvalidEvent(
                 "Signature verification failed".to_string(),
             ));
@@ -489,7 +498,6 @@ impl EventProcessor {
         // Fetch the validator metadata
         let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
             .map_err(|e| {
-                debug!(validator_pubkey= ?validator_pubkey, "Failed to fetch validator metadata");
                 ExecutionError::Database(format!("Failed to fetch validator metadata: {e}"))
             })?;
 
@@ -521,7 +529,6 @@ impl EventProcessor {
         self.db
             .insert_validator_tx(cluster, &validator_metadata, shares, tx, state_updates)
             .map_err(|e| {
-                debug!(cluster_id = ?cluster_id, error = %e, validator_metadata = ?validator_metadata.public_key, "Failed to insert validator into cluster");
                 ExecutionError::Database(format!("Failed to insert validator into cluster: {e}"))
             })?;
 
@@ -566,11 +573,7 @@ impl EventProcessor {
         {
             Some(data) => data,
             None => {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    "Failed to fetch validator metadata from database"
-                );
-                return Err(ExecutionError::Database(
+                return Err(ExecutionError::MissingCommittedState(
                     "Failed to fetch validator metadata from database".to_string(),
                 ));
             }
@@ -584,11 +587,7 @@ impl EventProcessor {
         {
             Some(data) => data,
             None => {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    "Failed to fetch cluster from database"
-                );
-                return Err(ExecutionError::Database(
+                return Err(ExecutionError::MissingCommittedState(
                     "Failed to fetch cluster from database".to_string(),
                 ));
             }
@@ -596,12 +595,6 @@ impl EventProcessor {
 
         // Make sure the right owner is removing this validator
         if owner != cluster.owner {
-            debug!(
-                cluster_id = ?cluster_id,
-                expected_owner = ?cluster.owner,
-                actual_owner = ?owner,
-                "Owner mismatch for validator removal"
-            );
             return Err(ExecutionError::InvalidEvent(format!(
                 "Cluster already exists with a different owner address. Expected {}. Got {}",
                 cluster.owner, owner
@@ -610,12 +603,6 @@ impl EventProcessor {
 
         // Make sure this is the correct validator
         if validator_pubkey != metadata.public_key {
-            debug!(
-                cluster_id = ?cluster_id,
-                expected_pubkey = %metadata.public_key,
-                actual_pubkey = %validator_pubkey,
-                "Validator pubkey mismatch"
-            );
             return Err(ExecutionError::InvalidEvent(
                 "Validator does not match".to_string(),
             ));
@@ -624,15 +611,7 @@ impl EventProcessor {
         // Remove the validator and all corresponding cluster data
         self.db
             .delete_validator_tx(&validator_pubkey, tx, state_updates)
-            .map_err(|e| {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    pubkey = ?validator_pubkey,
-                    error = %e,
-                    "Failed to delete validator from database"
-                );
-                ExecutionError::Database(format!("Failed to validator cluster: {e}"))
-            })?;
+            .map_err(|e| ExecutionError::Database(format!("Failed to delete validator: {e}")))?;
 
         trace!(
             cluster_id = ?cluster_id,
@@ -664,11 +643,6 @@ impl EventProcessor {
         self.db
             .update_status_tx(cluster_id, true, tx, state_updates)
             .map_err(|e| {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    error = %e,
-                    "Failed to mark cluster as liquidated"
-                );
                 ExecutionError::Database(format!("Failed to mark cluster as liquidated: {e}"))
             })?;
 
@@ -705,11 +679,6 @@ impl EventProcessor {
         self.db
             .update_status_tx(cluster_id, false, tx, state_updates)
             .map_err(|e| {
-                debug!(
-                    cluster_id = ?cluster_id,
-                    error = %e,
-                    "Failed to mark cluster as active"
-                );
                 ExecutionError::Database(format!("Failed to mark cluster as active: {e}"))
             })?;
 
@@ -741,11 +710,6 @@ impl EventProcessor {
         self.db
             .update_fee_recipient_tx(owner, recipientAddress, tx, state_updates)
             .map_err(|e| {
-                debug!(
-                    owner = ?owner,
-                    error = %e,
-                    "Failed to update fee recipient"
-                );
                 ExecutionError::Database(format!("Failed to update fee recipient: {e}"))
             })?;
         debug!(
@@ -896,7 +860,8 @@ impl EventProcessor {
     ///   mismatch
     ///
     /// # Note
-    /// If the cluster is already liquidated, the function will return `Ok(())` but issue a warning.
+    /// If the cluster is already liquidated, the function returns `SkippedEvent` so the caller can
+    /// skip it without aborting the batch.
     fn verify_validator_owner(
         &self,
         owner: &Address,
@@ -925,7 +890,7 @@ impl EventProcessor {
         }
 
         if cluster.liquidated {
-            return Err(ExecutionError::Misc(
+            return Err(ExecutionError::SkippedEvent(
                 "Cluster is liquidated, skipping exit processing".to_string(),
             ));
         }
