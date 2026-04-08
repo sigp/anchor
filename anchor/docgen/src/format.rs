@@ -21,7 +21,8 @@ fn group_display_name(group_id: &str) -> String {
 
 /// Split a PascalCase identifier into space-separated words.
 /// e.g. "SecurityOptions" → "Security Options"
-/// In addition, handles consecutive uppercase letters as a single word, e.g. "HTTPApi" → "HTTP Api".
+/// In addition, handles consecutive uppercase letters as a single word, e.g. "HTTPApi" → "HTTP
+/// Api".
 fn split_pascal_case(s: &str) -> String {
     let mut words = Vec::new();
     let mut current = String::new();
@@ -32,7 +33,8 @@ fn split_pascal_case(s: &str) -> String {
             current = String::new();
         }
         // Handle acronym followed by regular word, e.g. "HTTPApi" → "HTTP Api"
-        // In the case of a run of uppercase letters, the last uppercase detected is treated as the start of the next word.
+        // In the case of a run of uppercase letters, the last uppercase detected is treated as the
+        // start of the next word.
         if !ch.is_uppercase() && current.len() > 1 && current.chars().all(|c| c.is_uppercase()) {
             let last_char = current.pop().unwrap();
             words.push(current);
@@ -250,8 +252,14 @@ mod tests {
 
     #[test]
     fn test_split_pascal_case_splits_acronym_cases() {
-        assert_eq!(super::split_pascal_case("HTTPApiOptions"), "HTTP Api Options");
+        assert_eq!(
+            super::split_pascal_case("HTTPApiOptions"),
+            "HTTP Api Options"
+        );
         assert_eq!(super::split_pascal_case("ExternalApis"), "External Apis");
-        assert_eq!(super::split_pascal_case("FileLoggingFlags"), "File Logging Flags");
+        assert_eq!(
+            super::split_pascal_case("FileLoggingFlags"),
+            "File Logging Flags"
+        );
     }
 }

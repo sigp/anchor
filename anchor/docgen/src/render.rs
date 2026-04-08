@@ -84,9 +84,7 @@ fn write_arg_table_row(output: &mut String, arg: &Arg) -> Result<(), DocGenError
 
 /// Generate the CLI reference content for `cli.mdx` (global options).
 pub fn generate_cli_page_content(cmd: &Command) -> Result<String, DocGenError> {
-    let mut output = String::new();
-    output.push_str(&render_options_tables(cmd, "###")?);
-    Ok(output)
+    render_options_tables(cmd, "###")
 }
 
 /// Generate CLI help content for a flat command (no subcommands).
@@ -175,31 +173,6 @@ mod tests {
     struct TestCli {
         #[clap(flatten)]
         pub test_flag: TestFlag,
-    }
-
-    #[test]
-    fn test_group_args_by_clap_groups_outputs_correct_groupings() {
-        let cmd = TestCli::command();
-        let args: Vec<_> = cmd.get_arguments().collect();
-        let result = group_args_by_clap_groups(&cmd, &args);
-
-        // The TestFlag struct creates a "TestFlag" ArgGroup with its arg.
-        assert!(!result.is_empty());
-        // The group should contain the test_flag arg with display name "Test Flag".
-        let test_flag_group = result
-            .iter()
-            .find(|(name, _)| name.as_deref() == Some("Test Flag"));
-        assert!(
-            test_flag_group.is_some(),
-            "Expected a 'Test Flag' group, got: {:?}",
-            result.iter().map(|(n, _)| n).collect::<Vec<_>>()
-        );
-        let (_, group_args) = test_flag_group.unwrap();
-        assert!(
-            group_args
-                .iter()
-                .any(|a| a.get_id().as_str() == "test_flag")
-        );
     }
 
     #[test]

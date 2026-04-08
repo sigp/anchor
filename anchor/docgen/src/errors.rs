@@ -25,6 +25,6 @@ pub enum DocGenError {
         cli_tree: String,
     },
 
-    #[error("Sentinel markers are invalid for {path}: {source}")]
-    InvalidMarkers { path: String, source: fmt::Error },
+    #[error("Sentinel markers are in the incorrect order for {path}")]
+    InvalidMarkers { path: PathBuf },
 }

@@ -18,8 +18,10 @@ pub fn update_file(path: &Path, generated_content: &str) -> Result<(), DocGenErr
 
     let (before, after) = split_at_markers(&content, path)?;
 
-    let new_content =
-        format!("{before}{CLI_REFERENCE_START}{}{CLI_REFERENCE_END}{after}", frame_generated_content(generated_content));
+    let new_content = format!(
+        "{before}{CLI_REFERENCE_START}{}{CLI_REFERENCE_END}{after}",
+        frame_generated_content(generated_content)
+    );
 
     fs::write(path, new_content).map_err(|e| DocGenError::WriteFile {
         path: path.to_path_buf(),
@@ -34,8 +36,7 @@ fn start_before_end_idx(start_idx: usize, end_idx: usize, path: &Path) -> Result
         Ok(())
     } else {
         Err(DocGenError::InvalidMarkers {
-            path: path.to_string_lossy().to_string(),
-            source: std::fmt::Error,
+            path: path.to_path_buf(),
         })
     }
 }
