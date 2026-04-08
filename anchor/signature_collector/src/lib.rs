@@ -63,10 +63,11 @@ struct SignatureCollector {
     for_slot: Slot,
 }
 
-/// Outgoing partial signature messages that collected for a committee
-/// As soon as the partial signature for every validator in the committee is ready, it is sent.
-struct CommitteeSignatures {
-    collected_signatures: Vec<PartialSignatureMessage>,
+/// Locally accumulated validator partial signatures for one outgoing committee message.
+/// As soon as this operator has produced the full validator batch for the committee round, the
+/// message is sent.
+struct CommitteePartialSignatureBatch {
+    batched_validator_partial_signatures: Vec<PartialSignatureMessage>,
     for_slot: Slot,
 }
 
@@ -85,10 +86,11 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     message_sender: Arc<dyn MessageSender>,
     /// A map from the signing root and signing validator to the corresponding signature collector.
     signature_collectors: DashMap<(Hash256, ValidatorIndex), SignatureCollector>,
-    /// A map from a hash of an underlying decided committee value and committee id to a container
-    /// for all partial signatures based on that value for the committee.
+    /// A map from the hash of a decided committee value and committee ID to the local batch of
+    /// validator partial signatures for that committee round.
     /// Note that this hash may differ from the actual signing root.
-    committee_signatures: DashMap<(Hash256, CommitteeId), CommitteeSignatures>,
+    committee_partial_signature_batches:
+        DashMap<(Hash256, CommitteeId), CommitteePartialSignatureBatch>,
 }
 
 impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
@@ -108,7 +110,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             slots_per_epoch,
             message_sender,
             signature_collectors: DashMap::new(),
-            committee_signatures: DashMap::new(),
+            committee_partial_signature_batches: DashMap::new(),
         });
 
         manager
@@ -216,36 +218,43 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         }
                     }
                     SignatureRequester::Committee {
-                        num_signatures_to_collect,
+                        validator_partial_signature_batch_size,
                         base_hash,
                     } => {
-                        // We have to collect all signatures from the given validators.
-                        // To check this create or get an entry from the `committee_signatures` map.
+                        // Batch one locally produced partial signature per validator before
+                        // sending a single committee message for this round.
                         let mut entry = match manager
-                            .committee_signatures
+                            .committee_partial_signature_batches
                             .entry((base_hash, metadata.committee_id))
                         {
                             Entry::Occupied(occupied) => occupied,
-                            Entry::Vacant(vacant) => vacant.insert_entry(CommitteeSignatures {
-                                collected_signatures: Vec::with_capacity(num_signatures_to_collect),
+                            Entry::Vacant(vacant) => vacant.insert_entry(CommitteePartialSignatureBatch {
+                                batched_validator_partial_signatures: Vec::with_capacity(
+                                    validator_partial_signature_batch_size,
+                                ),
                                 for_slot: metadata.slot,
                             }),
                         };
-                        let collected_signatures = &mut entry.get_mut().collected_signatures;
+                        let validator_partial_signature_batch =
+                            &mut entry.get_mut().batched_validator_partial_signatures;
 
-                        // Enter the signature we just signed for this validator.
-                        collected_signatures.push(message.clone());
+                        // Add the partial signature we just produced for this validator to the
+                        // local batch.
+                        validator_partial_signature_batch.push(message.clone());
 
                         trace!(
-                            have = collected_signatures.len(),
-                            need = num_signatures_to_collect,
-                            "Checking if we have all signatures to send"
+                            have = validator_partial_signature_batch.len(),
+                            need = validator_partial_signature_batch_size,
+                            "Checking whether the batch of validator partial signatures is ready to send"
                         );
 
-                        // If we collected the correct number of signatures, create and sign the
-                        // final message.
-                        if collected_signatures.len() == num_signatures_to_collect {
-                            let signatures = entry.remove().collected_signatures;
+                        // Once the local batch of validator partial signatures is complete,
+                        // create and send the committee message.
+                        if validator_partial_signature_batch.len()
+                            == validator_partial_signature_batch_size
+                        {
+                            let signatures =
+                                entry.remove().batched_validator_partial_signatures;
 
                             let msg = match manager.create_message(
                                 &metadata,
@@ -413,8 +422,8 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             let cutoff = slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS);
             self.signature_collectors
                 .retain(|_, collector| collector.for_slot >= cutoff);
-            self.committee_signatures
-                .retain(|_, signatures| signatures.for_slot >= cutoff);
+            self.committee_partial_signature_batches
+                .retain(|_, batch| batch.for_slot >= cutoff);
         }
     }
 }
@@ -426,7 +435,14 @@ pub struct SignatureMetadata {
     pub kind: PartialSignatureKind,
     /// The role to transmit. Only needed for the network message we send.
     pub role: Role,
-    /// The signature threshold amount after which we can reconstruct the full signature.
+    /// The threshold of operator shares used by the per-validator reconstruction collector.
+    /// Once partial signatures from this many operators have arrived over the network, the full
+    /// validator signature can be reconstructed.
+    ///
+    /// This is distinct from
+    /// `SignatureRequester::Committee::validator_partial_signature_batch_size`, which only
+    /// controls how many validator partial signatures this operator batches locally before sending
+    /// its own committee message.
     pub threshold: u64,
     /// The slot relevant for this signature. The collector instance is cleaned up one slot after
     /// this. Also used in the network message.
@@ -435,8 +451,8 @@ pub struct SignatureMetadata {
     pub committee_id: CommitteeId,
 }
 
-/// Who is signing this - only a single validator, or potentially multiple validators in a
-/// committee? This is relevant because we send only one message in the latter case.
+/// Describes whether this request signs for a single validator or for multiple validators in a
+/// committee. This matters because the committee case sends one message for the whole batch.
 #[derive(Debug, Clone)]
 pub enum SignatureRequester {
     /// The only validator signing this is the one passed when `sign_and_collect` is called.
@@ -444,14 +460,19 @@ pub enum SignatureRequester {
         /// The public key of the validator. Used in the created network message.
         pubkey: PublicKeyBytes,
     },
-    /// We need to wait for all these validators to submit their signature until we can send.
+    /// The local operator is signing for multiple validators in one committee round.
+    /// We batch those validator partial signatures into a single outgoing committee message instead
+    /// of sending one message per validator.
     Committee {
-        /// The number of signatures we have to wait for.
-        num_signatures_to_collect: usize,
-        /// A hash that identifies what we are signing. We wait with sending the message until we
-        /// have created enough signatures with this `base_hash`. We need this to differentiate
-        /// "groups" of signatures. We cannot use the signing root, as we need to group signatures
-        /// with differing signing roots.
+        /// How many validator partial signatures this operator must produce locally before sending
+        /// the batched committee message.
+        ///
+        /// This is a local batching count, not the network reconstruction threshold from
+        /// `SignatureMetadata::threshold`.
+        validator_partial_signature_batch_size: usize,
+        /// Identifies which partial signatures belong in the same outgoing committee message.
+        /// We cannot use the signing root because the batched signatures may have different
+        /// signing roots.
         base_hash: Hash256,
     },
 }
