@@ -58,7 +58,6 @@ impl NetworkDatabase {
     ) -> Result<HashMap<OperatorId, PublicKeyBytes>, DatabaseError> {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(sql_operations::GET_SHARE_PUBKEYS_FOR_VALIDATOR_INDEX)?;
-        let validator_index: u64 = validator_index.into();
         let mut rows = stmt.query(params![validator_index])?;
 
         let mut result = HashMap::new();
