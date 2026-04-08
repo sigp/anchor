@@ -322,19 +322,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
     /// Collect committee signatures for a batch of signing requests.
     ///
-    /// Shared across all `sign_committee_*` methods. Builds `CollectionMode::Committee`,
-    /// fans out `collect_signature` calls concurrently, and returns the collected signatures.
+    /// Shared across all `sign_committee_*` methods. It builds `CollectionMode::Committee`,
+    /// runs `collect_signature` concurrently for each validator, and returns the signatures.
+    /// The `validator_partial_signature_batch_size` parameter is the number of validator partial
+    /// signatures this operator puts into one outgoing committee message. It is not the threshold
+    /// for reconstructing a signature from other operators' shares.
     async fn collect_prepared_signatures<D>(
         &self,
         role: Role,
         slot: Slot,
         cluster: &Cluster,
-        num_signatures_to_collect: usize,
+        validator_partial_signature_batch_size: usize,
         data_hash: Hash256,
         prepared: &[SigningRequest<D>],
     ) -> Result<HashMap<ValidatorIndex, Signature>, Error> {
         let collection_mode = CollectionMode::Committee {
-            num_signatures_to_collect,
+            validator_partial_signature_batch_size,
             base_hash: data_hash,
         };
 
@@ -467,10 +470,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     pubkey: validator.public_key,
                 },
                 CollectionMode::Committee {
-                    num_signatures_to_collect,
+                    validator_partial_signature_batch_size,
                     base_hash,
                 } => SignatureRequester::Committee {
-                    num_signatures_to_collect,
+                    validator_partial_signature_batch_size,
                     base_hash,
                 },
             };
@@ -1276,11 +1279,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         // roots, which `collect_prepared_signatures` cannot handle (it deduplicates by
         // `ValidatorIndex`).
         let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-        let num_signatures_to_collect = decided_data
+        let validator_partial_signature_batch_size = decided_data
             .post_consensus_signature_count(|idx| committee_validator_indices.contains(idx));
         let data_hash = decided_data.hash();
         let collection_mode = CollectionMode::Committee {
-            num_signatures_to_collect,
+            validator_partial_signature_batch_size,
             base_hash: data_hash,
         };
 
@@ -1402,7 +1405,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         // Collect signatures and assemble results
         let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-        let num_signatures_to_collect = voting_context
+        let validator_partial_signature_batch_size = voting_context
             .voting_assignments
             .voting_message_count_for_committee(|idx| committee_validator_indices.contains(idx));
 
@@ -1411,7 +1414,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Role::Committee,
                 slot,
                 &cluster,
-                num_signatures_to_collect,
+                validator_partial_signature_batch_size,
                 data.hash(),
                 &prepared,
             )
@@ -1526,7 +1529,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         // Collect signatures and assemble results
         let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-        let num_signatures_to_collect = voting_context_tx
+        let validator_partial_signature_batch_size = voting_context_tx
             .voting_assignments
             .voting_message_count_for_committee(|idx| committee_validator_indices.contains(idx));
 
@@ -1535,7 +1538,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Role::Committee,
                 slot,
                 &cluster,
-                num_signatures_to_collect,
+                validator_partial_signature_batch_size,
                 data.hash(),
                 &prepared,
             )
@@ -1679,7 +1682,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         // Collect signatures and assemble results
         let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-        let num_signatures_to_collect = decided_data
+        let validator_partial_signature_batch_size = decided_data
             .post_consensus_signature_count(|idx| committee_validator_indices.contains(idx));
 
         let signatures = self
@@ -1687,7 +1690,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Role::AggregatorCommittee,
                 slot,
                 &cluster,
-                num_signatures_to_collect,
+                validator_partial_signature_batch_size,
                 decided_data.hash(),
                 &prepared,
             )
@@ -2072,7 +2075,11 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
 enum CollectionMode {
     SingleValidator,
     Committee {
-        num_signatures_to_collect: usize,
+        /// The number of validator partial signatures this operator batches locally into the
+        /// outgoing committee message for the round.
+        validator_partial_signature_batch_size: usize,
+        /// Identifies which validator partial signatures belong in the same outgoing committee
+        /// message.
         base_hash: Hash256,
     },
 }
@@ -2496,19 +2503,18 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             let signing_root = slot.signing_root(domain_hash);
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            // We do not want to spend too long on the selection proof. We will not produce an
-            // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort
-            // then.
+            // Stop at two thirds of the slot. If the selection proof is not ready by then, we
+            // will not produce an aggregation anyway.
             let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
                 let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
-                // Defensive check: validator should be in `VotingAssignments` since both this
-                // function call and `VotingAssignments` are derived from `DutiesService`. If not,
-                // there's an inconsistency (e.g., stale cache after poll timeout) and we
-                // should not participate with a wrong `num_signatures_to_collect`.
+                // Defensive check: the validator should be present in `VotingAssignments` because
+                // both this call and `VotingAssignments` come from `DutiesService`. If not, we
+                // have an inconsistency, for example a stale cache after a poll timeout, and
+                // should not participate with the wrong batch size.
                 if !voting_assignments
                     .attesting_committees
                     .contains_key(&validator_pubkey)
@@ -2526,15 +2532,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let committee_validator_indices =
                     self.get_committee_validator_indices(&committee_id);
 
-                // Calculate how many selection proofs to collect using the selection proof counting
-                // method.
-                let num_signatures_to_collect = voting_assignments
+                // Count how many selection-proof partial signatures belong in this batch.
+                let validator_partial_signature_batch_size = voting_assignments
                     .selection_proof_count_for_committee(|idx| {
                         committee_validator_indices.contains(idx)
                     });
 
-                // Compute deterministic `base_hash` for batching (same across all operators in a
-                // committee)
+                // Compute a deterministic batch ID. Every operator in the committee must derive
+                // the same `base_hash`.
                 let batch_id = SelectionProofBatchId::new(slot, committee_id);
                 let base_hash = batch_id.hash();
 
@@ -2545,7 +2550,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 );
 
                 let collection_mode = CollectionMode::Committee {
-                    num_signatures_to_collect,
+                    validator_partial_signature_batch_size,
                     base_hash,
                 };
 
@@ -2564,7 +2569,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 )
                 .await?
             } else {
-                // Single validator collection (original behavior)
+                // Use the original single-validator path.
                 self.timeout_within_slot(
                     slot,
                     delay,
@@ -2608,20 +2613,20 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             .signing_root(domain_hash);
             let (validator, cluster) = self.get_validator_and_cluster(*validator_pubkey)?;
 
-            // We do not want to spend too long on the selection proof. We will not produce an
-            // aggregation anyway if the proof is not known at 2/3rds into the slot - so we abort
-            // then.
+            // Stop at two thirds of the slot. If the selection proof is not ready by then, we
+            // will not produce an aggregation anyway.
             let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
-                // Boole fork: Committee-based batching (batches with attestation selection proofs)
+                // Under Boole, sync selection proofs use the same committee path as attestation
+                // selection proofs.
                 let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
-                // Defensive check: validator should be in `VotingAssignments` since both this
-                // function call and `VotingAssignments` are derived from `DutiesService`. If not,
-                // there's an inconsistency (e.g., stale cache after poll timeout) and we
-                // should not participate with a wrong `num_signatures_to_collect`.
+                // Defensive check: the validator should be present in `VotingAssignments` because
+                // both this call and `VotingAssignments` come from `DutiesService`. If not, we
+                // have an inconsistency, for example a stale cache after a poll timeout, and
+                // should not participate with the wrong batch size.
                 let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
                 if !voting_assignments
                     .sync_validators_by_subnet
@@ -2640,16 +2645,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let committee_validator_indices =
                     self.get_committee_validator_indices(&committee_id);
 
-                // Calculate how many selection proofs to collect using the selection proof counting
-                // method.
-                let num_signatures_to_collect = voting_assignments
+                // Count how many selection-proof partial signatures belong in this batch.
+                let validator_partial_signature_batch_size = voting_assignments
                     .selection_proof_count_for_committee(|idx| {
                         committee_validator_indices.contains(idx)
                     });
 
-                // Compute deterministic `base_hash` for batching (SAME as attestation selection
-                // proofs). This ensures all selection proofs (attestation + sync) batch together
-                // into one P2P message per committee.
+                // Use the same deterministic batch ID as attestation selection proofs so both
+                // attestation and sync selection proofs are sent in one committee message.
                 let batch_id = SelectionProofBatchId::new(slot, committee_id);
                 let base_hash = batch_id.hash();
 
@@ -2661,7 +2664,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 );
 
                 let collection_mode = CollectionMode::Committee {
-                    num_signatures_to_collect,
+                    validator_partial_signature_batch_size,
                     base_hash,
                 };
 
@@ -2680,7 +2683,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 )
                 .await?
             } else {
-                // Single-validator collection (original behavior)
+                // Use the original single-validator path.
                 self.timeout_within_slot(
                     slot,
                     delay,
