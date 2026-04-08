@@ -15,6 +15,24 @@ const EXPECTED_TOTAL_SIGNED_AGGREGATES: usize = 3;
 const EXPECTED_SIGN_AND_COLLECT_CALLS: usize = 3;
 const EXPECTED_REQUESTED_COUNTS: [usize; 3] = [1, 2, 2];
 
+/// `sign_aggregate_and_proofs` with empty input yields zero stream items.
+#[tokio::test(flavor = "multi_thread")]
+async fn sign_aggregate_and_proofs_empty_input() {
+    let committee = create_primary_committee_setup(SINGLE_VALIDATOR_COMMITTEE_COUNT);
+    let harness = ValidatorStoreTestHarness::new(vec![committee], OUR_OPERATOR_ID);
+
+    let results: SignAggregatesResult = harness
+        .validator_store
+        .sign_aggregate_and_proofs(vec![])
+        .collect()
+        .await;
+
+    assert!(
+        results.is_empty(),
+        "empty input should yield zero stream items"
+    );
+}
+
 /// `sign_aggregate_and_proofs` groups aggregates by `CommitteeId`, runs consensus once per
 /// committee, collects committee signatures for each validator, and streams one batch per
 /// committee.
@@ -77,7 +95,7 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         .collect();
     requested_counts.sort_unstable();
     // Committee A has two aggregators and committee B has one, so the per-validator collection
-    // requests should be [2, 2, 1] irrespective of stream ordering.
+    // requests should be [1, 2, 2] irrespective of stream ordering.
     assert_eq!(
         requested_counts, EXPECTED_REQUESTED_COUNTS,
         "expected committee requester counts to match aggregators per committee"
@@ -118,7 +136,12 @@ async fn sign_aggregate_and_proofs_failure_isolation() {
     let first_item = first
         .expect("first committee should complete within timeout")
         .expect("stream should yield an item");
-    assert!(first_item.is_ok());
+    let signed = first_item.expect("first committee should succeed");
+    assert_eq!(
+        signed.len(),
+        1,
+        "successful committee should produce one signed item"
+    );
     assert!(
         second.is_err(),
         "stuck committee should not produce a result"
