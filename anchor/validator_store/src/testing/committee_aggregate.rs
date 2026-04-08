@@ -11,9 +11,6 @@ type SignAggregatesResult = Vec<Result<Vec<SignedAggregateAndProof<MainnetEthSpe
 
 const PRIMARY_COMMITTEE_VALIDATOR_COUNT: usize = 2;
 const SINGLE_VALIDATOR_COMMITTEE_COUNT: usize = 1;
-const EXPECTED_TOTAL_SIGNED_AGGREGATES: usize = 3;
-const EXPECTED_SIGN_AND_COLLECT_CALLS: usize = 3;
-const EXPECTED_REQUESTED_COUNTS: [usize; 3] = [1, 2, 2];
 
 /// `sign_aggregate_and_proofs` with empty input yields zero stream items.
 #[tokio::test(flavor = "multi_thread")]
@@ -72,16 +69,14 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         .map(|r| r.expect("each committee batch should succeed"))
         .collect();
     let total: usize = all_signed.iter().map(|batch| batch.len()).sum();
-    assert_eq!(
-        total, EXPECTED_TOTAL_SIGNED_AGGREGATES,
-        "expected 3 total signed aggregates"
-    );
+    let expected_total = PRIMARY_COMMITTEE_VALIDATOR_COUNT + SINGLE_VALIDATOR_COMMITTEE_COUNT;
+    assert_eq!(total, expected_total, "expected {expected_total} total signed aggregates");
 
     let captured = harness.captured_calls.lock();
     assert_eq!(
         captured.len(),
-        EXPECTED_SIGN_AND_COLLECT_CALLS,
-        "expected 3 sign_and_collect calls"
+        expected_total,
+        "expected {expected_total} sign_and_collect calls"
     );
     let mut requested_counts: Vec<_> = captured
         .iter()
@@ -94,11 +89,18 @@ async fn sign_aggregate_and_proofs_produces_one_stream_item_per_committee() {
         })
         .collect();
     requested_counts.sort_unstable();
-    // Committee A has two aggregators and committee B has one, so the per-validator collection
-    // requests should be [1, 2, 2] irrespective of stream ordering.
+    // Each validator gets one sign_and_collect call. Committee A's validators each request
+    // `PRIMARY_COMMITTEE_VALIDATOR_COUNT` signatures, committee B's request
+    // `SINGLE_VALIDATOR_COMMITTEE_COUNT`. Sorted ascending:
+    let mut expected_counts = vec![
+        SINGLE_VALIDATOR_COMMITTEE_COUNT,
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT,
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT,
+    ];
+    expected_counts.sort_unstable();
     assert_eq!(
-        requested_counts, EXPECTED_REQUESTED_COUNTS,
-        "expected committee requester counts to match aggregators per committee"
+        requested_counts, expected_counts,
+        "expected committee requester counts to match validators per committee"
     );
 }
 
