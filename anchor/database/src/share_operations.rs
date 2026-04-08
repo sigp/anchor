@@ -36,19 +36,7 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(sql_operations::GET_SHARE_PUBKEYS_FOR_VALIDATOR)?;
         let mut rows = stmt.query(params![validator_pubkey.to_string()])?;
-
-        let mut result = HashMap::new();
-        while let Some(row) = rows.next()? {
-            let operator_id: u64 = row.get(0)?;
-            let share_pubkey_str: String = row.get(1)?;
-            let share_pubkey = PublicKeyBytes::from_str(&share_pubkey_str).map_err(|e| {
-                DatabaseError::SQLError(format!(
-                    "Invalid share pubkey for operator {operator_id}: {e}"
-                ))
-            })?;
-            result.insert(OperatorId(operator_id), share_pubkey);
-        }
-        Ok(result)
+        Self::collect_share_pubkeys(&mut rows)
     }
 
     /// Fetch all operator share public keys for a given validator index.
@@ -59,7 +47,13 @@ impl NetworkDatabase {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(sql_operations::GET_SHARE_PUBKEYS_FOR_VALIDATOR_INDEX)?;
         let mut rows = stmt.query(params![validator_index])?;
+        Self::collect_share_pubkeys(&mut rows)
+    }
 
+    /// Decode rows of `(operator_id, share_pubkey)` into a map.
+    fn collect_share_pubkeys(
+        rows: &mut rusqlite::Rows<'_>,
+    ) -> Result<HashMap<OperatorId, PublicKeyBytes>, DatabaseError> {
         let mut result = HashMap::new();
         while let Some(row) = rows.next()? {
             let operator_id: u64 = row.get(0)?;
