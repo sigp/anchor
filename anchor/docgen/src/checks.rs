@@ -74,8 +74,8 @@ pub fn check_file(path: &Path, generated_content: &str) -> Result<(), DocGenErro
 
 /// Split file content at the sentinel markers, returning (before_start, after_end).
 fn split_at_markers<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a str), DocGenError> {
-    let start_idx = find_marker_index(&content, path, CLI_REFERENCE_START)?;
-    let end_idx = find_marker_index(&content, path, CLI_REFERENCE_END)?;
+    let start_idx = find_marker_index(content, path, CLI_REFERENCE_START)?;
+    let end_idx = find_marker_index(content, path, CLI_REFERENCE_END)?;
     start_before_end_idx(start_idx, end_idx, path)?;
 
     let before = &content[..start_idx];
