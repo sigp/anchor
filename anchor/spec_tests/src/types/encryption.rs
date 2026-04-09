@@ -1,15 +1,16 @@
 use base64::prelude::*;
-use operator_key::{encrypted::EncryptedKey, public, unencrypted};
+use openssl::{encrypt::Encrypter, pkey::PKey, rsa::Padding};
+use operator_key::{public, unencrypted};
 use serde::Deserialize;
 
 use crate::{SpecTest, utils::deserializers::deserialize_base64};
 
-/// Anchor-specific coverage using Go's `EncryptionSpecTest` fixtures.
+/// Mirrors Go's `EncryptionSpecTest.Run()`: parse RSA key pair from PEM,
+/// verify SK/PK consistency, then RSA-PKCS1v15 encrypt/decrypt roundtrip.
 ///
-/// Go tests RSA-PKCS1v15 encrypt/decrypt of arbitrary data. Anchor doesn't use
-/// RSA-PKCS1v15; operator keys are protected via EIP-2335 keystores instead.
-/// This test exercises that production path: parse the fixture's RSA key,
-/// verify the SK/PK pair, then roundtrip the key through EIP-2335 encrypt/decrypt.
+/// Uses the same RSA-PKCS1v15 primitives that `keysplit` and `validator_store`
+/// use in production for keyshare encryption/decryption, but calls `openssl`
+/// directly rather than going through those higher-level wrappers.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EncryptionSpecTest {
@@ -23,16 +24,13 @@ pub struct EncryptionSpecTest {
 
 impl SpecTest for EncryptionSpecTest {
     fn run(&self) -> Result<(), String> {
-        if self.plain_text.is_empty() {
-            return Err("Fixture plain_text is empty — expected non-empty data".to_string());
-        }
-
-        // `from_base64` expects base64-encoded PEM, so re-encode the raw PEM bytes.
+        // Parse private key from PEM.
         let sk_b64 = BASE64_STANDARD.encode(&self.sk_pem);
         let private_key = unencrypted::from_base64(sk_b64.as_bytes())
             .map_err(|e| format!("Failed to parse private key: {e}"))?;
 
         // Verify derived public key matches fixture.
+        // Go compares raw PEM bytes; we compare base64-encoded PEM (equivalent).
         let derived_pk_b64 = public::to_base64(&private_key)
             .map_err(|e| format!("Failed to derive public key: {e}"))?;
         let expected_pk_b64 = BASE64_STANDARD.encode(&self.pk_pem);
@@ -42,29 +40,41 @@ impl SpecTest for EncryptionSpecTest {
             );
         }
 
-        // Use plaintext as password; fall back to base64 if not valid UTF-8.
-        // `into_bytes()` recovers the original Vec<u8> from the FromUtf8Error.
-        let password = String::from_utf8(self.plain_text.clone())
-            .unwrap_or_else(|e| BASE64_STANDARD.encode(e.into_bytes()));
+        // Parse public key from fixture PEM.
+        let public_key = public::from_base64(expected_pk_b64.as_bytes())
+            .map_err(|e| format!("Failed to parse public key: {e}"))?;
 
-        let encrypted = EncryptedKey::encrypt(&private_key, &password)
+        // RSA-PKCS1v15 encrypt plaintext with public key.
+        let pkey = PKey::from_rsa(public_key)
+            .map_err(|e| format!("Failed to create PKey from RSA public key: {e}"))?;
+        let mut encrypter =
+            Encrypter::new(&pkey).map_err(|e| format!("Failed to create encrypter: {e}"))?;
+        encrypter
+            .set_rsa_padding(Padding::PKCS1)
+            .map_err(|e| format!("Failed to set padding: {e}"))?;
+        let buffer_len = encrypter
+            .encrypt_len(&self.plain_text)
+            .map_err(|e| format!("Failed to get encrypt length: {e}"))?;
+        let mut ciphertext = vec![0u8; buffer_len];
+        let encrypted_len = encrypter
+            .encrypt(&self.plain_text, &mut ciphertext)
             .map_err(|e| format!("Encryption failed: {e}"))?;
+        ciphertext.truncate(encrypted_len);
 
-        let decrypted = encrypted
-            .decrypt(&password)
+        // RSA-PKCS1v15 decrypt with private key.
+        let mut decrypted = vec![0u8; private_key.size() as usize];
+        let decrypted_len = private_key
+            .private_decrypt(&ciphertext, &mut decrypted, Padding::PKCS1)
             .map_err(|e| format!("Decryption failed: {e}"))?;
+        decrypted.truncate(decrypted_len);
 
-        // Compare full DER-encoded keys (all components: n, e, d, p, q, dp, dq, qinv).
-        // Note: Go compares RSA-encrypted plaintext; we compare the key itself after EIP-2335
-        // roundtrip.
-        let original_der = private_key
-            .private_key_to_der()
-            .map_err(|e| format!("Failed to encode original key to DER: {e}"))?;
-        let decrypted_der = decrypted
-            .private_key_to_der()
-            .map_err(|e| format!("Failed to encode decrypted key to DER: {e}"))?;
-        if original_der != decrypted_der {
-            return Err("Roundtrip failed: decrypted key does not match original".to_string());
+        // Compare decrypted bytes to original plaintext.
+        if decrypted != self.plain_text {
+            return Err(format!(
+                "Roundtrip failed: decrypted {} bytes, expected {} bytes",
+                decrypted.len(),
+                self.plain_text.len(),
+            ));
         }
 
         Ok(())
