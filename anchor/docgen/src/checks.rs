@@ -5,16 +5,29 @@ use crate::{
     render::{CLI_REFERENCE_END, CLI_REFERENCE_START},
 };
 
+fn find_marker_index(content: &str, path: &Path, marker: &str) -> Result<usize, DocGenError> {
+    content
+        .find(marker)
+        .ok_or_else(|| DocGenError::MissingMarker {
+            path: path.to_path_buf(),
+            marker: marker.to_string(),
+        })
+}
+
+fn read_content(path: &Path) -> Result<String, DocGenError> {
+    fs::read_to_string(path).map_err(|e| DocGenError::ReadFile {
+        path: path.to_path_buf(),
+        source: e,
+    })
+}
+
 fn frame_generated_content(content: &str) -> String {
     format!("\n{content}")
 }
 
 /// Replace content between sentinel markers in a file.
 pub fn update_file(path: &Path, generated_content: &str) -> Result<(), DocGenError> {
-    let content = fs::read_to_string(path).map_err(|e| DocGenError::ReadFile {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    let content = read_content(path)?;
 
     let (before, after) = split_at_markers(&content, path)?;
 
@@ -43,24 +56,10 @@ fn start_before_end_idx(start_idx: usize, end_idx: usize, path: &Path) -> Result
 
 /// Check if content between sentinel markers matches generated content.
 pub fn check_file(path: &Path, generated_content: &str) -> Result<(), DocGenError> {
-    let content = fs::read_to_string(path).map_err(|e| DocGenError::ReadFile {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    let content = read_content(path)?;
 
-    let start_idx =
-        content
-            .find(CLI_REFERENCE_START)
-            .ok_or_else(|| DocGenError::MissingMarker {
-                path: path.to_path_buf(),
-                marker: CLI_REFERENCE_START.to_string(),
-            })?;
-    let end_idx = content
-        .find(CLI_REFERENCE_END)
-        .ok_or_else(|| DocGenError::MissingMarker {
-            path: path.to_path_buf(),
-            marker: CLI_REFERENCE_END.to_string(),
-        })?;
+    let start_idx = find_marker_index(&content, path, CLI_REFERENCE_START)?;
+    let end_idx = find_marker_index(&content, path, CLI_REFERENCE_END)?;
     start_before_end_idx(start_idx, end_idx, path)?;
 
     let existing = &content[start_idx + CLI_REFERENCE_START.len()..end_idx];
@@ -75,19 +74,8 @@ pub fn check_file(path: &Path, generated_content: &str) -> Result<(), DocGenErro
 
 /// Split file content at the sentinel markers, returning (before_start, after_end).
 fn split_at_markers<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a str), DocGenError> {
-    let start_idx =
-        content
-            .find(CLI_REFERENCE_START)
-            .ok_or_else(|| DocGenError::MissingMarker {
-                path: path.to_path_buf(),
-                marker: CLI_REFERENCE_START.to_string(),
-            })?;
-    let end_idx = content
-        .find(CLI_REFERENCE_END)
-        .ok_or_else(|| DocGenError::MissingMarker {
-            path: path.to_path_buf(),
-            marker: CLI_REFERENCE_END.to_string(),
-        })?;
+    let start_idx = find_marker_index(&content, path, CLI_REFERENCE_START)?;
+    let end_idx = find_marker_index(&content, path, CLI_REFERENCE_END)?;
     start_before_end_idx(start_idx, end_idx, path)?;
 
     let before = &content[..start_idx];
@@ -106,6 +94,7 @@ mod tests {
     use super::{
         CLI_REFERENCE_END, CLI_REFERENCE_START, check_file, split_at_markers, update_file,
     };
+    use crate::errors::DocGenError;
 
     #[test]
     fn test_update_and_check_file_roundtrip() {
@@ -149,5 +138,91 @@ mod tests {
 
         assert_eq!(before, "Intro text\n");
         assert_eq!(after, "\nOutro text");
+    }
+
+    #[test]
+    fn test_check_file_with_missing_start_marker_returns_missing_marker_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_start.mdx");
+
+        let content = format!("Some content\n{CLI_REFERENCE_END}\n");
+        fs_write(&path, &content).unwrap();
+
+        let result = check_file(&path, "generated");
+        assert!(
+            matches!(
+                &result,
+                Err(DocGenError::MissingMarker { marker, .. })
+                    if marker == CLI_REFERENCE_START
+            ),
+            "Expected MissingMarker error for start marker, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_file_with_missing_end_marker_returns_missing_marker_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_end.mdx");
+
+        let content = format!("{CLI_REFERENCE_START}\nSome content\n");
+        fs_write(&path, &content).unwrap();
+
+        let result = check_file(&path, "generated");
+        assert!(
+            matches!(
+                &result,
+                Err(DocGenError::MissingMarker { marker, .. })
+                    if marker == CLI_REFERENCE_END
+            ),
+            "Expected MissingMarker error for end marker, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_file_with_invalid_marker_order_returns_invalid_markers_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reversed.mdx");
+
+        let content = format!("{CLI_REFERENCE_END}\nMiddle\n{CLI_REFERENCE_START}\n"); // End before start.
+        fs_write(&path, &content).unwrap();
+
+        let result = check_file(&path, "generated");
+        assert!(
+            matches!(&result, Err(DocGenError::InvalidMarkers { .. })),
+            "Expected InvalidMarkers error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_check_file_with_invalid_path_returns_read_file_error() {
+        let path = Path::new("/tmp/docgen_test_invalid_file.mdx"); // Does not exist.
+
+        let result = check_file(path, "generated");
+        assert!(
+            matches!(&result, Err(DocGenError::ReadFile { .. })),
+            "Expected ReadFile error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_update_file_with_invalid_path_returns_read_file_error() {
+        let path = Path::new("/tmp/docgen_test_invalid_file.mdx"); // Does not exist.
+
+        let result = update_file(path, "generated");
+        assert!(
+            matches!(&result, Err(DocGenError::ReadFile { .. })),
+            "Expected ReadFile error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_split_at_markers_with_invalid_marker_order_returns_invalid_markers_error() {
+        let content = format!("{CLI_REFERENCE_END}\nMiddle\n{CLI_REFERENCE_START}\n"); // End before start.
+
+        let result = split_at_markers(&content, Path::new("reversed.mdx"));
+        assert!(
+            matches!(&result, Err(DocGenError::InvalidMarkers { .. })),
+            "Expected InvalidMarkers error, got: {result:?}"
+        );
     }
 }

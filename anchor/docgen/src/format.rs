@@ -201,9 +201,9 @@ pub(crate) fn format_default(arg: &Arg) -> String {
 
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Parser};
+    use clap::{Arg, ArgAction, CommandFactory, Parser, ValueEnum, builder::EnumValueParser};
 
-    use super::group_args_by_clap_groups;
+    use super::{format_description, format_option, group_args_by_clap_groups};
 
     #[derive(Parser, Clone, Debug)]
     pub struct TestFlag {
@@ -261,5 +261,141 @@ mod tests {
             super::split_pascal_case("FileLoggingFlags"),
             "File Logging Flags"
         );
+    }
+
+    // Tests all permutations of format_option
+
+    #[test]
+    fn test_format_option_with_short_and_long_and_values() {
+        let arg = Arg::new("data_dir")
+            .short('d')
+            .long("data-dir")
+            .value_name("DIR")
+            .action(ArgAction::Set);
+
+        assert_eq!(format_option(&arg), "`-d`, `--data-dir <DIR>`");
+    }
+
+    #[test]
+    fn test_format_option_with_short_and_long_flag() {
+        let arg = Arg::new("subscribe")
+            .short('s')
+            .long("subscribe")
+            .action(ArgAction::SetTrue);
+
+        assert_eq!(format_option(&arg), "`-s`, `--subscribe`");
+    }
+
+    #[test]
+    fn test_format_option_with_long_only_and_values() {
+        let arg = Arg::new("key_file")
+            .long("key-file")
+            .value_name("PATH")
+            .action(ArgAction::Set);
+
+        assert_eq!(format_option(&arg), "`--key-file <PATH>`");
+    }
+
+    #[test]
+    fn test_format_option_with_long_only_flag() {
+        let arg = Arg::new("http").long("http").action(ArgAction::SetTrue);
+
+        assert_eq!(format_option(&arg), "`--http`");
+    }
+
+    #[test]
+    fn test_format_option_with_short_only_and_values() {
+        let arg = Arg::new("key")
+            .short('k')
+            .value_name("KEY")
+            .action(ArgAction::Set);
+
+        assert_eq!(format_option(&arg), "`-k <KEY>`");
+    }
+
+    #[test]
+    fn test_format_option_with_short_only_flag() {
+        let arg = Arg::new("verbose").short('v').action(ArgAction::SetTrue);
+
+        assert_eq!(format_option(&arg), "`-v`");
+    }
+
+    #[test]
+    fn test_format_option_positional_with_no_short_or_long() {
+        let arg = Arg::new("input").value_name("VALUE").action(ArgAction::Set);
+
+        assert_eq!(format_option(&arg), "`<VALUE>`");
+    }
+
+    #[test]
+    fn test_format_option_value_name_default_uppercases_arg_value() {
+        let arg = Arg::new("my_option")
+            .long("my-option")
+            .action(ArgAction::Set);
+
+        assert_eq!(format_option(&arg), "`--my-option <MY_OPTION>`");
+    }
+
+    // Tests for character escaping requirements in format_description. Required to ensure
+    // markdown tables render correctly.
+
+    #[test]
+    fn test_format_description_escapes_pipes_for_markdown_tables() {
+        // Pipes must be escaped to `\|` so they don't break markdown table columns.
+        let arg = Arg::new("choice")
+            .long("choice")
+            .action(ArgAction::Set)
+            .help("Use A | B");
+
+        let result = format_description(&arg).unwrap();
+        assert_eq!(result, "Use A \\| B");
+    }
+
+    #[test]
+    fn test_format_description_escapes_curly_braces() {
+        // MDX format requires escaping curly braces.
+        let arg = Arg::new("network")
+            .long("network")
+            .action(ArgAction::Set)
+            .help("Defaults to {network}");
+
+        let result = format_description(&arg).unwrap();
+        assert_eq!(result, "Defaults to \\{network\\}");
+    }
+
+    #[test]
+    fn test_format_description_collapses_newlines_double_spaces_to_single_spaces() {
+        let arg = Arg::new("multi")
+            .long("multi")
+            .action(ArgAction::Set)
+            .help("Line one\nLine  two");
+
+        let result = format_description(&arg).unwrap();
+        assert_eq!(result, "Line one Line two");
+    }
+
+    #[test]
+    fn test_format_description_appends_possible_values_to_help_string() {
+        #[derive(Clone, ValueEnum)]
+        enum TestTopic {
+            A,
+            B,
+        }
+        let arg = Arg::new("format")
+            .long("format")
+            .action(ArgAction::Set)
+            .value_parser(EnumValueParser::<TestTopic>::new()) // Equivalent to clap_derive for an enum type.
+            .help("Output format");
+
+        let result = format_description(&arg).unwrap();
+        assert_eq!(result, "Output format (possible values: a, b)");
+    }
+
+    #[test]
+    fn test_format_description_with_empty_help_returns_empty_string() {
+        let arg = Arg::new("silent").long("silent");
+
+        let result = format_description(&arg).unwrap();
+        assert_eq!(result, "");
     }
 }
