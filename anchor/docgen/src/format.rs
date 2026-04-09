@@ -6,6 +6,13 @@ use clap::{Arg, ArgAction, Command};
 
 use crate::errors::DocGenError;
 
+
+/// A container for a group of CLI arguments that belong to a common semantic group.
+type CliArgGrouping<'a> = Vec<&'a Arg>;
+
+/// A container of CLI argument semantic groupings with optional group display names.
+type GroupedCliArgs<'a> = Vec<(Option<String>, CliArgGrouping<'a>)>;
+
 /// Convert a clap ArgGroup ID (PascalCase struct name) to a human-readable heading.
 ///
 /// Hard-coded display names feature for certain groups for styling preferences.
@@ -58,7 +65,7 @@ fn split_pascal_case(s: &str) -> String {
 pub(crate) fn group_args_by_clap_groups<'a>(
     cmd: &Command,
     args: &[&'a Arg],
-) -> Vec<(Option<String>, Vec<&'a Arg>)> {
+) -> GroupedCliArgs<'a> {
     // Collect groups that have members (sub-structs with direct args, not parent
     // structs that contain flatten fields — those get empty groups per clap's design).
     let groups: Vec<_> = cmd
@@ -66,7 +73,7 @@ pub(crate) fn group_args_by_clap_groups<'a>(
         .filter(|g| g.get_args().next().is_some())
         .collect();
 
-    let mut result: Vec<(Option<String>, Vec<&'a Arg>)> = Vec::new();
+    let mut result: GroupedCliArgs<'a> = Vec::new();
     let mut assigned: HashSet<&str> = HashSet::new();
 
     for group in &groups {
