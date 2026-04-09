@@ -3,7 +3,10 @@ mod validator_database_tests {
     use bls::PublicKeyBytes;
     use types::Graffiti;
 
-    use crate::test_utils::{InMemoryTestFixture, assertions};
+    use crate::{
+        PendingStateUpdates,
+        test_utils::{InMemoryTestFixture, assertions, commit_and_publish},
+    };
 
     // ==================== Transaction view tests ====================
 
@@ -42,12 +45,13 @@ mod validator_database_tests {
 
         let mut conn = fixture.db.connection().unwrap();
         let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
 
         // update the graffiti
         assert!(
             fixture
                 .db
-                .update_graffiti(&validator.public_key, new_graffiti, &tx)
+                .update_graffiti_tx(&validator.public_key, new_graffiti, &tx, &mut pending)
                 .is_ok()
         );
 
@@ -55,6 +59,7 @@ mod validator_database_tests {
         // exists call will also check data values
         validator.graffiti = new_graffiti;
         assertions::validator::exists_in_db(&validator, &tx);
+        commit_and_publish(&fixture.db, tx, pending);
         assertions::validator::exists_in_memory(&fixture.db, &validator);
     }
 }

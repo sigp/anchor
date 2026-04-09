@@ -6,7 +6,7 @@
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
-use database::NetworkDatabase;
+use database::{NetworkDatabase, PendingStateUpdates};
 use fork::{Fork, ForkSchedule};
 use parking_lot::Mutex;
 use qbft::Completed;
@@ -19,18 +19,23 @@ use slashing_protection::SlashingDatabase;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata, consensus::QbftDataValidator,
+    ValidatorMetadata,
+    consensus::{
+        AggregatorCommitteeConsensusData, AssignedAggregator, DataVersion, QbftDataValidator,
+    },
 };
+use ssz::Encode;
+use ssz_types::VariableList;
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
 use tokio::sync::watch;
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
-    Hash256, MainnetEthSpec, Slot,
+    Hash256, MainnetEthSpec, SelectionProof, Slot,
 };
-use validator_store::AttestationToSign;
+use validator_store::{AggregateToSign, AttestationToSign};
 
-use crate::{AnchorValidatorStore, VotingAssignments, VotingContext};
+use crate::{AggregationAssignments, AnchorValidatorStore, VotingAssignments, VotingContext};
 
 pub(super) const TEST_SLOT: u64 = 1;
 const SLOT_DURATION_SECS: u64 = 12;
@@ -100,6 +105,10 @@ pub(super) struct CommitteeSetup {
     shares: Vec<Share>,
 }
 
+/// Builds a synthetic committee with deterministic validator and share data.
+///
+/// `starting_validator_index` lets tests create distinct committees without repeating the full
+/// fixture setup inline.
 pub(super) fn create_committee_setup(
     operator_ids: &[OperatorId],
     num_validators: usize,
@@ -200,6 +209,7 @@ impl ValidatorStoreTestHarness {
         {
             let mut conn = database.connection().expect("connection should succeed");
             let tx = conn.transaction().expect("transaction should start");
+            let mut pending = PendingStateUpdates::default();
 
             let mut inserted_operators = std::collections::HashSet::new();
             for setup in &committee_setups {
@@ -215,7 +225,7 @@ impl ValidatorStoreTestHarness {
                             database::test_utils::generators::operator::with_id(op_id.0)
                         };
                         database
-                            .insert_operator(&operator, &tx)
+                            .insert_operator_tx(&operator, &tx, &mut pending)
                             .expect("operator insertion should succeed");
                     }
                 }
@@ -229,12 +239,19 @@ impl ValidatorStoreTestHarness {
                         .collect();
 
                     database
-                        .insert_validator(setup.cluster.clone(), validator, validator_shares, &tx)
+                        .insert_validator_tx(
+                            setup.cluster.clone(),
+                            validator,
+                            validator_shares,
+                            &tx,
+                            &mut pending,
+                        )
                         .expect("validator insertion should succeed");
                 }
             }
 
             tx.commit().expect("commit should succeed");
+            database.publish_pending_state_updates(pending);
         }
 
         // Slashing DB
@@ -310,6 +327,83 @@ impl ValidatorStoreTestHarness {
         });
     }
 
+    /// Seeds `AggregationAssignments` for the given committees at the provided slot.
+    ///
+    /// Each validator in the selected committee is treated as an attestation aggregator for a
+    /// single beacon committee index derived from the test committee position.
+    pub(super) fn seed_aggregation_assignments_for_slot(
+        &self,
+        slot: u64,
+        committee_indices: &[usize],
+    ) {
+        let mut aggregator_committees = HashMap::new();
+        let mut consensus_data_by_ssv_committee = HashMap::new();
+
+        for &committee_idx in committee_indices {
+            let setup = &self.committee_setups[committee_idx];
+            let beacon_committee_index = committee_idx as u64;
+
+            for validator in &setup.validators {
+                aggregator_committees.insert(validator.public_key, beacon_committee_index);
+            }
+
+            let aggregators: Vec<_> = setup
+                .validators
+                .iter()
+                .map(|validator| AssignedAggregator {
+                    validator_index: validator.index.expect("test validator should have index"),
+                    selection_proof: Signature::empty(),
+                    committee_index: beacon_committee_index,
+                })
+                .collect();
+
+            let aggregated_attestation = AttestationBase::<MainnetEthSpec> {
+                aggregation_bits: ssz_types::BitList::with_capacity(128)
+                    .expect("bitlist should be valid"),
+                data: AttestationData {
+                    slot: Slot::new(slot),
+                    index: beacon_committee_index,
+                    beacon_block_root: Hash256::zero(),
+                    source: Checkpoint {
+                        epoch: Epoch::new(0),
+                        root: Hash256::zero(),
+                    },
+                    target: Checkpoint {
+                        epoch: Epoch::new(0),
+                        root: Hash256::zero(),
+                    },
+                },
+                signature: AggregateSignature::infinity(),
+            };
+
+            let consensus_data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+                version: DataVersion::from(types::ForkName::Deneb),
+                aggregators: VariableList::new(aggregators)
+                    .expect("aggregator list should be valid"),
+                aggregator_committee_indexes: VariableList::new(vec![beacon_committee_index])
+                    .expect("committee indexes should be valid"),
+                aggregated_attestations: VariableList::new(vec![
+                    VariableList::new(aggregated_attestation.as_ssz_bytes())
+                        .expect("attestation bytes should fit"),
+                ])
+                .expect("aggregated attestations should be valid"),
+                contributors: VariableList::empty(),
+                sync_committee_contributions: VariableList::empty(),
+            };
+
+            consensus_data_by_ssv_committee
+                .insert(setup.cluster.committee_id(), Arc::new(consensus_data));
+        }
+
+        self.validator_store
+            .update_aggregation_assignments(AggregationAssignments {
+                slot: Slot::new(slot),
+                aggregator_committees,
+                multi_sync_aggregators: HashMap::new(),
+                consensus_data_by_ssv_committee,
+            });
+    }
+
     pub(super) fn create_attestation(
         &self,
         committee_idx: usize,
@@ -351,6 +445,50 @@ impl ValidatorStoreTestHarness {
                 },
                 signature: AggregateSignature::infinity(),
             }),
+        }
+    }
+
+    pub(super) fn create_aggregate(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> AggregateToSign<MainnetEthSpec> {
+        self.create_aggregate_at_slot(committee_idx, validator_idx, TEST_SLOT)
+    }
+
+    pub(super) fn create_aggregate_at_slot(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+        slot: u64,
+    ) -> AggregateToSign<MainnetEthSpec> {
+        let validator = &self.committee_setups[committee_idx].validators[validator_idx];
+        let validator_index = validator
+            .index
+            .expect("test validator should have an index");
+
+        AggregateToSign {
+            pubkey: validator.public_key,
+            aggregator_index: *validator_index as u64,
+            aggregate: Attestation::Base(AttestationBase {
+                aggregation_bits: ssz_types::BitList::with_capacity(128)
+                    .expect("bitlist should be valid"),
+                data: AttestationData {
+                    slot: Slot::new(slot),
+                    index: committee_idx as u64,
+                    beacon_block_root: Hash256::zero(),
+                    source: Checkpoint {
+                        epoch: Epoch::new(0),
+                        root: Hash256::zero(),
+                    },
+                    target: Checkpoint {
+                        epoch: Epoch::new(0),
+                        root: Hash256::zero(),
+                    },
+                },
+                signature: AggregateSignature::infinity(),
+            }),
+            selection_proof: SelectionProof::from(Signature::empty()),
         }
     }
 }

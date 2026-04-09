@@ -5,7 +5,7 @@ use std::{net::IpAddr, path::PathBuf};
 
 use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
 use cli::{NetworkOptions, Node};
-use global_config::GlobalConfig;
+use global_config::{GlobalConfig, defaults::DEFAULT_NODE_ENDPOINTS};
 use multiaddr::{Multiaddr, Protocol};
 use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
 use network_utils::unused_port::{
@@ -15,10 +15,6 @@ use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
-
-pub const DEFAULT_BEACON_NODE: &str = "http://localhost:5052/";
-pub const DEFAULT_EXECUTION_NODE: &str = "http://localhost:8545/";
-pub const DEFAULT_EXECUTION_NODE_WS: &str = "ws://localhost:8546/";
 
 /// Stores the core configuration for this Anchor instance.
 #[derive(Clone)]
@@ -91,15 +87,16 @@ impl Config {
     /// global_config: We pass this because it would be expensive to uselessly get a default.
     fn new(global_config: GlobalConfig) -> Self {
         let beacon_nodes = vec![
-            SensitiveUrl::parse(DEFAULT_BEACON_NODE)
+            SensitiveUrl::parse(DEFAULT_NODE_ENDPOINTS.beacon_node)
                 .expect("beacon_nodes must always be a valid url."),
         ];
         let execution_nodes = vec![
-            SensitiveUrl::parse(DEFAULT_EXECUTION_NODE)
+            SensitiveUrl::parse(DEFAULT_NODE_ENDPOINTS.execution_node)
                 .expect("execution_nodes must always be a valid url."),
         ];
-        let execution_nodes_websocket = SensitiveUrl::parse(DEFAULT_EXECUTION_NODE_WS)
-            .expect("execution_nodes_websocket must always be a valid url.");
+        let execution_nodes_websocket =
+            SensitiveUrl::parse(DEFAULT_NODE_ENDPOINTS.execution_node_ws)
+                .expect("execution_nodes_websocket must always be a valid url.");
         let network_config = network::Config::new(global_config.data_dir.network_dir());
 
         Self {

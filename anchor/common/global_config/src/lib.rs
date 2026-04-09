@@ -1,5 +1,5 @@
 pub mod data_dir;
-
+pub mod defaults;
 use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use clap::Parser;
@@ -7,9 +7,6 @@ use ssv_network_config::SsvNetworkConfig;
 use tracing::Level;
 
 use crate::data_dir::DataDir;
-
-/// Default network, used to partition the data storage
-pub const DEFAULT_HARDCODED_NETWORK: &str = "mainnet";
 
 /// Config that applies to all subcommands: The resolved network and datadir. This avoids repeated
 /// logic matching the datadir from the actual CLI definition.
@@ -53,7 +50,7 @@ pub struct GlobalFlags {
         conflicts_with = "testnet_dir",
         help = "Name of the chain Anchor will validate.",
         display_order = 0,
-        default_value = DEFAULT_HARDCODED_NETWORK,
+        default_value = defaults::DEFAULT_HARDCODED_NETWORK,
     )]
     pub network: String,
 

@@ -1,4 +1,4 @@
-//! Integration tests for the committee-batching attestation path in `sign_attestations()`.
+//! Integration tests for the committee attestation path in `sign_attestations()`.
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -11,9 +11,11 @@ use super::common::*;
 use crate::Error;
 
 type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
+const PRIMARY_COMMITTEE_VALIDATOR_COUNT: usize = 2;
+const SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT: usize = 1;
 
 /// `sign_attestations` groups attestations by `CommitteeId`, runs consensus once per committee,
-/// collects signatures for each validator, and streams one batch of signed attestations per
+/// collects one signature per validator, and streams one batch of signed attestations per
 /// committee.
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_produces_one_stream_item_per_committee() {
@@ -21,12 +23,12 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
     let our_operator_id = OperatorId(1);
     let committee_a = create_committee_setup(
         &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
-        2,
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT,
         0,
     );
     let committee_b = create_committee_setup(
         &[OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)],
-        1,
+        SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT,
         100,
     );
     // Precondition: committees must have distinct IDs for the test to be meaningful
@@ -49,40 +51,63 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
         .collect()
         .await;
 
-    // Assert — 2 stream items (one per committee), 3 total signed attestations
+    // Assert: 2 stream items, one per committee, and 3 signed attestations in total.
     assert_eq!(results.len(), 2, "expected one stream item per committee");
     let all_signed: Vec<_> = results
         .into_iter()
         .map(|r| r.expect("each committee batch should succeed"))
         .collect();
     let total: usize = all_signed.iter().map(|batch| batch.len()).sum();
-    assert_eq!(total, 3, "expected 3 total signed attestations");
+    let expected_total =
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT + SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT;
+    assert_eq!(
+        total, expected_total,
+        "expected {expected_total} total signed attestations"
+    );
 
-    // Verify the mock signature collector was called via the committee path with the expected
-    // per-committee request counts. In this harness all validators are attesters and there are no
-    // sync committee duties, so the expected counts are the number of validators per committee.
+    // We make one `sign_and_collect` call per validator.
+    // The committee requester carries the batch size for that validator's committee:
+    // committee A has 2 validators, so it produces 2 calls, each with a batch size of 2;
+    // committee B has 1 validator, so it produces 1 call with a batch size of 1.
     let captured = harness.captured_calls.lock();
-    assert_eq!(captured.len(), 3, "expected 3 sign_and_collect calls");
-    let mut requested_counts: Vec<_> = captured
+    assert_eq!(
+        captured.len(),
+        expected_total,
+        "expected {expected_total} sign_and_collect calls"
+    );
+    let batch_sizes: Vec<_> = captured
         .iter()
         .map(|call| match &call.requester {
             SignatureRequester::Committee {
-                num_signatures_to_collect,
+                validator_partial_signature_batch_size,
                 ..
-            } => *num_signatures_to_collect,
+            } => *validator_partial_signature_batch_size,
             other => panic!("expected SignatureRequester::Committee, got: {other:?}"),
         })
         .collect();
-    requested_counts.sort_unstable();
+
+    let calls_with_batch_size = |batch_size: usize| {
+        batch_sizes
+            .iter()
+            .filter(|&&size| size == batch_size)
+            .count()
+    };
     assert_eq!(
-        requested_counts,
-        vec![1, 2, 2],
-        "expected committee requester counts to match validators per committee"
+        calls_with_batch_size(PRIMARY_COMMITTEE_VALIDATOR_COUNT),
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT,
+        "committee A should make one call per validator, and each call should batch {} validator partial signatures",
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT,
+    );
+    assert_eq!(
+        calls_with_batch_size(SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT),
+        SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT,
+        "committee B should make one call per validator, and that call should batch {} validator partial signature",
+        SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT,
     );
 }
 
-/// A committee stuck at `get_voting_context` (no voting context for its slot) does not block
-/// another committee from signing successfully. Verifies `FuturesUnordered` independence.
+/// A committee stuck in `get_voting_context` because its slot has no voting context does not block
+/// another committee from signing successfully. This verifies the `FuturesUnordered` isolation.
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_attestations_failure_isolation() {
     // Arrange
@@ -112,11 +137,16 @@ async fn sign_attestations_failure_isolation() {
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
     let second = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
 
-    // Assert — committee A completes, committee B stays stuck
+    // Assert: committee A completes, while committee B remains stuck.
     let first_item = first
         .expect("first committee should complete within timeout")
         .expect("stream should yield an item");
-    assert!(first_item.is_ok());
+    let signed = first_item.expect("first committee should succeed");
+    assert_eq!(
+        signed.len(),
+        1,
+        "successful committee should produce one signed item"
+    );
     assert!(
         second.is_err(),
         "stuck committee should not produce a result"
