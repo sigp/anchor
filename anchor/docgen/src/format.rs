@@ -6,7 +6,6 @@ use clap::{Arg, ArgAction, Command};
 
 use crate::errors::DocGenError;
 
-
 /// A container for a group of CLI arguments that belong to a common semantic group.
 type CliArgGrouping<'a> = Vec<&'a Arg>;
 
@@ -62,10 +61,7 @@ fn split_pascal_case(s: &str) -> String {
 /// clap_derive automatically creates an ArgGroup for each `#[derive(Parser)]` struct,
 /// with the struct's kebab-cased name as the group ID and the struct's direct args
 /// as members.
-pub(crate) fn group_args_by_clap_groups<'a>(
-    cmd: &Command,
-    args: &[&'a Arg],
-) -> GroupedCliArgs<'a> {
+pub(crate) fn group_args_by_clap_groups<'a>(cmd: &Command, args: &[&'a Arg]) -> GroupedCliArgs<'a> {
     // Collect groups that have members (sub-structs with direct args, not parent
     // structs that contain flatten fields — those get empty groups per clap's design).
     let groups: Vec<_> = cmd
