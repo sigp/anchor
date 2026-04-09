@@ -4,10 +4,12 @@ use serde::Deserialize;
 
 use crate::{SpecTest, utils::deserializers::deserialize_base64};
 
-/// Tests RSA key encryption/decryption roundtrip via Anchor's `operator_key` crate.
+/// Anchor-specific coverage using Go's `EncryptionSpecTest` fixtures.
 ///
-/// Go tests raw RSA encrypt/decrypt; Anchor uses EIP-2335 key encryption instead,
-/// so we test that path using the fixture's plaintext as the password.
+/// Go tests RSA-PKCS1v15 encrypt/decrypt of arbitrary data. Anchor doesn't use
+/// RSA-PKCS1v15; operator keys are protected via EIP-2335 keystores instead.
+/// This test exercises that production path: parse the fixture's RSA key,
+/// verify the SK/PK pair, then roundtrip the key through EIP-2335 encrypt/decrypt.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EncryptionSpecTest {
