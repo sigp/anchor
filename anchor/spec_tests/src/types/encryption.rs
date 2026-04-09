@@ -53,7 +53,8 @@ impl SpecTest for EncryptionSpecTest {
             .map_err(|e| format!("Decryption failed: {e}"))?;
 
         // Compare full DER-encoded keys (all components: n, e, d, p, q, dp, dq, qinv).
-        // Analogous to Go's byte-for-byte `require.EqualValues(t, test.PlainText, plain)`.
+        // Note: Go compares RSA-encrypted plaintext; we compare the key itself after EIP-2335
+        // roundtrip.
         let original_der = private_key
             .private_key_to_der()
             .map_err(|e| format!("Failed to encode original key to DER: {e}"))?;
