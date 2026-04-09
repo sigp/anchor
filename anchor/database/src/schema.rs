@@ -28,6 +28,15 @@ const MIGRATION_V2_TO_V3: &str = r#"
     UPDATE metadata SET schema_version = 3;
 "#;
 
+/// Migration from schema version 3 to 4: Add index on `validators.validator_index`
+///
+/// The `GET_SHARE_PUBKEYS_FOR_VALIDATOR_INDEX` query joins validators and shares
+/// filtering by `validator_index`. Without an index this causes a full table scan.
+const MIGRATION_V3_TO_V4: &str = r#"
+    CREATE INDEX idx_validators_validator_index ON validators(validator_index);
+    UPDATE metadata SET schema_version = 4;
+"#;
+
 enum UpgradeAction {
     UpToDate,
     DoUpdate {
@@ -183,7 +192,11 @@ fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
             script: MIGRATION_V2_TO_V3,
             new_version: 3,
         },
-        Some(3) => UpgradeAction::UpToDate,
-        Some(4..) => UpgradeAction::Future,
+        Some(3) => UpgradeAction::DoUpdate {
+            script: MIGRATION_V3_TO_V4,
+            new_version: 4,
+        },
+        Some(4) => UpgradeAction::UpToDate,
+        Some(5..) => UpgradeAction::Future,
     }
 }
