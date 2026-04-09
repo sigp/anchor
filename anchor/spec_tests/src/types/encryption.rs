@@ -8,9 +8,9 @@ use crate::{SpecTest, utils::deserializers::deserialize_base64};
 /// Mirrors Go's `EncryptionSpecTest.Run()`: parse RSA key pair from PEM,
 /// verify SK/PK consistency, then RSA-PKCS1v15 encrypt/decrypt roundtrip.
 ///
-/// Uses the same RSA-PKCS1v15 primitives that `keysplit` and `validator_store`
-/// use in production for keyshare encryption/decryption, but calls `openssl`
-/// directly rather than going through those higher-level wrappers.
+/// Uses the same RSA-PKCS1v15 primitives that `validator_store` uses in
+/// production for keyshare decryption, but calls `openssl` directly rather
+/// than going through the higher-level wrapper.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EncryptionSpecTest {
