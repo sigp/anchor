@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_v1_to_v3() {
+    fn test_migration_v1_to_v4() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_v2_to_v3() {
+    fn test_migration_v2_to_v4() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
