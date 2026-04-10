@@ -127,10 +127,52 @@ pub struct QbftInitialization<D: QbftData> {
 // Map from an identifier to a sender for the instance
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
 
+#[derive(Clone)]
+struct QbftScheduler {
+    senders: Senders,
+}
+
+impl QbftScheduler {
+    fn new(senders: Senders) -> Self {
+        Self { senders }
+    }
+
+    fn spawn_background(
+        &self,
+        task: impl Future<Output = ()> + Send + 'static,
+        name: &'static str,
+    ) -> Result<(), QbftError> {
+        self.senders.permitless.send_async(task, name)?;
+        Ok(())
+    }
+
+    fn dispatch<D: QbftData + Send + 'static>(
+        &self,
+        sender: UnboundedSender<QbftMessage<D>>,
+        kind: QbftMessageKind<D>,
+        name: &'static str,
+    ) -> Result<(), QbftError> {
+        self.senders.urgent_consensus.send_immediate(
+            move |drop_on_finish| {
+                let _ = sender.send(QbftMessage {
+                    kind,
+                    drop_on_finish: Some(drop_on_finish),
+                });
+            },
+            name,
+        )?;
+        Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        self.senders.permitless.is_closed()
+    }
+}
+
 // Top level QBFTManager structure
 pub struct QbftManager<E: EthSpec, S: SlotClock> {
-    // Senders to send work off to the central processor
-    processor: Senders,
+    // Internal scheduler used to queue QBFT work onto the shared processor.
+    scheduler: QbftScheduler,
     // OperatorID
     operator_id: OwnOperatorId,
     // All of the QBFT instances that are voting on proposer consensus data
@@ -161,7 +203,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         fork_schedule: Arc<ForkSchedule>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
-            processor,
+            scheduler: QbftScheduler::new(processor),
             operator_id,
             proposer_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
@@ -174,9 +216,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
 
         // Start a long running task that will clean up old instances
         manager
-            .processor
-            .permitless
-            .send_async(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
+            .scheduler
+            .spawn_background(Arc::clone(&manager).cleaner(), QBFT_CLEANER_NAME)?;
 
         Ok(manager)
     }
@@ -232,21 +273,16 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
         let sender = D::get_or_spawn_instance(self, id);
-        self.processor.urgent_consensus.send_immediate(
-            move |drop_on_finish: DropOnFinish| {
-                // A message to initialize this instance
-                let _ = sender.send(QbftMessage {
-                    kind: QbftMessageKind::Initialize(QbftInitialization {
-                        initial,
-                        validator,
-                        message_id,
-                        timeout_mode,
-                        config,
-                        on_completed: result_sender,
-                    }),
-                    drop_on_finish: Some(drop_on_finish),
-                });
-            },
+        self.scheduler.dispatch(
+            sender,
+            QbftMessageKind::Initialize(QbftInitialization {
+                initial,
+                validator,
+                message_id,
+                timeout_mode,
+                config,
+                on_completed: result_sender,
+            }),
             QBFT_MESSAGE_NAME,
         )?;
 
@@ -350,13 +386,9 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         data: WrappedQbftMessage,
     ) -> Result<(), QbftError> {
         let sender = D::get_or_spawn_instance(self, id);
-        self.processor.urgent_consensus.send_immediate(
-            move |drop_on_finish: DropOnFinish| {
-                let _ = sender.send(QbftMessage {
-                    kind: QbftMessageKind::NetworkMessage(data),
-                    drop_on_finish: Some(drop_on_finish),
-                });
-            },
+        self.scheduler.dispatch(
+            sender,
+            QbftMessageKind::NetworkMessage(data),
             QBFT_MESSAGE_NAME,
         )?;
         Ok(())
@@ -364,7 +396,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
 
     // Long running cleaner that will remove instances that are no longer relevant
     async fn cleaner(self: Arc<Self>) {
-        while !self.processor.permitless.is_closed() {
+        while !self.scheduler.is_closed() {
             sleep(
                 self.slot_clock
                     .duration_to_next_slot()
@@ -433,7 +465,7 @@ pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 's
                 let (tx, rx) = mpsc::unbounded_channel();
                 let span = debug_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);
-                let _ = manager.processor.permitless.send_async(
+                let _ = manager.scheduler.spawn_background(
                     Box::pin(qbft_instance(rx, manager.message_sender.clone()).instrument(span)),
                     QBFT_INSTANCE_NAME,
                 );
