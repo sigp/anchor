@@ -127,7 +127,6 @@ pub struct QbftInitialization<D: QbftData> {
 // Map from an identifier to a sender for the instance
 type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
 
-#[derive(Clone)]
 struct QbftScheduler {
     senders: Senders,
 }
