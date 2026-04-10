@@ -55,6 +55,11 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::PartialSigMsgSpecTest>(path, contents))
         }
 
+        // Encryption tests
+        "encryption.EncryptionSpecTest" => {
+            DispatchOutcome::Executed(run_test::<types::EncryptionSpecTest>(path, contents))
+        }
+
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.
         _ => {
