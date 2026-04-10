@@ -18,7 +18,7 @@ use ssv_types::{
     msgid::{DutyExecutor, MessageId, Role},
 };
 use ssz::Decode;
-use task_executor::{ShutdownReason, TaskExecutor};
+use task_executor::TaskExecutor;
 use tokio::{
     pin, select,
     sync::{
@@ -56,8 +56,8 @@ where
 {
     pub tester: Arc<QbftTester<E, D>>,
     pub consensus_rx: UnboundedReceiver<ConsensusResult>,
-    _signal: Option<async_channel::Sender<()>>,
-    _shutdown: Option<futures::channel::mpsc::Sender<ShutdownReason>>,
+    // Keep the matching exit sender alive for the lifetime of the test context.
+    _exit_signal: async_channel::Sender<()>,
 }
 
 impl<E, D> TestContext<E, D>
@@ -70,15 +70,25 @@ where
     pub async fn new(
         clock: ManualSlotClock,
         executor: TaskExecutor,
+        exit_signal: async_channel::Sender<()>,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
     ) -> Self {
-        Self::new_with_delays(clock, executor, size, test_data, HashMap::new()).await
+        Self::new_with_delays(
+            clock,
+            executor,
+            exit_signal,
+            size,
+            test_data,
+            HashMap::new(),
+        )
+        .await
     }
 
     pub async fn new_with_delays(
         clock: ManualSlotClock,
         executor: TaskExecutor,
+        exit_signal: async_channel::Sender<()>,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
         delay_initialization: HashMap<OperatorId, Duration>,
@@ -100,18 +110,8 @@ where
         Self {
             tester,
             consensus_rx,
-            _signal: None,
-            _shutdown: None,
+            _exit_signal: exit_signal,
         }
-    }
-
-    fn keep_executor_alive(
-        &mut self,
-        signal: async_channel::Sender<()>,
-        shutdown: futures::channel::mpsc::Sender<ShutdownReason>,
-    ) {
-        self._signal = Some(signal);
-        self._shutdown = Some(shutdown);
     }
 
     // Helper to set multiple operators offline
@@ -682,8 +682,7 @@ mod manager_tests {
     // Provides the runtime pieces the test harness needs to start in-memory managers.
     struct TestRuntime {
         executor: TaskExecutor,
-        _signal: async_channel::Sender<()>,
-        _shutdown: futures::channel::mpsc::Sender<ShutdownReason>,
+        _exit_signal: async_channel::Sender<()>,
         clock: ManualSlotClock,
     }
 
@@ -709,9 +708,9 @@ mod manager_tests {
 
         // setup the executor
         let handle = tokio::runtime::Handle::current();
-        let (signal, exit) = async_channel::bounded(1);
+        let (exit_signal, exit) = async_channel::bounded(1);
         let (shutdown, _) = futures::channel::mpsc::channel(1);
-        let executor = TaskExecutor::new(handle, exit, shutdown.clone());
+        let executor = TaskExecutor::new(handle, exit, shutdown);
 
         // setup the slot clock
         let slot_duration = Duration::from_secs(12);
@@ -728,8 +727,7 @@ mod manager_tests {
 
         TestRuntime {
             executor,
-            _signal: signal,
-            _shutdown: shutdown,
+            _exit_signal: exit_signal,
             clock,
         }
     }
@@ -744,20 +742,18 @@ mod manager_tests {
     ) -> BeaconVoteTestContext {
         let TestRuntime {
             executor,
-            _signal,
-            _shutdown,
+            _exit_signal,
             clock,
         } = new_test_runtime();
 
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+        TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             clock,
             executor,
+            _exit_signal,
             committee_size,
             generate_beacon_vote_duties(num_instances),
         )
-        .await;
-        context.keep_executor_alive(_signal, _shutdown);
-        context
+        .await
     }
 
     async fn start_single_beacon_vote_cluster(
@@ -773,21 +769,19 @@ mod manager_tests {
     ) -> BeaconVoteTestContext {
         let TestRuntime {
             executor,
-            _signal,
-            _shutdown,
+            _exit_signal,
             clock,
         } = new_test_runtime();
 
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
+        TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
             clock,
             executor,
+            _exit_signal,
             committee_size,
             generate_beacon_vote_duties(num_instances),
             initialization_delays,
         )
-        .await;
-        context.keep_executor_alive(_signal, _shutdown);
-        context
+        .await
     }
 
     async fn start_single_beacon_vote_cluster_with_delays(
