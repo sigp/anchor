@@ -18,7 +18,7 @@ SELECT
     COALESCE(domain_type, 0),
     network_name,
     block_number,
-    max_operator_id_seen
+    COALESCE(max_operator_id_seen, 0)
 FROM metadata;
 
 DROP TRIGGER unique_metadata;
