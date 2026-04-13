@@ -1,3 +1,5 @@
+-- Start from Anchor's historical v1 schema so fresh database creation and old-database upgrades
+-- share the same migration source of truth.
 CREATE TABLE metadata (
     schema_version INTEGER NOT NULL DEFAULT 1,
     domain_type INTEGER NOT NULL,
