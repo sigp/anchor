@@ -336,8 +336,8 @@ struct InMemoryCustomizeConnection {
 #[cfg(feature = "test-utils")]
 impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
-        // For in-memory databases, create schema on each connection
-        let _ = schema::create_initial_schema(conn, &self.network_name);
+        // For in-memory databases, initialize schema on each connection.
+        let _ = schema::initialize_in_memory(conn, &self.network_name);
         Ok(())
     }
 }

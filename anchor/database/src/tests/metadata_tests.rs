@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::path::Path;
 
-use rusqlite::Connection;
+use refinery::{Runner, Target};
+use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 use crate::{
@@ -15,44 +16,46 @@ mod tests {
 
     const TEST_NETWORK_1: &str = "testnet1";
     const TEST_NETWORK_2: &str = "testnet2";
+    const V1_SCHEMA_VERSION: i32 = 1;
+    const V2_SCHEMA_VERSION: i32 = 2;
+    const V3_SCHEMA_VERSION: i32 = 3;
+    const V4_SCHEMA_VERSION: i32 = 4;
+    const SEEDED_BLOCK_NUMBER: u64 = 42;
+    const SEEDED_MAX_OPERATOR_ID: u64 = 777;
 
     #[test]
     fn test_new_database_creation() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Ensure database is created successfully
         let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
-        assert!(result.is_ok(), "Failed to create new database: {result:?}",);
-
-        // Verify database file was created
+        assert!(result.is_ok(), "Failed to create new database: {result:?}");
         assert!(db_path.exists(), "Database file should exist");
 
-        // Verify metadata table contains correct initial values
         let conn = Connection::open(&db_path).expect("Failed to open database");
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
+        assert_eq!(metadata.schema_version, V4_SCHEMA_VERSION as u64);
+        assert_eq!(metadata.network_name, TEST_NETWORK_1);
+        assert_eq!(metadata.block_number, 0);
         assert_eq!(
-            metadata.schema_version, 4,
-            "Initial schema version should be 4"
+            get_applied_migration_versions(&conn),
+            vec![
+                V1_SCHEMA_VERSION,
+                V2_SCHEMA_VERSION,
+                V3_SCHEMA_VERSION,
+                V4_SCHEMA_VERSION,
+            ]
         );
-        assert_eq!(
-            metadata.network_name, TEST_NETWORK_1,
-            "Network name should match input"
-        );
-        assert_eq!(metadata.block_number, 0, "Initial block number should be 0");
     }
 
     #[test]
     fn test_network_name_validation() {
-        // Uses file-based DB to test reopening with different network
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create database with first network
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Failed to create database");
 
-        // Try to open with different network - should fail
         let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_2);
         assert!(result.is_err(), "Should fail with incorrect network");
 
@@ -69,14 +72,11 @@ mod tests {
 
     #[test]
     fn test_network_name_validation_success() {
-        // Uses file-based DB to test reopening with same network
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create database with network
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Failed to create database");
 
-        // Open with same network - should succeed
         let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
         assert!(result.is_ok(), "Should succeed with correct network");
     }
@@ -86,10 +86,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create a completely unknown database
         create_unknown_database(&db_path);
 
-        // Try to open - should fail
         let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
         assert!(result.is_err(), "Should reject unknown database");
 
@@ -109,10 +107,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create database with future schema version
         create_future_schema_database(&db_path, TEST_NETWORK_1);
 
-        // Try to open - should fail
         let result = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1);
         assert!(result.is_err(), "Should reject future schema version");
 
@@ -130,16 +126,12 @@ mod tests {
     #[test]
     fn test_block_number_operations() {
         let pubkey = generators::pubkey::random_rsa();
-
-        // Create database
         let db = NetworkDatabase::new_in_memory(&pubkey, TEST_NETWORK_1)
             .expect("Failed to create database");
 
-        // Test initial block number
         let initial_block = db.state().get_last_processed_block();
         assert_eq!(initial_block, 0, "Initial block should be 0");
 
-        // Update block number
         let new_block = 12345u64;
         let mut conn = db.connection().expect("Failed to get connection");
         let tx = conn.transaction().expect("Failed to start transaction");
@@ -148,7 +140,6 @@ mod tests {
             .expect("Failed to update block");
         commit_and_publish(&db, tx, pending);
 
-        // Verify update
         let updated_block = db.state().get_last_processed_block();
         assert_eq!(updated_block, new_block, "Block number should be updated");
     }
@@ -158,10 +149,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create legacy database
         create_legacy_database(&db_path);
 
-        // Ensure up to date - should error
         let err = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1)
             .expect_err("Failed to detect outdated database");
 
@@ -172,240 +161,210 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_v1_to_v4() {
+    fn test_migration_v1_to_v4_matches_fresh_schema() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
+        let fresh_db_path = temp_dir.path().join("fresh.db");
 
-        // Create a v1 database (without max_operator_id_seen column or network_name)
-        create_v1_database(&db_path);
-
-        // Verify it's version 1
-        {
-            let conn = Connection::open(&db_path).expect("Failed to open database");
-            let version: u64 = conn
-                .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
-                .expect("Failed to get schema version");
-            assert_eq!(version, 1, "Should start at version 1");
-        }
-
-        // Run migration
+        create_supported_anchor_database(&db_path, V1_SCHEMA_VERSION, None, None);
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
+        schema::ensure_up_to_date(&fresh_db_path, TEST_NETWORK_1)
+            .expect("Fresh schema creation should succeed");
 
-        // Verify migration succeeded
-        {
-            let conn = Connection::open(&db_path).expect("Failed to open database");
-            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-            assert_eq!(
-                metadata.schema_version, 4,
-                "Should be upgraded to version 4"
-            );
+        let conn = Connection::open(&db_path).expect("Failed to open migrated database");
+        let fresh_conn = Connection::open(&fresh_db_path).expect("Failed to open fresh database");
+        let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
-            // Verify the network_name column was set
-            assert_eq!(
-                metadata.network_name, TEST_NETWORK_1,
-                "network_name should be set after migration"
-            );
-
-            // Verify max_operator_id_seen column exists
-            let max_operator_id: Option<u64> = conn
-                .query_row("SELECT max_operator_id_seen FROM metadata", [], |row| {
-                    row.get(0)
-                })
-                .expect("Failed to query max_operator_id_seen");
-            assert_eq!(
-                max_operator_id, None,
-                "max_operator_id_seen should be NULL after migration"
-            );
-        }
+        assert_eq!(metadata.schema_version, V4_SCHEMA_VERSION as u64);
+        assert_eq!(metadata.network_name, TEST_NETWORK_1);
+        assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
+        assert_eq!(get_metadata_max_operator_id_seen(&conn), Some(0));
+        assert_eq!(schema_signature(&conn), schema_signature(&fresh_conn));
+        assert_eq!(
+            get_applied_migration_versions(&conn),
+            vec![
+                V1_SCHEMA_VERSION,
+                V2_SCHEMA_VERSION,
+                V3_SCHEMA_VERSION,
+                V4_SCHEMA_VERSION,
+            ]
+        );
     }
 
     #[test]
-    fn test_migration_v2_to_v4() {
+    fn test_migration_v2_to_v4_matches_fresh_schema() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
+        let fresh_db_path = temp_dir.path().join("fresh.db");
 
-        // Create a v2 database (with max_operator_id_seen but without network_name)
-        create_v2_database(&db_path);
-
-        // Verify it's version 2
-        {
-            let conn = Connection::open(&db_path).expect("Failed to open database");
-            let version: u64 = conn
-                .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
-                .expect("Failed to get schema version");
-            assert_eq!(version, 2, "Should start at version 2");
-        }
-
-        // Run migration
+        create_supported_anchor_database(
+            &db_path,
+            V2_SCHEMA_VERSION,
+            None,
+            Some(SEEDED_MAX_OPERATOR_ID),
+        );
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
+        schema::ensure_up_to_date(&fresh_db_path, TEST_NETWORK_1)
+            .expect("Fresh schema creation should succeed");
 
-        // Verify migration succeeded
-        {
-            let conn = Connection::open(&db_path).expect("Failed to open database");
-            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-            assert_eq!(
-                metadata.schema_version, 4,
-                "Should be upgraded to version 4"
-            );
+        let conn = Connection::open(&db_path).expect("Failed to open migrated database");
+        let fresh_conn = Connection::open(&fresh_db_path).expect("Failed to open fresh database");
+        let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
-            // Verify the network_name column was set
-            assert_eq!(
-                metadata.network_name, TEST_NETWORK_1,
-                "network_name should be set after migration"
-            );
-        }
+        assert_eq!(metadata.schema_version, V4_SCHEMA_VERSION as u64);
+        assert_eq!(metadata.network_name, TEST_NETWORK_1);
+        assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
+        assert_eq!(
+            get_metadata_max_operator_id_seen(&conn),
+            Some(SEEDED_MAX_OPERATOR_ID)
+        );
+        assert_eq!(schema_signature(&conn), schema_signature(&fresh_conn));
+        assert_eq!(
+            get_applied_migration_versions(&conn),
+            vec![
+                V1_SCHEMA_VERSION,
+                V2_SCHEMA_VERSION,
+                V3_SCHEMA_VERSION,
+                V4_SCHEMA_VERSION,
+            ]
+        );
     }
 
     #[test]
-    fn test_migration_v3_to_v4() {
+    fn test_migration_v3_to_v4_bootstraps_refinery_history_and_matches_fresh_schema() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let fresh_db_path = temp_dir.path().join("fresh.db");
+
+        create_supported_anchor_database(
+            &db_path,
+            V3_SCHEMA_VERSION,
+            Some(TEST_NETWORK_1),
+            Some(SEEDED_MAX_OPERATOR_ID),
+        );
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
+        schema::ensure_up_to_date(&fresh_db_path, TEST_NETWORK_1)
+            .expect("Fresh schema creation should succeed");
+
+        let conn = Connection::open(&db_path).expect("Failed to open migrated database");
+        let fresh_conn = Connection::open(&fresh_db_path).expect("Failed to open fresh database");
+        let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+
+        assert_eq!(metadata.schema_version, V4_SCHEMA_VERSION as u64);
+        assert_eq!(metadata.network_name, TEST_NETWORK_1);
+        assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
+        assert_eq!(
+            get_metadata_max_operator_id_seen(&conn),
+            Some(SEEDED_MAX_OPERATOR_ID)
+        );
+        assert_eq!(schema_signature(&conn), schema_signature(&fresh_conn));
+        assert_eq!(
+            get_applied_migration_versions(&conn),
+            vec![
+                V1_SCHEMA_VERSION,
+                V2_SCHEMA_VERSION,
+                V3_SCHEMA_VERSION,
+                V4_SCHEMA_VERSION,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_refinery_can_ignore_missing_old_migrations_after_baseline_cutoff() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
-        // Create a v3 database (with network_name but without validator_index index)
-        create_v3_database(&db_path, TEST_NETWORK_1);
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1)
+            .expect("Initial migration should succeed");
 
-        // Verify it's version 3
-        {
-            let conn = Connection::open(&db_path).expect("Failed to open database");
-            let version: u64 = conn
-                .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
-                .expect("Failed to get schema version");
-            assert_eq!(version, 3, "Should start at version 3");
-        }
+        let mut conn = Connection::open(&db_path).expect("Failed to open migrated database");
+        let strict_result = reduced_migration_runner().run(&mut conn);
+        assert!(
+            strict_result.is_err(),
+            "Missing historical migrations should fail with strict defaults"
+        );
 
-        // Run migration
-        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
-
-        // Verify migration succeeded
-        {
-            let conn = Connection::open(&db_path).expect("Failed to open database");
-            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-            assert_eq!(
-                metadata.schema_version, 4,
-                "Should be upgraded to version 4"
+        reduced_migration_runner()
+            .set_abort_missing(false)
+            .run(&mut conn)
+            .expect(
+                "A reduced migration set should be accepted when missing migrations are allowed",
             );
+    }
 
-            // Verify the index exists
-            let index_exists: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_validators_validator_index'",
-                    [],
-                    |row| row.get(0),
+    fn create_supported_anchor_database(
+        db_path: &Path,
+        schema_version: i32,
+        stored_network: Option<&str>,
+        max_operator_id_seen: Option<u64>,
+    ) {
+        let mut conn = Connection::open(db_path).expect("Failed to create supported Anchor DB");
+        schema::migration_runner_for_tests()
+            .set_target(Target::Version(schema_version))
+            .run(&mut conn)
+            .expect("Failed to derive historical schema from real migrations");
+        conn.execute_batch("DROP TABLE refinery_schema_history;")
+            .expect("Failed to remove refinery history from historical test DB");
+
+        match schema_version {
+            V1_SCHEMA_VERSION => {
+                conn.execute(
+                    "INSERT INTO metadata (schema_version, domain_type, block_number) VALUES (?1, 0, ?2)",
+                    params![schema_version, SEEDED_BLOCK_NUMBER],
                 )
-                .expect("Failed to check index");
-            assert!(index_exists, "idx_validators_validator_index should exist");
+                .expect("Failed to insert v1 metadata");
+            }
+            V2_SCHEMA_VERSION => {
+                conn.execute(
+                    "INSERT INTO metadata (schema_version, domain_type, block_number, max_operator_id_seen) VALUES (?1, 0, ?2, ?3)",
+                    params![
+                        schema_version,
+                        SEEDED_BLOCK_NUMBER,
+                        max_operator_id_seen.expect("v2 metadata should include max_operator_id_seen")
+                    ],
+                )
+                .expect("Failed to insert v2 metadata");
+            }
+            V3_SCHEMA_VERSION => {
+                conn.execute(
+                    "INSERT INTO metadata (schema_version, domain_type, network_name, block_number, max_operator_id_seen) VALUES (?1, 0, ?2, ?3, ?4)",
+                    params![
+                        schema_version,
+                        stored_network.expect("v3 metadata should include network_name"),
+                        SEEDED_BLOCK_NUMBER,
+                        max_operator_id_seen.expect("v3 metadata should include max_operator_id_seen")
+                    ],
+                )
+                .expect("Failed to insert v3 metadata");
+            }
+            other => panic!("unsupported historical schema version for test setup: {other}"),
         }
     }
 
-    // Helper functions for creating test databases
-    fn create_v1_database(db_path: &PathBuf) {
-        let conn = Connection::open(db_path).expect("Failed to create v1 database");
+    fn reduced_migration_runner() -> Runner {
+        let reduced_migrations = schema::migration_runner_for_tests()
+            .get_migrations()
+            .iter()
+            .filter(|migration| migration.version() >= V2_SCHEMA_VERSION)
+            .cloned()
+            .collect::<Vec<_>>();
 
-        // Create metadata table as it was in version 1 (without max_operator_id_seen or
-        // network_name)
-        conn.execute(
-            "CREATE TABLE metadata (
-                schema_version INTEGER NOT NULL DEFAULT 1,
-                domain_type INTEGER NOT NULL,
-                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
-            )",
-            [],
-        )
-        .expect("Failed to create v1 metadata table");
-
-        conn.execute("INSERT INTO metadata (domain_type) VALUES (0)", [])
-            .expect("Failed to insert v1 metadata");
-
-        // Create validators table (existed since v1, needed for v3->v4 index migration)
-        create_validators_table(&conn);
+        Runner::new(&reduced_migrations).set_grouped(true)
     }
 
-    fn create_v2_database(db_path: &PathBuf) {
-        let conn = Connection::open(db_path).expect("Failed to create v2 database");
-
-        // Create metadata table as it was in version 2 (with max_operator_id_seen but without
-        // network_name)
-        conn.execute(
-            "CREATE TABLE metadata (
-                schema_version INTEGER NOT NULL DEFAULT 2,
-                domain_type INTEGER NOT NULL,
-                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
-                max_operator_id_seen INTEGER DEFAULT 0
-            )",
-            [],
-        )
-        .expect("Failed to create v2 metadata table");
-
-        conn.execute("INSERT INTO metadata (domain_type) VALUES (0)", [])
-            .expect("Failed to insert v2 metadata");
-
-        // Create validators table (existed since v1, needed for v3->v4 index migration)
-        create_validators_table(&conn);
-    }
-
-    fn create_v3_database(db_path: &PathBuf, network_name: &str) {
-        let conn = Connection::open(db_path).expect("Failed to create v3 database");
-
-        // Create metadata table as it was in version 3
-        conn.execute(
-            "CREATE TABLE metadata (
-                schema_version INTEGER NOT NULL DEFAULT 3,
-                domain_type INTEGER NOT NULL DEFAULT 0,
-                network_name TEXT,
-                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
-                max_operator_id_seen INTEGER DEFAULT 0
-            )",
-            [],
-        )
-        .expect("Failed to create v3 metadata table");
-
-        conn.execute(
-            "INSERT INTO metadata (network_name) VALUES (?1)",
-            [network_name],
-        )
-        .expect("Failed to insert v3 metadata");
-
-        // Create validators table (needed for v3->v4 index migration)
-        create_validators_table(&conn);
-    }
-
-    /// Creates the validators table (and its clusters dependency) for test databases.
-    /// The validators table existed since schema v1 and is needed for the v3->v4 index migration.
-    fn create_validators_table(conn: &Connection) {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS clusters (
-                cluster_id BLOB PRIMARY KEY,
-                owner TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS validators (
-                validator_pubkey TEXT PRIMARY KEY,
-                cluster_id BLOB NOT NULL,
-                validator_index INTEGER,
-                graffiti BLOB,
-                FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
-            );",
-        )
-        .expect("Failed to create validators table");
-    }
-
-    fn create_legacy_database(db_path: &PathBuf) {
+    fn create_legacy_database(db_path: &Path) {
         let conn = Connection::open(db_path).expect("Failed to create legacy database");
-
-        // Create the old block table (without metadata)
         conn.execute(
             "CREATE TABLE block (block_number INTEGER NOT NULL DEFAULT 0)",
             [],
         )
         .expect("Failed to create legacy block table");
-
         conn.execute("INSERT INTO block (block_number) VALUES (42)", [])
             .expect("Failed to insert legacy block");
     }
 
-    fn create_unknown_database(db_path: &PathBuf) {
+    fn create_unknown_database(db_path: &Path) {
         let conn = Connection::open(db_path).expect("Failed to create unknown database");
-
-        // Create some random table that doesn't match our schema
         conn.execute(
             "CREATE TABLE unknown_table (id INTEGER PRIMARY KEY, data TEXT)",
             [],
@@ -413,10 +372,8 @@ mod tests {
         .expect("Failed to create unknown table");
     }
 
-    fn create_future_schema_database(db_path: &PathBuf, network_name: &str) {
+    fn create_future_schema_database(db_path: &Path, network_name: &str) {
         let conn = Connection::open(db_path).expect("Failed to create future schema database");
-
-        // Create metadata table with future version
         conn.execute(
             "CREATE TABLE metadata (
                 schema_version INTEGER NOT NULL DEFAULT 999,
@@ -433,5 +390,48 @@ mod tests {
             [network_name],
         )
         .expect("Failed to insert future metadata");
+    }
+
+    fn get_metadata_max_operator_id_seen(conn: &Connection) -> Option<u64> {
+        conn.query_row("SELECT max_operator_id_seen FROM metadata", [], |row| {
+            row.get(0)
+        })
+        .expect("Failed to query max_operator_id_seen")
+    }
+
+    fn get_applied_migration_versions(conn: &Connection) -> Vec<i32> {
+        let mut stmt = conn
+            .prepare("SELECT version FROM refinery_schema_history ORDER BY version")
+            .expect("Failed to prepare migration history query");
+        stmt.query_map([], |row| row.get(0))
+            .expect("Failed to query migration history")
+            .map(|row| row.expect("Failed to parse migration version"))
+            .collect()
+    }
+
+    fn schema_signature(conn: &Connection) -> Vec<(String, String, String, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, name, tbl_name, COALESCE(sql, '') \
+                 FROM sqlite_master \
+                 WHERE name NOT LIKE 'sqlite_%' \
+                 ORDER BY type, name",
+            )
+            .expect("Failed to prepare schema introspection query");
+        stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                normalize_sql(&row.get::<_, String>(3)?),
+            ))
+        })
+        .expect("Failed to introspect schema")
+        .map(|row| row.expect("Failed to parse schema row"))
+        .collect()
+    }
+
+    fn normalize_sql(sql: &str) -> String {
+        sql.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 }
