@@ -9,7 +9,7 @@ embed_migrations!("src/migrations");
 
 type SchemaVersion = u32;
 
-const SUPPORTED_PRE_REFINERY_SCHEMA_VERSION: SchemaVersion = 3;
+const SUPPORTED_PRE_REFINERY_SCHEMA_VERSION: SchemaVersion = 1;
 const BASELINE_MIGRATION_VERSION: i32 = 1;
 
 enum DatabaseType {
@@ -161,7 +161,7 @@ fn validate_network_name(
 fn bridge_manual_anchor_database(
     conn: &mut Connection,
     schema_version: SchemaVersion,
-    network_name: &str,
+    _network_name: &str,
 ) -> Result<(), DatabaseError> {
     if schema_version != SUPPORTED_PRE_REFINERY_SCHEMA_VERSION {
         return Err(DatabaseError::AlreadyPresent(
@@ -170,7 +170,9 @@ fn bridge_manual_anchor_database(
         ));
     }
 
-    canonicalize_manual_v3_metadata(conn, network_name)?;
+    // Manual schema v1 is now the refinery baseline, so pre-refinery production databases can be
+    // adopted by stamping V1 as already applied and then letting refinery run the combined V2
+    // upgrade normally.
     migration_runner()
         .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
         .run(conn)?;
@@ -178,55 +180,18 @@ fn bridge_manual_anchor_database(
     Ok(())
 }
 
-fn canonicalize_manual_v3_metadata(
-    conn: &Connection,
-    network_name: &str,
-) -> Result<(), DatabaseError> {
-    // Some shipped schema-v3 databases were created from the full v3 schema, while others reached
-    // v3 through additive ALTER TABLE migrations and therefore have a weaker `metadata`
-    // definition. The weaker shape can still have nullable `network_name` and
-    // `max_operator_id_seen`, because those columns were added later instead of being present in
-    // the original CREATE TABLE statement. Normalize both shapes into the lean refinery-era
-    // `metadata` table before stamping V1 as applied.
-    conn.execute_batch(
-        "DROP TRIGGER IF EXISTS unique_metadata;
-         CREATE TABLE metadata_new (
-             network_name TEXT NOT NULL,
-             block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
-             max_operator_id_seen INTEGER DEFAULT 0
-         );",
-    )?;
-
-    conn.execute(
-        "INSERT INTO metadata_new (
-             network_name,
-             block_number,
-             max_operator_id_seen
-         )
-         SELECT
-             COALESCE(network_name, ?1),
-             block_number,
-             COALESCE(max_operator_id_seen, 0)
-         FROM metadata",
-        params![network_name],
-    )?;
-
-    conn.execute_batch(
-        "DROP TABLE metadata;
-         ALTER TABLE metadata_new RENAME TO metadata;
-         CREATE TRIGGER unique_metadata
-             BEFORE INSERT ON metadata
-             WHEN (SELECT COUNT(*) FROM metadata) >= 1
-         BEGIN
-             SELECT RAISE(FAIL, 'we can only have one metadata row');
-         END;",
-    )?;
-
-    Ok(())
-}
-
 fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), DatabaseError> {
     conn.execute(sql_operations::INSERT_METADATA, params![network_name])?;
+    // V2 mirrors the old additive path, so pre-refinery rows still need runtime normalization
+    // after the migration runs.
+    conn.execute(
+        "UPDATE metadata
+         SET schema_version = 4,
+             domain_type = COALESCE(domain_type, 0),
+             network_name = COALESCE(network_name, ?1),
+             max_operator_id_seen = COALESCE(max_operator_id_seen, 0)",
+        params![network_name],
+    )?;
     Ok(())
 }
 

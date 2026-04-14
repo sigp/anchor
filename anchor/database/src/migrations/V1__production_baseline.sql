@@ -1,11 +1,10 @@
 -- Production baseline for the refinery cutover.
--- This is the first refinery-managed schema, derived from the shipped v3 layout. Schema
--- bookkeeping moves to `refinery_schema_history`, so the singleton table keeps only the runtime
--- state that Anchor still needs to persist.
+-- This matches the shipped schema-1 database layout exactly, so existing production databases can
+-- be adopted by stamping V1 as already applied and then letting refinery own all later evolution.
 CREATE TABLE metadata (
-    network_name TEXT NOT NULL, -- Network name for network isolation (e.g., "mainnet", "hoodi")
-    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
-    max_operator_id_seen INTEGER DEFAULT 0
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    domain_type INTEGER NOT NULL,
+    block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
 );
 
 CREATE TRIGGER unique_metadata

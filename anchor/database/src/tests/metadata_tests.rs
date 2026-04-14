@@ -16,9 +16,8 @@ mod tests {
     const TEST_NETWORK_1: &str = "testnet1";
     const TEST_NETWORK_2: &str = "testnet2";
     const PRODUCTION_BASELINE_MIGRATION_VERSION: i32 = 1;
-    const VALIDATOR_INDEX_MIGRATION_VERSION: i32 = 2;
+    const CURRENT_SCHEMA_MIGRATION_VERSION: i32 = 2;
     const SEEDED_BLOCK_NUMBER: u64 = 42;
-    const SEEDED_MAX_OPERATOR_ID: u64 = 777;
 
     #[test]
     fn test_new_database_creation() {
@@ -38,13 +37,14 @@ mod tests {
             get_applied_migration_versions(&conn),
             vec![
                 PRODUCTION_BASELINE_MIGRATION_VERSION,
-                VALIDATOR_INDEX_MIGRATION_VERSION,
+                CURRENT_SCHEMA_MIGRATION_VERSION,
             ]
         );
         assert!(
             has_validator_index(&conn),
             "the first refinery migration should create the validator index"
         );
+        assert_eq!(get_metadata_max_operator_id_seen(&conn), Some(0));
     }
 
     #[test]
@@ -83,57 +83,19 @@ mod tests {
     }
 
     #[test]
-    fn test_manual_v3_production_baseline_adoption() {
-        // Arrange: create a manual v3 DB matching the shipped fresh schema. This models a node
-        // that first installed Anchor on v3, so `metadata` already has the full v3 definition.
+    fn test_manual_v1_adoption() {
+        // Arrange: create a real shipped manual v1 DB. This is the production state we observed
+        // in the copied mainnet data dir, so the cutover should adopt it by stamping refinery V1
+        // and then running the combined refinery V2 upgrade.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
-        create_manual_v3_production_database(
-            &db_path,
-            Some(TEST_NETWORK_1),
-            Some(SEEDED_MAX_OPERATOR_ID),
-        );
+        create_manual_v1_database(&db_path);
 
         // Act: adopt it into refinery and run the first refinery migration.
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Adoption should succeed");
 
-        // Assert: data is preserved and the DB is now fully refinery-managed.
-        let conn = Connection::open(&db_path).expect("Failed to open adopted database");
-        let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-        assert_eq!(metadata.network_name, TEST_NETWORK_1);
-        assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
-        assert_eq!(
-            get_metadata_max_operator_id_seen(&conn),
-            Some(SEEDED_MAX_OPERATOR_ID)
-        );
-        assert_eq!(
-            get_applied_migration_versions(&conn),
-            vec![
-                PRODUCTION_BASELINE_MIGRATION_VERSION,
-                VALIDATOR_INDEX_MIGRATION_VERSION,
-            ]
-        );
-        assert!(
-            has_validator_index(&conn),
-            "the first refinery migration should create the validator index"
-        );
-    }
-
-    #[test]
-    fn test_manual_v3_upgraded_shape_adoption() {
-        // Arrange: create a manual v3 DB that reached v3 through older ALTER TABLE upgrades. This
-        // models a node that started on an older release, so `metadata` kept the weaker historical
-        // shape and only gained `network_name` / `max_operator_id_seen` later.
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let db_path = temp_dir.path().join("test.db");
-        create_manual_v3_upgraded_database(&db_path, None, None);
-
-        // Act: adopt it into refinery and run the first refinery migration.
-        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Adoption should succeed");
-
-        // Assert: the weaker legacy metadata shape is canonicalized into the lean refinery-era
-        // `metadata` table and then
-        // upgraded through the first refinery migration.
+        // Assert: the runtime state is preserved, refinery history is initialized, and the
+        // combined V2 migration materializes the current schema.
         let conn = Connection::open(&db_path).expect("Failed to open adopted database");
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
         assert_eq!(metadata.network_name, TEST_NETWORK_1);
@@ -143,7 +105,7 @@ mod tests {
             get_applied_migration_versions(&conn),
             vec![
                 PRODUCTION_BASELINE_MIGRATION_VERSION,
-                VALIDATOR_INDEX_MIGRATION_VERSION,
+                CURRENT_SCHEMA_MIGRATION_VERSION,
             ]
         );
         assert!(
@@ -218,87 +180,18 @@ mod tests {
         assert_eq!(updated_block, new_block, "Block number should be updated");
     }
 
-    fn create_manual_v3_production_database(
-        db_path: &Path,
-        network_name: Option<&str>,
-        max_operator_id_seen: Option<u64>,
-    ) {
-        let conn = Connection::open(db_path).expect("Failed to create manual v3 database");
+    fn create_manual_v1_database(db_path: &Path) {
+        let conn = Connection::open(db_path).expect("Failed to create manual v1 database");
         conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
             .expect("Failed to create production baseline schema");
-        // Replace the lean refinery-era `metadata` table with the shipped manual v3 schema so the
-        // adoption path sees a real pre-refinery database.
-        conn.execute_batch(
-            "DROP TRIGGER unique_metadata;
-             DROP TABLE metadata;
-             CREATE TABLE metadata (
-                 schema_version INTEGER NOT NULL DEFAULT 3,
-                 domain_type INTEGER NOT NULL DEFAULT 0,
-                 network_name TEXT NOT NULL,
-                 block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
-                 max_operator_id_seen INTEGER DEFAULT 0
-             );
-             CREATE TRIGGER unique_metadata
-                 BEFORE INSERT ON metadata
-                 WHEN (SELECT COUNT(*) FROM metadata) >= 1
-             BEGIN
-                 SELECT RAISE(FAIL, 'we can only have one metadata row');
-             END;",
-        )
-        .expect("Failed to recreate manual v3 metadata");
+        // Seed the metadata row exactly the way shipped schema-v1 databases look on disk. There
+        // is no network_name yet; the cutover fills that after V2 runs.
         conn.execute(
-            "INSERT INTO metadata (schema_version, domain_type, network_name, block_number, max_operator_id_seen)
-             VALUES (?1, 0, ?2, ?3, ?4)",
-            params![
-                3,
-                network_name.expect("production v3 DB should have network_name"),
-                SEEDED_BLOCK_NUMBER,
-                max_operator_id_seen.expect("production v3 DB should have max_operator_id_seen"),
-            ],
+            "INSERT INTO metadata (schema_version, domain_type, block_number)
+             VALUES (?1, ?2, ?3)",
+            params![1, 0, SEEDED_BLOCK_NUMBER],
         )
-        .expect("Failed to insert production v3 metadata");
-    }
-
-    fn create_manual_v3_upgraded_database(
-        db_path: &Path,
-        network_name: Option<&str>,
-        max_operator_id_seen: Option<u64>,
-    ) {
-        let conn = Connection::open(db_path).expect("Failed to create upgraded v3 database");
-        conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
-            .expect("Failed to create shared v3 tables");
-        // Recreate the weaker historical `metadata` shape left by `v1 -> v2 -> v3` additive
-        // migrations. In this layout the newer columns can still be nullable because they were
-        // added with `ALTER TABLE`.
-        conn.execute_batch(
-            "DROP TRIGGER unique_metadata;
-             DROP TABLE metadata;
-             CREATE TABLE metadata (
-                 schema_version INTEGER NOT NULL DEFAULT 1,
-                 domain_type INTEGER NOT NULL,
-                 block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0)
-             );
-             ALTER TABLE metadata ADD COLUMN max_operator_id_seen INTEGER;
-             ALTER TABLE metadata ADD COLUMN network_name TEXT;
-             CREATE TRIGGER unique_metadata
-                 BEFORE INSERT ON metadata
-                 WHEN (SELECT COUNT(*) FROM metadata) >= 1
-             BEGIN
-                 SELECT RAISE(FAIL, 'we can only have one metadata row');
-             END;",
-        )
-        .expect("Failed to recreate upgraded v3 metadata");
-        conn.execute(
-            "INSERT INTO metadata (schema_version, domain_type, block_number, max_operator_id_seen, network_name)
-             VALUES (?1, 0, ?2, ?3, ?4)",
-            params![
-                3,
-                SEEDED_BLOCK_NUMBER,
-                max_operator_id_seen,
-                network_name,
-            ],
-        )
-        .expect("Failed to insert upgraded v3 metadata");
+        .expect("Failed to insert manual v1 metadata");
     }
 
     fn create_legacy_database(db_path: &Path) {
