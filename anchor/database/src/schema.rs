@@ -10,18 +10,18 @@ embed_migrations!("src/migrations");
 type SchemaVersion = u32;
 
 const LATEST_SCHEMA_VERSION: SchemaVersion = 4;
-const MIN_SUPPORTED_SCHEMA_VERSION: SchemaVersion = 1;
-
-#[derive(Debug)]
-struct AnchorDatabaseState {
-    schema_version: SchemaVersion,
-    stored_network: Option<String>,
-    has_refinery_history: bool,
-}
+const SUPPORTED_PRE_REFINERY_SCHEMA_VERSION: SchemaVersion = 3;
+const BASELINE_MIGRATION_VERSION: i32 = 1;
 
 enum DatabaseType {
     New,
-    Anchor(AnchorDatabaseState),
+    RefineryManaged {
+        stored_network: Option<String>,
+    },
+    ManualAnchor {
+        schema_version: SchemaVersion,
+        stored_network: Option<String>,
+    },
     LegacyUnsupported,
     Unknown,
 }
@@ -52,11 +52,6 @@ pub(crate) fn initialize_in_memory(
     ensure_up_to_date_with_connection(conn, network_name, true)
 }
 
-#[cfg(test)]
-pub(crate) fn migration_runner_for_tests() -> refinery::Runner {
-    migration_runner()
-}
-
 fn ensure_up_to_date_with_connection(
     conn: &mut Connection,
     network_name: &str,
@@ -70,17 +65,19 @@ fn ensure_up_to_date_with_connection(
 
     match database_type {
         DatabaseType::New => {}
-        DatabaseType::Anchor(state) => {
-            validate_network_name(state.stored_network.as_deref(), network_name)?;
-            if !state.has_refinery_history {
-                // Existing Anchor databases predate `refinery_schema_history`. Seed the history
-                // from the recorded schema version so we can adopt the DB in place.
-                bootstrap_refinery_history(conn, state.schema_version)?;
-            }
+        DatabaseType::RefineryManaged { stored_network } => {
+            validate_network_name(stored_network.as_deref(), network_name)?;
+        }
+        DatabaseType::ManualAnchor {
+            schema_version,
+            stored_network,
+        } => {
+            validate_network_name(stored_network.as_deref(), network_name)?;
+            bridge_manual_anchor_database(conn, schema_version, network_name)?;
         }
         DatabaseType::LegacyUnsupported => {
             return Err(DatabaseError::AlreadyPresent(
-                "Database is outdated - please remove \"anchor_db.sqlite\" or use another data dir."
+                "Database is from an unsupported pre-refinery Anchor version. Please remove \"anchor_db.sqlite\" and let Anchor recreate it."
                     .to_string(),
             ));
         }
@@ -100,6 +97,18 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
     let has_metadata = has_table(conn, "metadata")?;
     let has_refinery_history = has_table(conn, "refinery_schema_history")?;
 
+    if has_refinery_history {
+        let stored_network = if has_metadata {
+            conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
+                .optional()?
+                .flatten()
+        } else {
+            None
+        };
+
+        return Ok(DatabaseType::RefineryManaged { stored_network });
+    }
+
     if has_metadata {
         let schema_version = conn
             .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
@@ -108,22 +117,16 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
         if let Some(schema_version) = schema_version {
             let stored_network = conn
                 .query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
-                .ok();
+                .ok()
+                .flatten();
 
-            return Ok(DatabaseType::Anchor(AnchorDatabaseState {
+            return Ok(DatabaseType::ManualAnchor {
                 schema_version,
                 stored_network,
-                has_refinery_history,
-            }));
+            });
         }
 
-        if has_refinery_history {
-            return Ok(DatabaseType::Anchor(AnchorDatabaseState {
-                schema_version: LATEST_SCHEMA_VERSION,
-                stored_network: None,
-                has_refinery_history,
-            }));
-        }
+        return Ok(DatabaseType::LegacyUnsupported);
     }
 
     let legacy = conn
@@ -156,34 +159,73 @@ fn validate_network_name(
     Ok(())
 }
 
-fn bootstrap_refinery_history(
+fn bridge_manual_anchor_database(
     conn: &mut Connection,
     schema_version: SchemaVersion,
+    network_name: &str,
 ) -> Result<(), DatabaseError> {
-    if schema_version < MIN_SUPPORTED_SCHEMA_VERSION {
+    if schema_version != SUPPORTED_PRE_REFINERY_SCHEMA_VERSION {
         return Err(DatabaseError::AlreadyPresent(
-            "Database is outdated - please remove \"anchor_db.sqlite\" or use another data dir."
+            "Database is from an unsupported pre-refinery Anchor version. Please remove \"anchor_db.sqlite\" and let Anchor recreate it."
                 .to_string(),
         ));
     }
 
-    if schema_version > LATEST_SCHEMA_VERSION {
-        return Err(DatabaseError::AlreadyPresent(
-            "Database schema is newer than supported by this version of Anchor".to_string(),
-        ));
-    }
-
-    // The on-disk schema and data already exist. We only need `refinery` to record which
-    // migrations should be considered applied before running any newer ones.
+    canonicalize_manual_v3_metadata(conn, network_name)?;
     migration_runner()
-        .set_target(Target::FakeVersion(schema_version.try_into().map_err(
-            |_| {
-                DatabaseError::MigrationError(format!(
-                    "schema version {schema_version} cannot be converted to usize"
-                ))
-            },
-        )?))
+        .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
         .run(conn)?;
+
+    Ok(())
+}
+
+fn canonicalize_manual_v3_metadata(
+    conn: &Connection,
+    network_name: &str,
+) -> Result<(), DatabaseError> {
+    // Some shipped schema-v3 databases were created from the full v3 schema, while others reached
+    // v3 through additive ALTER TABLE migrations and therefore have a weaker metadata definition.
+    // Normalize both shapes to the canonical production baseline before stamping V1 as applied.
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS unique_metadata;
+         CREATE TABLE metadata_new (
+             schema_version INTEGER NOT NULL DEFAULT 3,
+             domain_type INTEGER NOT NULL DEFAULT 0,
+             network_name TEXT NOT NULL,
+             block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+             max_operator_id_seen INTEGER DEFAULT 0
+         );",
+    )?;
+
+    conn.execute(
+        "INSERT INTO metadata_new (
+             schema_version,
+             domain_type,
+             network_name,
+             block_number,
+             max_operator_id_seen
+         )
+         SELECT
+             ?1,
+             COALESCE(domain_type, 0),
+             COALESCE(network_name, ?2),
+             block_number,
+             COALESCE(max_operator_id_seen, 0)
+         FROM metadata",
+        params![SUPPORTED_PRE_REFINERY_SCHEMA_VERSION, network_name],
+    )?;
+
+    conn.execute_batch(
+        "DROP TABLE metadata;
+         ALTER TABLE metadata_new RENAME TO metadata;
+         CREATE TRIGGER unique_metadata
+             BEFORE INSERT ON metadata
+             WHEN (SELECT COUNT(*) FROM metadata) >= 1
+         BEGIN
+             SELECT RAISE(FAIL, 'we can only have one metadata row');
+         END;",
+    )?;
+
     Ok(())
 }
 
@@ -192,8 +234,6 @@ fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), Data
         sql_operations::INSERT_METADATA,
         params![LATEST_SCHEMA_VERSION, network_name],
     )?;
-    // Historical migrations cannot know the correct runtime network for old DBs. Fill it here
-    // after the caller has validated which network this process is opening.
     conn.execute(
         "UPDATE metadata SET schema_version = ?1, network_name = COALESCE(network_name, ?2)",
         params![LATEST_SCHEMA_VERSION, network_name],
