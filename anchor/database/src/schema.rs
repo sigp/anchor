@@ -97,6 +97,9 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
     let has_refinery_history = has_table(conn, "refinery_schema_history")?;
 
     if has_refinery_history {
+        // Once refinery owns the DB, `refinery_schema_history` is the authoritative signal. The
+        // legacy `metadata.schema_version` column may still exist for compatibility, but it is no
+        // longer the source of truth for schema state.
         let stored_network = if has_metadata {
             conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
                 .optional()?
@@ -109,11 +112,17 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
     }
 
     if has_metadata {
+        // A metadata table without refinery history is the pre-cutover manual Anchor path. Those
+        // DBs are classified by the legacy `schema_version` field so we can decide whether to
+        // adopt them into the refinery baseline or reject them as unsupported.
         let schema_version = conn
             .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
             .optional()?;
 
         if let Some(schema_version) = schema_version {
+            // Shipped schema-v1 databases do not have `network_name` yet, so check for the column
+            // before reading it. Later manual schemas would have it, and we still want to enforce
+            // cross-network safety before doing any bridge work.
             let stored_network = if has_column(conn, "metadata", "network_name")? {
                 conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
                     .optional()?
@@ -128,6 +137,9 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
             });
         }
 
+        // A metadata table with no singleton row is not a valid refinery-era or supported manual
+        // Anchor state. Treat it like an unsupported legacy DB rather than trying to infer shape
+        // from half-initialized contents.
         return Ok(DatabaseType::LegacyUnsupported);
     }
 
@@ -175,7 +187,9 @@ fn bridge_manual_anchor_database(
 
     // Manual schema v1 is now the refinery baseline, so pre-refinery production databases can be
     // adopted by stamping V1 as already applied and then letting refinery run the combined V2
-    // upgrade normally.
+    // upgrade normally. This avoids replaying synthetic historical states: the DB stays in place,
+    // refinery history is bootstrapped once, and all later evolution goes through real migration
+    // files.
     migration_runner()
         .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
         .run(conn)?;
@@ -186,7 +200,9 @@ fn bridge_manual_anchor_database(
 fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), DatabaseError> {
     conn.execute(sql_operations::INSERT_METADATA, params![network_name])?;
     // V2 mirrors the old additive path, so pre-refinery rows still need runtime normalization
-    // after the migration runs.
+    // after the migration runs. Fresh DBs already inserted the full row through INSERT_METADATA;
+    // adopted schema-v1 DBs still need the new columns populated and the legacy columns brought to
+    // the post-upgrade values expected by the rest of the code.
     conn.execute(
         "UPDATE metadata
          SET schema_version = 4,
@@ -199,6 +215,8 @@ fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), Data
 }
 
 fn has_table(conn: &Connection, table_name: &str) -> Result<bool, DatabaseError> {
+    // Use sqlite_master as a pure existence check. `.optional()` keeps the common "not present"
+    // case cheap while still propagating real SQL errors instead of misclassifying broken DBs.
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
         [table_name],
@@ -214,6 +232,8 @@ fn has_column(
     table_name: &str,
     column_name: &str,
 ) -> Result<bool, DatabaseError> {
+    // Legacy manual schema-v1 databases legitimately lack newer columns such as `network_name`, so
+    // callers need an existence probe that preserves real SQL failures.
     conn.query_row(
         "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1",
         params![table_name, column_name],

@@ -209,7 +209,9 @@ mod tests {
         conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
             .expect("Failed to create production baseline schema");
         // Seed the metadata row exactly the way shipped schema-v1 databases look on disk. There
-        // is no network_name yet; the cutover fills that after V2 runs.
+        // is no network_name yet; the cutover fills that after V2 runs. The generic
+        // `schema_version` parameter lets us reuse the same physical schema for rejection tests
+        // that model unsupported manual versions.
         conn.execute(
             "INSERT INTO metadata (schema_version, domain_type, block_number)
              VALUES (?1, ?2, ?3)",
@@ -220,6 +222,8 @@ mod tests {
 
     fn create_legacy_database(db_path: &Path) {
         let conn = Connection::open(db_path).expect("Failed to create legacy database");
+        // Older pre-metadata Anchor DBs were detected by the singleton `block` table rather than a
+        // `metadata` row. Keep this fixture minimal so the rejection path stays obvious.
         conn.execute(
             "CREATE TABLE block (block_number INTEGER NOT NULL DEFAULT 0)",
             [],
@@ -231,6 +235,8 @@ mod tests {
 
     fn create_unknown_database(db_path: &Path) {
         let conn = Connection::open(db_path).expect("Failed to create unknown database");
+        // This intentionally looks like a random SQLite file with no Anchor markers so the
+        // database-type classifier has to fall through to `Unknown`.
         conn.execute(
             "CREATE TABLE unknown_table (id INTEGER PRIMARY KEY, data TEXT)",
             [],
