@@ -33,8 +33,8 @@ mod tests {
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
 
         assert_eq!(
-            metadata.schema_version, 3,
-            "Initial schema version should be 3"
+            metadata.schema_version, 4,
+            "Initial schema version should be 4"
         );
         assert_eq!(
             metadata.network_name, TEST_NETWORK_1,
@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_v1_to_v3() {
+    fn test_migration_v1_to_v4() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
@@ -196,8 +196,8 @@ mod tests {
             let conn = Connection::open(&db_path).expect("Failed to open database");
             let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
             assert_eq!(
-                metadata.schema_version, 3,
-                "Should be upgraded to version 3"
+                metadata.schema_version, 4,
+                "Should be upgraded to version 4"
             );
 
             // Verify the network_name column was set
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_v2_to_v3() {
+    fn test_migration_v2_to_v4() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
 
@@ -244,8 +244,8 @@ mod tests {
             let conn = Connection::open(&db_path).expect("Failed to open database");
             let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
             assert_eq!(
-                metadata.schema_version, 3,
-                "Should be upgraded to version 3"
+                metadata.schema_version, 4,
+                "Should be upgraded to version 4"
             );
 
             // Verify the network_name column was set
@@ -253,6 +253,47 @@ mod tests {
                 metadata.network_name, TEST_NETWORK_1,
                 "network_name should be set after migration"
             );
+        }
+    }
+
+    #[test]
+    fn test_migration_v3_to_v4() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create a v3 database (with network_name but without validator_index index)
+        create_v3_database(&db_path, TEST_NETWORK_1);
+
+        // Verify it's version 3
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let version: u64 = conn
+                .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
+                .expect("Failed to get schema version");
+            assert_eq!(version, 3, "Should start at version 3");
+        }
+
+        // Run migration
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Migration should succeed");
+
+        // Verify migration succeeded
+        {
+            let conn = Connection::open(&db_path).expect("Failed to open database");
+            let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+            assert_eq!(
+                metadata.schema_version, 4,
+                "Should be upgraded to version 4"
+            );
+
+            // Verify the index exists
+            let index_exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_validators_validator_index'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("Failed to check index");
+            assert!(index_exists, "idx_validators_validator_index should exist");
         }
     }
 
@@ -274,6 +315,9 @@ mod tests {
 
         conn.execute("INSERT INTO metadata (domain_type) VALUES (0)", [])
             .expect("Failed to insert v1 metadata");
+
+        // Create validators table (existed since v1, needed for v3->v4 index migration)
+        create_validators_table(&conn);
     }
 
     fn create_v2_database(db_path: &PathBuf) {
@@ -294,6 +338,54 @@ mod tests {
 
         conn.execute("INSERT INTO metadata (domain_type) VALUES (0)", [])
             .expect("Failed to insert v2 metadata");
+
+        // Create validators table (existed since v1, needed for v3->v4 index migration)
+        create_validators_table(&conn);
+    }
+
+    fn create_v3_database(db_path: &PathBuf, network_name: &str) {
+        let conn = Connection::open(db_path).expect("Failed to create v3 database");
+
+        // Create metadata table as it was in version 3
+        conn.execute(
+            "CREATE TABLE metadata (
+                schema_version INTEGER NOT NULL DEFAULT 3,
+                domain_type INTEGER NOT NULL DEFAULT 0,
+                network_name TEXT,
+                block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+                max_operator_id_seen INTEGER DEFAULT 0
+            )",
+            [],
+        )
+        .expect("Failed to create v3 metadata table");
+
+        conn.execute(
+            "INSERT INTO metadata (network_name) VALUES (?1)",
+            [network_name],
+        )
+        .expect("Failed to insert v3 metadata");
+
+        // Create validators table (needed for v3->v4 index migration)
+        create_validators_table(&conn);
+    }
+
+    /// Creates the validators table (and its clusters dependency) for test databases.
+    /// The validators table existed since schema v1 and is needed for the v3->v4 index migration.
+    fn create_validators_table(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS clusters (
+                cluster_id BLOB PRIMARY KEY,
+                owner TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS validators (
+                validator_pubkey TEXT PRIMARY KEY,
+                cluster_id BLOB NOT NULL,
+                validator_index INTEGER,
+                graffiti BLOB,
+                FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
+            );",
+        )
+        .expect("Failed to create validators table");
     }
 
     fn create_legacy_database(db_path: &PathBuf) {

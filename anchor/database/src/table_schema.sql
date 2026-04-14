@@ -1,8 +1,8 @@
--- SCHEMA VERSION 3
+-- SCHEMA VERSION 4
 
 -- we should avoid removing columns from this to keep compatibility between anchor Versions
 CREATE TABLE metadata (
-    schema_version INTEGER NOT NULL DEFAULT 3,
+    schema_version INTEGER NOT NULL DEFAULT 4,
     -- DEPRECATED: domain_type is no longer used for network isolation as of schema v3.
     -- Previously, we used domain_type (a 4-byte value derived from the fork) to prevent
     -- cross-network database usage. However, domain_type changes at each fork activation,
@@ -57,6 +57,7 @@ CREATE TABLE validators (
     graffiti BLOB DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
 );
+CREATE INDEX idx_validators_validator_index ON validators(validator_index);
 
 CREATE TABLE shares (
     validator_pubkey TEXT NOT NULL,
