@@ -1,3 +1,5 @@
+import CliGlobalOptions from '../generated/cli-global-options.mdx'
+
 # Anchor CLI Reference
 
 This document provides a comprehensive reference for Anchor's command-line interface, including all available commands, subcommands, and options.
@@ -16,15 +18,6 @@ Where `<COMMAND>` is one of:
 - `keysplit` - Split validator keys into shares
 - `keygen` - Generate RSA keys for operator identification
 
-{/* CLI_REFERENCE_START */}
-### Global Flags
+### Global Options
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `-d`, `--data-dir <DIR>` | Used to specify a custom root data directory for the Anchor key and database. Defaults to $HOME/.anchor/\{network\} where network is the value of the `network` flag Note: Users should specify separate custom datadirs for different networks. |  |
-| `-t`, `--testnet-dir <DIR>` | Path to directory containing eth2_testnet specs. |  |
-| `--network <NETWORK>` | Name of the chain Anchor will validate. (possible values: mainnet, holesky, hoodi) | `mainnet` |
-| `--debug-level <DEBUG_LEVEL>` | Specifies the verbosity level used when emitting logs to the terminal | `INFO` |
-
-{/* CLI_REFERENCE_END */}
-
+<CliGlobalOptions />

@@ -11,44 +11,46 @@ use clap::{Command, CommandFactory};
 use cli::Cli;
 use errors::DocGenError;
 use interface::DocGenCommand;
-use render::{generate_cli_page_content, generate_subcommand_page_content};
+use render::{generate_cli_reference_snippet, generate_subcommand_reference_snippet};
 
-/// Subcommand-to-file mapping for CLI reference pages.
-const SUBCOMMAND_PAGES: [(&str, &str); 3] = [
-    ("node", "cli-node.mdx"),
-    ("keygen", "cli-keygen.mdx"),
-    ("keysplit", "cli-keysplit.mdx"),
+const CLI_REFERENCE_FILE: &str = "cli-global-options.mdx";
+
+/// Subcommand-to-file mapping for generated CLI reference snippets.
+const SUBCOMMAND_REFERENCE_PAGES: [(&str, &str); 3] = [
+    ("node", "cli-node-options.mdx"),
+    ("keygen", "cli-keygen-options.mdx"),
+    ("keysplit", "cli-keysplit-options.mdx"),
 ];
 
-/// Updates the .mdx files with the latest CLI documentation.
+/// Updates the generated reference snippets with the latest CLI documentation.
 fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
-    let cli_content = generate_cli_page_content(cmd)?;
-    update_file(&docs_dir.join("cli.mdx"), &cli_content)?;
+    let cli_content = generate_cli_reference_snippet(cmd)?;
+    update_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content)?;
 
-    for (name, file) in SUBCOMMAND_PAGES {
-        let content = generate_subcommand_page_content(cmd, name)?;
+    for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
+        let content = generate_subcommand_reference_snippet(cmd, name)?;
         update_file(&docs_dir.join(file), &content)?;
     }
 
-    eprintln!("CLI reference documentation updated successfully.");
+    eprintln!("CLI reference snippets updated successfully.");
     Ok(())
 }
 
-/// Checks if the .mdx files are up to date with the current CLI definitions.
+/// Checks if the generated reference snippets are up to date with the current CLI definitions.
 fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     let mut out_of_date = Vec::new();
 
-    let cli_content = generate_cli_page_content(cmd)?;
-    match check_file(&docs_dir.join("cli.mdx"), &cli_content) {
+    let cli_content = generate_cli_reference_snippet(cmd)?;
+    match check_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content) {
         Ok(_) => {}
         Err(DocGenError::OutOfDate(_)) => {
-            out_of_date.push("cli.mdx".to_string());
+            out_of_date.push(CLI_REFERENCE_FILE.to_string());
         }
         Err(e) => return Err(e),
     }
 
-    for (name, file) in SUBCOMMAND_PAGES {
-        let content = generate_subcommand_page_content(cmd, name)?;
+    for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
+        let content = generate_subcommand_reference_snippet(cmd, name)?;
         match check_file(&docs_dir.join(file), &content) {
             Ok(_) => {}
             Err(DocGenError::OutOfDate(_)) => {
@@ -59,20 +61,21 @@ fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     }
 
     if out_of_date.is_empty() {
-        eprintln!("CLI reference documentation is up to date.");
+        eprintln!("CLI reference snippets are up to date.");
         Ok(())
     } else {
         Err(DocGenError::OutOfDate(out_of_date.join(", ")))
     }
 }
 
-/// Renders the CLI reference documentation from the `clap` struct definitions to stdout.
+/// Renders generated CLI reference snippets from the `clap` struct definitions to stdout.
 fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
-    let cli_content = generate_cli_page_content(anchor_command)?;
+    let cli_content = generate_cli_reference_snippet(anchor_command)?;
+    println!("---\n# {CLI_REFERENCE_FILE}\n");
     print!("{cli_content}");
-    for (name, _) in SUBCOMMAND_PAGES {
-        let content = generate_subcommand_page_content(anchor_command, name)?;
-        println!("---\n## {name}\n");
+    for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
+        let content = generate_subcommand_reference_snippet(anchor_command, name)?;
+        println!("\n---\n# {file}\n");
         print!("{content}");
     }
     Ok(())

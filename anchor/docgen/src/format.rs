@@ -192,7 +192,11 @@ pub(crate) fn format_description(arg: &Arg) -> Result<String, DocGenError> {
 pub(crate) fn format_default(arg: &Arg) -> String {
     let defaults = arg.get_default_values();
     if defaults.is_empty() {
-        return "".to_string();
+        return if arg.is_required_set() {
+            "Required".to_string()
+        } else {
+            String::new()
+        };
     }
 
     defaults
@@ -400,5 +404,16 @@ mod tests {
 
         let result = format_description(&arg).unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_format_default_marks_required_without_default() {
+        let arg = Arg::new("rpc")
+            .long("rpc")
+            .required(true)
+            .action(ArgAction::Set);
+
+        let result = super::format_default(&arg);
+        assert_eq!(result, "Required");
     }
 }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 /// Path to the directory where auto-generated .mdx files are created.
-const DOCS_PATH: &str = "docs/docs/pages";
+const DOCS_PATH: &str = "docs/docs/generated";
 
 #[derive(Parser)]
 #[clap(
@@ -19,19 +19,19 @@ pub struct DocGen {
 
 #[derive(Parser)]
 pub enum DocGenCommand {
-    /// Generate raw CLI reference content to stdout
+    /// Generate CLI reference snippets to stdout
     Generate,
 
-    /// Update .mdx files with current CLI documentation
+    /// Update generated reference snippets
     Update {
-        /// Path to the docs directory containing cli-*.mdx files
+        /// Path to the docs directory containing generated CLI snippet .mdx files
         #[clap(long, default_value = DOCS_PATH)]
         docs_dir: PathBuf,
     },
 
-    /// Check if .mdx files match current CLI definitions
+    /// Check if generated reference snippets match current CLI definitions
     Check {
-        /// Path to the docs directory containing cli-*.mdx files
+        /// Path to the docs directory containing generated CLI snippet .mdx files
         #[clap(long, default_value = DOCS_PATH)]
         docs_dir: PathBuf,
     },

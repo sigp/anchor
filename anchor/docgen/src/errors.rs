@@ -10,9 +10,6 @@ pub enum DocGenError {
     #[error("Failed to write file {path}: {source}")]
     WriteFile { path: PathBuf, source: io::Error },
 
-    #[error("Missing {marker} marker in {path}")]
-    MissingMarker { path: PathBuf, marker: String },
-
     #[error("CLI documentation is out of date in {0}")]
     OutOfDate(String),
 
@@ -24,7 +21,4 @@ pub enum DocGenError {
         subcommand: String,
         cli_tree: String,
     },
-
-    #[error("Sentinel markers are in the incorrect order for {path}")]
-    InvalidMarkers { path: PathBuf },
 }

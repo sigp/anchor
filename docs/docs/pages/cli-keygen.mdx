@@ -1,3 +1,5 @@
+import CliKeygenOptions from '../generated/cli-keygen-options.mdx'
+
 ## Keygen Command
 
 The `keygen` command generates RSA keys for SSV operator identification
@@ -6,20 +8,9 @@ The `keygen` command generates RSA keys for SSV operator identification
 anchor keygen [OPTIONS]
 ```
 
-{/* CLI_REFERENCE_START */}
 ### Options
 
-#### Keygen
-
-| Option | Description | Default |
-| --- | --- | --- |
-| `--force` | Force file overwrite | `false` |
-| `--encrypt` | Enable password encryption. Password is read from terminal or via --password-file |  |
-| `--password-file <PATH>` | Path to a file containing the password to use for the new key file |  |
-| `--use-existing <PATH>` | Path to an existing key file to use instead of generating a new one. If encrypted, the password is read from terminal or via --password-file-for-existing. The existing file is NOT automatically removed. |  |
-| `--password-file-for-existing <PATH>` | Path to a file containing the password to use for the EXISTING key file |  |
-
-{/* CLI_REFERENCE_END */}
+<CliKeygenOptions />
 
 ### Examples
 

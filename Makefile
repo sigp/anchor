@@ -105,11 +105,11 @@ check-benches:
 # test vectors.
 test: test-release
 
-# Update CLI reference docs from current clap definitions
+# Update generated CLI reference snippets from current clap definitions
 cli-reference:
 	cargo run --bin anchor-docgen -- update
 
-# Check CLI reference docs are up to date
+# Check generated CLI reference snippets are up to date
 cli-reference-check:
 	cargo run --bin anchor-docgen -- check
 
