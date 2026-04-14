@@ -66,6 +66,18 @@ fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     }
 }
 
+/// Renders the CLI reference documentation from the `clap` struct definitions to stdout.
+fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
+    let cli_content = generate_cli_page_content(anchor_command)?;
+    print!("{cli_content}");
+    for (name, _) in SUBCOMMAND_PAGES {
+        let content = generate_subcommand_page_content(anchor_command, name)?;
+        println!("---\n## {name}\n");
+        print!("{content}");
+    }
+    Ok(())
+}
+
 /// Renders documentation and updates/checks existing documentation based on the provided
 /// `DocGenCommand`.
 pub fn render_docs(
@@ -74,13 +86,7 @@ pub fn render_docs(
 ) -> Result<(), DocGenError> {
     match docgen_command.unwrap_or(DocGenCommand::Generate) {
         DocGenCommand::Generate => {
-            let cli_content = generate_cli_page_content(anchor_command)?;
-            print!("{cli_content}");
-            for (name, _) in SUBCOMMAND_PAGES {
-                let content = generate_subcommand_page_content(anchor_command, name)?;
-                println!("---\n## {name}\n");
-                print!("{content}");
-            }
+            display_help_docs(anchor_command)?;
         }
         DocGenCommand::Update { docs_dir } => {
             run_update(anchor_command, &docs_dir)?;
