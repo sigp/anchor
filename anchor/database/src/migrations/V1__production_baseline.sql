@@ -1,8 +1,8 @@
 -- Production baseline for the refinery cutover.
--- This matches the schema shipped before the validator-index migration.
+-- This is the first refinery-managed schema, derived from the shipped v3 layout. Schema
+-- bookkeeping moves to `refinery_schema_history`, so the singleton table keeps only the runtime
+-- state that Anchor still needs to persist.
 CREATE TABLE metadata (
-    schema_version INTEGER NOT NULL DEFAULT 3,
-    domain_type INTEGER NOT NULL DEFAULT 0,
     network_name TEXT NOT NULL,
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
     max_operator_id_seen INTEGER DEFAULT 0
@@ -12,7 +12,7 @@ CREATE TRIGGER unique_metadata
     BEFORE INSERT ON metadata
     WHEN (SELECT COUNT(*) FROM metadata) >= 1
 BEGIN
-    SELECT RAISE(FAIL, 'we can only have one metadata row');
+    SELECT RAISE(FAIL, 'metadata may only contain one row');
 END;
 
 CREATE TABLE owners (

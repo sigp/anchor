@@ -9,7 +9,6 @@ embed_migrations!("src/migrations");
 
 type SchemaVersion = u32;
 
-const LATEST_SCHEMA_VERSION: SchemaVersion = 4;
 const SUPPORTED_PRE_REFINERY_SCHEMA_VERSION: SchemaVersion = 3;
 const BASELINE_MIGRATION_VERSION: i32 = 1;
 
@@ -184,13 +183,12 @@ fn canonicalize_manual_v3_metadata(
     network_name: &str,
 ) -> Result<(), DatabaseError> {
     // Some shipped schema-v3 databases were created from the full v3 schema, while others reached
-    // v3 through additive ALTER TABLE migrations and therefore have a weaker metadata definition.
-    // Normalize both shapes to the canonical production baseline before stamping V1 as applied.
+    // v3 through additive ALTER TABLE migrations and therefore have a weaker `metadata`
+    // definition. Normalize both shapes into the lean refinery-era `metadata` table before
+    // stamping V1 as applied.
     conn.execute_batch(
         "DROP TRIGGER IF EXISTS unique_metadata;
          CREATE TABLE metadata_new (
-             schema_version INTEGER NOT NULL DEFAULT 3,
-             domain_type INTEGER NOT NULL DEFAULT 0,
              network_name TEXT NOT NULL,
              block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
              max_operator_id_seen INTEGER DEFAULT 0
@@ -199,20 +197,16 @@ fn canonicalize_manual_v3_metadata(
 
     conn.execute(
         "INSERT INTO metadata_new (
-             schema_version,
-             domain_type,
              network_name,
              block_number,
              max_operator_id_seen
          )
          SELECT
-             ?1,
-             COALESCE(domain_type, 0),
-             COALESCE(network_name, ?2),
+             COALESCE(network_name, ?1),
              block_number,
              COALESCE(max_operator_id_seen, 0)
          FROM metadata",
-        params![SUPPORTED_PRE_REFINERY_SCHEMA_VERSION, network_name],
+        params![network_name],
     )?;
 
     conn.execute_batch(
@@ -222,7 +216,7 @@ fn canonicalize_manual_v3_metadata(
              BEFORE INSERT ON metadata
              WHEN (SELECT COUNT(*) FROM metadata) >= 1
          BEGIN
-             SELECT RAISE(FAIL, 'we can only have one metadata row');
+             SELECT RAISE(FAIL, 'metadata may only contain one row');
          END;",
     )?;
 
@@ -230,14 +224,7 @@ fn canonicalize_manual_v3_metadata(
 }
 
 fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), DatabaseError> {
-    conn.execute(
-        sql_operations::INSERT_METADATA,
-        params![LATEST_SCHEMA_VERSION, network_name],
-    )?;
-    conn.execute(
-        "UPDATE metadata SET schema_version = ?1, network_name = COALESCE(network_name, ?2)",
-        params![LATEST_SCHEMA_VERSION, network_name],
-    )?;
+    conn.execute(sql_operations::INSERT_METADATA, params![network_name])?;
     Ok(())
 }
 

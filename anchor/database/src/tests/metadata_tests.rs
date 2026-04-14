@@ -15,9 +15,8 @@ mod tests {
 
     const TEST_NETWORK_1: &str = "testnet1";
     const TEST_NETWORK_2: &str = "testnet2";
-    const LATEST_SCHEMA_VERSION: u64 = 4;
     const PRODUCTION_BASELINE_MIGRATION_VERSION: i32 = 1;
-    const V4_REFINERY_MIGRATION_VERSION: i32 = 2;
+    const VALIDATOR_INDEX_MIGRATION_VERSION: i32 = 2;
     const SEEDED_BLOCK_NUMBER: u64 = 42;
     const SEEDED_MAX_OPERATOR_ID: u64 = 777;
 
@@ -33,19 +32,18 @@ mod tests {
         // Assert: fresh DBs apply the production baseline and the first refinery migration.
         let conn = Connection::open(&db_path).expect("Failed to open database");
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-        assert_eq!(metadata.schema_version, LATEST_SCHEMA_VERSION);
         assert_eq!(metadata.network_name, TEST_NETWORK_1);
         assert_eq!(metadata.block_number, 0);
         assert_eq!(
             get_applied_migration_versions(&conn),
             vec![
                 PRODUCTION_BASELINE_MIGRATION_VERSION,
-                V4_REFINERY_MIGRATION_VERSION,
+                VALIDATOR_INDEX_MIGRATION_VERSION,
             ]
         );
         assert!(
             has_validator_index(&conn),
-            "v4 migration should create validator index"
+            "the first refinery migration should create the validator index"
         );
     }
 
@@ -98,10 +96,9 @@ mod tests {
         // Act: adopt it into refinery and run the first refinery migration.
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Adoption should succeed");
 
-        // Assert: data is preserved and the DB is now fully refinery-managed at schema v4.
+        // Assert: data is preserved and the DB is now fully refinery-managed.
         let conn = Connection::open(&db_path).expect("Failed to open adopted database");
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-        assert_eq!(metadata.schema_version, LATEST_SCHEMA_VERSION);
         assert_eq!(metadata.network_name, TEST_NETWORK_1);
         assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
         assert_eq!(
@@ -112,12 +109,12 @@ mod tests {
             get_applied_migration_versions(&conn),
             vec![
                 PRODUCTION_BASELINE_MIGRATION_VERSION,
-                V4_REFINERY_MIGRATION_VERSION,
+                VALIDATOR_INDEX_MIGRATION_VERSION,
             ]
         );
         assert!(
             has_validator_index(&conn),
-            "v4 migration should create validator index"
+            "the first refinery migration should create the validator index"
         );
     }
 
@@ -131,10 +128,11 @@ mod tests {
         // Act: adopt it into refinery and run the first refinery migration.
         schema::ensure_up_to_date(&db_path, TEST_NETWORK_1).expect("Adoption should succeed");
 
-        // Assert: the weaker metadata shape is canonicalized and then upgraded to v4.
+        // Assert: the weaker legacy metadata shape is canonicalized into the lean refinery-era
+        // `metadata` table and then
+        // upgraded through the first refinery migration.
         let conn = Connection::open(&db_path).expect("Failed to open adopted database");
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
-        assert_eq!(metadata.schema_version, LATEST_SCHEMA_VERSION);
         assert_eq!(metadata.network_name, TEST_NETWORK_1);
         assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
         assert_eq!(get_metadata_max_operator_id_seen(&conn), Some(0));
@@ -142,12 +140,12 @@ mod tests {
             get_applied_migration_versions(&conn),
             vec![
                 PRODUCTION_BASELINE_MIGRATION_VERSION,
-                V4_REFINERY_MIGRATION_VERSION,
+                VALIDATOR_INDEX_MIGRATION_VERSION,
             ]
         );
         assert!(
             has_validator_index(&conn),
-            "v4 migration should create validator index"
+            "the first refinery migration should create the validator index"
         );
     }
 
@@ -225,6 +223,24 @@ mod tests {
         let conn = Connection::open(db_path).expect("Failed to create manual v3 database");
         conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
             .expect("Failed to create production baseline schema");
+        conn.execute_batch(
+            "DROP TRIGGER unique_metadata;
+             DROP TABLE metadata;
+             CREATE TABLE metadata (
+                 schema_version INTEGER NOT NULL DEFAULT 3,
+                 domain_type INTEGER NOT NULL DEFAULT 0,
+                 network_name TEXT NOT NULL,
+                 block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
+                 max_operator_id_seen INTEGER DEFAULT 0
+             );
+             CREATE TRIGGER unique_metadata
+                 BEFORE INSERT ON metadata
+                 WHEN (SELECT COUNT(*) FROM metadata) >= 1
+             BEGIN
+                 SELECT RAISE(FAIL, 'we can only have one metadata row');
+             END;",
+        )
+        .expect("Failed to recreate manual v3 metadata");
         conn.execute(
             "INSERT INTO metadata (schema_version, domain_type, network_name, block_number, max_operator_id_seen)
              VALUES (?1, 0, ?2, ?3, ?4)",

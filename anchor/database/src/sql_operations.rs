@@ -1,7 +1,7 @@
 // Metadata
 pub const INSERT_METADATA: &str = r#"
-    INSERT INTO metadata (schema_version, domain_type, network_name)
-    SELECT ?1, 0, ?2
+    INSERT INTO metadata (network_name)
+    SELECT ?1
     WHERE NOT EXISTS (SELECT 1 FROM metadata)
 "#;
 pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
