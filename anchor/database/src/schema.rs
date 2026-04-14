@@ -199,12 +199,14 @@ fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), Data
 }
 
 fn has_table(conn: &Connection, table_name: &str) -> Result<bool, DatabaseError> {
-    let exists = conn.query_row(
+    conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
         [table_name],
         |_| Ok(()),
-    );
-    Ok(exists.is_ok())
+    )
+    .optional()
+    .map(|exists| exists.is_some())
+    .map_err(DatabaseError::from)
 }
 
 fn has_column(
@@ -212,12 +214,14 @@ fn has_column(
     table_name: &str,
     column_name: &str,
 ) -> Result<bool, DatabaseError> {
-    let exists = conn.query_row(
+    conn.query_row(
         "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1",
         params![table_name, column_name],
         |_| Ok(()),
-    );
-    Ok(exists.is_ok())
+    )
+    .optional()
+    .map(|exists| exists.is_some())
+    .map_err(DatabaseError::from)
 }
 
 fn is_empty_database(conn: &Connection) -> Result<bool, DatabaseError> {

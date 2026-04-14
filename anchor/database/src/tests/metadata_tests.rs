@@ -115,6 +115,26 @@ mod tests {
     }
 
     #[test]
+    fn test_unsupported_manual_schema_version_rejection() {
+        // Arrange: create a pre-refinery Anchor DB that looks like metadata-backed Anchor, but
+        // carries an unsupported manual schema version. The cutover only adopts the real shipped
+        // schema-v1 layout.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        create_manual_database_with_schema_version(&db_path, 2);
+
+        // Act: try to open it through the cutover path.
+        let err = schema::ensure_up_to_date(&db_path, TEST_NETWORK_1)
+            .expect_err("Unsupported manual schema version should be rejected");
+
+        // Assert: manual schemas newer than the shipped baseline are rejected explicitly.
+        assert!(
+            err.to_string().contains("unsupported pre-refinery"),
+            "Error should mention unsupported pre-refinery database"
+        );
+    }
+
+    #[test]
     fn test_legacy_database_rejection() {
         // Arrange: create a legacy pre-metadata Anchor DB.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -181,6 +201,10 @@ mod tests {
     }
 
     fn create_manual_v1_database(db_path: &Path) {
+        create_manual_database_with_schema_version(db_path, 1);
+    }
+
+    fn create_manual_database_with_schema_version(db_path: &Path, schema_version: u32) {
         let conn = Connection::open(db_path).expect("Failed to create manual v1 database");
         conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
             .expect("Failed to create production baseline schema");
@@ -189,7 +213,7 @@ mod tests {
         conn.execute(
             "INSERT INTO metadata (schema_version, domain_type, block_number)
              VALUES (?1, ?2, ?3)",
-            params![1, 0, SEEDED_BLOCK_NUMBER],
+            params![schema_version, 0, SEEDED_BLOCK_NUMBER],
         )
         .expect("Failed to insert manual v1 metadata");
     }
