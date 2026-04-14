@@ -114,10 +114,13 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
             .optional()?;
 
         if let Some(schema_version) = schema_version {
-            let stored_network = conn
-                .query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
-                .ok()
-                .flatten();
+            let stored_network = if has_column(conn, "metadata", "network_name")? {
+                conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
+                    .optional()?
+                    .flatten()
+            } else {
+                None
+            };
 
             return Ok(DatabaseType::ManualAnchor {
                 schema_version,
@@ -199,6 +202,19 @@ fn has_table(conn: &Connection, table_name: &str) -> Result<bool, DatabaseError>
     let exists = conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
         [table_name],
+        |_| Ok(()),
+    );
+    Ok(exists.is_ok())
+}
+
+fn has_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<bool, DatabaseError> {
+    let exists = conn.query_row(
+        "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1",
+        params![table_name, column_name],
         |_| Ok(()),
     );
     Ok(exists.is_ok())
