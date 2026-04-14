@@ -5,6 +5,8 @@ use crate::{
     render::{CLI_REFERENCE_END, CLI_REFERENCE_START},
 };
 
+/// Find the index of the first occurrence of a marker in a string,
+/// returning an error if the marker is not found.
 fn find_marker_index(content: &str, path: &Path, marker: &str) -> Result<usize, DocGenError> {
     content
         .find(marker)
@@ -14,6 +16,7 @@ fn find_marker_index(content: &str, path: &Path, marker: &str) -> Result<usize, 
         })
 }
 
+/// Read the content of a file and return as a string.
 fn read_content(path: &Path) -> Result<String, DocGenError> {
     fs::read_to_string(path).map_err(|e| DocGenError::ReadFile {
         path: path.to_path_buf(),
@@ -21,6 +24,8 @@ fn read_content(path: &Path) -> Result<String, DocGenError> {
     })
 }
 
+/// Adds a newline character to the content string. This is to ensure that this occurs exactly
+/// the same way everywhere it is used.
 fn frame_generated_content(content: &str) -> String {
     format!("\n{content}")
 }
