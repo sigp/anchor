@@ -84,7 +84,8 @@ mod tests {
 
     #[test]
     fn test_manual_v3_production_baseline_adoption() {
-        // Arrange: create a manual v3 DB matching the shipped fresh schema.
+        // Arrange: create a manual v3 DB matching the shipped fresh schema. This models a node
+        // that first installed Anchor on v3, so `metadata` already has the full v3 definition.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
         create_manual_v3_production_database(
@@ -120,7 +121,9 @@ mod tests {
 
     #[test]
     fn test_manual_v3_upgraded_shape_adoption() {
-        // Arrange: create a manual v3 DB that reached v3 through older ALTER TABLE upgrades.
+        // Arrange: create a manual v3 DB that reached v3 through older ALTER TABLE upgrades. This
+        // models a node that started on an older release, so `metadata` kept the weaker historical
+        // shape and only gained `network_name` / `max_operator_id_seen` later.
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test.db");
         create_manual_v3_upgraded_database(&db_path, None, None);
@@ -223,6 +226,8 @@ mod tests {
         let conn = Connection::open(db_path).expect("Failed to create manual v3 database");
         conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
             .expect("Failed to create production baseline schema");
+        // Replace the lean refinery-era `metadata` table with the shipped manual v3 schema so the
+        // adoption path sees a real pre-refinery database.
         conn.execute_batch(
             "DROP TRIGGER unique_metadata;
              DROP TABLE metadata;
@@ -262,6 +267,9 @@ mod tests {
         let conn = Connection::open(db_path).expect("Failed to create upgraded v3 database");
         conn.execute_batch(include_str!("../migrations/V1__production_baseline.sql"))
             .expect("Failed to create shared v3 tables");
+        // Recreate the weaker historical `metadata` shape left by `v1 -> v2 -> v3` additive
+        // migrations. In this layout the newer columns can still be nullable because they were
+        // added with `ALTER TABLE`.
         conn.execute_batch(
             "DROP TRIGGER unique_metadata;
              DROP TABLE metadata;

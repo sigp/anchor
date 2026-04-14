@@ -184,8 +184,10 @@ fn canonicalize_manual_v3_metadata(
 ) -> Result<(), DatabaseError> {
     // Some shipped schema-v3 databases were created from the full v3 schema, while others reached
     // v3 through additive ALTER TABLE migrations and therefore have a weaker `metadata`
-    // definition. Normalize both shapes into the lean refinery-era `metadata` table before
-    // stamping V1 as applied.
+    // definition. The weaker shape can still have nullable `network_name` and
+    // `max_operator_id_seen`, because those columns were added later instead of being present in
+    // the original CREATE TABLE statement. Normalize both shapes into the lean refinery-era
+    // `metadata` table before stamping V1 as applied.
     conn.execute_batch(
         "DROP TRIGGER IF EXISTS unique_metadata;
          CREATE TABLE metadata_new (
@@ -216,7 +218,7 @@ fn canonicalize_manual_v3_metadata(
              BEFORE INSERT ON metadata
              WHEN (SELECT COUNT(*) FROM metadata) >= 1
          BEGIN
-             SELECT RAISE(FAIL, 'metadata may only contain one row');
+             SELECT RAISE(FAIL, 'we can only have one metadata row');
          END;",
     )?;
 

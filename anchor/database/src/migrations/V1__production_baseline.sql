@@ -3,7 +3,7 @@
 -- bookkeeping moves to `refinery_schema_history`, so the singleton table keeps only the runtime
 -- state that Anchor still needs to persist.
 CREATE TABLE metadata (
-    network_name TEXT NOT NULL,
+    network_name TEXT NOT NULL, -- Network name for network isolation (e.g., "mainnet", "hoodi")
     block_number INTEGER NOT NULL DEFAULT 0 CHECK (block_number >= 0),
     max_operator_id_seen INTEGER DEFAULT 0
 );
@@ -12,7 +12,7 @@ CREATE TRIGGER unique_metadata
     BEFORE INSERT ON metadata
     WHEN (SELECT COUNT(*) FROM metadata) >= 1
 BEGIN
-    SELECT RAISE(FAIL, 'metadata may only contain one row');
+    SELECT RAISE(FAIL, 'we can only have one metadata row');
 END;
 
 CREATE TABLE owners (
@@ -40,7 +40,7 @@ CREATE TABLE cluster_members (
     operator_id INTEGER NOT NULL,
     PRIMARY KEY (cluster_id, operator_id),
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id) ON DELETE CASCADE,
-    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE RESTRICT
+    FOREIGN KEY (operator_id) REFERENCES operators(operator_id) ON DELETE RESTRICT -- safeguard, as operators should not be removed while still a member
 );
 
 CREATE TABLE validators (
