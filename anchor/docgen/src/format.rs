@@ -192,7 +192,7 @@ pub(crate) fn format_description(arg: &Arg) -> Result<String, DocGenError> {
 pub(crate) fn format_default(arg: &Arg) -> String {
     let defaults = arg.get_default_values();
     if defaults.is_empty() {
-        return "None".to_string();
+        return "".to_string();
     }
 
     defaults
