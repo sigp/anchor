@@ -18,7 +18,7 @@ use ssv_types::{
     msgid::{DutyExecutor, MessageId, Role},
 };
 use ssz::Decode;
-use task_executor::{ShutdownReason, TaskExecutor};
+use task_executor::TaskExecutor;
 use tokio::{
     pin, select,
     sync::{
@@ -56,6 +56,8 @@ where
 {
     pub tester: Arc<QbftTester<E, D>>,
     pub consensus_rx: UnboundedReceiver<ConsensusResult>,
+    // Keep the matching exit sender alive for the lifetime of the test context.
+    _exit_signal: async_channel::Sender<()>,
 }
 
 impl<E, D> TestContext<E, D>
@@ -68,15 +70,25 @@ where
     pub async fn new(
         clock: ManualSlotClock,
         executor: TaskExecutor,
+        exit_signal: async_channel::Sender<()>,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
     ) -> Self {
-        Self::new_with_delays(clock, executor, size, test_data, HashMap::new()).await
+        Self::new_with_delays(
+            clock,
+            executor,
+            exit_signal,
+            size,
+            test_data,
+            HashMap::new(),
+        )
+        .await
     }
 
     pub async fn new_with_delays(
         clock: ManualSlotClock,
         executor: TaskExecutor,
+        exit_signal: async_channel::Sender<()>,
         size: CommitteeSize,
         test_data: Vec<(D, D::Id)>,
         delay_initialization: HashMap<OperatorId, Duration>,
@@ -98,6 +110,7 @@ where
         Self {
             tester,
             consensus_rx,
+            _exit_signal: exit_signal,
         }
     }
 
@@ -124,8 +137,8 @@ where
         }
     }
 
-    // Helper to verify consensus is reached
-    pub async fn verify_consensus(&mut self) {
+    // Assert that every started instance produced a successful consensus result.
+    pub async fn assert_all_started_instances_reached_consensus(&mut self) {
         // Track whether we got any consensus result at all
         let mut got_any_result = false;
 
@@ -165,7 +178,7 @@ where
         // At this point the channel has closed, so if we never received anything, fail the test.
         assert!(
             got_any_result,
-            "verify_consensus: no consensus result was ever returned"
+            "assert_all_started_instances_reached_consensus: no consensus result was ever returned"
         );
     }
 }
@@ -637,13 +650,40 @@ pub struct ConsensusResult {
 mod manager_tests {
     use super::*;
 
-    // Provides test setup
-    struct Setup {
+    type BeaconVoteTestContext = TestContext<types::MainnetEthSpec, BeaconVote>;
+
+    const DEFAULT_BEACON_VOTE_COMMITTEE_SIZE: CommitteeSize = CommitteeSize::Four;
+    const PARTITION_TEST_COMMITTEE_SIZE: CommitteeSize = CommitteeSize::Ten;
+    const SINGLE_BEACON_VOTE_DUTY: usize = 1;
+    const TWO_BEACON_VOTE_DUTIES: usize = 2;
+    const FIRST_OPERATOR: u64 = 1;
+    // With the default leader function, round 1 at instance height 1 selects operator 2.
+    const ROUND_ONE_LEADER_AT_HEIGHT_ONE: u64 = 2;
+    const THIRD_OPERATOR: u64 = 3;
+    const FOURTH_OPERATOR: u64 = 4;
+    const FIFTH_OPERATOR: u64 = 5;
+    const SIXTH_OPERATOR: u64 = 6;
+    const SEVENTH_OPERATOR: u64 = 7;
+    const EIGHTH_OPERATOR: u64 = 8;
+    const ROUND_CHANGE_OFFLINE_OPERATOR: [u64; 1] = [ROUND_ONE_LEADER_AT_HEIGHT_ONE];
+    const SINGLE_FAULTY_OPERATOR: [u64; 1] = [FIRST_OPERATOR];
+    const RECOVERY_OFFLINE_OPERATORS: [u64; 2] = [FIRST_OPERATOR, ROUND_ONE_LEADER_AT_HEIGHT_ONE];
+    const INITIAL_PARTITION_OFFLINE_OPERATORS: [u64; 4] = [
+        THIRD_OPERATOR,
+        FOURTH_OPERATOR,
+        FIFTH_OPERATOR,
+        SIXTH_OPERATOR,
+    ];
+    const FOLLOW_UP_PARTITION_OFFLINE_OPERATORS: [u64; 3] =
+        [SIXTH_OPERATOR, SEVENTH_OPERATOR, EIGHTH_OPERATOR];
+    const MID_ROUND_TWO_DELAY: Duration = Duration::from_secs(3);
+    const MID_ROUND_THREE_DELAY: Duration = Duration::from_secs(5);
+
+    // Provides the runtime pieces the test harness needs to start in-memory managers.
+    struct TestRuntime {
         executor: TaskExecutor,
-        _signal: async_channel::Sender<()>,
-        _shutdown: futures::channel::mpsc::Sender<ShutdownReason>,
+        _exit_signal: async_channel::Sender<()>,
         clock: ManualSlotClock,
-        all_data: Vec<(BeaconVote, CommitteeInstanceId)>,
     }
 
     // Generate unique test data
@@ -663,15 +703,14 @@ mod manager_tests {
         (data, id)
     }
 
-    // Setup env for the test
-    fn setup_test(num_instances: usize) -> Setup {
+    fn new_test_runtime() -> TestRuntime {
         *TRACING;
 
         // setup the executor
         let handle = tokio::runtime::Handle::current();
-        let (signal, exit) = async_channel::bounded(1);
+        let (exit_signal, exit) = async_channel::bounded(1);
         let (shutdown, _) = futures::channel::mpsc::channel(1);
-        let executor = TaskExecutor::new(handle, exit, shutdown.clone());
+        let executor = TaskExecutor::new(handle, exit, shutdown);
 
         // setup the slot clock
         let slot_duration = Duration::from_secs(12);
@@ -686,203 +725,231 @@ mod manager_tests {
             slot_duration,
         );
 
-        let mut all_data = vec![];
-        for id in 1..num_instances + 1 {
-            all_data.push(generate_test_data(id))
-        }
-
-        Setup {
+        TestRuntime {
             executor,
-            _signal: signal,
-            _shutdown: shutdown,
+            _exit_signal: exit_signal,
             clock,
-            all_data,
         }
+    }
+
+    fn generate_beacon_vote_duties(num_instances: usize) -> Vec<(BeaconVote, CommitteeInstanceId)> {
+        (1..=num_instances).map(generate_test_data).collect()
+    }
+
+    async fn start_beacon_vote_cluster(
+        committee_size: CommitteeSize,
+        num_instances: usize,
+    ) -> BeaconVoteTestContext {
+        let TestRuntime {
+            executor,
+            _exit_signal,
+            clock,
+        } = new_test_runtime();
+
+        TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+            clock,
+            executor,
+            _exit_signal,
+            committee_size,
+            generate_beacon_vote_duties(num_instances),
+        )
+        .await
+    }
+
+    async fn start_single_beacon_vote_cluster(
+        committee_size: CommitteeSize,
+    ) -> BeaconVoteTestContext {
+        start_beacon_vote_cluster(committee_size, SINGLE_BEACON_VOTE_DUTY).await
+    }
+
+    async fn start_beacon_vote_cluster_with_delays(
+        committee_size: CommitteeSize,
+        num_instances: usize,
+        initialization_delays: HashMap<OperatorId, Duration>,
+    ) -> BeaconVoteTestContext {
+        let TestRuntime {
+            executor,
+            _exit_signal,
+            clock,
+        } = new_test_runtime();
+
+        TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
+            clock,
+            executor,
+            _exit_signal,
+            committee_size,
+            generate_beacon_vote_duties(num_instances),
+            initialization_delays,
+        )
+        .await
+    }
+
+    async fn start_single_beacon_vote_cluster_with_delays(
+        committee_size: CommitteeSize,
+        initialization_delays: HashMap<OperatorId, Duration>,
+    ) -> BeaconVoteTestContext {
+        start_beacon_vote_cluster_with_delays(
+            committee_size,
+            SINGLE_BEACON_VOTE_DUTY,
+            initialization_delays,
+        )
+        .await
     }
 
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.verify_consensus().await;
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test]
     // Take the leader offline to test a round change
     async fn test_round_change() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_offline(&[2]);
-        context.verify_consensus().await;
+        context.set_operators_offline(&ROUND_CHANGE_OFFLINE_OPERATOR);
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test]
     // Test one offline operator
     async fn test_fault_operator() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_offline(&[1]);
-        context.verify_consensus().await;
+        context.set_operators_offline(&SINGLE_FAULTY_OPERATOR);
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        let setup = setup_test(1);
-        let sizes = vec![
-            (CommitteeSize::Four, vec![1]),
-            (CommitteeSize::Seven, vec![1, 3]),
-            (CommitteeSize::Ten, vec![1, 3, 4]),
-            (CommitteeSize::Thirteen, vec![1, 3, 4, 5]),
+        let faulty_operators_for_four = [FIRST_OPERATOR];
+        let faulty_operators_for_seven = [FIRST_OPERATOR, THIRD_OPERATOR];
+        let faulty_operators_for_ten = [FIRST_OPERATOR, THIRD_OPERATOR, FOURTH_OPERATOR];
+        let faulty_operators_for_thirteen = [
+            FIRST_OPERATOR,
+            THIRD_OPERATOR,
+            FOURTH_OPERATOR,
+            FIFTH_OPERATOR,
+        ];
+        let sizes = [
+            (CommitteeSize::Four, faulty_operators_for_four.as_slice()),
+            (CommitteeSize::Seven, faulty_operators_for_seven.as_slice()),
+            (CommitteeSize::Ten, faulty_operators_for_ten.as_slice()),
+            (
+                CommitteeSize::Thirteen,
+                faulty_operators_for_thirteen.as_slice(),
+            ),
         ];
 
         for (size, faulty) in sizes {
-            let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-                setup.clock.clone(),
-                setup.executor.clone(),
-                size,
-                setup.all_data.clone(),
-            )
-            .await;
+            let mut context = start_single_beacon_vote_cluster(size).await;
 
-            context.set_operators_offline(&faulty);
-            context.verify_consensus().await;
+            context.set_operators_offline(faulty);
+            context
+                .assert_all_started_instances_reached_consensus()
+                .await;
         }
     }
 
     #[tokio::test]
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
-        let setup = setup_test(2);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE, TWO_BEACON_VOTE_DUTIES)
+                .await;
 
-        context.verify_consensus().await;
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test(start_paused = true)]
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_offline(&[1, 2]);
+        context.set_operators_offline(&RECOVERY_OFFLINE_OPERATORS);
 
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        context.set_operators_online(&[1, 2]);
+        tokio::time::sleep(MID_ROUND_TWO_DELAY).await;
+        context.set_operators_online(&RECOVERY_OFFLINE_OPERATORS);
 
-        context.verify_consensus().await;
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test]
     // Test commit message suppression for an operator
     async fn test_commit_suppression() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
         context.set_operators_byzantine(
-            &[1],
+            &SINGLE_FAULTY_OPERATOR,
             ByzantineBehavior::MessageSuppression(QbftMessageType::Commit),
         );
-        context.verify_consensus().await;
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test]
     // Test sending double messages
     async fn test_send_double() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_byzantine(&[1], ByzantineBehavior::DoubleVote);
-        context.verify_consensus().await;
+        context.set_operators_byzantine(&SINGLE_FAULTY_OPERATOR, ByzantineBehavior::DoubleVote);
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test]
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
-        )
-        .await;
+        let mut context =
+            start_single_beacon_vote_cluster(DEFAULT_BEACON_VOTE_COMMITTEE_SIZE).await;
 
-        context.set_operators_byzantine(&[1], ByzantineBehavior::InvalidMessage);
-        context.verify_consensus().await;
+        context.set_operators_byzantine(&SINGLE_FAULTY_OPERATOR, ByzantineBehavior::InvalidMessage);
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test(start_paused = true)]
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        let setup = setup_test(1);
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Ten, // Using larger committee for partition testing
-            setup.all_data,
-        )
-        .await;
+        let mut context = start_single_beacon_vote_cluster(PARTITION_TEST_COMMITTEE_SIZE).await;
 
         // Initial partition. We have > f offline so we will not be able to reach consensus
-        context.set_operators_offline(&[3, 4, 5, 6]);
+        context.set_operators_offline(&INITIAL_PARTITION_OFFLINE_OPERATORS);
 
         // Wait and change partition
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(MID_ROUND_TWO_DELAY).await;
 
         // Bring original back online, and then take = f offline. Should be able to reach consensus
         // now
-        context.set_operators_online(&[3, 4, 5, 6]);
-        context.set_operators_offline(&[6, 7, 8]);
+        context.set_operators_online(&INITIAL_PARTITION_OFFLINE_OPERATORS);
+        context.set_operators_offline(&FOLLOW_UP_PARTITION_OFFLINE_OPERATORS);
 
-        context.verify_consensus().await;
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     #[tokio::test(start_paused = true)]
@@ -894,23 +961,23 @@ mod manager_tests {
     // This is different compared to network partition because here, messages are delayed instead
     // of dropped.
     async fn test_late_initialization() {
-        let setup = setup_test(1);
-
         let initialization_delays = HashMap::from([
-            (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
-            (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
+            (
+                OperatorId(ROUND_ONE_LEADER_AT_HEIGHT_ONE),
+                MID_ROUND_TWO_DELAY,
+            ),
+            (OperatorId(THIRD_OPERATOR), MID_ROUND_THREE_DELAY),
         ]);
 
-        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
-            setup.clock,
-            setup.executor,
-            CommitteeSize::Four,
-            setup.all_data,
+        let mut context = start_single_beacon_vote_cluster_with_delays(
+            DEFAULT_BEACON_VOTE_COMMITTEE_SIZE,
             initialization_delays,
         )
         .await;
 
-        context.verify_consensus().await;
+        context
+            .assert_all_started_instances_reached_consensus()
+            .await;
     }
 
     /// Test that AggregatorCommittee messages are rejected before the Boole fork.
@@ -926,20 +993,20 @@ mod manager_tests {
         };
         use ssz::Encode;
 
-        let setup = setup_test(1);
+        let runtime = new_test_runtime();
 
         // Create QbftManager with default fork schedule (no Boole)
         let config = processor::Config {
             max_workers: 4,
             queue_size: Default::default(),
         };
-        let senders = processor::spawn(config, setup.executor);
+        let senders = processor::spawn(config, runtime.executor);
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
 
         let manager = QbftManager::<types::MainnetEthSpec, _>::new(
             senders,
             OperatorId(1).into(),
-            setup.clock,
+            runtime.clock,
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
             NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
             Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test")), // No Boole fork
@@ -1002,7 +1069,7 @@ mod manager_tests {
         };
         use ssz::Encode;
 
-        let setup = setup_test(1);
+        let runtime = new_test_runtime();
 
         // Create fork schedule with Boole active at epoch 0
         let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "test");
@@ -1011,13 +1078,13 @@ mod manager_tests {
             max_workers: 4,
             queue_size: Default::default(),
         };
-        let senders = processor::spawn(config, setup.executor);
+        let senders = processor::spawn(config, runtime.executor);
         let (network_tx, _network_rx) = mpsc::unbounded_channel();
 
         let manager = QbftManager::<types::MainnetEthSpec, _>::new(
             senders,
             OperatorId(1).into(),
-            setup.clock,
+            runtime.clock,
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
             NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
             Arc::new(fork_schedule),
