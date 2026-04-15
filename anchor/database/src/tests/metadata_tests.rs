@@ -100,7 +100,7 @@ mod tests {
         let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
         assert_eq!(metadata.network_name, TEST_NETWORK_1);
         assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
-        assert_eq!(get_metadata_max_operator_id_seen(&conn), Some(0));
+        assert_eq!(get_metadata_max_operator_id_seen(&conn), None);
         assert_eq!(
             get_applied_migration_versions(&conn),
             vec![

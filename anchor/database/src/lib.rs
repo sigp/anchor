@@ -127,7 +127,9 @@ struct SingleState {
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
-    /// Monotonically increasing OperatorId count. None indicates a migrated database.
+    /// Monotonically increasing OperatorId count. `None` means this DB was adopted from schema v1,
+    /// which never tracked the field; the application will establish the first trustworthy value
+    /// when it processes a new `OperatorAdded` event.
     max_operator_id_seen: Option<u64>,
 }
 

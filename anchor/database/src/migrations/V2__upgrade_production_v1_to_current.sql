@@ -2,6 +2,6 @@
 -- upgrade. Keep the shipped schema-v1 metadata table in place and apply the later additive
 -- changes exactly the way the manual migration path would have, then let runtime fill the network
 -- name and normalize the row values.
-ALTER TABLE metadata ADD COLUMN max_operator_id_seen INTEGER DEFAULT 0;
+ALTER TABLE metadata ADD COLUMN max_operator_id_seen INTEGER;
 ALTER TABLE metadata ADD COLUMN network_name TEXT;
 CREATE INDEX IF NOT EXISTS idx_validators_validator_index ON validators(validator_index);

@@ -188,7 +188,9 @@ fn bridge_manual_anchor_database(
     // adopted by stamping V1 as already applied and then letting refinery run the combined V2
     // upgrade normally. This avoids replaying synthetic historical states: the DB stays in place,
     // refinery history is bootstrapped once, and all later evolution goes through real migration
-    // files.
+    // files. Stamping V1 and then applying V2 happen in separate runner invocations, so the
+    // bridge+upgrade path is resumable rather than fully atomic: if V1 is stamped and V2 fails,
+    // the next startup will see a refinery-managed DB and retry V2.
     migration_runner()
         .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
         .run(conn)?;
@@ -206,8 +208,7 @@ fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), Data
         "UPDATE metadata
          SET schema_version = 4,
              domain_type = COALESCE(domain_type, 0),
-             network_name = COALESCE(network_name, ?1),
-             max_operator_id_seen = COALESCE(max_operator_id_seen, 0)",
+             network_name = COALESCE(network_name, ?1)",
         params![network_name],
     )?;
     Ok(())
