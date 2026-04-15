@@ -10,11 +10,14 @@ const DOCS_PATH: &str = "docs/docs/generated";
 #[derive(Parser)]
 #[clap(
     name = "anchor-docgen",
-    about = "CLI reference documentation generator for Anchor"
+    about = "CLI reference documentation generator for Anchor",
+    next_line_help = true,
+    term_width = 80,
+    display_order = 0
 )]
 pub struct DocGen {
     #[clap(subcommand)]
-    pub command: Option<DocGenCommand>,
+    pub command: DocGenCommand,
 }
 
 #[derive(Parser)]

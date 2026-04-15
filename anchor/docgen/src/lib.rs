@@ -32,7 +32,7 @@ fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
         update_file(&docs_dir.join(file), &content)?;
     }
 
-    eprintln!("CLI reference snippets updated successfully.");
+    println!("CLI reference snippets updated successfully.");
     Ok(())
 }
 
@@ -61,7 +61,6 @@ fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     }
 
     if out_of_date.is_empty() {
-        eprintln!("CLI reference snippets are up to date.");
         Ok(())
     } else {
         Err(DocGenError::OutOfDate(out_of_date.join(", ")))
@@ -84,10 +83,10 @@ fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
 /// Renders documentation and updates/checks existing documentation based on the provided
 /// `DocGenCommand`.
 pub fn render_docs(
-    docgen_command: Option<DocGenCommand>,
+    docgen_command: DocGenCommand,
     anchor_command: &Command,
 ) -> Result<(), DocGenError> {
-    match docgen_command.unwrap_or(DocGenCommand::Generate) {
+    match docgen_command {
         DocGenCommand::Generate => {
             display_help_docs(anchor_command)?;
         }
