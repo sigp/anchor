@@ -16,7 +16,7 @@ cargo build -p docgen
 cargo run -p docgen generate
 
 # Update generated reference snippets
-cargo run -p docgen -- update
+cargo run -p docgen update
 
 # Update with a custom docs directory
 cargo run -p docgen update --docs-dir path/to/pages
