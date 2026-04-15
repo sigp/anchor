@@ -1,5 +1,7 @@
+mod errors;
 pub mod metadata_service;
 mod metrics;
+mod proposer;
 pub mod registration_service;
 
 use std::{
@@ -14,6 +16,7 @@ use std::{
 
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
+use errors::{Error, SpecificError};
 use eth2::types::{BlockContents, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
 use futures::{
@@ -31,17 +34,16 @@ use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
     AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider, ProposerInstanceId,
-    QbftError, QbftManager, TimeoutMode, ValidatorDutyKind,
+    QbftManager, TimeoutMode, ValidatorDutyKind,
 };
-use safe_arith::{ArithError, SafeArith};
+use safe_arith::SafeArith;
 use signature_collector::{
-    CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
-    ValidatorSigningData,
+    SignatureCollecting, SignatureMetadata, SignatureRequester, ValidatorSigningData,
 };
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
+    Cluster, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
@@ -53,7 +55,7 @@ use ssv_types::{
     partial_sig::PartialSignatureKind,
     try_to_variable_list,
 };
-use ssz::{Decode, DecodeError, Encode};
+use ssz::{Decode, Encode};
 use task_executor::TaskExecutor;
 use tokio::{
     select,
@@ -74,9 +76,8 @@ use types::{
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
-    AggregateToSign, AttestationToSign, ContributionToSign, DoppelgangerStatus,
-    Error as ValidatorStoreError, ProposalData, SignedBlock, SyncMessageToSign, UnsignedBlock,
-    ValidatorStore,
+    AggregateToSign, AttestationToSign, ContributionToSign, DoppelgangerStatus, ProposalData,
+    SignedBlock, SyncMessageToSign, UnsignedBlock, ValidatorStore,
 };
 
 /// Number of epochs of slashing protection history to keep.
@@ -2084,77 +2085,6 @@ enum CollectionMode {
     },
 }
 
-#[derive(Debug, Clone)]
-pub enum SpecificError {
-    Unsupported,
-    SignatureCollectionFailed(CollectionError),
-    ArithError(ArithError),
-    QbftError(QbftError),
-    Timeout,
-    InvalidQbftData(DecodeError),
-    TooManySyncSubnetsToSign,
-    NoDataAgreed,
-    Metadata,
-    MissingIndex,
-    SlotClock,
-    NotSynced,
-    InconsistentDatabase,
-    /// Database inconsistency: validator references a cluster that doesn't exist
-    ValidatorClusterMismatch {
-        validator_pubkey: PublicKeyBytes,
-        cluster_id: ClusterId,
-    },
-    KeyShareDecryptionFailed,
-    DataTooLarge(String),
-    ClusterLiquidated,
-    /// Requested slot has already passed the current cached slot in `VotingAssignments`
-    MetadataSlotPassed,
-    /// Watch channel for `VotingAssignments` has been closed
-    MetadataChannelClosed,
-    /// Requested slot has already passed the current cached slot in `AggregationAssignments`
-    AggregatorInfoSlotPassed,
-    /// Watch channel for `AggregationAssignments` has been closed
-    AggregatorInfoChannelClosed,
-    /// `produce_selection_proof` called for validator not in
-    /// `VotingAssignments.attesting_committees`
-    ValidatorNotAttesting {
-        validator_pubkey: PublicKeyBytes,
-        slot: Slot,
-    },
-    /// `produce_sync_selection_proof` called for validator not in
-    /// `VotingAssignments.sync_validators_by_subnet`
-    ValidatorNotInSyncCommittee {
-        validator_pubkey: PublicKeyBytes,
-        slot: Slot,
-    },
-    /// Pre-built consensus data not found for this committee (Boole+)
-    ConsensusDataNotFound,
-    /// This committee's aggregate not found in consensus data (Boole+)
-    AggregateNotInConsensus(u64),
-    /// This subcommittee's contribution not found in consensus data (Boole+)
-    ContributionNotInConsensus(u64),
-    /// This validator not found in consensus data (Boole+)
-    ValidatorNotInConsensus(ValidatorIndex),
-}
-
-impl From<CollectionError> for SpecificError {
-    fn from(err: CollectionError) -> SpecificError {
-        SpecificError::SignatureCollectionFailed(err)
-    }
-}
-
-impl From<ArithError> for SpecificError {
-    fn from(err: ArithError) -> SpecificError {
-        SpecificError::ArithError(err)
-    }
-}
-
-impl From<QbftError> for SpecificError {
-    fn from(err: QbftError) -> SpecificError {
-        SpecificError::QbftError(err)
-    }
-}
-
 fn convert_slashing_result(value: Result<Safe, NotSafe>) -> Result<(), Error> {
     match value {
         Ok(Safe::Valid) => Ok(()),
@@ -2162,8 +2092,6 @@ fn convert_slashing_result(value: Result<Safe, NotSafe>) -> Result<(), Error> {
         Err(not_safe) => Err(Error::Slashable(not_safe)),
     }
 }
-
-pub type Error = ValidatorStoreError<SpecificError>;
 
 impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
     for AnchorValidatorStore<T, E, C>
