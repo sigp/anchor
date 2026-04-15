@@ -1,6 +1,5 @@
 use crate::errors::{Error, SpecificError};
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 /// Instrumentation taxonomy reported outcomes of signing a block.
 pub enum SignBlockOutcome {
@@ -9,7 +8,7 @@ pub enum SignBlockOutcome {
     Error,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 impl SignBlockOutcome {
     pub fn as_str(&self) -> &'static str {
         match self {
