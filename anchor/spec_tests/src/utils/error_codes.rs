@@ -42,5 +42,18 @@ pub const NO_PARTIAL_SIG_MESSAGES: i64 = 19;
 /// `SSVMessageHasInvalidSignatureErrorCode` (iota 38 → value 39)
 pub const SSV_MESSAGE_HAS_INVALID_SIGNATURE: i64 = 39;
 
+// --- ProposerConsensusData / GetBlockData codes ---
+
+/// `UnmarshalSSZErrorCode` (iota 0 → value 1) — SSZ decode failure.
+pub const UNMARSHAL_SSZ: i64 = 1;
+
+/// `UnknownDutyRoleDataErrorCode` (iota 9 → value 10) — duty type is not `BNRoleProposer`.
+pub const UNKNOWN_DUTY_ROLE_DATA: i64 = 10;
+
+/// `UnknownBlockVersionErrorCode` (iota 10 → value 11) — unrecognized fork version.
+pub const UNKNOWN_BLOCK_VERSION: i64 = 11;
+
+// --- Sentinel ---
+
 /// Sentinel for Anchor-specific errors without Go equivalents.
 pub const UNMAPPED_ERROR_CODE: i64 = -1;
