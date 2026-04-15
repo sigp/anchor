@@ -106,12 +106,15 @@ check-benches:
 test: test-release
 
 # Update generated CLI reference snippets from current clap definitions
-cli-reference:
-	cargo run --bin anchor-docgen -- update
+cli-reference-update:
+	cargo run --release --bin anchor-docgen -- update
 
 # Check generated CLI reference snippets are up to date
 cli-reference-check:
-	cargo run --bin anchor-docgen -- check
+	cargo run --release --bin anchor-docgen -- check
+
+# Runs both update and check on the project to update the docs and check that they are consistent
+cli-reference: cli-reference-update cli-reference-check
 
 # Updates the CLI help text pages in the Anchor book, building with Docker.
 cli:

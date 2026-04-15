@@ -13,16 +13,16 @@ Anchor's documentation site includes hand-written CLI pages with explanatory pro
 cargo build -p docgen
 
 # Print generated CLI reference to stdout (default)
-cargo run -p docgen
+cargo run -p docgen generate
 
 # Update generated reference snippets
-cargo run -p docgen -- update
+cargo run -p docgen update
 
 # Update with a custom docs directory
-cargo run -p docgen -- update --docs-dir path/to/pages
+cargo run -p docgen update --docs-dir path/to/pages
 
 # Check if .mdx files are up to date (useful in CI)
-cargo run -p docgen -- check
+cargo run -p docgen check
 ```
 
 ### Subcommands
