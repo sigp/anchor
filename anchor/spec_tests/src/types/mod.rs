@@ -11,6 +11,7 @@ mod signed_ssv_msg;
 mod signed_ssv_msg_encoding;
 mod ssv_message_encoding;
 mod ssv_msg;
+mod ssz_spec_test;
 
 pub use aggregator_committee_consensus_data_encoding::*;
 pub use beacon_vote_encoding::*;
@@ -25,3 +26,4 @@ pub use signed_ssv_msg::*;
 pub use signed_ssv_msg_encoding::*;
 pub use ssv_message_encoding::*;
 pub use ssv_msg::*;
+pub use ssz_spec_test::*;
