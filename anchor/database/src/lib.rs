@@ -278,8 +278,9 @@ impl NetworkDatabase {
         Ok(conn_pool)
     }
 
-    // Build a new connection pool for in-memory databases (test-only)
-    // In-memory databases bypass schema migrations and are initialized via connection customizer
+    // Build a new connection pool for in-memory databases (test-only).
+    // Each SQLite in-memory connection gets its own schema, so initialize it through the same
+    // migration path when the pool acquires a connection.
     #[cfg(feature = "test-utils")]
     fn open_in_memory(network_name: &str) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::memory();
@@ -337,7 +338,10 @@ struct InMemoryCustomizeConnection {
 impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
         // For in-memory databases, initialize schema on each connection.
-        let _ = schema::initialize_in_memory(conn, &self.network_name);
+        // `CustomizeConnection` must surface a `rusqlite::Error`, so wrap the richer database
+        // migration failure instead of silently discarding it.
+        schema::initialize_in_memory(conn, &self.network_name)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(())
     }
 }

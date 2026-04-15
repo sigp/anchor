@@ -53,3 +53,5 @@ impl Display for DatabaseError {
         write!(f, "{self:?}")
     }
 }
+
+impl std::error::Error for DatabaseError {}

@@ -72,7 +72,7 @@ fn ensure_up_to_date_with_connection(
             stored_network,
         } => {
             validate_network_name(stored_network.as_deref(), network_name)?;
-            bridge_manual_anchor_database(conn, schema_version, network_name)?;
+            bridge_manual_anchor_database(conn, schema_version)?;
         }
         DatabaseType::LegacyUnsupported => {
             return Err(DatabaseError::AlreadyPresent(
@@ -176,7 +176,6 @@ fn validate_network_name(
 fn bridge_manual_anchor_database(
     conn: &mut Connection,
     schema_version: SchemaVersion,
-    _network_name: &str,
 ) -> Result<(), DatabaseError> {
     if schema_version != SUPPORTED_PRE_REFINERY_SCHEMA_VERSION {
         return Err(DatabaseError::AlreadyPresent(
