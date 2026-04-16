@@ -51,6 +51,14 @@ pub(crate) fn initialize_in_memory(
     ensure_up_to_date_with_connection(conn, network_name, true)
 }
 
+#[cfg(test)]
+pub(crate) fn stamp_baseline_for_tests(conn: &mut Connection) -> Result<(), DatabaseError> {
+    migration_runner()
+        .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
+        .run(conn)?;
+    Ok(())
+}
+
 fn ensure_up_to_date_with_connection(
     conn: &mut Connection,
     network_name: &str,
@@ -99,8 +107,10 @@ fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseEr
     if has_refinery_history {
         // Once refinery owns the DB, `refinery_schema_history` is the authoritative signal. The
         // legacy `metadata.schema_version` column may still exist for compatibility, but it is no
-        // longer the source of truth for schema state.
-        let stored_network = if has_metadata {
+        // longer the source of truth for schema state. A DB can also be in the stamped-only V1
+        // bridge state after `FakeVersion(1)` but before V2 has added `network_name`, so guard
+        // the read the same way we do for manual schema-v1 DBs.
+        let stored_network = if has_metadata && has_column(conn, "metadata", "network_name")? {
             conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
                 .optional()?
                 .flatten()

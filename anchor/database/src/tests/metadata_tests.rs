@@ -115,6 +115,41 @@ mod tests {
     }
 
     #[test]
+    fn test_stamped_v1_restart_recovers_and_applies_v2() {
+        // Arrange: create the exact restart state after the bridge stamps V1 into
+        // `refinery_schema_history` but before the later runtime call applies V2.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        create_manual_v1_database(&db_path);
+        let mut conn =
+            Connection::open(&db_path).expect("Failed to open stamped v1 database for setup");
+        schema::stamp_baseline_for_tests(&mut conn).expect("Failed to stamp refinery baseline");
+        drop(conn);
+
+        // Act: restart through the normal cutover path.
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1)
+            .expect("Restart should recover and apply V2");
+
+        // Assert: the retry path applies V2 and initializes the runtime metadata fields.
+        let conn = Connection::open(&db_path).expect("Failed to reopen recovered database");
+        let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+        assert_eq!(metadata.network_name, TEST_NETWORK_1);
+        assert_eq!(metadata.block_number, SEEDED_BLOCK_NUMBER);
+        assert_eq!(get_metadata_max_operator_id_seen(&conn), None);
+        assert_eq!(
+            get_applied_migration_versions(&conn),
+            vec![
+                PRODUCTION_BASELINE_MIGRATION_VERSION,
+                CURRENT_SCHEMA_MIGRATION_VERSION,
+            ]
+        );
+        assert!(
+            has_validator_index(&conn),
+            "the resumed cutover should still create the validator index"
+        );
+    }
+
+    #[test]
     fn test_unsupported_manual_schema_version_rejection() {
         // Arrange: create a pre-refinery Anchor DB that looks like metadata-backed Anchor, but
         // carries an unsupported manual schema version. The cutover only adopts the real shipped
