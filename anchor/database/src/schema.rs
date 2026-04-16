@@ -59,6 +59,12 @@ pub(crate) fn stamp_baseline_for_tests(conn: &mut Connection) -> Result<(), Data
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) fn run_migrations_for_tests(conn: &mut Connection) -> Result<(), DatabaseError> {
+    migration_runner().run(conn)?;
+    Ok(())
+}
+
 fn ensure_up_to_date_with_connection(
     conn: &mut Connection,
     network_name: &str,

@@ -150,6 +150,41 @@ mod tests {
     }
 
     #[test]
+    fn test_refinery_managed_restart_without_metadata_row_recovers() {
+        // Arrange: create the partial fresh-DB state after refinery has applied V1/V2 and written
+        // `refinery_schema_history`, but before `ensure_metadata_row()` has inserted the singleton
+        // metadata row.
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let mut conn = Connection::open(&db_path)
+            .expect("Failed to open partial refinery-managed database for setup");
+        schema::run_migrations_for_tests(&mut conn).expect("Failed to apply refinery migrations");
+        drop(conn);
+
+        // Act: restart through the normal runtime path.
+        schema::ensure_up_to_date(&db_path, TEST_NETWORK_1)
+            .expect("Restart should recover and insert metadata row");
+
+        // Assert: the metadata row is created and the database is fully initialized.
+        let conn = Connection::open(&db_path).expect("Failed to reopen recovered database");
+        let metadata = queries::get_metadata(&conn).expect("Failed to get metadata");
+        assert_eq!(metadata.network_name, TEST_NETWORK_1);
+        assert_eq!(metadata.block_number, 0);
+        assert_eq!(get_metadata_max_operator_id_seen(&conn), Some(0));
+        assert_eq!(
+            get_applied_migration_versions(&conn),
+            vec![
+                PRODUCTION_BASELINE_MIGRATION_VERSION,
+                CURRENT_SCHEMA_MIGRATION_VERSION,
+            ]
+        );
+        assert!(
+            has_validator_index(&conn),
+            "the recovered fresh DB should still have the validator index"
+        );
+    }
+
+    #[test]
     fn test_unsupported_manual_schema_version_rejection() {
         // Arrange: create a pre-refinery Anchor DB that looks like metadata-backed Anchor, but
         // carries an unsupported manual schema version. The cutover only adopts the real shipped
