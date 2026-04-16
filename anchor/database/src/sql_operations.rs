@@ -1,6 +1,15 @@
 // Metadata
-pub const INSERT_METADATA: &str = r#"INSERT INTO metadata (network_name) VALUES (?1)"#;
-pub const GET_METADATA: &str = r#"SELECT schema_version FROM metadata"#;
+pub const INSERT_METADATA: &str = r#"
+    INSERT INTO metadata (
+        schema_version,
+        domain_type,
+        network_name,
+        block_number,
+        max_operator_id_seen
+    )
+    SELECT 4, 0, ?1, 0, 0
+    WHERE NOT EXISTS (SELECT 1 FROM metadata)
+"#;
 pub const GET_LEGACY_BLOCK: &str = r#"SELECT * FROM block"#;
 pub const GET_MAX_OPERATOR_ID_SEEN: &str = r#"SELECT max_operator_id_seen FROM metadata"#;
 pub const SET_MAX_OPERATOR_ID_SEEN: &str = r#"UPDATE metadata SET max_operator_id_seen = ?1"#;
@@ -87,6 +96,16 @@ pub const INSERT_SHARE: &str = r#"
 pub const GET_SHARES: &str = r#"
     SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey
     FROM shares WHERE operator_id = ?1
+"#;
+pub const GET_SHARE_PUBKEYS_FOR_VALIDATOR: &str = r#"
+    SELECT operator_id, share_pubkey
+    FROM shares WHERE validator_pubkey = ?1
+"#;
+pub const GET_SHARE_PUBKEYS_FOR_VALIDATOR_INDEX: &str = r#"
+    SELECT s.operator_id, s.share_pubkey
+    FROM shares s
+    JOIN validators v ON v.validator_pubkey = s.validator_pubkey
+    WHERE v.validator_index = ?1
 "#;
 pub const GET_OWN_SHARE: &str = r#"
     SELECT 1

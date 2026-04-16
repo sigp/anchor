@@ -3,19 +3,23 @@
 //! These DTOs bridge Go's JSON serialization format to Anchor's production types
 //! without polluting production types with serde annotations.
 
+use std::str::FromStr;
+
 use serde::Deserialize;
 use ssv_types::{
     OperatorId, ValidatorIndex,
+    consensus::{BeaconRole, DataVersion, ProposerConsensusData, ValidatorDuty},
     message::{MsgType, SSVMessage},
     msgid::MessageId,
     partial_sig::{PartialSignatureKind, PartialSignatureMessage},
 };
-use ssz::DecodeError;
-use types::Hash256;
+use ssz::{Decode, DecodeError, Encode};
+use ssz_types::VariableList;
+use types::{ForkName, Hash256, Slot};
 
 use super::deserializers::{
-    deserialize_base64, deserialize_hex_message_id, deserialize_hex_option,
-    deserialize_partial_signature_kind,
+    deserialize_base64, deserialize_base64_or_empty, deserialize_hex_message_id,
+    deserialize_hex_option, deserialize_partial_signature_kind,
 };
 
 /// DTO for `SSVMessage`.
@@ -100,4 +104,98 @@ pub struct RawPartialSignatureMessages {
     pub kind: PartialSignatureKind,
     pub slot: String,
     pub messages: Vec<RawPartialSignatureMessage>,
+}
+
+/// DTO for Go's `Duty` object inside `ConsensusData`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RawDuty {
+    #[serde(rename = "Type")]
+    pub duty_type: u64,
+    pub pub_key: String,
+    pub slot: String,
+    pub validator_index: String,
+    pub committee_index: u64,
+    pub committee_length: u64,
+    pub committees_at_slot: u64,
+    pub validator_committee_index: u64,
+    #[serde(default)]
+    pub validator_sync_committee_indices: Option<Vec<u64>>,
+}
+
+impl TryFrom<&RawDuty> for ValidatorDuty {
+    type Error = String;
+
+    fn try_from(raw: &RawDuty) -> Result<Self, String> {
+        let role = BeaconRole::from_ssz_bytes(&raw.duty_type.as_ssz_bytes())
+            .map_err(|e| format!("Invalid duty type {}: {e:?}", raw.duty_type))?;
+
+        let pub_key = bls::PublicKeyBytes::from_str(&raw.pub_key)
+            .map_err(|e| format!("Invalid pub_key: {e:?}"))?;
+
+        let slot = raw
+            .slot
+            .parse::<u64>()
+            .map(Slot::new)
+            .map_err(|e| format!("Invalid slot: {e}"))?;
+
+        let validator_index = raw
+            .validator_index
+            .parse::<usize>()
+            .map(ValidatorIndex)
+            .map_err(|e| format!("Invalid validator_index: {e}"))?;
+
+        let sync_indices: Vec<u64> = raw
+            .validator_sync_committee_indices
+            .clone()
+            .unwrap_or_default();
+        let validator_sync_committee_indices = VariableList::new(sync_indices)
+            .map_err(|_| "validator_sync_committee_indices exceeds max length")?;
+
+        Ok(ValidatorDuty {
+            r#type: role,
+            pub_key,
+            slot,
+            validator_index,
+            committee_index: raw.committee_index,
+            committee_length: raw.committee_length,
+            committees_at_slot: raw.committees_at_slot,
+            validator_committee_index: raw.validator_committee_index,
+            validator_sync_committee_indices,
+        })
+    }
+}
+
+/// DTO for Go's `ConsensusData` fixture (proposer variant).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RawConsensusData {
+    pub duty: RawDuty,
+    pub version: String,
+    #[serde(
+        rename = "DataSSZ",
+        deserialize_with = "deserialize_base64_or_empty",
+        default
+    )]
+    pub data_ssz: Vec<u8>,
+}
+
+impl TryFrom<&RawConsensusData> for ProposerConsensusData {
+    type Error = String;
+
+    fn try_from(raw: &RawConsensusData) -> Result<Self, String> {
+        let duty = ValidatorDuty::try_from(&raw.duty)?;
+
+        let fork = ForkName::from_str(&raw.version)
+            .map_err(|e| format!("Invalid version '{}': {e}", raw.version))?;
+
+        let data_ssz =
+            VariableList::new(raw.data_ssz.clone()).map_err(|_| "data_ssz exceeds max length")?;
+
+        Ok(ProposerConsensusData {
+            duty,
+            version: DataVersion::from(fork),
+            data_ssz,
+        })
+    }
 }
