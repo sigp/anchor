@@ -127,7 +127,9 @@ struct SingleState {
     clusters: HashSet<ClusterId>,
     /// Nonce of the owner account
     nonces: HashMap<Address, u16>,
-    /// Monotonically increasing OperatorId count. None indicates a migrated database.
+    /// Monotonically increasing OperatorId count. `None` means this DB was adopted from schema v1,
+    /// which never tracked the field; the application will establish the first trustworthy value
+    /// when it processes a new `OperatorAdded` event.
     max_operator_id_seen: Option<u64>,
 }
 
@@ -278,8 +280,9 @@ impl NetworkDatabase {
         Ok(conn_pool)
     }
 
-    // Build a new connection pool for in-memory databases (test-only)
-    // In-memory databases bypass schema migrations and are initialized via connection customizer
+    // Build a new connection pool for in-memory databases (test-only).
+    // Each SQLite in-memory connection gets its own schema, so initialize it through the same
+    // migration path when the pool acquires a connection.
     #[cfg(feature = "test-utils")]
     fn open_in_memory(network_name: &str) -> Result<Pool, DatabaseError> {
         let manager = SqliteConnectionManager::memory();
@@ -336,8 +339,11 @@ struct InMemoryCustomizeConnection {
 #[cfg(feature = "test-utils")]
 impl CustomizeConnection<Connection, rusqlite::Error> for InMemoryCustomizeConnection {
     fn on_acquire(&self, conn: &mut Connection) -> rusqlite::Result<()> {
-        // For in-memory databases, create schema on each connection
-        let _ = schema::create_initial_schema(conn, &self.network_name);
+        // For in-memory databases, initialize schema on each connection.
+        // `CustomizeConnection` must surface a `rusqlite::Error`, so wrap the richer database
+        // migration failure instead of silently discarding it.
+        schema::initialize_in_memory(conn, &self.network_name)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(())
     }
 }
