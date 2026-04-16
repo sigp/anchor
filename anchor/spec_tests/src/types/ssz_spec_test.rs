@@ -10,10 +10,12 @@ use crate::{
     },
 };
 
-/// Mirrors Go's `SSZSpecTest.Run()`. Verifies withdrawals `HashTreeRoot`.
+/// Mirrors Go's `SSZSpecTest.Run()`. Verifies the withdrawals root from the
+/// execution payload when block decode succeeds.
 ///
-/// Fixtures contain synthetic BLS; Anchor rejects these during SSZ decode
-/// (Go's `fastssz` doesn't validate BLS), so BLS failures pass silently.
+/// Fixtures contain synthetic BLS; Lighthouse rejects these during SSZ decode
+/// (Go's `fastssz` doesn't validate BLS), so withdrawals root verification is
+/// only exercised with `fake_crypto` enabled.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct SSZSpecTest {
@@ -46,8 +48,9 @@ impl SpecTest for SSZSpecTest {
                     })?,
                 // Both decoders failed. Go fixtures use synthetic BLS points that Go's
                 // fastssz accepts but Lighthouse rejects (`BLST_BAD_ENCODING`). Without
-                // `fake_crypto`, the withdrawals root check is unreachable — the test
-                // passes by skipping it. With `fake_crypto` enabled
+                // `fake_crypto`, the withdrawals root check is unreachable and this
+                // returns `Ok(())` to preserve parity with the current Go `SSZSpecTest`.
+                // With `fake_crypto` enabled
                 // (`cargo test -p spec_tests --features fake_crypto`), BLS validation is
                 // skipped, the full block decodes successfully above, and the withdrawals
                 // root is actually verified. Tracked by ssvlabs/ssv-spec#622.
