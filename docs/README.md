@@ -79,7 +79,7 @@ All documentation content is in `docs/pages/` as `.mdx` files.
 
 Specific CLI option detail is stored as separate imported components:
 
-- `docs/docs/generated/*.mdx` contain specific CLI option implementation details generated from Anchor CLI source code.
+- `docs/docs/generated/*.mdx` contain specific CLI option implementation details generated using the structure of Anchor CLI source code.
 - The `docs/docs/pages/cli*.mdx` pages remain hand-written and import those generated snippets.
 
 ### Page Structure
