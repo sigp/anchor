@@ -85,11 +85,6 @@ pub fn generate_cli_reference_snippet(cmd: &Command) -> Result<String, DocGenErr
     render_options_tables(cmd, "####")
 }
 
-/// Generate CLI help snippet for a flat command (no subcommands).
-fn generate_flat_command_reference_snippet(cmd: &Command) -> Result<String, DocGenError> {
-    render_options_tables(cmd, "####")
-}
-
 /// Generate CLI help snippet for a command with nested subcommands.
 fn generate_nested_command_reference_snippet(cmd: &Command) -> Result<String, DocGenError> {
     let mut output = String::new();
@@ -130,7 +125,7 @@ pub fn generate_subcommand_reference_snippet(
     if subcmd.get_subcommands().any(|s| !s.is_hide_set()) {
         generate_nested_command_reference_snippet(subcmd)
     } else {
-        generate_flat_command_reference_snippet(subcmd)
+        generate_cli_reference_snippet(subcmd)
     }
 }
 
