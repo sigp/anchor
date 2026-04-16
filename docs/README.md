@@ -75,7 +75,12 @@ npm run preview
 
 ### Editing Existing Pages
 
-All documentation content is in `docs/pages/` as `.mdx` files. Edit these files directly.
+All documentation content is in `docs/pages/` as `.mdx` files.
+
+Specific CLI option detail is stored as separate imported components:
+
+- `docs/docs/generated/*.mdx` contain specific CLI option implementation details generated from Anchor CLI source code.
+- The `docs/docs/pages/cli*.mdx` pages remain hand-written and import those generated snippets.
 
 ### Page Structure
 

@@ -1,3 +1,5 @@
+import CliKeysplitOptions from '../generated/cli-keysplit-options.mdx'
+
 ## Keysplit Command
 
 The `keysplit` command is used to split validator keys for distributed validation on the SSV network.
@@ -13,43 +15,7 @@ Where `<SUBCOMMAND>` is one of:
 
 Both subcommands share these Options
 
-| Option | Description | Default |
-| --- | --- | ---|
-| `--keystore-path <PATH>` | Path to validator keystore file | Required |
-| `--password-file <PATH>` | Path to a file containing the password for the validator keystore (if omitted, password will be prompted) | None |
-| `--owner <ADDRESS>` | EOA address that owns the validator | Required |
-| `--output-path <OUTPUT PATH>` | Path for output file | Required |
-| `--operators <IDS>` | Comma-separated list of operator IDs | Required|
-| `-d, --data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
-| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `hoodi` |
-| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None |
-| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
-| `-h, --help` | Display help information | |
-
-### Manual Keysplit Subcommand
-
-```bash
-anchor keysplit manual [OPTIONS]
-```
-
-Additional Options:
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--nonce <NONCE>` | Nonce for the owner address | Required |
-| `--public-keys <KEYS>...` | RSA public keys for the operators | Required|
-
-### Onchain Keysplit Subcommand
-
-```bash
-anchor keysplit onchain [OPTIONS]
-```
-
-Additional Options:
-
-| Option | Description | Default |
-| --- | --- | ---|
-| `--rpc <ENDPOINT>` | RPC endpoint to access L1 data | Required|
+<CliKeysplitOptions />
 
 #### Examples
 
