@@ -77,11 +77,6 @@ npm run preview
 
 All documentation content is in `docs/pages/` as `.mdx` files. Edit these files directly.
 
-Generated CLI option snippets are machine-owned:
-
-- `docs/docs/generated/*.mdx` should be updated via `make cli-reference`.
-- The `docs/docs/pages/cli*.mdx` pages remain hand-written and import those generated snippets.
-
 ### Page Structure
 
 Each page should use this frontmatter structure:
