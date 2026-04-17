@@ -1,3 +1,5 @@
+import CliGlobalOptions from '../generated/cli-global-options.mdx'
+
 # Anchor CLI Reference
 
 This document provides a comprehensive reference for Anchor's command-line interface, including all available commands, subcommands, and options.
@@ -18,12 +20,4 @@ Where `<COMMAND>` is one of:
 
 ### Global Options
 
-| Option | Description | Default               |
-| --- | --- |-----------------------|
-| `-d, --data-dir <DIR>` | Data directory for node files | `~/.anchor/{network}` |
-| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None                  |
-| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `mainnet`               |
-| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
-| `-h, --help` | Display help information | Unset                 |
-| `-V, --version` | Print version information | Unset |
-
+<CliGlobalOptions />
