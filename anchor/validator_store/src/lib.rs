@@ -1,7 +1,6 @@
 mod errors;
 pub mod metadata_service;
 mod metrics;
-mod proposer;
 pub mod registration_service;
 
 use std::{
