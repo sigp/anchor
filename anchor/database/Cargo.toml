@@ -15,6 +15,7 @@ openssl = { workspace = true }
 r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 rand = { workspace = true }
+refinery = { version = "0.9.1", features = ["rusqlite"] }
 rusqlite = { workspace = true }
 slashing_protection = { workspace = true }
 ssv_types = { workspace = true }

@@ -1770,7 +1770,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .collect();
 
         for ((validator_index, attestation, validator_pubkey), slashing_status) in
-            attestations.into_iter().zip(results.into_iter())
+            attestations.into_iter().zip(results)
         {
             match slashing_status {
                 Ok(()) => {
