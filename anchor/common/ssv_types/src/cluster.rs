@@ -48,7 +48,7 @@ impl Cluster {
     ///
     /// Exception: Returns 0 if there are no cluster members
     pub fn get_f(&self) -> u64 {
-        (self.cluster_members.len().saturating_sub(1) / 3) as u64
+        crate::get_f(self.cluster_members.len()) as u64
     }
 
     pub fn committee_id(&self) -> CommitteeId {

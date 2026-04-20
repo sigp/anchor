@@ -26,6 +26,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
+    get_f,
     message::{MsgType, SSVMessageError, SignedSSVMessage, SignedSSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
@@ -1059,8 +1060,7 @@ pub fn sync_committee_period(
 }
 
 pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
-    let f = get_f(committee_size);
-    f * 2 + 1
+    get_f(committee_size) * 2 + 1
 }
 
 fn get_operator_pub_keys(
@@ -1075,11 +1075,6 @@ fn get_operator_pub_keys(
                 .map(|operator| (*id, operator.rsa_pubkey))
         })
         .collect()
-}
-
-// # TODO centralize this and the one in the qbft crate
-pub(crate) fn get_f(committee_size: usize) -> usize {
-    (committee_size - 1) / 3
 }
 
 pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {

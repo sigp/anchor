@@ -1,7 +1,7 @@
 use std::{fmt::Debug, time::Duration};
 
 use indexmap::IndexSet;
-use ssv_types::{OperatorId, Round};
+use ssv_types::{OperatorId, Round, get_f, quorum_size};
 
 use super::error::ConfigBuilderError;
 use crate::qbft_types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction};
@@ -61,11 +61,6 @@ impl<F: Clone + LeaderFunction> Config<F> {
         &self.leader_fn
     }
 
-    /// Obtains the maximum number of faulty nodes that this consensus can tolerate
-    pub fn get_f(&self) -> usize {
-        get_f(self.committee_members.len())
-    }
-
     /// Private constructor so it can only be built by our `ConfigBuilder`.
     fn from_builder(builder: &ConfigBuilder<F>) -> Self {
         Self {
@@ -79,10 +74,6 @@ impl<F: Clone + LeaderFunction> Config<F> {
             leader_fn: builder.leader_fn.clone(),
         }
     }
-}
-
-fn get_f(members: usize) -> usize {
-    (members - 1) / 3
 }
 
 /// Builder struct for constructing the QBFT instance configuration
@@ -113,9 +104,7 @@ where
         instance_height: InstanceHeight,
         committee_members: IndexSet<OperatorId>,
     ) -> Self {
-        let committee_size = committee_members.len();
-        let f = get_f(committee_size);
-        let default_quorum = committee_size.saturating_sub(f);
+        let default_quorum = quorum_size(committee_members.len());
 
         ConfigBuilder {
             operator_id,
@@ -140,9 +129,7 @@ where
         committee_members: IndexSet<OperatorId>,
         leader_fn: F,
     ) -> Self {
-        let committee_size = committee_members.len();
-        let f = get_f(committee_size);
-        let default_quorum = committee_size.saturating_sub(f);
+        let default_quorum = quorum_size(committee_members.len());
 
         ConfigBuilder {
             operator_id,
@@ -234,9 +221,9 @@ where
             return Err(ConfigBuilderError::OperatorNotParticipant);
         }
 
-        // Validate `quorum_size`
+        // Validate `quorum_size`: must fall in `[2f + 1, quorum_size(N)]`.
         let f = get_f(committee_size);
-        if self.quorum_size < f * 2 + 1 || self.quorum_size > committee_size - f {
+        if self.quorum_size < f * 2 + 1 || self.quorum_size > quorum_size(committee_size) {
             return Err(ConfigBuilderError::InvalidQuorumSize);
         }
 

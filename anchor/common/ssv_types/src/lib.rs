@@ -26,6 +26,20 @@ pub use types::{Epoch, Slot};
 pub const RSA_SIGNATURE_SIZE: usize = 256;
 pub const MAX_SIGNATURES: usize = 13;
 
+/// Maximum Byzantine/faulty members a committee of `members` can tolerate:
+/// `f = ⌊(N − 1) / 3⌋`. Returns 0 for empty committees.
+pub fn get_f(members: usize) -> usize {
+    members.saturating_sub(1) / 3
+}
+
+/// Default QBFT quorum: `N − f`. Safe for any `N ≥ 1`; equivalent to `2f + 1`
+/// for canonical SSV sizes (`N = 3f + 1`: 4, 7, 10, 13) and strictly larger
+/// otherwise. Callers may override via `ConfigBuilder::with_quorum_size`
+/// within the valid range `[2f + 1, N − f]`.
+pub fn quorum_size(committee_size: usize) -> usize {
+    committee_size.saturating_sub(get_f(committee_size))
+}
+
 /// Converts a Vec to VariableList, returning a custom error on failure.
 pub fn try_to_variable_list<T, N, E, F>(vec: Vec<T>, error_fn: F) -> Result<VariableList<T, N>, E>
 where

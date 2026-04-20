@@ -16,6 +16,7 @@ use ssv_types::{
         PrepareJustificationLength, QbftData, QbftDataValidator, QbftMessage, QbftMessageType,
         RoundChangeJustificationLength, UnsignedSSVMessage,
     },
+    get_f,
     message::{MsgType, SSVMessage, SignedSSVMessage},
     msgid::MessageId,
     try_to_variable_list,
@@ -1149,7 +1150,10 @@ where
             //    message
             let round = self
                 .round_change_container
-                .lowest_partial_quorum_above_round(self.current_round, self.config.get_f() + 1);
+                .lowest_partial_quorum_above_round(
+                    self.current_round,
+                    get_f(self.config.committee_members().len()) + 1,
+                );
             if let Some(round) = round
                 && round > self.current_round
             {
