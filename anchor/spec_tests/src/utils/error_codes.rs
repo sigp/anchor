@@ -3,6 +3,8 @@
 //! Only codes relevant to currently implemented spec tests are included.
 //! Add new codes as new test types are implemented.
 
+use ssv_types::message::SignedSSVMessageError;
+
 /// No error — validation passed.
 pub const NO_ERROR: i64 = 0;
 
@@ -57,3 +59,29 @@ pub const UNKNOWN_BLOCK_VERSION: i64 = 11;
 
 /// Sentinel for Anchor-specific errors without Go equivalents.
 pub const UNMAPPED_ERROR_CODE: i64 = -1;
+
+// --- Mappers ---
+
+/// Maps `SignedSSVMessageError` variants to Go's integer error codes from ssv-spec.
+///
+/// Variants without a Go equivalent map to `UNMAPPED_ERROR_CODE` so tests fail loudly
+/// on mismatch rather than silently matching some unrelated code.
+pub fn signed_ssv_message_error_code(err: &SignedSSVMessageError) -> i64 {
+    match err {
+        SignedSSVMessageError::NoSigners => NO_SIGNERS,
+        SignedSSVMessageError::NoSignatures => NO_SIGNATURES,
+        SignedSSVMessageError::ZeroSigner => ZERO_SIGNER_NOT_ALLOWED,
+        SignedSSVMessageError::DuplicatedSigner => NON_UNIQUE_SIGNER,
+        SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
+            INCORRECT_NUMBER_OF_SIGNATURES
+        }
+        // Unreachable when callers pad all sigs to exactly `[u8; 256]` before
+        // `SignedSSVMessage::new()`, so the size check inside `new()` always passes.
+        SignedSSVMessageError::WrongRSASignatureSize { .. } => EMPTY_SIGNATURE,
+        SignedSSVMessageError::TooManySignatures { .. }
+        | SignedSSVMessageError::TooManyOperatorIDs { .. }
+        | SignedSSVMessageError::FullDataTooLong { .. }
+        | SignedSSVMessageError::SignersNotSorted
+        | SignedSSVMessageError::SSVMessageError(_) => UNMAPPED_ERROR_CODE,
+    }
+}
