@@ -1,3 +1,4 @@
+mod instrumentation;
 pub mod metadata_service;
 mod metrics;
 pub mod registration_service;
@@ -60,7 +61,7 @@ use tokio::{
     sync::{Barrier, RwLock, watch},
     time::{Instant, sleep},
 };
-use tracing::{debug, error, info, info_span, trace, warn};
+use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
@@ -78,6 +79,8 @@ use validator_store::{
     Error as ValidatorStoreError, ProposalData, SignedBlock, SyncMessageToSign, UnsignedBlock,
     ValidatorStore,
 };
+
+use crate::instrumentation::{BlockSigningCheckpoints, SignBlockOutcome};
 
 /// Number of epochs of slashing protection history to keep.
 ///
@@ -2307,11 +2310,47 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         block: UnsignedBlock<E>,
         current_slot: Slot,
     ) -> Result<SignedBlock<E>, Error> {
+        let block_type = match &block {
+            UnsignedBlock::Full(_) => "full",
+            UnsignedBlock::Blinded(_) => "blinded",
+        };
+        let block_slot = match block {
+            UnsignedBlock::Full(FullBlockContents::BlockContents(ref contents)) => {
+                contents.block.slot()
+            }
+            UnsignedBlock::Full(FullBlockContents::Block(ref block)) => block.slot(),
+            UnsignedBlock::Blinded(ref block) => block.slot(),
+        };
+
+        // Root span
+        let span = info_span!(
+            "sign_block",
+            block_type,
+            cluster_size = tracing::field::Empty,
+            current_slot = current_slot.as_u64(),
+            proposal_matched = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            slot = block_slot.as_u64(),
+            validator_pubkey = %validator_pubkey,
+            validator_index = tracing::field::Empty,
+        );
         let future = async {
+            info!(
+                checkpoint = BlockSigningCheckpoints::DutyEntry.as_str(),
+                "Block signing duty entered"
+            );
+
             if !*self.is_synced.borrow() {
                 return Err(Error::SpecificError(SpecificError::NotSynced));
             }
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+
+            let cluster_size = cluster.cluster_members.len() as u64; // tracing::Value implemented for i64 and u64.
+            tracing::Span::current().record("cluster_size", cluster_size);
+
+            if let Some(validator_idx) = validator.index {
+                tracing::Span::current().record("validator_index", *validator_idx);
+            }
 
             let (blinded_block, proofs_and_blobs, block_full) = match block {
                 UnsignedBlock::Full(FullBlockContents::BlockContents(contents)) => (
@@ -2325,9 +2364,19 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 UnsignedBlock::Blinded(block) => (block, None, None),
             };
 
+            info!(
+                checkpoint = BlockSigningCheckpoints::PreConsensusHandoff.as_str(),
+                "Handing block to consensus"
+            );
+
             let decided_block = self
                 .decide_abstract_block(&validator, &cluster, &blinded_block)
                 .await?;
+
+            info!(
+                checkpoint = BlockSigningCheckpoints::ConsensusReturned.as_str(),
+                "Block consensus completed successfully"
+            );
 
             // Sign the decided block
             let signed_block = match decided_block {
@@ -2346,39 +2395,67 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 }
             }?;
 
+            info!(
+                checkpoint = BlockSigningCheckpoints::BlockSigned.as_str(),
+                "Block threshold signature completed"
+            );
+
             match signed_block {
                 SignedBlock::Blinded(signed_blinded_block) => {
                     // Check if the decided block matches our original proposal
                     if signed_blinded_block.signed_block_header().message
                         == blinded_block.block_header()
                     {
+                        span.record("proposal_matched", true);
                         if let Some(full_block) = block_full {
                             let signed_full_block = SignedBeaconBlock::from_block(
                                 full_block,
                                 signed_blinded_block.signature().clone(),
+                            );
+                            info!(
+                                checkpoint = BlockSigningCheckpoints::PublishConsensus.as_str(),
+                                "Publishing full reconstructed block as leader"
                             );
                             Ok(SignedBlock::Full(PublishBlockRequest::new(
                                 Arc::new(signed_full_block),
                                 proofs_and_blobs,
                             )))
                         } else {
+                            info!(
+                                checkpoint = BlockSigningCheckpoints::PublishConsensus.as_str(),
+                                "Publishing blinded block as leader"
+                            );
                             Ok(SignedBlock::Blinded(signed_blinded_block))
                         }
                     } else {
+                        span.record("proposal_matched", false);
+                        info!(
+                            checkpoint = BlockSigningCheckpoints::PublishConsensus.as_str(),
+                            "Publishing blinded block not as leader"
+                        );
                         // Someone else's proposal won, return blinded
                         Ok(SignedBlock::Blinded(signed_blinded_block))
                     }
                 }
-                SignedBlock::Full(signed_block) => Ok(SignedBlock::Full(signed_block)),
+                SignedBlock::Full(signed_block) => {
+                    info!(
+                        checkpoint = BlockSigningCheckpoints::PublishConsensus.as_str(),
+                        "Published full block directly"
+                    );
+                    Ok(SignedBlock::Full(signed_block))
+                }
             }
-        };
+        }
+        .instrument(span.clone());
 
-        run_and_update_metrics(
+        let result = run_and_update_metrics(
             BLOCK_LOG_NAME,
             &validator_metrics::SIGNED_BLOCKS_TOTAL,
             future,
         )
-        .await
+        .await;
+        span.record("outcome", SignBlockOutcome::from_result(&result).as_str());
+        result
     }
 
     async fn sign_validator_registration_data(
