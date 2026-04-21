@@ -32,10 +32,10 @@ pub fn get_f(members: usize) -> usize {
     members.saturating_sub(1) / 3
 }
 
-/// Default QBFT quorum: `N − f`. Safe for any `N ≥ 1`; equivalent to `2f + 1`
-/// for canonical SSV sizes (`N = 3f + 1`: 4, 7, 10, 13) and strictly larger
-/// otherwise. Callers may override via `ConfigBuilder::with_quorum_size`
-/// within the valid range `[2f + 1, N − f]`.
+/// Default QBFT quorum: `N − f`. Equivalent to `2f + 1` when `N = 3f + 1`
+/// (SSV canonical sizes: 4, 7, 10, 13) and strictly larger for all other `N`.
+/// Uses `saturating_sub` so `N = 0` returns 0 without panicking; small committees
+/// (`N ≤ 3`) yield trivial unanimity quorums with `f = 0` (no Byzantine tolerance).
 pub fn quorum_size(committee_size: usize) -> usize {
     committee_size.saturating_sub(get_f(committee_size))
 }

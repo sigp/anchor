@@ -221,9 +221,10 @@ where
             return Err(ConfigBuilderError::OperatorNotParticipant);
         }
 
-        // Validate `quorum_size`: must fall in `[2f + 1, quorum_size(N)]`.
+        // Validate `quorum_size`: must fall in `[2f + 1, N − f]`.
         let f = get_f(committee_size);
-        if self.quorum_size < f * 2 + 1 || self.quorum_size > quorum_size(committee_size) {
+        let max_quorum = quorum_size(committee_size);
+        if self.quorum_size < f * 2 + 1 || self.quorum_size > max_quorum {
             return Err(ConfigBuilderError::InvalidQuorumSize);
         }
 
