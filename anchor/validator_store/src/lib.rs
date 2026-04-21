@@ -2366,7 +2366,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
             info!(
                 checkpoint = BlockSigningCheckpoints::PreConsensusHandoff.as_str(),
-                "Handing block to consensus"
+                "Handing block to consensus process"
             );
 
             let decided_block = self
@@ -2374,7 +2374,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 .await?;
 
             info!(
-                checkpoint = BlockSigningCheckpoints::ConsensusReturned.as_str(),
+                checkpoint = BlockSigningCheckpoints::ConsensusDecided.as_str(),
                 "Block consensus completed successfully"
             );
 

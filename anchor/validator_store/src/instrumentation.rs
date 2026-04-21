@@ -29,7 +29,7 @@ impl SignBlockOutcome {
 pub enum BlockSigningCheckpoints {
     DutyEntry,
     PreConsensusHandoff,
-    ConsensusReturned,
+    ConsensusDecided,
     BlockSigned,
     PublishConsensus,
 }
@@ -38,8 +38,8 @@ impl BlockSigningCheckpoints {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::DutyEntry => "duty_entry",
-            Self::PreConsensusHandoff => "pre_consensus_handoff",
-            Self::ConsensusReturned => "consensus_returned",
+            Self::PreConsensusHandoff => "qbft_start",
+            Self::ConsensusDecided => "consensus_decided",
             Self::BlockSigned => "block_signed",
             Self::PublishConsensus => "publish_consensus",
         }
