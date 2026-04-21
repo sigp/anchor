@@ -70,6 +70,20 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::ConsensusDataProposerTest>(path, contents))
         }
 
+        // Lighthouse's VC drives Anchor through per-duty trait methods (`sign_block_proposal`,
+        // `sign_aggregate`, …), so Anchor always knows which duty it's in at the call site
+        // and hardcodes the wire `Role` there for parity with go-ssv. It never holds a
+        // `BeaconRole` and needs to dispatch on it.
+        //
+        // Go-ssv does need that dispatch — its `Validator` keeps `runners map[RunnerRole]Runner`
+        // and looks up the right runner per incoming duty, which is what `MapDutyToRunnerRole`
+        // (the function this spec test verifies) provides. Anchor has no equivalent and no
+        // caller for one. Not applicable.
+        "duty.DutySpecTest" => {
+            eprintln!("SKIP (known-inapplicable): {prefix}");
+            DispatchOutcome::SkippedKnown
+        }
+
         // TODO(spec-tests): Add more test types here as they are implemented.
         // This arm will be replaced with panic!() once all test types are added.
         _ => {
