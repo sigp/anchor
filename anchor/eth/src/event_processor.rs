@@ -495,6 +495,8 @@ impl EventProcessor {
             ));
         }
 
+        self.validate_validator_added_conflict(&owner, &validator_pubkey, &cluster_id, tx)?;
+
         // Fetch the validator metadata
         let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
             .map_err(|e| {
@@ -541,6 +543,58 @@ impl EventProcessor {
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
         Ok(())
+    }
+
+    /// Rejects `ValidatorAdded` events that conflict with validator state already reconstructed by
+    /// Anchor.
+    ///
+    /// Anchor and the Go SSV node both key reconstructed validator state globally by validator
+    /// pubkey, even though the contract stores registrations per `(owner, pubkey)`. Until the
+    /// wider data model changes, treat a second owner for an existing pubkey as malformed and skip
+    /// it rather than aborting historical sync on a DB uniqueness error.
+    fn validate_validator_added_conflict(
+        &self,
+        owner: &Address,
+        validator_pubkey: &PublicKeyBytes,
+        computed_cluster_id: &ClusterId,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
+        let Some(_) = self
+            .db
+            .get_validator_metadata_tx(validator_pubkey, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        else {
+            return Ok(());
+        };
+
+        let Some(existing_cluster) = self
+            .db
+            .get_cluster_by_validator_tx(validator_pubkey, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        else {
+            return Err(ExecutionError::MissingCommittedState(
+                "Failed to fetch cluster for existing validator metadata".to_string(),
+            ));
+        };
+
+        if existing_cluster.owner != *owner {
+            return Err(ExecutionError::InvalidEvent(format!(
+                "Validator already exists with different owner address. Expected {}. Got {}",
+                existing_cluster.owner, owner
+            )));
+        }
+
+        if existing_cluster.cluster_id != *computed_cluster_id {
+            return Err(ExecutionError::InvalidEvent(format!(
+                "Validator already exists with different cluster id. Expected {:?}. Got {:?}",
+                existing_cluster.cluster_id, computed_cluster_id
+            )));
+        }
+
+        Err(ExecutionError::Duplicate(format!(
+            "Validator already exists for owner {} and cluster {:?}",
+            owner, computed_cluster_id
+        )))
     }
 
     // A validator has been removed from the network and its respective cluster
