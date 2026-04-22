@@ -79,6 +79,7 @@ jobs:
               uses: actions/checkout@v4
               with:
                   token: ${{ steps.app-token.outputs.token }}
+                  ref: ${{ github.event.pull_request.head.sha }}
 
             - name: Configure AWS Credentials (OIDC)
               if: steps.check.outputs.is_member == 'true'
