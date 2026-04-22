@@ -78,6 +78,7 @@ impl NetworkDatabase {
     }
 
     /// Check if an `OperatorAdded` log for this id was previously skipped.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn was_operator_add_skipped_tx(
         &self,
         id: OperatorId,

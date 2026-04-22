@@ -55,12 +55,6 @@ pub fn wrap_operator_public_key_bytes(public_key: &[u8]) -> Bytes {
     Bytes::from(encoded)
 }
 
-/// Generate a valid operator key wrapped in the nested ABI string encoding used on-chain.
-pub fn create_wrapped_base64_operator_public_key_bytes() -> Bytes {
-    let public_key = create_valid_rsa_public_key_bytes();
-    wrap_operator_public_key_bytes(public_key.as_ref())
-}
-
 /// Re-encode the same PEM key as ASCII hex and wrap it in the nested ABI string encoding used
 /// on-chain.
 pub fn create_wrapped_hex_operator_public_key_bytes(public_key: &Bytes) -> Bytes {

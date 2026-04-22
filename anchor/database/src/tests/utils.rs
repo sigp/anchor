@@ -360,8 +360,6 @@ pub mod queries {
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
     const GET_METADATA: &str = "SELECT network_name, block_number FROM metadata";
-    const GET_SKIPPED_OPERATOR_REASON: &str =
-        "SELECT reason FROM skipped_operator_adds WHERE operator_id = ?1";
 
     // Get an operator from the database
     pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
@@ -476,9 +474,11 @@ pub mod queries {
         operator_id: OperatorId,
         tx: &Transaction<'_>,
     ) -> Option<String> {
-        tx.query_row(GET_SKIPPED_OPERATOR_REASON, params![operator_id], |row| {
-            row.get(0)
-        })
+        tx.query_row(
+            crate::sql_operations::GET_SKIPPED_OPERATOR_ADD_REASON,
+            params![operator_id],
+            |row| row.get(0),
+        )
         .ok()
     }
 }

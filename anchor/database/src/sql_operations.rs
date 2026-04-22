@@ -30,6 +30,7 @@ pub const INSERT_SKIPPED_OPERATOR_ADD: &str = r#"
 "#;
 pub const DELETE_SKIPPED_OPERATOR_ADD: &str =
     r#"DELETE FROM skipped_operator_adds WHERE operator_id = ?1"#;
+#[cfg(any(test, feature = "test-utils"))]
 pub const GET_SKIPPED_OPERATOR_ADD_REASON: &str =
     r#"SELECT reason FROM skipped_operator_adds WHERE operator_id = ?1"#;
 pub const MARK_OPERATOR_REMOVED: &str =
