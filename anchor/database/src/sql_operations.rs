@@ -21,12 +21,25 @@ pub const INSERT_OPERATOR: &str = r#"
     VALUES
         (?1, ?2, ?3)
 "#;
+pub const INSERT_SKIPPED_OPERATOR_ADD: &str = r#"
+    INSERT INTO skipped_operator_adds
+        (operator_id, reason)
+    VALUES
+        (?1, ?2)
+    ON CONFLICT (operator_id) DO UPDATE SET reason = excluded.reason
+"#;
+pub const DELETE_SKIPPED_OPERATOR_ADD: &str =
+    r#"DELETE FROM skipped_operator_adds WHERE operator_id = ?1"#;
+pub const GET_SKIPPED_OPERATOR_ADD_REASON: &str =
+    r#"SELECT reason FROM skipped_operator_adds WHERE operator_id = ?1"#;
 pub const MARK_OPERATOR_REMOVED: &str =
     r#"UPDATE operators SET removed = TRUE WHERE operator_id = ?1"#;
 pub const DELETE_OPERATOR: &str = r#"DELETE FROM operators WHERE operator_id = ?1"#;
 pub const GET_OPERATOR_STATUS: &str = r#"SELECT removed FROM operators WHERE operator_id = ?1"#;
 pub const GET_OPERATOR_ID: &str =
     r#"SELECT operator_id FROM operators WHERE public_key = ?1 AND removed = FALSE"#;
+pub const GET_ANY_OPERATOR_ID: &str =
+    r#"SELECT operator_id FROM operators WHERE public_key = ?1 LIMIT 1"#;
 pub const GET_OPERATOR_KEY: &str =
     r#"SELECT public_key FROM operators WHERE operator_id = ?1 AND removed = FALSE"#;
 pub const GET_ALL_OPERATORS: &str = r#"SELECT * FROM operators WHERE removed = FALSE"#;

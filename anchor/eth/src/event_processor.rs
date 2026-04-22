@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use base64::prelude::*;
 use bls::PublicKeyBytes;
 use database::{NetworkDatabase, PendingStateUpdates, SlashingProtection};
 use indexmap::IndexSet;
@@ -380,24 +381,29 @@ impl EventProcessor {
             .set_max_operator_id_seen_tx(operatorId, tx, state_updates)
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
-        let data = publicKey.as_ref();
-
-        // If the data is 704 bytes, remove the ssv encoding. Else, just parse the key
-        let data = if data.len() == 704 {
-            let mut data = &data[64..];
-            // while there is a 0 at the end of the data, remove it
-            while let [rest @ .., 0] = data {
-                data = rest;
+        let operator = match parse_operator_public_key(publicKey.as_ref(), operator_id, owner) {
+            Ok(operator) => operator,
+            Err(reason) => {
+                self.db
+                    .insert_skipped_operator_add_tx(operator_id, &reason, tx)
+                    .map_err(|e| ExecutionError::Database(e.to_string()))?;
+                return Err(ExecutionError::InvalidEvent(reason));
             }
-            data
-        } else {
-            data
         };
 
-        // Construct the Operator and insert it into the database
-        let operator = Operator::new(data, operator_id, owner).map_err(|e| {
-            ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
-        })?;
+        if let Some(existing_operator_id) = self
+            .db
+            .get_any_operator_id_by_public_key_tx(&operator.rsa_pubkey, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        {
+            let reason =
+                format!("Operator public key already exists as operator {existing_operator_id}");
+            self.db
+                .insert_skipped_operator_add_tx(operator_id, &reason, tx)
+                .map_err(|e| ExecutionError::Database(e.to_string()))?;
+            return Err(ExecutionError::InvalidEvent(reason));
+        }
+
         self.db
             .insert_operator_tx(&operator, tx, state_updates)
             .map_err(|e| {
@@ -425,6 +431,19 @@ impl EventProcessor {
             SSVContract::OperatorRemoved::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
         trace!(operator_id = ?operator_id, "Processing operator removed");
+
+        if self
+            .db
+            .was_operator_add_skipped_tx(operator_id, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        {
+            self.db
+                .delete_skipped_operator_add_tx(operator_id, tx)
+                .map_err(|e| ExecutionError::Database(e.to_string()))?;
+            return Err(ExecutionError::SkippedEvent(format!(
+                "Operator {operator_id} was previously skipped during registration"
+            )));
+        }
 
         // Delete the operator from database and in memory
         self.db
@@ -905,4 +924,78 @@ impl EventProcessor {
 
         Ok(())
     }
+}
+
+fn parse_operator_public_key(
+    data: &[u8],
+    operator_id: OperatorId,
+    owner: Address,
+) -> Result<Operator, String> {
+    let data = unwrap_operator_public_key(data);
+    let data = normalize_operator_public_key_bytes(data)?;
+    Operator::new(&data, operator_id, owner)
+        .map_err(|e| format!("Failed to construct operator: {e}"))
+}
+
+fn unwrap_operator_public_key(data: &[u8]) -> &[u8] {
+    abi_decode_single_dynamic_bytes(data).unwrap_or(data)
+}
+
+fn normalize_operator_public_key_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    if let Some(pem_base64) = decode_hex_encoded_operator_pem(data)? {
+        return Ok(pem_base64);
+    }
+
+    Ok(data.to_vec())
+}
+
+fn decode_hex_encoded_operator_pem(data: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let text = match std::str::from_utf8(data) {
+        Ok(text) => text,
+        Err(_) => return Ok(None),
+    };
+    let text = text.strip_prefix("0x").unwrap_or(text);
+
+    if text.is_empty() || !text.len().is_multiple_of(2) {
+        return Ok(None);
+    }
+    if !text.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Ok(None);
+    }
+
+    let pem = hex::decode(text)
+        .map_err(|e| format!("Failed to decode hex-encoded operator public key: {e}"))?;
+    if !pem.starts_with(b"-----BEGIN") {
+        return Err("Hex-encoded operator public key did not decode to PEM".to_string());
+    }
+
+    Ok(Some(BASE64_STANDARD.encode(pem).into_bytes()))
+}
+
+fn abi_decode_single_dynamic_bytes(data: &[u8]) -> Option<&[u8]> {
+    if data.len() < 64 || !data.len().is_multiple_of(32) {
+        return None;
+    }
+
+    let offset = abi_word_to_usize(&data[..32])?;
+    if offset != 32 {
+        return None;
+    }
+
+    let len = abi_word_to_usize(&data[32..64])?;
+    let padded_len = len.checked_add(31)?.checked_div(32)?.checked_mul(32)?;
+    let end = 64usize.checked_add(len)?;
+    if data.len() != 64 + padded_len || end > data.len() {
+        return None;
+    }
+
+    Some(&data[64..end])
+}
+
+fn abi_word_to_usize(word: &[u8]) -> Option<usize> {
+    if word.len() != 32 || word[..24].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+
+    usize::try_from(u64::from_be_bytes(word[24..].try_into().ok()?)).ok()
 }

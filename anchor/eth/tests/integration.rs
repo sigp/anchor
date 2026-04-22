@@ -72,6 +72,101 @@ async fn test_operator_added_event_processing() {
 }
 
 #[tokio::test]
+async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_does_not_abort() {
+    setup_tracing();
+
+    let test = ProcessorFixture::new_empty();
+    let owner = Address::random();
+    let first_block = 12345;
+    let second_block = 12346;
+    let third_block = 12347;
+
+    let base64_public_key = create_valid_rsa_public_key_bytes();
+    let wrapped_base64_public_key = wrap_operator_public_key_bytes(base64_public_key.as_ref());
+    let wrapped_hex_public_key = create_wrapped_hex_operator_public_key_bytes(&base64_public_key);
+
+    let first_add = create_operator_added_log_at_position(
+        1,
+        owner,
+        wrapped_base64_public_key,
+        1000,
+        first_block,
+        0,
+        0,
+    );
+    assert!(
+        test.processor
+            .process_logs(vec![first_add], true, first_block)
+            .is_ok(),
+        "Wrapped base64 operator keys should still decode successfully"
+    );
+    verify_operator_stored(&test.processor, OperatorId(1));
+
+    let second_add = create_operator_added_log_at_position(
+        2,
+        owner,
+        wrapped_hex_public_key,
+        1001,
+        second_block,
+        0,
+        0,
+    );
+    assert!(
+        test.processor
+            .process_logs(vec![second_add], true, second_block)
+            .is_ok(),
+        "A duplicate canonical operator key should be skipped without aborting the block"
+    );
+
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+
+    assert!(
+        queries::get_operator(OperatorId(2), &tx).is_none(),
+        "The duplicate operator should not be inserted"
+    );
+    let skip_reason = queries::get_skipped_operator_reason(OperatorId(2), &tx)
+        .expect("Skipped operator marker should be recorded");
+    assert!(
+        skip_reason.contains("already exists as operator 1"),
+        "Skip reason should explain the canonical key conflict: {skip_reason}"
+    );
+    drop(tx);
+    drop(conn);
+
+    let remove = create_operator_removed_log_at_position(2, third_block, 0, 0);
+    assert!(
+        test.processor
+            .process_logs(vec![remove], true, third_block)
+            .is_ok(),
+        "Removing a previously skipped operator should no longer abort replay"
+    );
+    verify_operator_stored(&test.processor, OperatorId(1));
+
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    assert!(
+        queries::get_skipped_operator_reason(OperatorId(2), &tx).is_none(),
+        "The skipped operator marker should be consumed by the later remove"
+    );
+    drop(tx);
+    drop(conn);
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        third_block,
+        "Replay should advance past the later operator removal"
+    );
+}
+
+#[tokio::test]
 async fn test_validator_added_event_processing() {
     setup_tracing();
 
