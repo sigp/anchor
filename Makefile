@@ -144,8 +144,16 @@ audit: install-audit audit-CI
 install-audit:
 	cargo install --force cargo-audit
 
+# Keep real vulnerabilities failing CI while suppressing reviewed warning-only
+# advisories from current upstream transitive dependencies.
+AUDIT_IGNORES = \
+	--ignore RUSTSEC-2024-0388 \
+	--ignore RUSTSEC-2024-0436 \
+	--ignore RUSTSEC-2026-0002 \
+	--ignore RUSTSEC-2026-0097
+
 audit-CI:
-	cargo audit
+	cargo audit $(AUDIT_IGNORES)
 
 # Runs `cargo vendor` to make sure dependencies can be vendored for packaging, reproducibility and archival purpose.
 vendor:
