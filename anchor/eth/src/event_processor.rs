@@ -1131,6 +1131,33 @@ mod tests {
     }
 
     #[test]
+    fn decode_hex_encoded_operator_pem_accepts_0x_prefixed_hex_payload() {
+        let base64_public_key = create_base64_operator_public_key();
+        let pem_bytes = BASE64_STANDARD
+            .decode(&base64_public_key)
+            .expect("Failed to decode base64 operator key");
+        let hex_payload = format!("0x{}", hex::encode(pem_bytes));
+
+        let decoded = decode_hex_encoded_operator_pem(hex_payload.as_bytes())
+            .expect("0x-prefixed PEM hex should parse")
+            .expect("0x-prefixed PEM hex should normalize to base64 PEM");
+
+        assert_eq!(decoded, base64_public_key);
+    }
+
+    #[test]
+    fn decode_hex_encoded_operator_pem_returns_none_for_non_hex_like_inputs() {
+        for input in [&b""[..], b"abc", b"zzzz", &[0xff, 0xfe]] {
+            assert!(
+                decode_hex_encoded_operator_pem(input)
+                    .expect("Malformed non-hex inputs should not error")
+                    .is_none(),
+                "Input {input:?} should not be treated as hex-encoded PEM"
+            );
+        }
+    }
+
+    #[test]
     fn abi_decode_single_dynamic_bytes_rejects_invalid_offset() {
         let mut encoded = wrap_dynamic_bytes(b"test");
         encoded[31] = 0;
@@ -1139,6 +1166,17 @@ mod tests {
         assert!(
             abi_decode_single_dynamic_bytes(&encoded).is_none(),
             "ABI payload with a non-standard offset should be rejected"
+        );
+    }
+
+    #[test]
+    fn abi_decode_single_dynamic_bytes_rejects_length_mismatch_buffer() {
+        let mut encoded = wrap_dynamic_bytes(b"test");
+        encoded[56..64].copy_from_slice(&40u64.to_be_bytes());
+
+        assert!(
+            abi_decode_single_dynamic_bytes(&encoded).is_none(),
+            "ABI payloads whose declared length does not match the padded buffer should be rejected"
         );
     }
 
