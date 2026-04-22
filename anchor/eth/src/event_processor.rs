@@ -996,3 +996,107 @@ fn abi_word_to_usize(word: &[u8]) -> Option<usize> {
 
     usize::try_from(u64::from_be_bytes(word[24..].try_into().ok()?)).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+
+    use super::*;
+
+    fn create_base64_operator_public_key() -> Vec<u8> {
+        let rsa_key = database::test_utils::generators::pubkey::random_rsa();
+        BASE64_STANDARD
+            .encode(
+                rsa_key
+                    .public_key_to_pem()
+                    .expect("Failed to serialize RSA public key"),
+            )
+            .into_bytes()
+    }
+
+    fn wrap_dynamic_bytes(data: &[u8]) -> Vec<u8> {
+        let padded_len = data.len().div_ceil(32) * 32;
+        let mut encoded = vec![0u8; 64 + padded_len];
+
+        encoded[31] = 32;
+        encoded[56..64].copy_from_slice(&(data.len() as u64).to_be_bytes());
+        encoded[64..64 + data.len()].copy_from_slice(data);
+
+        encoded
+    }
+
+    #[test]
+    fn parse_operator_public_key_normalizes_wrapped_base64_and_hex_payloads() {
+        let base64_public_key = create_base64_operator_public_key();
+        let pem_bytes = BASE64_STANDARD
+            .decode(&base64_public_key)
+            .expect("Failed to decode base64 operator key");
+        let wrapped_base64 = wrap_dynamic_bytes(&base64_public_key);
+        let wrapped_hex = wrap_dynamic_bytes(hex::encode(pem_bytes).as_bytes());
+
+        let base64_operator =
+            parse_operator_public_key(&wrapped_base64, OperatorId(1), Address::random())
+                .expect("Wrapped base64 operator key should parse");
+        let hex_operator =
+            parse_operator_public_key(&wrapped_hex, OperatorId(2), Address::random())
+                .expect("Wrapped hex operator key should parse");
+
+        assert_eq!(
+            base64_operator
+                .rsa_pubkey
+                .public_key_to_pem()
+                .expect("Failed to serialize parsed base64 operator key"),
+            hex_operator
+                .rsa_pubkey
+                .public_key_to_pem()
+                .expect("Failed to serialize parsed hex operator key"),
+        );
+    }
+
+    #[test]
+    fn unwrap_operator_public_key_returns_original_bytes_for_non_abi_input() {
+        let public_key = create_base64_operator_public_key();
+
+        assert_eq!(
+            unwrap_operator_public_key(&public_key),
+            public_key.as_slice()
+        );
+    }
+
+    #[test]
+    fn decode_hex_encoded_operator_pem_rejects_non_pem_hex_payload() {
+        let hex_payload = hex::encode("not a pem");
+
+        let error = decode_hex_encoded_operator_pem(hex_payload.as_bytes())
+            .expect_err("Non-PEM hex should be rejected");
+
+        assert!(
+            error.contains("did not decode to PEM"),
+            "Unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn abi_decode_single_dynamic_bytes_rejects_invalid_offset() {
+        let mut encoded = wrap_dynamic_bytes(b"test");
+        encoded[31] = 0;
+        encoded[30] = 64;
+
+        assert!(
+            abi_decode_single_dynamic_bytes(&encoded).is_none(),
+            "ABI payload with a non-standard offset should be rejected"
+        );
+    }
+
+    #[test]
+    fn abi_word_to_usize_rejects_non_zero_high_bytes() {
+        let mut word = [0u8; 32];
+        word[0] = 1;
+        word[31] = 32;
+
+        assert!(
+            abi_word_to_usize(&word).is_none(),
+            "ABI words with non-zero high-order bytes should be rejected"
+        );
+    }
+}
