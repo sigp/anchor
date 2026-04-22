@@ -434,12 +434,9 @@ impl EventProcessor {
 
         if self
             .db
-            .was_operator_add_skipped_tx(operator_id, tx)
+            .delete_skipped_operator_add_tx(operator_id, tx)
             .map_err(|e| ExecutionError::Database(e.to_string()))?
         {
-            self.db
-                .delete_skipped_operator_add_tx(operator_id, tx)
-                .map_err(|e| ExecutionError::Database(e.to_string()))?;
             return Err(ExecutionError::SkippedEvent(format!(
                 "Operator {operator_id} was previously skipped during registration"
             )));
