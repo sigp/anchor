@@ -6,7 +6,7 @@ use std::{
 };
 
 use alloy::primitives::{Address, Bytes};
-use bls::PublicKeyBytes;
+use bls::{PublicKeyBytes, SecretKey};
 use database::test_utils::queries;
 use eth::{
     SlashingProtection,
@@ -293,6 +293,136 @@ async fn test_cross_block_operator_and_validator_processing_succeeds() {
         _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
             panic!("validator should have been queued for index sync");
         }
+    }
+}
+
+/// Ensures a later `ValidatorAdded` for the same pubkey but a different owner does not abort the
+/// fetched batch.
+///
+/// The underlying schema mismatch predates the recent sync/refinery PRs: Anchor has always keyed
+/// validator state globally by pubkey. This test captures the user-visible regression boundary:
+/// historical sync must keep progressing even when the later block contains this contract-permitted
+/// edge case.
+#[tokio::test]
+async fn test_cross_owner_duplicate_validator_pubkey_is_skipped() {
+    setup_tracing();
+
+    // Arrange: one fetched batch contains operator setup, an initial validator registration, and
+    // then a second registration of the same validator pubkey under a different owner.
+    let mut test = ProcessorFixture::new_empty();
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_block = 12410;
+    let first_validator_block = 12411;
+    let duplicate_validator_block = 12412;
+    let first_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let second_owner = Address::random();
+    let validator_secret_key = SecretKey::random();
+    let (first_shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_validator_owner_and_nonce(
+            &operator_ids,
+            &validator_secret_key,
+            first_owner,
+            0,
+        );
+    let (second_shares, _) = create_valid_shares_data_for_validator_owner_and_nonce(
+        &operator_ids,
+        &validator_secret_key,
+        second_owner,
+        0,
+    );
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+
+    let mut logs = Vec::new();
+    for (log_index, operator_id) in operator_ids.iter().enumerate() {
+        logs.push(create_operator_added_log_at_position(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000 + *operator_id,
+            operator_block,
+            0,
+            log_index as u64,
+        ));
+    }
+
+    logs.push(create_validator_added_log_at_position(
+        first_owner,
+        operator_ids.clone(),
+        validator_public_key.clone(),
+        first_shares,
+        first_validator_block,
+        0,
+        0,
+    ));
+    logs.push(create_validator_added_log_at_position(
+        second_owner,
+        operator_ids.clone(),
+        validator_public_key,
+        second_shares,
+        duplicate_validator_block,
+        0,
+        0,
+    ));
+
+    // Act: process the entire fetched batch in one call, matching historical sync behavior.
+    let result = test
+        .processor
+        .process_logs(logs, false, duplicate_validator_block);
+
+    // Assert: the later duplicate-owner event is skipped rather than aborting the batch.
+    assert!(
+        result.is_ok(),
+        "cross-owner duplicate validator pubkey should not abort batch processing"
+    );
+
+    let cluster_id = compute_cluster_id(first_owner, &operator_ids);
+    let duplicate_cluster_id = compute_cluster_id(second_owner, &operator_ids);
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    let stored_validator =
+        queries::get_validator(&validator_pubkey_str, &tx).expect("validator should exist");
+
+    assert_eq!(
+        stored_validator.cluster_id, cluster_id,
+        "the first registration should remain authoritative"
+    );
+    assert!(
+        queries::get_cluster(cluster_id, &tx).is_some(),
+        "the original cluster should exist"
+    );
+    assert!(
+        queries::get_cluster(duplicate_cluster_id, &tx).is_none(),
+        "the duplicate-owner cluster should not be created"
+    );
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        duplicate_validator_block,
+        "historical sync should advance through the duplicate-owner block"
+    );
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            assert_eq!(
+                validator_key,
+                Some(validator_pubkey_bytes),
+                "only the first registration should queue index sync"
+            );
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+            panic!("the first registration should queue index sync");
+        }
+    }
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            panic!("unexpected second index-sync enqueue for duplicate-owner event: {validator_key:?}");
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {}
     }
 }
 
