@@ -112,6 +112,7 @@ mod tests {
             has_validator_index(&conn),
             "the first refinery migration should create the validator index"
         );
+        assert_skipped_operator_add_round_trip(&conn, 7);
     }
 
     #[test]
@@ -147,6 +148,7 @@ mod tests {
             has_validator_index(&conn),
             "the resumed cutover should still create the validator index"
         );
+        assert_skipped_operator_add_round_trip(&conn, 8);
     }
 
     #[test]
@@ -338,5 +340,28 @@ mod tests {
             |_| Ok(()),
         )
         .is_ok()
+    }
+
+    fn assert_skipped_operator_add_round_trip(conn: &Connection, operator_id: u64) {
+        let expected_reason = "migration coverage";
+
+        conn.execute(
+            "INSERT INTO skipped_operator_adds (operator_id, reason) VALUES (?1, ?2)",
+            params![operator_id, expected_reason],
+        )
+        .expect("Failed to insert skipped operator marker");
+
+        let actual_reason: String = conn
+            .query_row(
+                "SELECT reason FROM skipped_operator_adds WHERE operator_id = ?1",
+                params![operator_id],
+                |row| row.get(0),
+            )
+            .expect("Failed to read skipped operator marker");
+
+        assert_eq!(
+            actual_reason, expected_reason,
+            "the V2 migration should materialize a writable skipped_operator_adds table"
+        );
     }
 }

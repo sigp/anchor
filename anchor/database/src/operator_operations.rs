@@ -1,5 +1,6 @@
 use base64::prelude::*;
-use rusqlite::{Transaction, params};
+use openssl::{pkey::Public, rsa::Rsa};
+use rusqlite::{OptionalExtension, Transaction, params};
 use ssv_types::{Operator, OperatorId};
 use tracing::trace;
 
@@ -49,6 +50,59 @@ impl NetworkDatabase {
             ])?;
         state_updates.insert_operator(operator.to_owned(), is_own_operator);
         Ok(())
+    }
+
+    /// Record that an `OperatorAdded` log was intentionally skipped after consuming its
+    /// monotonically-increasing operator id.
+    pub fn insert_skipped_operator_add_tx(
+        &self,
+        id: OperatorId,
+        reason: &str,
+        tx: &Transaction<'_>,
+    ) -> Result<(), DatabaseError> {
+        tx.prepare_cached(sql_operations::INSERT_SKIPPED_OPERATOR_ADD)?
+            .execute(params![id, reason])?;
+        Ok(())
+    }
+
+    /// Delete a previously recorded skipped `OperatorAdded` marker.
+    pub fn delete_skipped_operator_add_tx(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        let rows = tx
+            .prepare_cached(sql_operations::DELETE_SKIPPED_OPERATOR_ADD)?
+            .execute(params![id])?;
+        Ok(rows > 0)
+    }
+
+    /// Check if an `OperatorAdded` log for this id was previously skipped.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn was_operator_add_skipped_tx(
+        &self,
+        id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Result<bool, DatabaseError> {
+        tx.prepare_cached(sql_operations::GET_SKIPPED_OPERATOR_ADD_REASON)?
+            .query_row(params![id], |row| row.get::<_, String>(0))
+            .optional()
+            .map(|reason| reason.is_some())
+            .map_err(DatabaseError::from)
+    }
+
+    /// Resolve any operator id that already owns this canonical public key, including soft-deleted
+    /// rows that still occupy the schema-level uniqueness slot.
+    pub fn get_any_operator_id_by_public_key_tx(
+        &self,
+        public_key: &Rsa<Public>,
+        tx: &Transaction<'_>,
+    ) -> Result<Option<OperatorId>, DatabaseError> {
+        let encoded = BASE64_STANDARD.encode(public_key.public_key_to_pem()?);
+        tx.prepare_cached(sql_operations::GET_ANY_OPERATOR_ID)?
+            .query_row(params![encoded], |row| row.get(0))
+            .optional()
+            .map_err(DatabaseError::from)
     }
 
     /// Delete an operator in the active transaction and queue the matching state update.

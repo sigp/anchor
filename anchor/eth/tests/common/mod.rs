@@ -42,6 +42,29 @@ pub fn create_valid_rsa_public_key_bytes() -> Bytes {
     Bytes::from(base64_pem.as_bytes().to_vec())
 }
 
+/// Wrap operator key bytes the same way the SDK currently submits `string` into the contract's
+/// `bytes publicKey` field.
+pub fn wrap_operator_public_key_bytes(public_key: &[u8]) -> Bytes {
+    let padded_len = public_key.len().div_ceil(32) * 32;
+    let mut encoded = vec![0u8; 64 + padded_len];
+
+    encoded[31] = 32;
+    encoded[56..64].copy_from_slice(&(public_key.len() as u64).to_be_bytes());
+    encoded[64..64 + public_key.len()].copy_from_slice(public_key);
+
+    Bytes::from(encoded)
+}
+
+/// Re-encode the same PEM key as ASCII hex and wrap it in the nested ABI string encoding used
+/// on-chain.
+pub fn create_wrapped_hex_operator_public_key_bytes(public_key: &Bytes) -> Bytes {
+    let pem_bytes = BASE64_STANDARD
+        .decode(public_key.as_ref())
+        .expect("Failed to decode test operator public key");
+    let hex_pem = hex::encode(pem_bytes);
+    wrap_operator_public_key_bytes(hex_pem.as_bytes())
+}
+
 /// Generate valid shares data with correct signature verification
 /// Returns (shares_data, validator_public_key) - both are needed for the test
 pub fn create_valid_shares_data_for_owner_and_nonce(
