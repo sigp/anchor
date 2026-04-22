@@ -4,10 +4,7 @@ use clap::{Arg, Command};
 
 use crate::{
     errors::DocGenError,
-    format::{
-        GroupedCliArgs, format_default, format_description, format_option,
-        group_args_by_help_heading,
-    },
+    format::{format_default, format_description, format_option, group_args_by_clap_groups},
 };
 
 /// A postprocessing function that creates styled `.mdx` markdown tables from grouped CLI arguments.
@@ -19,7 +16,7 @@ use crate::{
 /// | --option | Option description (possible values: ...) | `default` |
 /// ```
 fn generate_formatted_option_table_doc(
-    groups: &GroupedCliArgs,
+    groups: &[(Option<String>, Vec<&Arg>)],
     heading_prefix: &str,
 ) -> Result<String, DocGenError> {
     let mut output = String::new();
@@ -62,7 +59,7 @@ pub fn render_options_tables(cmd: &Command, heading_prefix: &str) -> Result<Stri
         .filter(|a| !a.is_positional() && !a.is_hide_set())
         .collect();
 
-    let mut groups = group_args_by_help_heading(&args);
+    let mut groups = group_args_by_clap_groups(cmd, &args);
     if groups.len() == 1 {
         groups[0].0 = None;
     }
@@ -189,12 +186,12 @@ mod tests {
         for heading in [
             "Security Options",
             "External APIs",
-            "HTTP API Options",
+            "HTTP API",
             "Network Options",
             "Metrics Options",
             "Payload Building Options",
             "Logging Options",
-            "Flags",
+            "Additional Options",
         ] {
             assert!(
                 result.contains(heading),

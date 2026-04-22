@@ -10,7 +10,6 @@ use checks::{check_file, update_file};
 use clap::{Command, CommandFactory};
 use cli::Cli;
 use errors::DocGenError;
-use format::to_title_case;
 use interface::DocGenCommand;
 use render::{generate_cli_reference_snippet, generate_subcommand_reference_snippet};
 
@@ -71,12 +70,11 @@ fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
 /// Renders generated CLI reference snippets from the `clap` struct definitions to stdout.
 fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
     let cli_content = generate_cli_reference_snippet(anchor_command)?;
-    println!("---\n# Global Options\n");
+    println!("---\n# {CLI_REFERENCE_FILE}\n");
     print!("{cli_content}");
-    for (name, _) in SUBCOMMAND_REFERENCE_PAGES {
+    for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
         let content = generate_subcommand_reference_snippet(anchor_command, name)?;
-        let title = format!("{} Command", to_title_case(name));
-        println!("\n---\n# {title}\n");
+        println!("\n---\n# {file}\n");
         print!("{content}");
     }
     Ok(())

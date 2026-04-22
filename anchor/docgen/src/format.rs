@@ -1,8 +1,8 @@
 //! Contains documentation generator help string formatting to produce markdown content for CLI
 //! reference pages.
-use std::fmt::Write;
+use std::{collections::HashSet, fmt::Write};
 
-use clap::{Arg, ArgAction};
+use clap::{Arg, ArgAction, Command};
 
 use crate::errors::DocGenError;
 
@@ -10,36 +10,97 @@ use crate::errors::DocGenError;
 type CliArgGrouping<'a> = Vec<&'a Arg>;
 
 /// A container of CLI argument semantic groupings with optional group display names.
-pub type GroupedCliArgs<'a> = Vec<(Option<String>, CliArgGrouping<'a>)>;
+type GroupedCliArgs<'a> = Vec<(Option<String>, CliArgGrouping<'a>)>;
 
-/// Helper function that converts a word to title-case format.
+/// Convert a clap ArgGroup ID (PascalCase struct name) to a human-readable heading.
 ///
-/// Outputs the string with the first litter capitalized.
-pub(crate) fn to_title_case(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+/// Hard-coded display names feature for certain groups for styling preferences.
+/// For example -> "...Apis" to "... APIs".
+fn group_display_name(group_id: &str) -> String {
+    match group_id {
+        "ExternalApis" => "External APIs".to_string(),
+        "HttpApiOptions" => "HTTP API".to_string(),
+        "FileLoggingFlags" => "Logging Options".to_string(),
+        _ => split_pascal_case(group_id),
     }
 }
 
-/// Group arguments by the help heading registered for it.
-///
-/// Help headings are set on either the arg itself or on its parent CLI subcommand.
-pub(crate) fn group_args_by_help_heading<'a>(args: &[&'a Arg]) -> GroupedCliArgs<'a> {
-    let mut result: GroupedCliArgs<'a> = Vec::new();
-
-    for arg in args {
-        let heading = Some(
-            arg.get_help_heading()
-                .unwrap_or("Additional Options")
-                .to_string(),
-        );
-
-        match result.iter_mut().find(|(name, _)| *name == heading) {
-            Some(group) => group.1.push(arg),
-            None => result.push((heading, vec![arg])),
+/// Split a PascalCase identifier into space-separated words.
+/// e.g. "SecurityOptions" → "Security Options"
+/// In addition, handles consecutive uppercase letters as a single word, e.g. "HTTPApi" → "HTTP
+/// Api".
+fn split_pascal_case(s: &str) -> String {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut previous = '\0';
+    for ch in s.chars() {
+        if ch.is_uppercase() && !current.is_empty() && !previous.is_uppercase() {
+            words.push(current);
+            current = String::new();
         }
+        // Handle acronym followed by regular word, e.g. "HTTPApi" → "HTTP Api"
+        // In the case of a run of uppercase letters, the last uppercase detected is treated as the
+        // start of the next word.
+        if !ch.is_uppercase() && current.len() > 1 && current.chars().all(|c| c.is_uppercase()) {
+            let last_char = current.pop().unwrap();
+            words.push(current);
+            current = String::new();
+            current.push(last_char);
+        }
+        current.push(ch);
+        previous = ch;
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words.join(" ")
+}
+
+/// Group arguments by the ArgGroups registered on the command.
+///
+/// clap_derive automatically creates an ArgGroup for each `#[derive(Parser)]` struct,
+/// with the struct's kebab-cased name as the group ID and the struct's direct args
+/// as members.
+pub(crate) fn group_args_by_clap_groups<'a>(cmd: &Command, args: &[&'a Arg]) -> GroupedCliArgs<'a> {
+    // Collect groups that have members (sub-structs with direct args, not parent
+    // structs that contain flatten fields — those get empty groups per clap's design).
+    let groups: Vec<_> = cmd
+        .get_groups()
+        .filter(|g| g.get_args().next().is_some())
+        .collect();
+
+    let mut result: GroupedCliArgs<'a> = Vec::new();
+    let mut assigned: HashSet<&str> = HashSet::new();
+
+    for group in &groups {
+        // Collects IDs of command args in a group.
+        let group_arg_ids: HashSet<_> = group.get_args().map(|id| id.as_str()).collect();
+
+        // Finds command args that belong to this group.
+        let matching: Vec<_> = args
+            .iter()
+            .filter(|a| group_arg_ids.contains(a.get_id().as_str()))
+            .copied()
+            .collect();
+
+        // Tracks assigned args and adds matching group and args to result.
+        if !matching.is_empty() {
+            let name = group_display_name(group.get_id().as_str());
+            for a in &matching {
+                assigned.insert(a.get_id().as_str());
+            }
+            result.push((Some(name), matching));
+        }
+    }
+
+    // Remaining args not in any other group are added at the end under "Additional Options".
+    let remaining: Vec<_> = args
+        .iter()
+        .filter(|a| !assigned.contains(a.get_id().as_str()))
+        .copied()
+        .collect();
+    if !remaining.is_empty() {
+        result.push((Some("Additional Options".to_string()), remaining));
     }
 
     result
@@ -149,66 +210,63 @@ pub(crate) fn format_default(arg: &Arg) -> String {
 mod tests {
     use clap::{Arg, ArgAction, CommandFactory, Parser, ValueEnum, builder::EnumValueParser};
 
-    use super::{format_description, format_option, group_args_by_help_heading};
+    use super::{format_description, format_option, group_args_by_clap_groups};
 
     #[derive(Parser, Clone, Debug)]
-    #[clap(next_help_heading = "Test Group 2")]
-    pub struct TestFlag1 {
+    pub struct TestFlag {
         #[clap(
             long,
             short = 't',
             value_name = "TEST",
-            help = "Test flag 1.",
-            help_heading = "Test Group 1",
-            alias = "test1"
+            help = "Test flag.",
+            alias = "test",
+            help_heading = "Test Group"
         )]
-        pub test_flag_1: String,
-        #[clap(
-            long,
-            short = 'u',
-            value_name = "TEST_2",
-            help = "Test flag 2.",
-            alias = "test2"
-        )]
-        pub test_flag_2: String,
+        pub test_flag: String,
     }
 
     #[derive(Parser, Clone, Debug)]
     #[clap(name = "testcli", about = "Test cli interface.", next_line_help = true)]
     struct TestCli {
         #[clap(flatten)]
-        pub test_flag_1: TestFlag1,
-        #[clap(flatten)]
-        pub test_flag_2: TestFlag1,
+        pub test_flag: TestFlag,
     }
 
     #[test]
-    fn test_group_args_by_help_heading_outputs_correct_groupings() {
+    fn test_group_args_by_clap_groups_outputs_correct_groupings() {
         let cmd = TestCli::command();
         let args: Vec<_> = cmd.get_arguments().collect();
-        let result = group_args_by_help_heading(&args);
+        let result = group_args_by_clap_groups(&cmd, &args);
 
-        // Check that we have both groups
-        let group_names: Vec<(String, String)> = result
+        // The TestFlag struct creates a "TestFlag" ArgGroup with its arg.
+        assert!(!result.is_empty());
+        // The group should contain the test_flag arg with display name "Test Flag".
+        let test_flag_group = result
             .iter()
-            .map(|(name, argument)| {
-                (
-                    name.as_ref().unwrap().to_string(),
-                    argument[0].get_id().to_string(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            group_names[0],
-            ("Test Group 1".to_string(), "test_flag_1".to_string()),
-            "Group 1 and flag not found in result {:?}",
-            group_names
+            .find(|(name, _)| name.as_deref() == Some("Test Flag"));
+        assert!(
+            test_flag_group.is_some(),
+            "Expected a 'Test Flag' group, got: {:?}",
+            result.iter().map(|(n, _)| n).collect::<Vec<_>>()
         );
+        let (_, group_args) = test_flag_group.unwrap();
+        assert!(
+            group_args
+                .iter()
+                .any(|a| a.get_id().as_str() == "test_flag")
+        );
+    }
+
+    #[test]
+    fn test_split_pascal_case_splits_acronym_cases() {
         assert_eq!(
-            group_names[1],
-            ("Test Group 2".to_string(), "test_flag_2".to_string()),
-            "Group 2 and flag not found in result {:?}",
-            group_names
+            super::split_pascal_case("HTTPApiOptions"),
+            "HTTP Api Options"
+        );
+        assert_eq!(super::split_pascal_case("ExternalApis"), "External Apis");
+        assert_eq!(
+            super::split_pascal_case("FileLoggingFlags"),
+            "File Logging Flags"
         );
     }
 
@@ -357,19 +415,5 @@ mod tests {
 
         let result = super::format_default(&arg);
         assert_eq!(result, "Required");
-    }
-
-    #[test]
-    fn test_to_title_case_capitalizes_first_letter() {
-        assert_eq!(
-            super::to_title_case("anchor"),
-            "Anchor",
-            "to_title_case must capitalize first letter"
-        );
-        assert_eq!(
-            super::to_title_case("Anchor"),
-            "Anchor",
-            "to_title_case must leave already capitalized strings unchanged"
-        );
     }
 }
