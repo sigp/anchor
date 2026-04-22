@@ -75,6 +75,8 @@ async fn test_operator_added_event_processing() {
 async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_does_not_abort() {
     setup_tracing();
 
+    // Arrange: register one operator normally, then replay the same canonical RSA key under a
+    // different operator id using the wrapped-hex payload shape seen on-chain.
     let test = ProcessorFixture::new_empty();
     let owner = Address::random();
     let first_block = 12345;
@@ -94,12 +96,16 @@ async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_doe
         0,
         0,
     );
+
+    // Act: process the initial add and then the duplicate-key add in separate replay steps.
     assert!(
         test.processor
             .process_logs(vec![first_add], true, first_block)
             .is_ok(),
         "Wrapped base64 operator keys should still decode successfully"
     );
+
+    // Assert: the first operator is committed normally.
     verify_operator_stored(&test.processor, OperatorId(1));
 
     let second_add = create_operator_added_log_at_position(
@@ -118,6 +124,7 @@ async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_doe
         "A duplicate canonical operator key should be skipped without aborting the block"
     );
 
+    // Assert: the duplicate operator is skipped and leaves a marker behind.
     let mut conn = test
         .processor
         .db
@@ -138,6 +145,7 @@ async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_doe
     drop(tx);
     drop(conn);
 
+    // Act: process the later remove for the skipped operator id.
     let remove = create_operator_removed_log_at_position(2, third_block, 0, 0);
     assert!(
         test.processor
@@ -145,6 +153,8 @@ async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_doe
             .is_ok(),
         "Removing a previously skipped operator should no longer abort replay"
     );
+
+    // Assert: the original operator remains, the marker is consumed, and replay keeps advancing.
     verify_operator_stored(&test.processor, OperatorId(1));
 
     let mut conn = test
@@ -170,6 +180,7 @@ async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_doe
 async fn test_malformed_operator_add_is_skipped_and_later_remove_does_not_abort() {
     setup_tracing();
 
+    // Arrange: replay an operator add whose wrapped payload decodes as hex text but not PEM.
     let test = ProcessorFixture::new_empty();
     let owner = Address::random();
     let add_block = 12345;
@@ -186,6 +197,8 @@ async fn test_malformed_operator_add_is_skipped_and_later_remove_does_not_abort(
         0,
         0,
     );
+
+    // Act: process the malformed add and let replay classify it as skipped.
     assert!(
         test.processor
             .process_logs(vec![add], true, add_block)
@@ -193,6 +206,7 @@ async fn test_malformed_operator_add_is_skipped_and_later_remove_does_not_abort(
         "An unparseable operator key should be skipped without aborting the block"
     );
 
+    // Assert: the operator is not inserted and the skip marker records the parse failure.
     let mut conn = test
         .processor
         .db
@@ -213,6 +227,7 @@ async fn test_malformed_operator_add_is_skipped_and_later_remove_does_not_abort(
     drop(tx);
     drop(conn);
 
+    // Act: process the later remove for that skipped operator id.
     let remove = create_operator_removed_log_at_position(1, remove_block, 0, 0);
     assert!(
         test.processor
@@ -221,6 +236,7 @@ async fn test_malformed_operator_add_is_skipped_and_later_remove_does_not_abort(
         "Removing a previously skipped malformed operator should no longer abort replay"
     );
 
+    // Assert: the skip marker is consumed and replay advances through the remove.
     let mut conn = test
         .processor
         .db

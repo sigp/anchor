@@ -1081,6 +1081,7 @@ mod tests {
 
     #[test]
     fn parse_operator_public_key_normalizes_wrapped_base64_and_hex_payloads() {
+        // Arrange: encode the same PEM key once as wrapped base64 and once as wrapped ASCII hex.
         let base64_public_key = create_base64_operator_public_key();
         let pem_bytes = BASE64_STANDARD
             .decode(&base64_public_key)
@@ -1088,6 +1089,7 @@ mod tests {
         let wrapped_base64 = wrap_dynamic_bytes(&base64_public_key);
         let wrapped_hex = wrap_dynamic_bytes(hex::encode(pem_bytes).as_bytes());
 
+        // Act: parse both payload shapes through the operator-key normalization path.
         let base64_operator =
             parse_operator_public_key(&wrapped_base64, OperatorId(1), Address::random())
                 .expect("Wrapped base64 operator key should parse");
@@ -1095,6 +1097,7 @@ mod tests {
             parse_operator_public_key(&wrapped_hex, OperatorId(2), Address::random())
                 .expect("Wrapped hex operator key should parse");
 
+        // Assert: both payloads normalize to the same canonical RSA key.
         assert_eq!(
             base64_operator
                 .rsa_pubkey
@@ -1109,8 +1112,10 @@ mod tests {
 
     #[test]
     fn unwrap_operator_public_key_returns_original_bytes_for_non_abi_input() {
+        // Arrange: build a plain base64 operator key without the outer ABI wrapper.
         let public_key = create_base64_operator_public_key();
 
+        // Act/Assert: non-ABI input should pass through unchanged.
         assert_eq!(
             unwrap_operator_public_key(&public_key),
             public_key.as_slice()
@@ -1119,11 +1124,14 @@ mod tests {
 
     #[test]
     fn decode_hex_encoded_operator_pem_rejects_non_pem_hex_payload() {
+        // Arrange: build hex text that decodes successfully but does not contain PEM bytes.
         let hex_payload = hex::encode("not a pem");
 
+        // Act: attempt to normalize it as a hex-encoded operator key.
         let error = decode_hex_encoded_operator_pem(hex_payload.as_bytes())
             .expect_err("Non-PEM hex should be rejected");
 
+        // Assert: the helper rejects it explicitly rather than silently accepting garbage.
         assert!(
             error.contains("did not decode to PEM"),
             "Unexpected error: {error}"
@@ -1132,22 +1140,27 @@ mod tests {
 
     #[test]
     fn decode_hex_encoded_operator_pem_accepts_0x_prefixed_hex_payload() {
+        // Arrange: encode a valid PEM payload as hex and add the optional 0x prefix.
         let base64_public_key = create_base64_operator_public_key();
         let pem_bytes = BASE64_STANDARD
             .decode(&base64_public_key)
             .expect("Failed to decode base64 operator key");
         let hex_payload = format!("0x{}", hex::encode(pem_bytes));
 
+        // Act: normalize the prefixed hex payload.
         let decoded = decode_hex_encoded_operator_pem(hex_payload.as_bytes())
             .expect("0x-prefixed PEM hex should parse")
             .expect("0x-prefixed PEM hex should normalize to base64 PEM");
 
+        // Assert: the normalized bytes match the canonical base64 PEM form.
         assert_eq!(decoded, base64_public_key);
     }
 
     #[test]
     fn decode_hex_encoded_operator_pem_returns_none_for_non_hex_like_inputs() {
+        // Arrange: gather malformed inputs that should be ignored as "not hex", not rejected.
         for input in [&b""[..], b"abc", b"zzzz", &[0xff, 0xfe]] {
+            // Act/Assert: all of them should fall back to the non-hex path.
             assert!(
                 decode_hex_encoded_operator_pem(input)
                     .expect("Malformed non-hex inputs should not error")
@@ -1159,10 +1172,12 @@ mod tests {
 
     #[test]
     fn abi_decode_single_dynamic_bytes_rejects_invalid_offset() {
+        // Arrange: encode a valid payload, then corrupt the ABI offset word.
         let mut encoded = wrap_dynamic_bytes(b"test");
         encoded[31] = 0;
         encoded[30] = 64;
 
+        // Act/Assert: non-standard offsets should be rejected.
         assert!(
             abi_decode_single_dynamic_bytes(&encoded).is_none(),
             "ABI payload with a non-standard offset should be rejected"
@@ -1171,9 +1186,11 @@ mod tests {
 
     #[test]
     fn abi_decode_single_dynamic_bytes_rejects_length_mismatch_buffer() {
+        // Arrange: encode a short payload, then lie about the dynamic length word.
         let mut encoded = wrap_dynamic_bytes(b"test");
         encoded[56..64].copy_from_slice(&40u64.to_be_bytes());
 
+        // Act/Assert: buffers whose declared length does not match the padded body are rejected.
         assert!(
             abi_decode_single_dynamic_bytes(&encoded).is_none(),
             "ABI payloads whose declared length does not match the padded buffer should be rejected"
@@ -1182,10 +1199,12 @@ mod tests {
 
     #[test]
     fn abi_word_to_usize_rejects_non_zero_high_bytes() {
+        // Arrange: create a 32-byte ABI word with non-zero high-order bytes.
         let mut word = [0u8; 32];
         word[0] = 1;
         word[31] = 32;
 
+        // Act/Assert: values that do not fit the narrow ABI decoding contract are rejected.
         assert!(
             abi_word_to_usize(&word).is_none(),
             "ABI words with non-zero high-order bytes should be rejected"
