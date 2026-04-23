@@ -11,7 +11,9 @@ use database::NetworkDatabase;
 use reqwest::Client;
 use rusqlite::Transaction;
 use sensitive_url::SensitiveUrl;
-use ssv_types::{ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata};
+use ssv_types::{
+    ClusterId, ENCRYPTED_KEY_LENGTH, OperatorId, Share, ValidatorMetadata, is_valid_committee_size,
+};
 use tower::ServiceBuilder;
 use tracing::trace;
 use types::Graffiti;
@@ -151,8 +153,7 @@ pub fn validate_operators(
     }
 
     // make sure count is valid
-    let threshold = (num_operators - 1) / 3;
-    if !(num_operators - 1).is_multiple_of(3) || !(1..=4).contains(&threshold) {
+    if !is_valid_committee_size(num_operators) {
         return Err(ExecutionError::InvalidEvent(format!(
             "Given {num_operators} operators. Cannot build a 3f+1 quorum"
         )));

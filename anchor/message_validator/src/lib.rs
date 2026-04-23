@@ -26,7 +26,6 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
-    get_f,
     message::{MsgType, SSVMessageError, SignedSSVMessage, SignedSSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
@@ -1059,10 +1058,6 @@ pub fn sync_committee_period(
         .as_u64())
 }
 
-pub(crate) fn compute_quorum_size(committee_size: usize) -> usize {
-    get_f(committee_size) * 2 + 1
-}
-
 fn get_operator_pub_keys(
     network_state: &NetworkState,
     operator_ids: &IndexSet<OperatorId>,
@@ -1107,12 +1102,11 @@ mod tests {
     use ssz::Encode;
     use types::{Epoch, Slot};
 
-    use crate::{ValidationFailure, compute_quorum_size, hash_data};
+    use crate::{ValidationFailure, hash_data};
 
-    // Constants for committee sizes in tests to improve readability
+    // Constants for committee sizes in tests to improve readability.
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
     pub(crate) const FOUR_NODE_COMMITTEE: usize = 4;
-    pub(crate) const SEVEN_NODE_COMMITTEE: usize = 7;
 
     // Helper struct for directly creating consensus messages for tests
     pub(crate) struct QbftMessageBuilder {
@@ -1356,28 +1350,6 @@ mod tests {
     // ---------------------------------------------------------------------
     // Utility function tests
     // ---------------------------------------------------------------------
-
-    #[test]
-    fn test_compute_quorum_size() {
-        // For committee_size=4 -> f=1 -> quorum=3.
-        assert_eq!(
-            compute_quorum_size(FOUR_NODE_COMMITTEE),
-            3,
-            "Expected quorum=3 for committee of 4"
-        );
-        // For committee_size=7 -> f=2 -> quorum=5.
-        assert_eq!(
-            compute_quorum_size(SEVEN_NODE_COMMITTEE),
-            5,
-            "Expected quorum=5 for committee of 7"
-        );
-        // For committee_size=1 -> f=0 -> quorum=1.
-        assert_eq!(
-            compute_quorum_size(SINGLE_NODE_COMMITTEE),
-            1,
-            "Expected quorum=1 for committee of 1"
-        );
-    }
 
     #[test]
     fn test_hash_data_root() {

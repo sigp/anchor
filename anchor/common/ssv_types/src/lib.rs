@@ -32,12 +32,27 @@ pub fn get_f(members: usize) -> usize {
     members.saturating_sub(1) / 3
 }
 
-/// Default QBFT quorum: `N − f`. Equivalent to `2f + 1` when `N = 3f + 1`
-/// (SSV canonical sizes: 4, 7, 10, 13) and strictly larger for all other `N`.
-/// Uses `saturating_sub` so `N = 0` returns 0 without panicking; small committees
-/// (`N ≤ 3`) yield trivial unanimity quorums with `f = 0` (no Byzantine tolerance).
+/// QBFT quorum threshold, matching Go SSV's `ComputeQuorumAndPartialQuorum`
+/// and ssv-spec's `CommitteeMember.GetQuorum`: `2f + 1`.
+///
+/// This is equal to `N - f` for canonical SSV committee sizes (`N = 3f + 1`),
+/// while non-canonical committee sizes should be rejected at config/event
+/// boundaries.
 pub fn quorum_size(committee_size: usize) -> usize {
-    committee_size.saturating_sub(get_f(committee_size))
+    get_f(committee_size) * 2 + 1
+}
+
+/// Returns true if `committee_size` is a canonical SSV committee size.
+///
+/// Matches Go SSV's `ValidCommitteeSize` and the SSV Network contract operator
+/// length rule: `N = 3f + 1`, with `f` in `1..=4`, i.e. 4, 7, 10, or 13.
+pub fn is_valid_committee_size(committee_size: usize) -> bool {
+    if committee_size == 0 {
+        return false;
+    }
+
+    let f = get_f(committee_size);
+    (committee_size - 1).is_multiple_of(3) && (1..=get_f(MAX_SIGNATURES)).contains(&f)
 }
 
 /// Converts a Vec to VariableList, returning a custom error on failure.
@@ -72,13 +87,15 @@ mod tests {
         }
     }
 
-    // Regression targets: silent `2f + 1` substitution for `N − f`.
+    // Regression targets: accidental `N - f` substitution for `2f + 1`.
     #[test]
-    fn quorum_size_is_n_minus_f() {
+    fn quorum_size_is_two_f_plus_one() {
         let cases = [
-            (3, 3),  // non-canonical: `N − f` = 3, `2f + 1` = 1
-            (4, 3),  // canonical SSV
-            (6, 5),  // non-canonical: `N − f` = 5, `2f + 1` = 3
+            (0, 1),  // empty committees are invalid, but the arithmetic stays `2f + 1`
+            (1, 1),  // non-canonical: f = 0
+            (3, 1),  // non-canonical: `N - f` = 3, `2f + 1` = 1
+            (4, 3),  // canonical SSV: `N - f` = `2f + 1`
+            (6, 3),  // non-canonical: `N - f` = 5, `2f + 1` = 3
             (7, 5),  // canonical SSV
             (10, 7), // canonical SSV
             (13, 9), // canonical SSV
@@ -92,7 +109,18 @@ mod tests {
     #[test]
     fn quorum_size_composes_with_get_f() {
         for n in 0..=MAX_SIGNATURES {
-            assert_eq!(quorum_size(n), n - get_f(n), "n={n}");
+            assert_eq!(quorum_size(n), get_f(n) * 2 + 1, "n={n}");
+        }
+    }
+
+    #[test]
+    fn valid_committee_size_matches_ssv_canonical_sizes() {
+        for n in [4, 7, 10, 13] {
+            assert!(is_valid_committee_size(n), "committee size {n}");
+        }
+
+        for n in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 16] {
+            assert!(!is_valid_committee_size(n), "committee size {n}");
         }
     }
 }

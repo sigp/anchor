@@ -85,7 +85,7 @@ impl Default for TestQBFTCommitteeBuilder {
             config: ConfigBuilder::new(
                 1.into(),
                 InstanceHeight::default(),
-                (1..6).map(OperatorId::from).collect(),
+                (1..=4).map(OperatorId::from).collect(),
             ),
         }
     }
@@ -202,7 +202,7 @@ fn test_basic_committee() {
 
     // Wait until consensus is reached or all the instances have ended
     let num_consensus = test_instance.wait_until_end();
-    assert!(num_consensus == 5);
+    assert_eq!(num_consensus, 4);
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn test_consensus_with_f_faulty_operators() {
 
     // Wait until consensus is reached or all the instances have ended
     let num_consensus = test_instance.wait_until_end();
-    assert!(num_consensus == 4);
+    assert_eq!(num_consensus, 3);
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn test_node_recovery() {
     test_instance.restart_instance(&OperatorId::from(2));
 
     let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
+    assert_eq!(num_consensus, 4); // Should reach full consensus after recovery
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes, quorum = 3
+        (1..=4).map(OperatorId::from).collect(), // 4 nodes, quorum = 3
     )
     .with_operator_id(OperatorId::from(1))
     .build()
@@ -287,7 +287,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
                                                        * preparation! */
     };
 
-    // Create signed round change messages (need quorum of 3 for 3-node committee)
+    // Create signed round change messages (need quorum of 3 for 4-node committee)
     let mut signed_round_changes = vec![];
     for operator_id in [1, 2, 3] {
         // Create the SSVMessage properly
@@ -399,11 +399,11 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
 
     // Create QBFT instance that will be leader for round 2
     // Leader for round R: committee[(R-1 + height) % committee_size]
-    // Round 2: (2-1+0) % 3 = 1 -> operator 2 (index 1 in [1,2,3])
+    // Round 2: (2-1+0) % 4 = 1 -> operator 2 (index 1 in [1,2,3,4])
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // [1, 2, 3]
+        (1..=4).map(OperatorId::from).collect(), // [1, 2, 3, 4]
     )
     .with_operator_id(OperatorId::from(2)) // This node is leader for round 2
     .build()
