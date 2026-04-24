@@ -36,19 +36,9 @@ project's PR-shaping rules.
 
 ### Description — make it easy to review
 
-Follow the repo template sections and ensure each one is addressed:
-
-- `Issue Addressed`
-- `Motivation`
-- `Proposed Changes`
-- `Real Benefits`
-- `Risk`
-- `Testing`
-- `Rollback`
-- `Blockers / Dependencies`
-- `Additional Info`
-
-When writing those sections, weave in these principles:
+Follow the section structure from `.github/PULL_REQUEST_TEMPLATE.md` (read in
+the pre-flight step) and address each required section. When writing those
+sections, weave in these principles:
 
 **1. Lead with motivation ("why before what")**
 Open with the problem or goal — what was wrong, missing, or suboptimal.
@@ -93,7 +83,7 @@ covered by existing tests or new ones.
 1. Push the branch if needed: `git push -u origin <branch>`
 2. Create the PR:
    ```
-   gh pr create --repo sigp/anchor --base <base> \
+   gh pr create --base <base> \
      --title "<title>" \
      --body "$(cat <<'EOF'
    <body>
