@@ -1,7 +1,7 @@
 use std::{fmt::Debug, time::Duration};
 
 use indexmap::IndexSet;
-use ssv_types::{OperatorId, Round};
+use ssv_types::{OperatorId, Round, is_valid_committee_size, quorum_size};
 
 use super::error::ConfigBuilderError;
 use crate::qbft_types::{DefaultLeaderFunction, InstanceHeight, LeaderFunction};
@@ -15,7 +15,6 @@ where
     instance_height: InstanceHeight,
     round: Round,
     committee_members: IndexSet<OperatorId>,
-    quorum_size: usize,
     round_time: Duration,
     max_rounds: usize,
     leader_fn: F,
@@ -43,7 +42,7 @@ impl<F: Clone + LeaderFunction> Config<F> {
     }
 
     pub fn quorum_size(&self) -> usize {
-        self.quorum_size
+        quorum_size(self.committee_members.len())
     }
 
     /// How long the round will last
@@ -61,11 +60,6 @@ impl<F: Clone + LeaderFunction> Config<F> {
         &self.leader_fn
     }
 
-    /// Obtains the maximum number of faulty nodes that this consensus can tolerate
-    pub fn get_f(&self) -> usize {
-        get_f(self.committee_members.len())
-    }
-
     /// Private constructor so it can only be built by our `ConfigBuilder`.
     fn from_builder(builder: &ConfigBuilder<F>) -> Self {
         Self {
@@ -75,14 +69,9 @@ impl<F: Clone + LeaderFunction> Config<F> {
             round: builder.round,
             round_time: builder.round_time,
             max_rounds: builder.max_rounds,
-            quorum_size: builder.quorum_size,
             leader_fn: builder.leader_fn.clone(),
         }
     }
-}
-
-fn get_f(members: usize) -> usize {
-    (members - 1) / 3
 }
 
 /// Builder struct for constructing the QBFT instance configuration
@@ -101,7 +90,6 @@ where
     round: Round,
     round_time: Duration,
     max_rounds: usize,
-    quorum_size: usize,
 }
 
 impl<F> ConfigBuilder<F>
@@ -113,10 +101,6 @@ where
         instance_height: InstanceHeight,
         committee_members: IndexSet<OperatorId>,
     ) -> Self {
-        let committee_size = committee_members.len();
-        let f = get_f(committee_size);
-        let default_quorum = committee_size.saturating_sub(f);
-
         ConfigBuilder {
             operator_id,
             instance_height,
@@ -124,7 +108,6 @@ where
             round: Round::default(),
             round_time: Duration::new(2, 0),
             max_rounds: 4,
-            quorum_size: default_quorum,
             leader_fn: F::default(),
         }
     }
@@ -140,10 +123,6 @@ where
         committee_members: IndexSet<OperatorId>,
         leader_fn: F,
     ) -> Self {
-        let committee_size = committee_members.len();
-        let f = get_f(committee_size);
-        let default_quorum = committee_size.saturating_sub(f);
-
         ConfigBuilder {
             operator_id,
             instance_height,
@@ -151,7 +130,6 @@ where
             round: Round::default(),
             round_time: Duration::new(2, 0),
             max_rounds: 4,
-            quorum_size: default_quorum,
             leader_fn,
         }
     }
@@ -177,7 +155,7 @@ where
     }
 
     pub fn quorum_size(&self) -> usize {
-        self.quorum_size
+        quorum_size(self.committee_members.len())
     }
 
     pub fn max_rounds(&self) -> usize {
@@ -234,10 +212,9 @@ where
             return Err(ConfigBuilderError::OperatorNotParticipant);
         }
 
-        // Validate `quorum_size`
-        let f = get_f(committee_size);
-        if self.quorum_size < f * 2 + 1 || self.quorum_size > committee_size - f {
-            return Err(ConfigBuilderError::InvalidQuorumSize);
+        // Validate canonical SSV committee size
+        if !is_valid_committee_size(committee_size) {
+            return Err(ConfigBuilderError::InvalidCommitteeSize);
         }
 
         // Validate `max_rounds`
@@ -252,5 +229,63 @@ where
 
         // If everything is okay, build and return a `Config`.
         Ok(Config::from_builder(&self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn committee_members(size: usize) -> IndexSet<OperatorId> {
+        (1..=size as u64).map(OperatorId::from).collect()
+    }
+
+    fn builder(size: usize) -> ConfigBuilder<DefaultLeaderFunction> {
+        ConfigBuilder::new(
+            OperatorId::from(1),
+            InstanceHeight::default(),
+            committee_members(size),
+        )
+    }
+
+    #[test]
+    fn build_accepts_canonical_committee_sizes() {
+        for size in [4, 7, 10, 13] {
+            let config = builder(size)
+                .build()
+                .expect("canonical committee size should build");
+
+            assert_eq!(config.quorum_size(), quorum_size(size), "size={size}");
+        }
+    }
+
+    #[test]
+    fn build_rejects_empty_committee() {
+        let result = builder(0).build();
+
+        assert!(matches!(result, Err(ConfigBuilderError::NoParticipants)));
+    }
+
+    #[test]
+    fn build_rejects_non_canonical_committee_sizes() {
+        for size in [1, 2, 3, 5, 6, 8, 9, 11, 12, 14] {
+            let result = builder(size).build();
+
+            assert!(
+                matches!(result, Err(ConfigBuilderError::InvalidCommitteeSize)),
+                "size={size}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn builder_quorum_size_is_derived_from_committee_size() {
+        assert_eq!(builder(4).quorum_size(), 3);
+        assert_eq!(
+            builder(4)
+                .with_committee_members(committee_members(7))
+                .quorum_size(),
+            5
+        );
     }
 }
