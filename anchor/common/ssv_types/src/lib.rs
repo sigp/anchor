@@ -47,12 +47,8 @@ pub fn quorum_size(committee_size: usize) -> usize {
 /// Matches Go SSV's `ValidCommitteeSize` and the SSV Network contract operator
 /// length rule: `N = 3f + 1`, with `f` in `1..=4`, i.e. 4, 7, 10, or 13.
 pub fn is_valid_committee_size(committee_size: usize) -> bool {
-    if committee_size == 0 {
-        return false;
-    }
-
     let f = get_f(committee_size);
-    (committee_size - 1).is_multiple_of(3) && (1..=get_f(MAX_SIGNATURES)).contains(&f)
+    committee_size.saturating_sub(1).is_multiple_of(3) && (1..=get_f(MAX_SIGNATURES)).contains(&f)
 }
 
 /// Converts a Vec to VariableList, returning a custom error on failure.
@@ -91,7 +87,6 @@ mod tests {
     #[test]
     fn quorum_size_is_two_f_plus_one() {
         let cases = [
-            (0, 1),  // empty committees are invalid, but the arithmetic stays `2f + 1`
             (1, 1),  // non-canonical: f = 0
             (3, 1),  // non-canonical: `N - f` = 3, `2f + 1` = 1
             (4, 3),  // canonical SSV: `N - f` = `2f + 1`

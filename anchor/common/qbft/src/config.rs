@@ -212,7 +212,7 @@ where
             return Err(ConfigBuilderError::OperatorNotParticipant);
         }
 
-        // Validate `quorum_size`
+        // Validate canonical SSV committee size
         if !is_valid_committee_size(committee_size) {
             return Err(ConfigBuilderError::InvalidCommitteeSize);
         }
