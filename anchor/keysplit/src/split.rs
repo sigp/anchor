@@ -44,7 +44,7 @@ pub fn onchain_split<'a>(
     secret_keys: impl IntoIterator<Item = &'a SecretKey>,
 ) -> Result<Vec<Split<KeyShare>>, KeysplitError> {
     // Construct DB and perform sync
-    let db = build_db();
+    let db = build_db()?;
     let mut syncer =
         SsvEventSyncer::new_keysplit(db.clone(), onchain.rpc, global_config.ssv_network);
 
@@ -113,19 +113,27 @@ fn create_keyshares_for_key(
 }
 
 // Build a network database for the keysplit
-fn build_db() -> Arc<NetworkDatabase> {
+fn build_db() -> Result<Arc<NetworkDatabase>, KeysplitError> {
     // We do not care about the public key here, so just generate a random one to prevent having to
     // use option
     let rsa = Rsa::generate(2048).expect("Keygen will not fail");
-    let public_key =
-        Rsa::from_public_components(rsa.n().to_owned().unwrap(), rsa.e().to_owned().unwrap())
-            .expect("Keygen will not fail");
+    
+    // Extract RSA components with proper error handling
+    let n = rsa.n().to_owned().map_err(|e| {
+        KeysplitError::Misc(format!("Failed to extract RSA modulus: {e}"))
+    })?;
+    let e = rsa.e().to_owned().map_err(|e| {
+        KeysplitError::Misc(format!("Failed to extract RSA exponent: {e}"))
+    })?;
+    
+    let public_key = Rsa::from_public_components(n, e)
+        .expect("Keygen will not fail");
     let path = Path::new("keysplit.sqlite");
     // TODO: The way the keysplit currently is implemented, we do not have easy access to the domain
     // type. This is easier once https://github.com/sigp/anchor/pull/347 is merged and irrelevant
     // if we implement https://github.com/sigp/anchor/issues/386.
-    Arc::new(
+    Ok(Arc::new(
         NetworkDatabase::new(path, &public_key, DomainType([0xff; 4]))
             .expect("Database construction will not fail"),
-    )
+    ))
 }
