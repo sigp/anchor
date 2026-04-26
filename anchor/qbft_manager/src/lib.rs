@@ -44,8 +44,35 @@ const QBFT_INSTANCE_NAME: &str = "qbft_instance";
 const QBFT_MESSAGE_NAME: &str = "qbft_message";
 const QBFT_CLEANER_NAME: &str = "qbft_cleaner";
 
-/// Number of slots to keep before the current slot
-const QBFT_RETAIN_SLOTS: u64 = 1;
+/// Calculate the beacon chain inclusion deadline for a duty
+fn calculate_deadline(role: Role, slot: types::Slot, slots_per_epoch: NonZeroU64) -> types::Slot {
+    let spe = slots_per_epoch.get();
+    match role {
+        Role::Committee | Role::Aggregator | Role::AggregatorCommittee => {
+            // Attestations can be included until end of next epoch (epoch E+1)
+            // Per EIP-7045: attestation from epoch E valid until end of epoch E+1
+            //
+            // Calculation for duty at slot S in epoch E:
+            // - Epoch E+1 ends at slot: (E+2) * slots_per_epoch - 1
+            // - This is the last slot where the attestation can be included on-chain
+            let epoch = slot.epoch(spe);
+            types::Slot::new((epoch.as_u64() + 2) * spe - 1)
+        }
+        Role::Proposer => {
+            // Block proposals must be included in the same slot.
+            slot
+        }
+        Role::SyncCommittee => {
+            // Sync committee contributions start at `2/3` of the slot and are included in the
+            // next block, so keep the instance alive through the following slot.
+            types::Slot::new(slot.as_u64() + 1)
+        }
+        Role::VoluntaryExit | Role::ValidatorRegistration => {
+            // One epoch to complete
+            types::Slot::new(slot.as_u64() + spe)
+        }
+    }
+}
 
 /// Determines how round timeouts are calculated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +151,17 @@ pub struct QbftInitialization<D: QbftData> {
     on_completed: oneshot::Sender<Completed<D>>,
 }
 
-// Map from an identifier to a sender for the instance
-type Map<I, D> = DashMap<I, UnboundedSender<QbftMessage<D>>>;
+/// Manager's bookkeeping for a QBFT instance.
+///
+/// Tracks the communication channel for sending messages to the instance
+/// and the beacon chain inclusion deadline used by the cleanup task.
+pub struct ManagedInstance<D: QbftData> {
+    sender: UnboundedSender<QbftMessage<D>>,
+    deadline: types::Slot,
+}
+
+// Map from an identifier to managed instance data
+type Map<I, D> = DashMap<I, ManagedInstance<D>>;
 
 // Top level QBFTManager structure
 pub struct QbftManager<E: EthSpec, S: SlotClock> {
@@ -213,6 +249,11 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let include_epoch_shift = self.fork_schedule.active_fork(epoch) >= Fork::Boole;
         let leader_fn = DefaultLeaderFunction::new(self.slots_per_epoch, include_epoch_shift);
 
+        // Calculate deadline for this instance
+        let role = message_id.role().ok_or(QbftError::InconsistentMessageId)?;
+        let slot = types::Slot::new(*initial.instance_height(&id) as u64);
+        let deadline = calculate_deadline(role, slot, self.slots_per_epoch);
+
         // Generate the qbft configuration
         let config = ConfigBuilder::new_with_leader_fn(
             operator_id,
@@ -221,17 +262,12 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             leader_fn,
         );
         let config = config
-            .with_max_rounds(
-                message_id
-                    .role()
-                    .and_then(|r| r.max_round())
-                    .ok_or(QbftError::InconsistentMessageId)? as usize,
-            )
+            .with_max_rounds(role.max_round().ok_or(QbftError::InconsistentMessageId)? as usize)
             .build()?;
 
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
-        let sender = D::get_or_spawn_instance(self, id);
+        let sender = D::get_or_spawn_instance(self, id.clone(), deadline);
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 // A message to initialize this instance
@@ -349,7 +385,16 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         id: D::Id,
         data: WrappedQbftMessage,
     ) -> Result<(), QbftError> {
-        let sender = D::get_or_spawn_instance(self, id);
+        let role = data
+            .signed_message
+            .ssv_message()
+            .msg_id()
+            .role()
+            .ok_or(QbftError::InconsistentMessageId)?;
+        let slot = types::Slot::new(data.qbft_message.height);
+        let deadline = calculate_deadline(role, slot, self.slots_per_epoch);
+        let sender = D::get_or_spawn_instance(self, id, deadline);
+
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 let _ = sender.send(QbftMessage {
@@ -362,7 +407,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         Ok(())
     }
 
-    // Long running cleaner that will remove instances that are no longer relevant
+    /// Long running cleaner that removes instances whose beacon chain deadline has passed.
+    /// Instances stay alive in `Decided` state to serve late callers until their deadline expires.
     async fn cleaner(self: Arc<Self>) {
         while !self.processor.permitless.is_closed() {
             sleep(
@@ -371,16 +417,16 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     .unwrap_or(self.slot_clock.slot_duration()),
             )
             .await;
-            let Some(slot) = self.slot_clock.now() else {
+
+            let Some(current_slot) = self.slot_clock.now() else {
                 continue;
             };
-            let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
             self.beacon_vote_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+                .retain(|_, managed| managed.deadline >= current_slot);
             self.proposer_consensus_data_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+                .retain(|_, managed| managed.deadline >= current_slot);
             self.aggregator_committee_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+                .retain(|_, managed| managed.deadline >= current_slot);
         }
     }
 }
@@ -416,28 +462,34 @@ impl<E: EthSpec, S: SlotClock + 'static> ConsensusDecider<E> for QbftManager<E, 
 
 // Trait that describes any data that is able to be decided upon during a qbft instance
 pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 'static {
-    type Id: Hash + Eq + Send + Debug;
+    type Id: Hash + Eq + Send + Debug + Clone;
 
     fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self>;
 
-    fn get_or_spawn_instance<S: SlotClock>(
+    fn get_or_spawn_instance<S: SlotClock + Clone + 'static>(
         manager: &QbftManager<E, S>,
         id: Self::Id,
+        deadline: types::Slot,
     ) -> UnboundedSender<QbftMessage<Self>> {
         let map = Self::get_map(manager);
-        match map.entry(id) {
-            dashmap::Entry::Occupied(entry) => entry.get().clone(),
+        match map.entry(id.clone()) {
+            dashmap::Entry::Occupied(entry) => entry.get().sender.clone(),
             dashmap::Entry::Vacant(entry) => {
                 // There is not an instance running yet, store the sender and spawn a new instance
                 // with the receiver
                 let (tx, rx) = mpsc::unbounded_channel();
                 let span = debug_span!("qbft_instance", instance_id = ?entry.key());
-                let tx = entry.insert(tx);
+                let managed = ManagedInstance {
+                    sender: tx,
+                    deadline,
+                };
+                let sender = entry.insert(managed).sender.clone();
+                let message_sender = manager.message_sender.clone();
                 let _ = manager.processor.permitless.send_async(
-                    Box::pin(qbft_instance(rx, manager.message_sender.clone()).instrument(span)),
+                    Box::pin(qbft_instance(rx, message_sender).instrument(span)),
                     QBFT_INSTANCE_NAME,
                 );
-                tx.clone()
+                sender
             }
         }
     }

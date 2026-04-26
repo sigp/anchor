@@ -203,6 +203,9 @@ if ENABLE_TEST_LOGGING {
 **Resource Management:**
 - Use unique identifiers for concurrent test resources
 - Clean up test resources properly
+- Default to `#[tokio::test(start_paused = true)]` for Tokio tests whenever the code under test can run against simulated time
+- Prefer `tokio::time::advance()` plus `tokio::task::yield_now()` over real sleeps when driving timers in paused tests
+- Only use non-paused Tokio tests when behavior depends on wall-clock time or runtime setup that is incompatible with paused time
 - Avoid sleep/delay-based synchronization
 
 **Error Handling Testing:**
@@ -214,6 +217,14 @@ if ENABLE_TEST_LOGGING {
 - Use `cargo test --release` for performance-sensitive tests
 - Consider using `nextest` for faster parallel execution
 - Profile tests that may have performance implications
+
+**Behavioral Contracts and Invariants:**
+- Start by identifying the higher-level guarantee the code is supposed to provide, then write tests against that guarantee first
+- Do not rely on tests that only restate a helper, constant, or branch condition introduced by the change under review
+- Pair narrow unit tests with at least one production-path test that would still fail if the implementation matched its own helpers but violated the real system behavior
+- If a new bound, filter, or policy is introduced or tightened, add a test that proves the intended production flow still works unless the stricter behavior is explicitly intended and documented
+- Cross-check all production sources that contribute to the behavior under test so the test validates the actual system contract rather than a locally restated assumption
+- When the same rule is encoded in multiple places, add a regression or invariant test that proves those parts still agree
 
 ### 7. Crate-Specific Knowledge
 

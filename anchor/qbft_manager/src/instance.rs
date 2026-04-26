@@ -357,6 +357,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 if let QbftInstance::Initialized(initialized) = instance {
                     initialized.complete(Completed::TimedOut);
                 }
+                // No notification - either already sent when decided, or cleaner removed us
                 break;
             }
         };

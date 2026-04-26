@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use bls::PublicKeyBytes;
 use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
@@ -12,14 +13,17 @@ use qbft::InstanceHeight;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
-    consensus::{BeaconVote, NoDataValidation, QbftMessage, QbftMessageType},
+    consensus::{
+        BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote, Contributions, NoDataValidation,
+        ProposerConsensusData, QbftMessage, QbftMessageType, ValidatorDuty,
+    },
     domain_type::DomainType,
     get_f,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
     quorum_size,
 };
-use ssz::Decode;
+use ssz::{Decode, Encode};
 use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::{
     pin, select,
@@ -34,8 +38,9 @@ use tracing::{debug, error};
 use types::{EthSpec, Hash256, Slot};
 
 use super::{
-    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftInitialization, QbftManager,
-    QbftMessageKind, TimeoutMode, WrappedQbftMessage,
+    CommitteeInstanceId, Completed, ProposerInstanceId, QbftDecidable, QbftError,
+    QbftInitialization, QbftManager, QbftMessageKind, TimeoutMode, ValidatorDutyKind,
+    WrappedQbftMessage,
 };
 use crate::instance::qbft_instance;
 
@@ -91,6 +96,34 @@ where
         let tester_clone = tester.clone();
 
         // Run the instance in background
+        tokio::spawn(async move {
+            tester_clone
+                .run_until_complete(network_rx, result_rx, consensus_tx)
+                .await;
+        });
+
+        Self {
+            tester,
+            consensus_rx,
+        }
+    }
+
+    pub async fn new_with_timeout_mode(
+        clock: ManualSlotClock,
+        executor: TaskExecutor,
+        size: CommitteeSize,
+        test_data: Vec<(D, D::Id)>,
+        timeout_mode: TimeoutMode,
+    ) -> Self {
+        let (mut tester, network_rx) = QbftTester::new(clock, executor, size);
+        let result_rx = tester
+            .start_instance_with_timeout_mode(test_data, HashMap::new(), timeout_mode)
+            .await;
+        let (consensus_tx, consensus_rx) = mpsc::unbounded_channel();
+
+        let tester = Arc::new(tester);
+        let tester_clone = tester.clone();
+
         tokio::spawn(async move {
             tester_clone
                 .run_until_complete(network_rx, result_rx, consensus_tx)
@@ -405,6 +438,64 @@ where
         result_rx
     }
 
+    pub async fn start_instance_with_timeout_mode(
+        &mut self,
+        all_data: Vec<(D, D::Id)>,
+        delay_initialization: HashMap<OperatorId, Duration>,
+        timeout_mode: TimeoutMode,
+    ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+        for (data, data_id) in all_data {
+            let height = *data.instance_height(&data_id) as u64;
+            self.identifiers.insert(height, data_id.clone());
+
+            let min_for_consensus = self.size as u64 - self.size.get_f();
+            self.results.write().unwrap().insert(
+                data.hash(),
+                ConsensusResult {
+                    min_for_consensus,
+                    ..Default::default()
+                },
+            );
+
+            self.num_running
+                .write()
+                .unwrap()
+                .insert(data.hash(), self.size as u64);
+
+            for (operator, manager) in self.managers.iter() {
+                let manager_clone = manager.clone();
+                let cluster = self.cluster.clone();
+                let data_clone = data.clone();
+                let id_clone = data_id.clone();
+                let tx_clone = result_tx.clone();
+                let delay_initialization = delay_initialization
+                    .get(operator)
+                    .copied()
+                    .unwrap_or(Duration::ZERO);
+
+                let _ = self.senders.permitless.send_async(
+                    async move {
+                        sleep(delay_initialization).await;
+                        let result = manager_clone
+                            .decide_instance(
+                                id_clone,
+                                data_clone.clone(),
+                                Box::new(NoDataValidation),
+                                timeout_mode,
+                                &cluster.cluster_members,
+                            )
+                            .await;
+                        let _ = tx_clone.send((data_clone.hash(), result));
+                    },
+                    "qbft_tests",
+                );
+            }
+        }
+        result_rx
+    }
+
     // Get a write lock to the behavior so that we can modify it while the instance is running
     fn modify_behavior(&self, id: OperatorId) -> RwLockWriteGuard<'_, OperatorBehavior> {
         self.behavior
@@ -627,6 +718,10 @@ pub struct ConsensusResult {
 mod manager_tests {
     use super::*;
 
+    // Test constants for number of QBFT instances
+    const SINGLE_INSTANCE: usize = 1;
+    const TWO_INSTANCES: usize = 2;
+
     // Provides test setup
     struct Setup {
         executor: TaskExecutor,
@@ -648,6 +743,40 @@ mod manager_tests {
             block_root: Hash256::random(),
             source: types::Checkpoint::default(),
             target: types::Checkpoint::default(),
+        };
+
+        (data, id)
+    }
+
+    pub(crate) fn generate_sync_committee_test_data(
+        slot: u64,
+    ) -> (ProposerConsensusData, ProposerInstanceId) {
+        let validator = PublicKeyBytes::empty();
+        let contributions = Contributions::<types::MainnetEthSpec>::empty();
+
+        let id = ProposerInstanceId {
+            validator,
+            duty: ValidatorDutyKind::SyncCommitteeAggregator,
+            instance_height: (slot as usize).into(),
+        };
+
+        let data = ProposerConsensusData {
+            duty: ValidatorDuty {
+                r#type: BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION,
+                pub_key: validator,
+                slot: Slot::new(slot),
+                validator_index: 0usize.into(),
+                committee_index: 0,
+                committee_length: 0,
+                committees_at_slot: 0,
+                validator_committee_index: 0,
+                validator_sync_committee_indices: Default::default(),
+            },
+            version: types::ForkName::Altair.into(),
+            data_ssz: contributions
+                .as_ssz_bytes()
+                .try_into()
+                .expect("sync committee test data fits in proposer consensus payload"),
         };
 
         (data, id)
@@ -690,10 +819,22 @@ mod manager_tests {
         }
     }
 
+    fn sync_committee_timeout_mode(slot_duration: Duration) -> TimeoutMode {
+        TimeoutMode::SlotTime {
+            instance_start_time: Instant::now() + slot_duration * 2 / 3,
+        }
+    }
+
+    async fn advance_to_slot_boundary(clock: &ManualSlotClock, slot: u64, slot_duration: Duration) {
+        clock.set_slot(slot);
+        tokio::time::advance(slot_duration).await;
+        tokio::task::yield_now().await;
+    }
+
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
     async fn test_basic_run() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -708,7 +849,7 @@ mod manager_tests {
     #[tokio::test]
     // Take the leader offline to test a round change
     async fn test_round_change() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -724,7 +865,7 @@ mod manager_tests {
     #[tokio::test]
     // Test one offline operator
     async fn test_fault_operator() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -740,7 +881,7 @@ mod manager_tests {
     #[tokio::test]
     // Go through all committee sizes and confirm that we can reach consensus with f faulty
     async fn test_consensus_f_faulty() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let sizes = vec![
             (CommitteeSize::Four, vec![1]),
             (CommitteeSize::Seven, vec![1, 3]),
@@ -765,7 +906,7 @@ mod manager_tests {
     #[tokio::test]
     // Test running concurrent instances and confirm that they reach consensus
     async fn test_concurrent_runs() {
-        let setup = setup_test(2);
+        let setup = setup_test(TWO_INSTANCES);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -780,7 +921,7 @@ mod manager_tests {
     #[tokio::test(start_paused = true)]
     // Start with > f fault and then recover them. This should reach consensus
     async fn test_recovery() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -800,7 +941,7 @@ mod manager_tests {
     #[tokio::test]
     // Test commit message suppression for an operator
     async fn test_commit_suppression() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -819,7 +960,7 @@ mod manager_tests {
     #[tokio::test]
     // Test sending double messages
     async fn test_send_double() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -835,7 +976,7 @@ mod manager_tests {
     #[tokio::test]
     // Test one of the nodes sending invalid messages
     async fn test_invalid_message() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -852,7 +993,7 @@ mod manager_tests {
     // Test network partition scenarios
     // This simulates temporary network partitions by taking nodes offline and bringing them back
     async fn test_network_partition() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
             setup.clock,
             setup.executor,
@@ -884,7 +1025,7 @@ mod manager_tests {
     // This is different compared to network partition because here, messages are delayed instead
     // of dropped.
     async fn test_late_initialization() {
-        let setup = setup_test(1);
+        let setup = setup_test(SINGLE_INSTANCE);
 
         let initialization_delays = HashMap::from([
             (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
@@ -1056,6 +1197,490 @@ mod manager_tests {
             !matches!(result, Err(QbftError::RoleNotActive)),
             "Should not return RoleNotActive after Boole fork, got: {:?}",
             result
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test that Committee instances can reach late rounds (9+) with max_round=12 configuration.
+    // This verifies that instances survive long enough to progress through many round changes
+    // as configured. Committee role has max_round=12, so instances should be able to reach
+    // round 10 before timing out at round 13.
+    //
+    // The test simulates network conditions where consensus cannot be reached early by keeping
+    // all but one operator offline, forcing round changes. We advance the slot to trigger
+    // cleanup and verify the instance survives to reach round 10.
+    async fn test_committee_can_reach_late_rounds() {
+        let setup = setup_test(SINGLE_INSTANCE);
+        let clock = setup.clock.clone();
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+        )
+        .await;
+
+        // Keep 3 operators offline initially to prevent consensus and force round changes.
+        // With only 1 operator online out of 4, we cannot reach quorum (need 3).
+        // This will cause the instance to go through multiple round changes.
+        context.set_operators_offline(&[2, 3, 4]);
+
+        // Advance time and slots to simulate reaching round 10
+        // Instance starts at slot 0
+        let slot_duration = Duration::from_secs(12);
+
+        // Advance through multiple slots while QBFT progresses
+        // This triggers cleanup logic which should NOT remove the active instance
+        for slot in 1..=25 {
+            clock.set_slot(slot);
+            tokio::time::advance(slot_duration).await;
+
+            // Round timeout calculation:
+            // - Rounds 1-8: 2s each = 16s total
+            // - Round 9: 120s (ends at 136s)
+            // - Round 10: 120s (ends at 256s ≈ 21.3 slots)
+            // At slot 22 (264s), we're in round 11, verifying the instance
+            // survived past round 10 as required for max_round=12 configuration
+            if slot == 22 {
+                // Bring operators back online to allow consensus after verifying
+                // the instance survived past round 10
+                context.set_operators_online(&[2, 3, 4]);
+                break;
+            }
+        }
+
+        // Verify that consensus is reached successfully, proving the instance
+        // survived cleanup and was able to reach round 10
+        context.verify_consensus().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test that cleanup uses beacon chain deadlines, not slot-based timeouts
+    // This verifies instances with longer deadlines survive past old 2-slot timeout
+    async fn test_cleanup_removes_only_expired_instances() {
+        // SETUP: Create instance at slot 1 with beacon chain deadline = 63 (end of epoch E+1)
+        // Under old system, would be cleaned at slot 3 (slot + 2)
+        const OLD_CLEANUP_SLOT: u64 = 3;
+        const BEACON_DEADLINE_SLOT: u64 = 63;
+        const SLOT_AFTER_DEADLINE: u64 = 64;
+        const EXPECTED_INSTANCES_BEFORE_DEADLINE: usize = 1;
+        const EXPECTED_INSTANCES_AFTER_DEADLINE: usize = 0;
+
+        let setup = setup_test(SINGLE_INSTANCE);
+        let clock = setup.clock.clone();
+        let slot_duration = Duration::from_secs(12);
+
+        let context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+        )
+        .await;
+
+        // Keep operators offline to prevent completion so we can test deadline-based cleanup
+        context.set_operators_offline(&[1, 2, 3, 4]);
+        let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
+
+        // EXECUTE: Advance past old 2-slot deadline to slot 3
+        for slot in 1..=OLD_CLEANUP_SLOT {
+            clock.set_slot(slot);
+            tokio::time::advance(slot_duration).await;
+        }
+        tokio::task::yield_now().await;
+        // ASSERT: Instance should still exist (new deadline is 63, not 3)
+        assert_eq!(
+            manager.beacon_vote_instances.len(),
+            EXPECTED_INSTANCES_BEFORE_DEADLINE,
+            "Instance should survive past old slot {} cleanup with new beacon deadline of {}",
+            OLD_CLEANUP_SLOT,
+            BEACON_DEADLINE_SLOT
+        );
+
+        // EXECUTE: Advance past actual beacon chain deadline
+        for slot in (OLD_CLEANUP_SLOT + 1)..=SLOT_AFTER_DEADLINE {
+            clock.set_slot(slot);
+            tokio::time::advance(slot_duration).await;
+        }
+        tokio::task::yield_now().await;
+        // ASSERT: Instance should now be cleaned after its beacon chain deadline
+        assert_eq!(
+            manager.beacon_vote_instances.len(),
+            EXPECTED_INSTANCES_AFTER_DEADLINE,
+            "Instance should be cleaned after beacon deadline {}",
+            BEACON_DEADLINE_SLOT
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test that a completed instance remains registered until its deadline expires.
+    async fn test_completed_instance_remains_registered_until_deadline() {
+        // SETUP: Create a single instance that will complete successfully
+        const EXPECTED_REGISTERED_INSTANCES: usize = 1;
+
+        let setup = setup_test(SINGLE_INSTANCE);
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+        )
+        .await;
+
+        // EXECUTE: Wait for the instance to complete consensus
+        context.verify_consensus().await;
+
+        // ASSERT: The completed instance should still be registered until deadline-based cleanup
+        let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
+        assert_eq!(
+            manager.beacon_vote_instances.len(),
+            EXPECTED_REGISTERED_INSTANCES,
+            "Completed instance should remain registered until its deadline expires"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Sync committee contributions start late in the slot but must still remain alive long enough
+    // to finish consensus for inclusion in the next slot's block.
+    async fn test_sync_committee_survives_next_slot_cleanup_and_expires_after_deadline() {
+        const DUTY_SLOT: u64 = 0;
+        const NEXT_SLOT: u64 = 1;
+        const CLEANUP_SLOT: u64 = 2;
+        const POST_BOUNDARY_PROGRESS_SECS: u64 = 4;
+        const EXPECTED_REGISTERED_INSTANCES_BEFORE_CLEANUP: usize = 1;
+        const EXPECTED_REGISTERED_INSTANCES_AFTER_CLEANUP: usize = 0;
+
+        // Arrange: start a sync committee instance with the real late-in-slot timeout mode and
+        // keep quorum offline so the instance must survive the first slot boundary.
+        let setup = setup_test(0);
+        let clock = setup.clock.clone();
+        let slot_duration = clock.slot_duration();
+        let mut context =
+            TestContext::<types::MainnetEthSpec, ProposerConsensusData>::new_with_timeout_mode(
+                setup.clock,
+                setup.executor,
+                CommitteeSize::Four,
+                vec![generate_sync_committee_test_data(DUTY_SLOT)],
+                sync_committee_timeout_mode(slot_duration),
+            )
+            .await;
+        let manager = context
+            .tester
+            .managers
+            .get(&OperatorId(1))
+            .expect("manager should exist")
+            .clone();
+        context.set_operators_offline(&[2, 3, 4]);
+
+        // Act: cross the first cleanup boundary without quorum, then restore quorum and let the
+        // instance finish inside the next slot.
+        advance_to_slot_boundary(&clock, NEXT_SLOT, slot_duration).await;
+        context.set_operators_online(&[2, 3, 4]);
+        tokio::time::advance(Duration::from_secs(POST_BOUNDARY_PROGRESS_SECS)).await;
+        tokio::task::yield_now().await;
+        context.verify_consensus().await;
+
+        // Assert: the decided instance remains registered through the inclusion slot.
+        assert_eq!(
+            manager.proposer_consensus_data_instances.len(),
+            EXPECTED_REGISTERED_INSTANCES_BEFORE_CLEANUP,
+            "Completed sync committee instance should remain registered through slot {}",
+            NEXT_SLOT
+        );
+
+        // Act + Assert: the next cleanup boundary removes the expired instance.
+        advance_to_slot_boundary(&clock, CLEANUP_SLOT, slot_duration).await;
+        assert_eq!(
+            manager.proposer_consensus_data_instances.len(),
+            EXPECTED_REGISTERED_INSTANCES_AFTER_CLEANUP,
+            "Sync committee instance should be cleaned when slot {} begins",
+            CLEANUP_SLOT
+        );
+    }
+
+    #[test]
+    // Test deadline calculation for Committee role
+    fn test_committee_role_deadline_calculation() {
+        use ssv_types::msgid::Role;
+        use types::Slot;
+
+        // SETUP: Define test constants for Committee role (deadline = end of epoch E+1)
+        const SLOTS_PER_EPOCH: u64 = 32;
+        const SLOT_ZERO: u64 = 0;
+        const SLOT_IN_EPOCH_ONE: u64 = 32;
+        const EXPECTED_DEADLINE_EPOCH_ZERO: u64 = 63; // (epoch 0 + 2) * 32 - 1
+        const EXPECTED_DEADLINE_EPOCH_ONE: u64 = 95; // (epoch 1 + 2) * 32 - 1
+
+        // EXECUTE: Calculate deadline for slot 0
+        let deadline = super::super::calculate_deadline(
+            Role::Committee,
+            Slot::new(SLOT_ZERO),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: Committee at slot 0 should have deadline per EIP-7045
+        assert_eq!(
+            deadline,
+            Slot::new(EXPECTED_DEADLINE_EPOCH_ZERO),
+            "Committee at slot {} (epoch 0) should have deadline {} per EIP-7045",
+            SLOT_ZERO,
+            EXPECTED_DEADLINE_EPOCH_ZERO
+        );
+
+        // EXECUTE: Calculate deadline for slot 32 (epoch 1)
+        let deadline = super::super::calculate_deadline(
+            Role::Committee,
+            Slot::new(SLOT_IN_EPOCH_ONE),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: Committee at slot 32 should have correct deadline
+        assert_eq!(
+            deadline,
+            Slot::new(EXPECTED_DEADLINE_EPOCH_ONE),
+            "Committee at slot {} (epoch 1) should have deadline {}",
+            SLOT_IN_EPOCH_ONE,
+            EXPECTED_DEADLINE_EPOCH_ONE
+        );
+    }
+
+    #[test]
+    // Test deadline calculation for Aggregator role
+    fn test_aggregator_role_deadline_calculation() {
+        use ssv_types::msgid::Role;
+        use types::Slot;
+
+        // SETUP: Define test constants for Aggregator role (same as Committee)
+        const SLOTS_PER_EPOCH: u64 = 32;
+        const SLOT_ZERO: u64 = 0;
+        const EXPECTED_DEADLINE: u64 = 63; // (epoch 0 + 2) * 32 - 1
+
+        // EXECUTE: Calculate deadline
+        let deadline = super::super::calculate_deadline(
+            Role::Aggregator,
+            Slot::new(SLOT_ZERO),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: Aggregator should have same deadline as Committee
+        assert_eq!(
+            deadline,
+            Slot::new(EXPECTED_DEADLINE),
+            "Aggregator at slot {} should have same deadline as Committee",
+            SLOT_ZERO
+        );
+    }
+
+    #[test]
+    // Test deadline calculation for Proposer role
+    fn test_proposer_role_deadline_calculation() {
+        use ssv_types::msgid::Role;
+        use types::Slot;
+
+        // SETUP: Define test constants for Proposer role (deadline = same slot)
+        const SLOTS_PER_EPOCH: u64 = 32;
+        const SLOT_ZERO: u64 = 0;
+        const SLOT_ARBITRARY: u64 = 100;
+
+        // EXECUTE: Calculate deadline for slot 0
+        let deadline = super::super::calculate_deadline(
+            Role::Proposer,
+            Slot::new(SLOT_ZERO),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: Proposer deadline should be same slot for immediate inclusion
+        assert_eq!(
+            deadline,
+            Slot::new(SLOT_ZERO),
+            "Proposer deadline should be same slot for immediate inclusion"
+        );
+
+        // EXECUTE: Calculate deadline for arbitrary slot
+        let deadline = super::super::calculate_deadline(
+            Role::Proposer,
+            Slot::new(SLOT_ARBITRARY),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: Proposer at arbitrary slot should have deadline at that slot
+        assert_eq!(
+            deadline,
+            Slot::new(SLOT_ARBITRARY),
+            "Proposer at slot {} should have deadline {}",
+            SLOT_ARBITRARY,
+            SLOT_ARBITRARY
+        );
+    }
+
+    #[test]
+    // Test deadline calculation for SyncCommittee role
+    fn test_sync_committee_role_deadline_calculation() {
+        use ssv_types::msgid::Role;
+        use types::Slot;
+
+        // SETUP: Define test constants for SyncCommittee role (deadline = next slot)
+        const SLOTS_PER_EPOCH: u64 = 32;
+        const SLOT_MID_EPOCH: u64 = 50;
+        const EXPECTED_DEADLINE: u64 = SLOT_MID_EPOCH + 1;
+
+        // EXECUTE: Calculate deadline
+        let deadline = super::super::calculate_deadline(
+            Role::SyncCommittee,
+            Slot::new(SLOT_MID_EPOCH),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: SyncCommittee deadline should keep the instance alive through the next slot
+        assert_eq!(
+            deadline,
+            Slot::new(EXPECTED_DEADLINE),
+            "SyncCommittee at slot {} should keep a deadline of {}",
+            SLOT_MID_EPOCH,
+            EXPECTED_DEADLINE
+        );
+    }
+
+    #[test]
+    // Test deadline calculation for VoluntaryExit role
+    fn test_voluntary_exit_role_deadline_calculation() {
+        use ssv_types::msgid::Role;
+        use types::Slot;
+
+        // SETUP: Define test constants for VoluntaryExit role (deadline = slot + epoch)
+        const SLOTS_PER_EPOCH: u64 = 32;
+        const SLOT_TEN: u64 = 10;
+        const EXPECTED_DEADLINE: u64 = 42; // 10 + 32
+
+        // EXECUTE: Calculate deadline
+        let deadline = super::super::calculate_deadline(
+            Role::VoluntaryExit,
+            Slot::new(SLOT_TEN),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: VoluntaryExit should have one epoch to complete
+        assert_eq!(
+            deadline,
+            Slot::new(EXPECTED_DEADLINE),
+            "VoluntaryExit at slot {} should have one epoch to complete",
+            SLOT_TEN
+        );
+    }
+
+    #[test]
+    // Test deadline calculation for ValidatorRegistration role
+    fn test_validator_registration_role_deadline_calculation() {
+        use ssv_types::msgid::Role;
+        use types::Slot;
+
+        // SETUP: Define test constants for ValidatorRegistration role (deadline = slot + epoch)
+        const SLOTS_PER_EPOCH: u64 = 32;
+        const SLOT_ZERO: u64 = 0;
+        const EXPECTED_DEADLINE: u64 = 32; // 0 + 32
+
+        // EXECUTE: Calculate deadline
+        let deadline = super::super::calculate_deadline(
+            Role::ValidatorRegistration,
+            Slot::new(SLOT_ZERO),
+            std::num::NonZeroU64::new(SLOTS_PER_EPOCH).unwrap(),
+        );
+
+        // ASSERT: ValidatorRegistration should have one epoch to complete
+        assert_eq!(
+            deadline,
+            Slot::new(EXPECTED_DEADLINE),
+            "ValidatorRegistration at slot {} should have one epoch to complete",
+            SLOT_ZERO
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test instance cleanup across epoch boundary
+    // Verifies that deadline calculation and cleanup work correctly when crossing epochs
+    async fn test_cleanup_across_epoch_boundary() {
+        // SETUP: Create instance at slot 30 (near end of epoch 0) with deadline at slot 63
+        // Epoch 0 ends at slot 31, epoch 1 spans slots 32-63
+        // Deadline for Committee at slot 30: (epoch 0 + 2) * 32 - 1 = 63
+        const INSTANCE_SLOT: usize = 30;
+        const EPOCH_BOUNDARY_SLOT: u64 = 32;
+        const DEADLINE_SLOT: u64 = 63;
+        const SLOT_AFTER_DEADLINE: u64 = 64;
+        const SLOT_DURATION_SECS: u64 = 12;
+        const EXPECTED_INSTANCES_BEFORE_DEADLINE: usize = 1;
+        const EXPECTED_INSTANCES_AFTER_DEADLINE: usize = 0;
+
+        let setup = setup_test(0);
+        let clock = setup.clock.clone();
+        let test_data = vec![generate_test_data(INSTANCE_SLOT)];
+
+        let context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            test_data,
+        )
+        .await;
+
+        // Keep operators offline to prevent completion so we can test deadline-based cleanup
+        context.set_operators_offline(&[1, 2, 3, 4]);
+
+        let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
+        let slot_duration = Duration::from_secs(SLOT_DURATION_SECS);
+
+        // EXECUTE: Advance through epoch boundary to slot 32
+        for slot in 31..=EPOCH_BOUNDARY_SLOT {
+            clock.set_slot(slot);
+            tokio::time::advance(slot_duration).await;
+        }
+        tokio::task::yield_now().await;
+        // ASSERT: Instance should survive across epoch boundary
+        assert_eq!(
+            manager.beacon_vote_instances.len(),
+            EXPECTED_INSTANCES_BEFORE_DEADLINE,
+            "Instance should survive across epoch boundary"
+        );
+
+        // EXECUTE: Advance to slot 64 (past deadline of 63)
+        for slot in (EPOCH_BOUNDARY_SLOT + 1)..=SLOT_AFTER_DEADLINE {
+            clock.set_slot(slot);
+            tokio::time::advance(slot_duration).await;
+        }
+        tokio::task::yield_now().await;
+        // ASSERT: Instance should be cleaned after deadline
+        assert_eq!(
+            manager.beacon_vote_instances.len(),
+            EXPECTED_INSTANCES_AFTER_DEADLINE,
+            "Instance should be cleaned after deadline {}",
+            DEADLINE_SLOT
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test that multiple completed instances remain registered until their deadlines expire.
+    async fn test_multiple_completed_instances_remain_registered_until_deadline() {
+        // SETUP: Create two instances that will both complete successfully
+        const EXPECTED_REGISTERED_INSTANCES: usize = TWO_INSTANCES;
+
+        let setup = setup_test(TWO_INSTANCES);
+
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+        )
+        .await;
+
+        // EXECUTE: Wait for both instances to complete
+        context.verify_consensus().await;
+
+        // ASSERT: Both completed instances should still be registered until deadline-based cleanup
+        let manager = context.tester.managers.get(&OperatorId(1)).unwrap();
+        assert_eq!(
+            manager.beacon_vote_instances.len(),
+            EXPECTED_REGISTERED_INSTANCES,
+            "Completed instances should remain registered until their deadlines expire"
         );
     }
 }
