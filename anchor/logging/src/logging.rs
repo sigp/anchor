@@ -14,6 +14,7 @@ pub use crate::tracing_libp2p_discv5_layer::{
 };
 
 #[derive(Parser, Debug, Clone)]
+#[clap(next_help_heading = "Logging Options")]
 pub struct FileLoggingFlags {
     #[arg(
         long,
