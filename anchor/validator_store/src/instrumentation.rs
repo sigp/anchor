@@ -1,21 +1,19 @@
+use derive_more::Display;
+
 use crate::{Error, SpecificError};
 
 /// Outcome of a block signing attempt, used for metrics labeling.
-#[derive(Debug)]
+#[derive(Debug, Display)]
 pub enum SignBlockOutcome {
+    #[display("success")]
     Success,
+    #[display("timeout")]
     Timeout,
+    #[display("error")]
     Failed,
 }
 
 impl SignBlockOutcome {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::Timeout => "timeout",
-            Self::Failed => "error",
-        }
-    }
     pub fn from_result<T>(result: &Result<T, Error>) -> Self {
         match result {
             Ok(_) => Self::Success,
@@ -25,23 +23,12 @@ impl SignBlockOutcome {
     }
 }
 
-#[derive(Debug)]
-pub enum BlockSigningCheckpoints {
-    DutyEntry,
-    PreConsensusHandoff,
-    ConsensusDecided,
-    BlockSigned,
-    PublishConsensus,
-}
-
-impl BlockSigningCheckpoints {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::DutyEntry => "duty_entry",
-            Self::PreConsensusHandoff => "qbft_start",
-            Self::ConsensusDecided => "consensus_decided",
-            Self::BlockSigned => "block_signed",
-            Self::PublishConsensus => "publish_consensus",
-        }
-    }
+pub mod checkpoints {
+    pub const DUTY_ENTRY: &str = "duty_entry";
+    pub const PRE_CONSENSUS_HANDOFF: &str = "pre_consensus_handoff";
+    pub const CONSENSUS_DECIDED: &str = "consensus_decided";
+    pub const BLOCK_SIGNED: &str = "block_signed";
+    pub const PUBLISH_BLOCK: &str = "publish_block";
+    pub const DUTY_COMPLETED: &str = "duty_completed";
+    pub const DUTY_FAILED: &str = "duty_failed";
 }

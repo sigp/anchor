@@ -797,6 +797,7 @@ dependencies = [
  "beacon_node_fallback",
  "bls",
  "database",
+ "derive_more 2.1.1",
  "eth2",
  "ethereum_ssz",
  "fork",
