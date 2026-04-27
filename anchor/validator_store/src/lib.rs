@@ -2443,16 +2443,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 }
             }
             .await;
-            tracing::Span::current().record(
-                "outcome",
-                tracing::field::display(SignBlockOutcome::from_result(&result)),
-            );
+
+            let outcome = tracing::field::display(SignBlockOutcome::from_result(&result));
+            tracing::Span::current().record("outcome", &outcome);
             match &result {
-                Ok(_) => info!(
-                    checkpoint = checkpoints::DUTY_COMPLETED,
-                    outcome = "success"
-                ),
-                Err(_) => info!(checkpoint = checkpoints::DUTY_FAILED, outcome = "failed"),
+                Ok(_) => info!(checkpoint = checkpoints::DUTY_COMPLETED, outcome = &outcome),
+                Err(_) => info!(checkpoint = checkpoints::DUTY_FAILED, outcome = &outcome),
             }
             result
         }
