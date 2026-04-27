@@ -2452,7 +2452,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             result
         }
-        .instrument(span.clone());
+        .instrument(span);
 
         run_and_update_metrics(
             BLOCK_LOG_NAME,
