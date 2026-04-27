@@ -469,6 +469,18 @@ pub mod queries {
             })
         })
     }
+
+    pub fn get_skipped_operator_reason(
+        operator_id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Option<String> {
+        tx.query_row(
+            crate::sql_operations::GET_SKIPPED_OPERATOR_ADD_REASON,
+            params![operator_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
 }
 
 /// Database assertions for testing
