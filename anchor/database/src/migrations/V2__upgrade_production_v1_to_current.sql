@@ -5,3 +5,7 @@
 ALTER TABLE metadata ADD COLUMN max_operator_id_seen INTEGER;
 ALTER TABLE metadata ADD COLUMN network_name TEXT;
 CREATE INDEX IF NOT EXISTS idx_validators_validator_index ON validators(validator_index);
+CREATE TABLE skipped_operator_adds (
+    operator_id INTEGER PRIMARY KEY,
+    reason TEXT NOT NULL
+);

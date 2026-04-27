@@ -70,6 +70,19 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::ConsensusDataProposerTest>(path, contents))
         }
 
+        // Go's spec test pins ssv-spec's historical deposit-data primitive
+        // (used when DKG lived in ssv-spec pre-2023; now in ssvlabs/ssv-dkg
+        // which uses its own Go primitives). No Anchor production path generates
+        // or verifies deposit data: deposit signing is ssv-dkg's responsibility,
+        // on-chain verification is Ethereum's, and Anchor only consumes RSA-
+        // encrypted shares from `ValidatorAdded` events. Lighthouse drift in
+        // deposit primitives cannot affect Anchor or its ssv-dkg interop.
+        // Not applicable.
+        "beacon.DepositDataSpecTest" => {
+            eprintln!("SKIP (known-inapplicable): {prefix}");
+            DispatchOutcome::SkippedKnown
+        }
+
         // Lighthouse's VC drives Anchor through per-duty trait methods (`sign_block_proposal`,
         // `sign_aggregate`, …), so Anchor always knows which duty it's in at the call site
         // and hardcodes the wire `Role` there for parity with go-ssv. It never holds a
