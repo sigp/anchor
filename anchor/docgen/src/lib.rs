@@ -25,7 +25,7 @@ const SUBCOMMAND_REFERENCE_PAGES: [(&str, &str); 3] = [
 
 /// Updates the generated reference snippets with the latest CLI documentation.
 fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
-    let cli_content = generate_cli_reference_snippet(cmd)?;
+    let cli_content = generate_cli_reference_snippet(cmd);
     update_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content)?;
 
     for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
@@ -41,7 +41,7 @@ fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
 fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
     let mut out_of_date = Vec::new();
 
-    let cli_content = generate_cli_reference_snippet(cmd)?;
+    let cli_content = generate_cli_reference_snippet(cmd);
     match check_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content) {
         Ok(_) => {}
         Err(DocGenError::OutOfDate(_)) => {
@@ -70,7 +70,7 @@ fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
 
 /// Renders generated CLI reference snippets from the `clap` struct definitions to stdout.
 fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
-    let cli_content = generate_cli_reference_snippet(anchor_command)?;
+    let cli_content = generate_cli_reference_snippet(anchor_command);
     println!("---\n# Global Options\n");
     print!("{cli_content}");
     for (name, _) in SUBCOMMAND_REFERENCE_PAGES {

@@ -1,4 +1,4 @@
-use std::{fmt, io, path::PathBuf};
+use std::{io, path::PathBuf};
 
 use thiserror::Error;
 
@@ -12,9 +12,6 @@ pub enum DocGenError {
 
     #[error("CLI documentation is out of date in {0}")]
     OutOfDate(String),
-
-    #[error("Unable to render documentation for option group {group}: {source}")]
-    RenderOptionGroup { group: String, source: fmt::Error },
 
     #[error("Subcommand {subcommand} not found in CLI tree {cli_tree}")]
     SubcommandNotFound {

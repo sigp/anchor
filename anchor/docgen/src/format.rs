@@ -4,8 +4,6 @@ use std::fmt::Write;
 
 use clap::{Arg, ArgAction};
 
-use crate::errors::DocGenError;
-
 /// A container for a group of CLI arguments that belong to a common semantic group.
 type CliArgGrouping<'a> = Vec<&'a Arg>;
 
@@ -85,7 +83,7 @@ pub(crate) fn format_option(arg: &Arg) -> String {
 ///
 /// This uses the `help` string and appends possible values if they exist. The string is
 /// formatted to be suitable for markdown table cells.
-pub(crate) fn format_description(arg: &Arg) -> Result<String, DocGenError> {
+pub(crate) fn format_description(arg: &Arg) -> String {
     let mut desc = arg.get_help().map(|h| h.to_string()).unwrap_or_default();
 
     // Collapse newlines and excess whitespace for table cell.
@@ -116,15 +114,10 @@ pub(crate) fn format_description(arg: &Arg) -> Result<String, DocGenError> {
         if !desc.is_empty() {
             desc.push(' ');
         }
-        write!(desc, "(possible values: {values_str})").map_err(|e| {
-            DocGenError::RenderOptionGroup {
-                group: arg.get_help_heading().unwrap_or("Ungrouped").to_string(),
-                source: e,
-            }
-        })?;
+        write!(desc, "(possible values: {values_str})").expect("Infallible Write For String");
     }
 
-    Ok(desc)
+    desc
 }
 
 /// Format the default value column.
@@ -296,7 +289,7 @@ mod tests {
             .action(ArgAction::Set)
             .help("Use A | B");
 
-        let result = format_description(&arg).unwrap();
+        let result = format_description(&arg);
         assert_eq!(result, "Use A \\| B");
     }
 
@@ -308,7 +301,7 @@ mod tests {
             .action(ArgAction::Set)
             .help("Defaults to {network}");
 
-        let result = format_description(&arg).unwrap();
+        let result = format_description(&arg);
         assert_eq!(result, "Defaults to \\{network\\}");
     }
 
@@ -319,7 +312,7 @@ mod tests {
             .action(ArgAction::Set)
             .help("Line one\nLine  two");
 
-        let result = format_description(&arg).unwrap();
+        let result = format_description(&arg);
         assert_eq!(result, "Line one Line two");
     }
 
@@ -336,7 +329,7 @@ mod tests {
             .value_parser(EnumValueParser::<TestTopic>::new()) // Equivalent to clap_derive for an enum type.
             .help("Output format");
 
-        let result = format_description(&arg).unwrap();
+        let result = format_description(&arg);
         assert_eq!(result, "Output format (possible values: a, b)");
     }
 
@@ -344,7 +337,7 @@ mod tests {
     fn test_format_description_with_empty_help_returns_empty_string() {
         let arg = Arg::new("silent").long("silent");
 
-        let result = format_description(&arg).unwrap();
+        let result = format_description(&arg);
         assert_eq!(result, "");
     }
 

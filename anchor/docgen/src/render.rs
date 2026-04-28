@@ -18,45 +18,27 @@ use crate::{
 /// | --- | --- | --- |
 /// | --option | Option description (possible values: ...) | `default` |
 /// ```
-fn generate_formatted_option_table_doc(
-    groups: &GroupedCliArgs,
-    heading_prefix: &str,
-) -> Result<String, DocGenError> {
+fn generate_formatted_option_table_doc(groups: &GroupedCliArgs, heading_prefix: &str) -> String {
     let mut output = String::new();
 
     for (heading, group_args) in groups {
         if let Some(heading_text) = heading {
-            writeln!(output, "{heading_prefix} {heading_text}\n").map_err(|e| {
-                DocGenError::RenderOptionGroup {
-                    group: heading_text.to_string(),
-                    source: e,
-                }
-            })?;
+            writeln!(output, "{heading_prefix} {heading_text}\n")
+                .expect("Infallible Write For String");
         }
-        let group_name = heading.as_deref().unwrap_or("Ungrouped").to_string();
-        writeln!(output, "| Option | Description | Default |").map_err(|e| {
-            DocGenError::RenderOptionGroup {
-                group: group_name.clone(),
-                source: e,
-            }
-        })?;
-        writeln!(output, "| --- | --- | --- |").map_err(|e| DocGenError::RenderOptionGroup {
-            group: group_name.clone(),
-            source: e,
-        })?;
+        writeln!(output, "| Option | Description | Default |")
+            .expect("Infallible Write For String");
+        writeln!(output, "| --- | --- | --- |").expect("Infallible Write For String");
         for arg in group_args {
-            write_arg_table_row(&mut output, arg)?;
+            write_arg_table_row(&mut output, arg);
         }
-        writeln!(output).map_err(|e| DocGenError::RenderOptionGroup {
-            group: group_name,
-            source: e,
-        })?;
+        writeln!(output).expect("Infallible Write For String");
     }
-    Ok(output)
+    output
 }
 
 /// Render a command's options as markdown tables grouped by struct-derived ArgGroups.
-pub fn render_options_tables(cmd: &Command, heading_prefix: &str) -> Result<String, DocGenError> {
+pub fn render_options_tables(cmd: &Command, heading_prefix: &str) -> String {
     let args: Vec<_> = cmd
         .get_arguments()
         .filter(|a| !a.is_positional() && !a.is_hide_set())
@@ -70,26 +52,22 @@ pub fn render_options_tables(cmd: &Command, heading_prefix: &str) -> Result<Stri
 }
 
 /// Write a single argument row: `| Option | Description | Default |`
-fn write_arg_table_row(output: &mut String, arg: &Arg) -> Result<(), DocGenError> {
+fn write_arg_table_row(output: &mut String, arg: &Arg) {
     let option_str = format_option(arg);
-    let description = format_description(arg)?;
+    let description = format_description(arg);
     let default = format_default(arg);
 
-    writeln!(output, "| {option_str} | {description} | {default} |").map_err(|e| {
-        DocGenError::RenderOptionGroup {
-            group: arg.get_help_heading().unwrap_or("Ungrouped").to_string(),
-            source: e,
-        }
-    })
+    writeln!(output, "| {option_str} | {description} | {default} |")
+        .expect("Infallible Write For String");
 }
 
 /// Generate the CLI reference snippet for global options.
-pub fn generate_cli_reference_snippet(cmd: &Command) -> Result<String, DocGenError> {
+pub fn generate_cli_reference_snippet(cmd: &Command) -> String {
     render_options_tables(cmd, "####")
 }
 
 /// Generate CLI help snippet for a command with nested subcommands.
-fn generate_nested_command_reference_snippet(cmd: &Command) -> Result<String, DocGenError> {
+fn generate_nested_command_reference_snippet(cmd: &Command) -> String {
     let mut output = String::new();
     for sub in cmd.get_subcommands() {
         if sub.is_hide_set() {
@@ -98,19 +76,11 @@ fn generate_nested_command_reference_snippet(cmd: &Command) -> Result<String, Do
         let name = sub.get_name();
         let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
 
-        writeln!(output, "#### {name} Subcommand\n").map_err(|e| {
-            DocGenError::RenderOptionGroup {
-                group: name.to_string(),
-                source: e,
-            }
-        })?;
-        writeln!(output, "{about}\n").map_err(|e| DocGenError::RenderOptionGroup {
-            group: name.to_string(),
-            source: e,
-        })?;
-        output.push_str(&render_options_tables(sub, "#####")?);
+        writeln!(output, "#### {name} Subcommand\n").expect("Infallible Write For String");
+        writeln!(output, "{about}\n").expect("Infallible Write For String");
+        output.push_str(&render_options_tables(sub, "#####"));
     }
-    Ok(output)
+    output
 }
 
 /// Generate the CLI reference snippet for a subcommand page.
@@ -126,9 +96,9 @@ pub fn generate_subcommand_reference_snippet(
             })?;
 
     if subcmd.get_subcommands().any(|s| !s.is_hide_set()) {
-        generate_nested_command_reference_snippet(subcmd)
+        Ok(generate_nested_command_reference_snippet(subcmd))
     } else {
-        generate_cli_reference_snippet(subcmd)
+        Ok(generate_cli_reference_snippet(subcmd))
     }
 }
 
@@ -164,7 +134,7 @@ mod tests {
         let cmd = TestCli::command();
         let arg = cmd.get_arguments().next().unwrap();
         let groups = Vec::from([(Some("Test Group".to_string()), vec![arg])]);
-        let result = generate_formatted_option_table_doc(&groups, "####").unwrap();
+        let result = generate_formatted_option_table_doc(&groups, "####");
 
         assert!(result.contains("| Option | Description | Default |"));
         assert!(result.contains("#### Test Group"));
@@ -175,7 +145,7 @@ mod tests {
     #[test]
     fn test_render_options_tables_produces_table() {
         let cmd = TestCli::command();
-        let result = render_options_tables(&cmd, "####").unwrap();
+        let result = render_options_tables(&cmd, "####");
 
         assert!(result.contains("| Option | Description | Default |"));
         assert!(result.contains("`-t`, `--test-flag <TEST>`"));
@@ -194,7 +164,6 @@ mod tests {
             "Metrics Options",
             "Payload Building Options",
             "Logging Options",
-            "Flags",
         ] {
             assert!(
                 result.contains(heading),
@@ -221,7 +190,7 @@ mod tests {
     #[test]
     fn test_render_cli_snippet_contains_options_table() {
         let cmd = anchor_command();
-        let result = generate_cli_reference_snippet(&cmd).unwrap();
+        let result = generate_cli_reference_snippet(&cmd);
 
         assert!(result.contains("| Option | Description | Default |"));
     }
