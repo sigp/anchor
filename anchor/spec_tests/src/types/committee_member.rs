@@ -35,9 +35,9 @@ struct FixtureCommitteeMember {
 }
 
 /// Mirrors Go's `CommitteeMemberTest`. Quorum check reuses `ssv_types::quorum_size`
-/// (the same helper `ConfigBuilder::new` seeds `Config::quorum_size()` with, which
-/// production `Qbft::has_quorum` compares against). For canonical SSV committees
-/// (`N ∈ {4, 7, 10, 13}`) this equals Go's `2f + 1`.
+/// (`2f + 1`), the same helper `Config::quorum_size()` returns and production
+/// `Qbft::has_quorum` compares against. This matches Go's `CommitteeMember.GetQuorum`
+/// byte-for-byte at all committee sizes.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CommitteeMemberTest {
