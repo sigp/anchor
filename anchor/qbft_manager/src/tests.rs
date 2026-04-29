@@ -630,7 +630,7 @@ mod manager_tests {
     // Provides test setup
     struct Setup {
         executor: TaskExecutor,
-        _signal: async_channel::Sender<()>,
+        _task_executor_keepalive: async_channel::Sender<()>,
         _shutdown: futures::channel::mpsc::Sender<ShutdownReason>,
         clock: ManualSlotClock,
         all_data: Vec<(BeaconVote, CommitteeInstanceId)>,
@@ -683,7 +683,7 @@ mod manager_tests {
 
         Setup {
             executor,
-            _signal: signal,
+            _task_executor_keepalive: signal,
             _shutdown: shutdown,
             clock,
             all_data,
