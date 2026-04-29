@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, de::IgnoredAny};
-use ssv_types::{OperatorId, message::SignedSSVMessage, quorum_size};
+use ssv_types::{OperatorId, get_f, message::SignedSSVMessage, quorum_size};
 
 use crate::{
     SpecTest,
@@ -26,12 +26,15 @@ struct FixtureMessage {
     full_data: Option<Vec<u8>>,
 }
 
-/// Only the length of `Committee` is exercised; quorum is derived from committee size
-/// via `ssv_types::quorum_size` (matches production QBFT behavior, see struct docs).
+/// `committee` is deserialized only for its length; per-operator data isn't needed
+/// because quorum is derived from `committee.len()` via `ssv_types::quorum_size`.
+/// `faulty_nodes` is asserted equal to `ssv_types::get_f(committee.len())` to detect
+/// drift between Anchor's `get_f` and Go's `ComputeF`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct FixtureCommitteeMember {
     committee: Vec<IgnoredAny>,
+    faulty_nodes: usize,
 }
 
 /// Mirrors Go's `CommitteeMemberTest`. Quorum check reuses `ssv_types::quorum_size`
@@ -61,6 +64,18 @@ impl SpecTest for CommitteeMemberTest {
         let unique_signers: HashSet<u64> = self.message.operator_ids.iter().copied().collect();
         let unique_count = unique_signers.len();
         let committee_size = self.committee_member.committee.len();
+
+        // Verify the fixture's stored `FaultyNodes` agrees with Anchor's derivation.
+        // Go's `CommitteeMember.HasQuorum` uses the stored field directly, so this
+        // catches drift between `ssv_types::get_f` and Go's `ComputeF`.
+        let derived_f = get_f(committee_size);
+        if self.committee_member.faulty_nodes != derived_f {
+            return Err(format!(
+                "FaultyNodes mismatch: fixture={}, get_f({committee_size})={derived_f}",
+                self.committee_member.faulty_nodes,
+            ));
+        }
+
         let required_quorum = quorum_size(committee_size);
 
         let has_quorum = unique_count >= required_quorum;
