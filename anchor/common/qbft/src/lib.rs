@@ -330,11 +330,12 @@ where
             // Decided messages carry all information needed to complete the height, even if the
             // local round timer has already moved this instance forward. In SSV QBFT, a decided
             // message is a Commit signed by a committee quorum.
-            if !matches!(
+            let is_decided_message = matches!(
                 wrapped_msg.qbft_message.qbft_message_type,
                 QbftMessageType::Commit
-            ) || !self.has_quorum([wrapped_msg])
-            {
+            ) && self.has_quorum([wrapped_msg]);
+
+            if !is_decided_message {
                 debug!(
                     message_round = wrapped_msg.qbft_message.round,
                     current_round = *self.current_round,
