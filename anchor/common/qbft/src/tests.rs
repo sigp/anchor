@@ -316,6 +316,8 @@ fn test_receive_accepts_past_round_decided_message_after_round_timeout() {
         qbft_instance.completed
     );
     assert!(qbft_instance.aggregated_commit.is_some());
+    assert!(matches!(qbft_instance.state, InstanceState::Complete));
+    assert!(qbft_instance.data.contains_key(&decided_root));
 }
 
 #[test]
