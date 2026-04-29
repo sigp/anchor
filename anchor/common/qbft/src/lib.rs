@@ -275,8 +275,8 @@ where
         unique_operators.len() >= self.config.quorum_size()
     }
 
-    /// Checks if a message carries a quorum-backed decided commit.
-    fn is_decided_message(&self, wrapped_msg: &WrappedQbftMessage) -> bool {
+    /// Checks if a message is a commit signed by a committee quorum.
+    fn is_quorum_commit(&self, wrapped_msg: &WrappedQbftMessage) -> bool {
         matches!(
             wrapped_msg.qbft_message.qbft_message_type,
             QbftMessageType::Commit
@@ -337,7 +337,7 @@ where
         if wrapped_msg.qbft_message.round < self.current_round.into() {
             // Decided messages carry all information needed to complete the height, even if the
             // local round timer has already moved this instance forward.
-            if !self.is_decided_message(wrapped_msg) {
+            if !self.is_quorum_commit(wrapped_msg) {
                 debug!(
                     message_round = wrapped_msg.qbft_message.round,
                     current_round = *self.current_round,
@@ -355,7 +355,7 @@ where
                 }
                 QbftMessageType::Commit => {
                     // Only decided messages (with quorum) are allowed from future rounds
-                    if !self.is_decided_message(wrapped_msg) {
+                    if !self.has_quorum([wrapped_msg]) {
                         return Err(QbftError::WrongRound);
                     }
                 }
