@@ -1,25 +1,10 @@
-use derive_more::Display;
-
 use crate::{Error, SpecificError};
 
 /// Outcome of a block signing attempt, used for metrics labeling.
-#[derive(Debug, Display)]
-pub enum SignBlockOutcome {
-    #[display("success")]
-    Success,
-    #[display("timeout")]
-    Timeout,
-    #[display("error")]
-    Failed,
-}
-
-impl SignBlockOutcome {
-    pub fn from_result<T>(result: &Result<T, Error>) -> Self {
-        match result {
-            Ok(_) => Self::Success,
-            Err(Error::SpecificError(SpecificError::Timeout)) => Self::Timeout,
-            Err(_) => Self::Failed,
-        }
+pub fn from_result<T>(result: &Result<T, Error>) -> &'static str {
+    match result {
+        Ok(_) => "success",
+        Err(_) => "failed",
     }
 }
 
@@ -31,4 +16,25 @@ pub mod checkpoints {
     pub const PUBLISH_BLOCK: &str = "publish_block";
     pub const DUTY_COMPLETED: &str = "duty_completed";
     pub const DUTY_FAILED: &str = "duty_failed";
+}
+
+/// Common reasons for block signing failures.
+pub fn failure_reason(error: &Error) -> &'static str {
+    match error {
+        Error::SpecificError(SpecificError::ClusterLiquidated) => "cluster_liquidated",
+        Error::SpecificError(SpecificError::InvalidQbftData(_)) => "invalid_qbft_data",
+        Error::SpecificError(SpecificError::MissingIndex) => "missing_index",
+        Error::SpecificError(SpecificError::NotSynced) => "not_synced",
+        Error::SpecificError(SpecificError::QbftError(_)) => "qbft_error",
+        Error::SpecificError(SpecificError::SignatureCollectionFailed(_)) => {
+            "signature_collection_failed"
+        }
+        Error::SpecificError(SpecificError::SlotClock) => "slot_clock",
+        Error::SpecificError(SpecificError::Timeout) => "timeout",
+        Error::Slashable(_) => "slashable",
+        Error::SameData => "same_data",
+        Error::SpecificError(_) => "other_specific_error",
+        Error::UnknownPubkey(_) => "unknown_pubkey",
+        _ => "other_error",
+    }
 }

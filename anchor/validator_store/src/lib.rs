@@ -80,8 +80,6 @@ use validator_store::{
     ValidatorStore,
 };
 
-use crate::instrumentation::{SignBlockOutcome, checkpoints};
-
 /// Number of epochs of slashing protection history to keep.
 ///
 /// This acts as a maximum safe-guard against clock drift.
@@ -2331,7 +2329,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         );
         let future = async {
             info!(
-                checkpoint = checkpoints::DUTY_ENTRY,
+                checkpoint = instrumentation::checkpoints::DUTY_ENTRY,
                 "Proposer block signing duty entered"
             );
             let result = async {
@@ -2360,7 +2358,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 };
 
                 info!(
-                    checkpoint = checkpoints::PRE_CONSENSUS_HANDOFF,
+                    checkpoint = instrumentation::checkpoints::PRE_CONSENSUS_HANDOFF,
                     "Handing block to consensus process"
                 );
 
@@ -2369,7 +2367,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     .await?;
 
                 info!(
-                    checkpoint = checkpoints::CONSENSUS_DECIDED,
+                    checkpoint = instrumentation::checkpoints::CONSENSUS_DECIDED,
                     "Block consensus completed successfully"
                 );
 
@@ -2391,7 +2389,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 }?;
 
                 info!(
-                    checkpoint = checkpoints::BLOCK_SIGNED,
+                    checkpoint = instrumentation::checkpoints::BLOCK_SIGNED,
                     "Block threshold signature completed"
                 );
 
@@ -2408,7 +2406,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                                     signed_blinded_block.signature().clone(),
                                 );
                                 info!(
-                                    checkpoint = checkpoints::PUBLISH_BLOCK,
+                                    checkpoint = instrumentation::checkpoints::PUBLISH_BLOCK,
                                     "Publishing full reconstructed block as leader"
                                 );
                                 Ok(SignedBlock::Full(PublishBlockRequest::new(
@@ -2417,7 +2415,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                                 )))
                             } else {
                                 info!(
-                                    checkpoint = checkpoints::PUBLISH_BLOCK,
+                                    checkpoint = instrumentation::checkpoints::PUBLISH_BLOCK,
                                     "Publishing blinded block as leader"
                                 );
                                 Ok(SignedBlock::Blinded(signed_blinded_block))
@@ -2425,7 +2423,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                         } else {
                             tracing::Span::current().record("proposal_matched", false);
                             info!(
-                                checkpoint = checkpoints::PUBLISH_BLOCK,
+                                checkpoint = instrumentation::checkpoints::PUBLISH_BLOCK,
                                 "Publishing blinded block not as leader"
                             );
                             // Someone else's proposal won, return blinded
@@ -2435,7 +2433,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     SignedBlock::Full(signed_block) => {
                         tracing::Span::current().record("proposal_matched", false);
                         info!(
-                            checkpoint = checkpoints::PUBLISH_BLOCK,
+                            checkpoint = instrumentation::checkpoints::PUBLISH_BLOCK,
                             "Publishing full block directly"
                         );
                         Ok(SignedBlock::Full(signed_block))
@@ -2444,11 +2442,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
-            let outcome = tracing::field::display(SignBlockOutcome::from_result(&result));
-            tracing::Span::current().record("outcome", &outcome);
+            let outcome = instrumentation::from_result(&result);
+            tracing::Span::current().record("outcome", outcome);
             match &result {
-                Ok(_) => info!(checkpoint = checkpoints::DUTY_COMPLETED, outcome = &outcome),
-                Err(_) => info!(checkpoint = checkpoints::DUTY_FAILED, outcome = &outcome),
+                Ok(_) => info!(
+                    checkpoint = instrumentation::checkpoints::DUTY_COMPLETED,
+                    outcome = &outcome
+                ),
+                Err(err) => {
+                    let failure_reason = instrumentation::failure_reason(err);
+                    info!(
+                        checkpoint = instrumentation::checkpoints::DUTY_FAILED,
+                        outcome = &outcome,
+                        failure_reason = &failure_reason
+                    );
+                    tracing::Span::current().record("failure_reason", failure_reason);
+                }
             }
             result
         }
