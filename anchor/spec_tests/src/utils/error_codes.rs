@@ -85,3 +85,24 @@ pub fn signed_ssv_message_error_code(err: &SignedSSVMessageError) -> i64 {
         | SignedSSVMessageError::SSVMessageError(_) => UNMAPPED_ERROR_CODE,
     }
 }
+
+// --- Assertions ---
+
+/// Mirrors ssv-spec's `tests.AssertErrorCode` (`types/spectest/tests/error.go`):
+/// `expected_error_code == NO_ERROR` requires `actual_code == NO_ERROR`;
+/// `actual_code == UNMAPPED_ERROR_CODE` always fails loudly (matches Go's
+/// `errors.As(err, &types.Error)` guard, which fails with "unknown error" when
+/// the error isn't a typed spec error); otherwise the codes are compared for equality.
+pub fn assert_error_code(expected_error_code: i64, actual_code: i64) -> Result<(), String> {
+    if actual_code == UNMAPPED_ERROR_CODE {
+        return Err(format!(
+            "Unknown error: validation returned a variant not mapped to a Go error code (expected {expected_error_code})"
+        ));
+    }
+    if actual_code != expected_error_code {
+        return Err(format!(
+            "Expected error code {expected_error_code}, got {actual_code}"
+        ));
+    }
+    Ok(())
+}

@@ -50,22 +50,13 @@ pub struct CommitteeMemberTest {
 
 impl SpecTest for CommitteeMemberTest {
     fn run(&self) -> Result<(), String> {
-        // Arrange + Act: build the `SignedSSVMessage` through the production constructor,
-        // capturing either success or a mapped Go error code.
         let actual_code = self
             .build_signed_message()
             .err()
             .unwrap_or(error_codes::NO_ERROR);
+        error_codes::assert_error_code(self.expected_error_code, actual_code)?;
 
-        // Assert: validation error code matches the fixture's expectation.
-        if actual_code != self.expected_error_code {
-            return Err(format!(
-                "Expected error code {}, got {actual_code}",
-                self.expected_error_code,
-            ));
-        }
-
-        // Assert: quorum thresholds use deduplicated signers (matches Go's
+        // Quorum thresholds use deduplicated signers (matches Go's
         // `GetUniqueMessageSignersCount` behavior).
         let unique_signers: HashSet<u64> = self.message.operator_ids.iter().copied().collect();
         let unique_count = unique_signers.len();
