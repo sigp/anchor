@@ -1,7 +1,7 @@
 use crate::{Error, SpecificError};
 
 /// Outcome of a block signing attempt, used for metrics labeling.
-pub fn from_result<T>(result: &Result<T, Error>) -> &'static str {
+pub fn outcome_from_result<T>(result: &Result<T, Error>) -> &'static str {
     match result {
         Ok(_) => "success",
         Err(_) => "failed",
@@ -24,6 +24,7 @@ pub fn failure_reason(error: &Error) -> &'static str {
         Error::SpecificError(SpecificError::ClusterLiquidated) => "cluster_liquidated",
         Error::SpecificError(SpecificError::InvalidQbftData(_)) => "invalid_qbft_data",
         Error::SpecificError(SpecificError::MissingIndex) => "missing_index",
+        Error::SpecificError(SpecificError::NoDataAgreed) => "no_data_agreed",
         Error::SpecificError(SpecificError::NotSynced) => "not_synced",
         Error::SpecificError(SpecificError::QbftError(_)) => "qbft_error",
         Error::SpecificError(SpecificError::SignatureCollectionFailed(_)) => {

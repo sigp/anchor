@@ -2407,7 +2407,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
-            let outcome = instrumentation::from_result(&result);
+            let outcome = instrumentation::outcome_from_result(&result);
             tracing::Span::current().record("outcome", outcome);
             match &result {
                 Ok(_) => trace!(
