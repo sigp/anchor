@@ -275,14 +275,6 @@ where
         unique_operators.len() >= self.config.quorum_size()
     }
 
-    /// Checks if a message is a commit signed by a committee quorum.
-    fn is_quorum_commit(&self, wrapped_msg: &WrappedQbftMessage) -> bool {
-        matches!(
-            wrapped_msg.qbft_message.qbft_message_type,
-            QbftMessageType::Commit
-        ) && self.has_quorum([wrapped_msg])
-    }
-
     /// Checks if we have accepted a proposal
     fn is_proposal_accepted(&self) -> Result<(), QbftError> {
         if !self.proposal_accepted_for_current_round {
@@ -336,8 +328,13 @@ where
         // Ensure that this message is for the correct round
         if wrapped_msg.qbft_message.round < self.current_round.into() {
             // Decided messages carry all information needed to complete the height, even if the
-            // local round timer has already moved this instance forward.
-            if !self.is_quorum_commit(wrapped_msg) {
+            // local round timer has already moved this instance forward. In SSV QBFT, a decided
+            // message is a Commit signed by a committee quorum.
+            if !matches!(
+                wrapped_msg.qbft_message.qbft_message_type,
+                QbftMessageType::Commit
+            ) || !self.has_quorum([wrapped_msg])
+            {
                 debug!(
                     message_round = wrapped_msg.qbft_message.round,
                     current_round = *self.current_round,
