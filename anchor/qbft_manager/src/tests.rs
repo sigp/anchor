@@ -14,8 +14,10 @@ use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
     consensus::{BeaconVote, NoDataValidation, QbftMessage, QbftMessageType},
     domain_type::DomainType,
+    get_f,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
+    quorum_size,
 };
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};
@@ -153,7 +155,7 @@ where
                         .expect("If consensus was reached, this must exist");
                     assert!(
                         aggregated_commit.signatures().len() as u64
-                            >= (self.tester.size as u64 - self.tester.size.get_f())
+                            >= quorum_size(self.tester.size as usize) as u64
                     );
                 },
                 _ = &mut timeout => {
@@ -177,18 +179,6 @@ pub enum CommitteeSize {
     Seven = 7,
     Ten = 10,
     Thirteen = 13,
-}
-
-impl CommitteeSize {
-    // The number of fault nodes that the committee can tolerate
-    fn get_f(&self) -> u64 {
-        match self {
-            CommitteeSize::Four => 1,
-            CommitteeSize::Seven => 2,
-            CommitteeSize::Ten => 3,
-            CommitteeSize::Thirteen => 4,
-        }
-    }
 }
 
 /// The main test coordinator that manages multiple QBFT instances
@@ -362,7 +352,7 @@ where
             self.identifiers.insert(height, data_id.clone());
 
             // Track the consensus results
-            let min_for_consensus = self.size as u64 - self.size.get_f();
+            let min_for_consensus = quorum_size(self.size as usize) as u64;
             self.results.write().unwrap().insert(
                 data.hash(),
                 ConsensusResult {
@@ -512,7 +502,7 @@ where
         let mut finished = true;
         // Make sure there are no more running instances
         for running in self.num_running.read().unwrap().values() {
-            finished &= *running <= self.size.get_f();
+            finished &= *running <= get_f(self.size as usize) as u64;
         }
 
         // Make sure we have received all of the aggregated commit message. There is race condition

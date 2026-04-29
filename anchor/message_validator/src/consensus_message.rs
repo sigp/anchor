@@ -9,15 +9,16 @@ use ssv_types::{
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
     msgid::Role,
+    quorum_size,
 };
 use ssz::Decode;
 use typenum::{U13, Unsigned};
 use types::Epoch;
 
 use crate::{
-    FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, compute_quorum_size,
-    duty_state::DutyState, hash_data, slot_start_time, validate_beacon_duty, validate_duty_count,
-    validate_role_for_fork, validate_slot_time, verify_message_signatures,
+    FIRST_ROUND, ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
+    hash_data, slot_start_time, validate_beacon_duty, validate_duty_count, validate_role_for_fork,
+    validate_slot_time, verify_message_signatures,
 };
 
 pub(crate) fn validate_consensus_message(
@@ -77,7 +78,7 @@ pub(crate) fn validate_consensus_message_semantics(
 ) -> Result<(), ValidationFailure> {
     let signers = signed_ssv_message.operator_ids().len();
 
-    let quorum_size = compute_quorum_size(committee_info.committee_members.len());
+    let required_quorum = quorum_size(committee_info.committee_members.len());
     let msg_type = consensus_message.qbft_message_type;
 
     if signers > 1 {
@@ -90,10 +91,10 @@ pub(crate) fn validate_consensus_message_semantics(
         }
 
         // Rule: Number of signers must be >= quorum size
-        if signers < quorum_size {
+        if signers < required_quorum {
             return Err(ValidationFailure::DecidedNotEnoughSigners {
                 got: signers,
-                want: quorum_size,
+                want: required_quorum,
             });
         }
     }
