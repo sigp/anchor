@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, hash_map},
     future::Future,
     mem,
+    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
 };
@@ -566,53 +567,65 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
     }
 }
 
-/// The actual signature collector task, waiting for messages
+/// The actual signature collector task, waiting for messages.
 async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
-    let mut notifiers = vec![];
-    let mut signature_share = HashMap::new();
-    let mut full_signature: Option<Arc<Signature>> = None;
-    let mut threshold = None;
-
+    let mut state = SignatureCollectorState::default();
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
-        match message.kind {
+        if state.process(message.kind).is_break() {
+            return;
+        }
+    }
+}
+
+/// Invariant: once `full_signature` is `Some`, both `signature_share` and
+/// `notifiers` are empty (drained by `try_reconstruct`).
+#[derive(Default)]
+struct SignatureCollectorState {
+    notifiers: Vec<oneshot::Sender<Arc<Signature>>>,
+    signature_share: HashMap<OperatorId, Signature>,
+    full_signature: Option<Arc<Signature>>,
+    threshold: Option<u64>,
+}
+
+impl SignatureCollectorState {
+    /// Returns `Break` when the collector should exit (conflicting thresholds,
+    /// unrecoverable reconstruction failure).
+    fn process(&mut self, kind: CollectorMessageKind) -> ControlFlow<()> {
+        match kind {
             CollectorMessageKind::RegisterNotifier {
                 notify,
                 threshold: new_threshold,
             } => {
-                if let Some(full_signature) = &full_signature {
-                    // We already got a reconstructed signature, send it immediately.
-                    if let Err(err) = notify.send(full_signature.clone()) {
+                if let Some(full_signature) = &self.full_signature {
+                    if let Err(err) = notify.send(Arc::clone(full_signature)) {
                         warn!(?err, "Failed to send recovered signature");
                     }
-                } else {
-                    // Register the notifier and threshold.
-                    notifiers.push(notify);
-                    if let Some(old_threshold) = threshold
-                        && new_threshold != old_threshold
-                    {
-                        // Different tasks expect different thresholds. We can not know which is
-                        // correct, so we exit this instance.
-                        error!(
-                            new_threshold,
-                            old_threshold, "Conflicting thresholds passed!"
-                        );
-                        return;
-                    }
-                    threshold = Some(new_threshold);
+                    return ControlFlow::Continue(());
                 }
+                self.notifiers.push(notify);
+                if let Some(old_threshold) = self.threshold
+                    && new_threshold != old_threshold
+                {
+                    // Different tasks expect different thresholds. We can not know which is
+                    // correct, so we exit this instance.
+                    error!(
+                        new_threshold,
+                        old_threshold, "Conflicting thresholds passed!"
+                    );
+                    return ControlFlow::Break(());
+                }
+                self.threshold = Some(new_threshold);
             }
             CollectorMessageKind::PartialSignature {
                 operator_id,
                 signature,
             } => {
-                if full_signature.is_some() {
-                    // Already got the full signature.
-                    continue;
+                if self.full_signature.is_some() {
+                    return ControlFlow::Continue(());
                 }
 
-                // Insert the signature into our map.
-                match signature_share.entry(operator_id) {
+                match self.signature_share.entry(operator_id) {
                     hash_map::Entry::Vacant(entry) => {
                         entry.insert(*signature);
                     }
@@ -630,26 +643,34 @@ async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) 
             }
         }
 
-        if let Some(threshold) = threshold
-            && signature_share.len() as u64 >= threshold
-        {
-            let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                Ok(signature) => Arc::new(signature),
-                Err(err) => {
-                    error!(?err, "Failed to recover signature");
-                    return;
-                }
-            };
+        self.try_reconstruct()
+    }
 
-            trace!(?signature, "Successfully recovered signature");
-
-            for notifier in mem::take(&mut notifiers) {
-                if notifier.send(Arc::clone(&signature)).is_err() {
-                    warn!("Callback dropped - signature is no longer relevant");
-                }
-            }
-            full_signature = Some(signature);
+    fn try_reconstruct(&mut self) -> ControlFlow<()> {
+        let Some(threshold) = self.threshold else {
+            return ControlFlow::Continue(());
+        };
+        if (self.signature_share.len() as u64) < threshold {
+            return ControlFlow::Continue(());
         }
+
+        let signature = match combine_signatures(mem::take(&mut self.signature_share)) {
+            Ok(signature) => Arc::new(signature),
+            Err(err) => {
+                error!(?err, "Failed to recover signature");
+                return ControlFlow::Break(());
+            }
+        };
+
+        trace!(?signature, "Successfully recovered signature");
+
+        for notifier in mem::take(&mut self.notifiers) {
+            if notifier.send(Arc::clone(&signature)).is_err() {
+                warn!("Callback dropped - signature is no longer relevant");
+            }
+        }
+        self.full_signature = Some(signature);
+        ControlFlow::Continue(())
     }
 }
 
@@ -663,3 +684,6 @@ fn combine_signatures(
 
     Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
 }
+
+#[cfg(test)]
+mod tests;

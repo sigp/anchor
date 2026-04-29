@@ -19,3 +19,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
