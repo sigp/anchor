@@ -2399,7 +2399,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     .record("proposal_matched", publish_decision.proposal_matched);
                 trace!(
                     checkpoint = instrumentation::checkpoints::PUBLISH_BLOCK,
-                    publish_path = publish_decision.publish_path.as_str(),
+                    publish_path = publish_decision.publish_path,
                     "Publish path selected"
                 );
 
@@ -2989,27 +2989,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 struct PublishDecision<E: EthSpec> {
     signed_block: SignedBlock<E>,
     proposal_matched: bool,
-    publish_path: PublishPath,
+    publish_path: &'static str,
 }
 
-#[derive(Clone, Copy)]
-enum PublishPath {
-    ReconstructedFullBlockAsLeader,
-    BlindedBlockAsLeader,
-    BlindedBlockNotLeader,
-    FullBlockDirectly,
-}
-
-impl PublishPath {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ReconstructedFullBlockAsLeader => "reconstructed_full_block_as_leader",
-            Self::BlindedBlockAsLeader => "blinded_block_as_leader",
-            Self::BlindedBlockNotLeader => "blinded_block_not_leader",
-            Self::FullBlockDirectly => "full_block_directly",
-        }
-    }
-}
+const PUBLISH_PATH_RECONSTRUCTED_FULL_BLOCK_AS_LEADER: &str = "reconstructed_full_block_as_leader";
+const PUBLISH_PATH_BLINDED_BLOCK_AS_LEADER: &str = "blinded_block_as_leader";
+const PUBLISH_PATH_BLINDED_BLOCK_NOT_LEADER: &str = "blinded_block_not_leader";
+const PUBLISH_PATH_FULL_BLOCK_DIRECTLY: &str = "full_block_directly";
 
 fn select_publish_block<E: EthSpec>(
     signed_block: SignedBlock<E>,
@@ -3025,7 +3011,7 @@ fn select_publish_block<E: EthSpec>(
                 return PublishDecision {
                     signed_block: SignedBlock::Blinded(signed_blinded_block),
                     proposal_matched,
-                    publish_path: PublishPath::BlindedBlockNotLeader,
+                    publish_path: PUBLISH_PATH_BLINDED_BLOCK_NOT_LEADER,
                 };
             }
 
@@ -3042,20 +3028,20 @@ fn select_publish_block<E: EthSpec>(
                             proofs_and_blobs,
                         )),
                         proposal_matched,
-                        publish_path: PublishPath::ReconstructedFullBlockAsLeader,
+                        publish_path: PUBLISH_PATH_RECONSTRUCTED_FULL_BLOCK_AS_LEADER,
                     }
                 }
                 None => PublishDecision {
                     signed_block: SignedBlock::Blinded(signed_blinded_block),
                     proposal_matched,
-                    publish_path: PublishPath::BlindedBlockAsLeader,
+                    publish_path: PUBLISH_PATH_BLINDED_BLOCK_AS_LEADER,
                 },
             }
         }
         SignedBlock::Full(signed_block) => PublishDecision {
             signed_block: SignedBlock::Full(signed_block),
             proposal_matched: false,
-            publish_path: PublishPath::FullBlockDirectly,
+            publish_path: PUBLISH_PATH_FULL_BLOCK_DIRECTLY,
         },
     }
 }
