@@ -45,6 +45,9 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
         }
 
         // Validation tests
+        "committeemember.CommitteeMemberTest" => {
+            DispatchOutcome::Executed(run_test::<types::CommitteeMemberTest>(path, contents))
+        }
         "signedssvmsg.SignedSSVMessageTest" => {
             DispatchOutcome::Executed(run_test::<types::SignedSSVMessageTest>(path, contents))
         }
