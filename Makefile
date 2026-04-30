@@ -97,6 +97,15 @@ coverage:
 coverage-html:
 	cargo llvm-cov nextest --workspace --features "$(TEST_FEATURES)" --html
 
+# Runs `spec_tests` with `fake_crypto` for full proposer block coverage
+# (workspace run already covers the BLS-rejection path).
+test-spec-tests:
+	cargo test --release -p spec_tests --features fake_crypto
+
+# Same as `test-spec-tests`, using nextest.
+nextest-spec-tests:
+	cargo nextest run --release -p spec_tests --features fake_crypto
+
 # Runs cargo-fmt (linter).
 cargo-fmt:
 	cargo +$(PINNED_NIGHTLY) fmt --all
@@ -133,7 +142,7 @@ mdlint:
 	./scripts/mdlint.sh
 
 # Runs the entire test suite
-test-full: cargo-fmt test-release test-debug
+test-full: cargo-fmt test-release test-debug test-spec-tests
 
 # Lints the code for bad style and potentially unsafe arithmetic using Clippy.
 # Clippy lints are opt-in per-crate for now. By default, everything is allowed except for performance and correctness lints.
