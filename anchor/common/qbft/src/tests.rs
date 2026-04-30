@@ -232,6 +232,95 @@ fn test_node_recovery() {
 }
 
 #[test]
+/// A decided message from an earlier round should complete the instance even after the local
+/// round timer has advanced.
+fn test_receive_accepts_past_round_decided_message_after_round_timeout() {
+    init_test_logging();
+
+    use ssv_types::{
+        consensus::QbftMessage,
+        message::{MsgType, SSVMessage},
+    };
+
+    // Arrange: create a round-1 instance, then simulate the local timer moving it to round 2.
+    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+        1.into(),
+        InstanceHeight::default(),
+        (1..=4).map(OperatorId::from).collect(),
+    )
+    .build()
+    .expect("config should be valid");
+
+    let decided_data = TestData(42);
+    let decided_root = decided_data.hash();
+    let mut qbft_instance = Qbft::new(
+        config,
+        decided_data.clone(),
+        Box::new(NoDataValidation),
+        MessageId::from([0; 56]),
+        |_| {},
+    );
+
+    qbft_instance.end_round();
+    assert_eq!(qbft_instance.current_round, 2.into());
+
+    let decided_commit = QbftMessage {
+        qbft_message_type: QbftMessageType::Commit,
+        height: 0,
+        round: 1,
+        identifier: VariableList::repeat_full(0),
+        root: decided_root,
+        data_round: 0,
+        round_change_justification: VariableList::empty(),
+        prepare_justification: VariableList::empty(),
+    };
+
+    let ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        decided_commit.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    let signed_decided = SignedSSVMessage::new(
+        vec![[0; RSA_SIGNATURE_SIZE]; 3],
+        vec![
+            OperatorId::from(1),
+            OperatorId::from(2),
+            OperatorId::from(3),
+        ],
+        ssv_message,
+        decided_data.as_ssz_bytes(),
+    )
+    .expect("should create signed decided message");
+
+    let wrapped_decided = WrappedQbftMessage {
+        signed_message: signed_decided,
+        qbft_message: decided_commit,
+    };
+
+    // Act: deliver the round-1 decided message after the node has already moved to round 2.
+    let result = qbft_instance.receive(wrapped_decided);
+
+    // Assert: the decided certificate is stronger than the local liveness round cursor.
+    assert!(
+        result.is_ok(),
+        "past-round decided message should complete the instance, got {result:?}"
+    );
+    assert!(
+        matches!(
+            &qbft_instance.completed,
+            Some(Completed::Success(root)) if *root == decided_root
+        ),
+        "instance should complete with the decided root, got {:?}",
+        qbft_instance.completed
+    );
+    assert!(qbft_instance.aggregated_commit.is_some());
+    assert!(matches!(qbft_instance.state, InstanceState::Complete));
+    assert!(qbft_instance.data.contains_key(&decided_root));
+}
+
+#[test]
 /// Test that FAILS if round change validation doesn't require prepare justifications for
 /// data_round=1
 ///

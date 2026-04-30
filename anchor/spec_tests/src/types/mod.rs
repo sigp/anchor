@@ -1,5 +1,6 @@
 mod aggregator_committee_consensus_data_encoding;
 mod beacon_vote_encoding;
+mod committee_member;
 mod consensus_data_proposer;
 mod encryption;
 mod partial_sig_message;
@@ -13,6 +14,7 @@ mod ssv_msg;
 
 pub use aggregator_committee_consensus_data_encoding::*;
 pub use beacon_vote_encoding::*;
+pub use committee_member::*;
 pub use consensus_data_proposer::*;
 pub use encryption::*;
 pub use partial_sig_message::*;
