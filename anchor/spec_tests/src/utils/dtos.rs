@@ -212,6 +212,7 @@ impl TryFrom<&RawConsensusData> for ProposerConsensusData {
 pub struct RawAssignedAggregator {
     pub validator_index: String,
     #[serde(deserialize_with = "deserialize_hex")]
+    // `AggregatorCommitteeDataValidator::do_validation()` does not currently read this field.
     pub selection_proof: Vec<u8>,
     pub committee_index: u64,
 }
@@ -233,9 +234,11 @@ impl TryFrom<&RawAssignedAggregator> for AssignedAggregator {
 
 /// DTO for Go's `AggregatorCommitteeConsensusData` fixture.
 ///
-/// Go marshals empty slices as JSON `null`, so list fields are `Option<Vec<_>>`
-/// (or use a null-tolerant deserializer). `SyncCommitteeContribution<E>` reuses
-/// Lighthouse's existing serde derive directly.
+/// Go marshals nil slices as JSON `null` (vs `[]` for non-nil empties); the
+/// `no_validators` fixture exercises this by leaving every list at its zero
+/// value. List fields therefore tolerate null via `Option<Vec<_>>` or a
+/// null-tolerant deserializer. `SyncCommitteeContribution<E>` reuses
+/// Lighthouse's existing `serde` derive directly.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RawAggregatorCommitteeConsensusData {
