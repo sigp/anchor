@@ -21,15 +21,7 @@ impl SpecTest for ProposerConsensusDataTest {
             Ok(()) => error_codes::NO_ERROR,
             Err(code) => code,
         };
-
-        if actual_code != self.expected_error_code {
-            return Err(format!(
-                "Expected error code {}, got {actual_code}",
-                self.expected_error_code,
-            ));
-        }
-
-        Ok(())
+        error_codes::assert_error_code(self.expected_error_code, actual_code)
     }
 }
 
