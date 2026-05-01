@@ -153,3 +153,51 @@ fn state_notifies_all_registrants_on_reconstruction() {
     expect_signature(&mut rx_b, "registrant b should be notified");
     expect_signature(&mut rx_c, "registrant c should be notified");
 }
+
+/// Partial signatures that arrive before any `RegisterNotifier` is buffered.
+/// Reconstruction triggers when a notifier and the threshold arrives.
+#[test]
+fn state_buffers_shares_arriving_before_first_notifier_register() {
+    let shares = split_random_master();
+    let mut state = SignatureCollectorState::default();
+
+    for (op_id, sk) in &shares[..THRESHOLD as usize] {
+        feed_partial_sig(&mut state, *op_id, sk.sign(SIGNING_ROOT));
+    }
+
+    assert!(
+        state.full_signature.is_none(),
+        "State should not reconstruct without a threshold"
+    );
+
+    let mut result_rx = register_notifier(&mut state, THRESHOLD);
+    expect_signature(
+        &mut result_rx,
+        "Notifier should receive the signature reconstructed from buffered shares",
+    );
+}
+
+/// Partial signatures that arrive after reconstruction are silently dropped:
+/// no panic, no Break, no re-buffering of the late share. This is the common
+/// case in production: slow operators' shares routinely arrive after a fast
+/// majority has already reconstructed the signature.
+#[test]
+fn state_drops_partial_signatures_after_reconstruction() {
+    let shares = split_random_master();
+    let mut state = SignatureCollectorState::default();
+
+    let mut rx = register_notifier(&mut state, THRESHOLD);
+    for (op_id, sk) in &shares[..THRESHOLD as usize] {
+        feed_partial_sig(&mut state, *op_id, sk.sign(SIGNING_ROOT));
+    }
+    expect_signature(&mut rx, "first registrant should be notified");
+
+    let (late_op, late_sk) = &shares[THRESHOLD as usize];
+    feed_partial_sig(&mut state, *late_op, late_sk.sign(SIGNING_ROOT));
+
+    assert!(state.full_signature.is_some(), "cached signature persists");
+    assert!(
+        state.signature_share.is_empty(),
+        "post-reconstruction shares are not buffered"
+    );
+}
