@@ -144,10 +144,9 @@ audit: install-audit audit-CI
 install-audit:
 	cargo install --force cargo-audit
 
-# TODO: drop the hickory-proto ignores once libp2p picks up hickory >= 0.26.1
-# (libp2p/rust-libp2p#6395). Hickory is a transitive dep of libp2p, so the bump
-# happens by updating the libp2p source in workspace Cargo.toml (version bump
-# and/or the [patch] rev), then refreshing the lockfile.
+# Tracked in sigp/anchor#989. Drop the hickory-proto ignores once libp2p ships
+# a release with hickory >= 0.26.1 (libp2p/rust-libp2p#6395) and we bump our
+# libp2p dep. See the tracking issue for the reachability analysis.
 audit-CI:
 	cargo audit --ignore RUSTSEC-2026-0118 --ignore RUSTSEC-2026-0119
 
