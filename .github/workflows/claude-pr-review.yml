@@ -126,7 +126,7 @@ jobs:
                       ${{ steps.review-prompt.outputs.content }}
                   claude_args: |
                       --max-turns 50
-                      --model us.anthropic.claude-opus-4-6-v1
+                      --model us.anthropic.claude-opus-4-7
                       --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep"
 
             - name: Remove claude-recheck label if present
