@@ -7211,6 +7211,7 @@ dependencies = [
  "fork",
  "message_sender",
  "processor",
+ "rand 0.9.2",
  "slot_clock",
  "ssv_types",
  "thiserror 2.0.18",
