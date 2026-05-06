@@ -117,7 +117,7 @@ futures = "0.3.30"
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
-libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "22fb4c784fc55ad8b15d05fdc9f98d663107d4cb", default-features = false, features = [
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "197663d7cd23c121db30b4cbe2557eb28e454142", default-features = false, features = [
     "identify",
     "yamux",
     "noise",
