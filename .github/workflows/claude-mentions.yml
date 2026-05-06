@@ -98,5 +98,5 @@ jobs:
                   use_bedrock: "true"
                   claude_args: |
                       --max-turns 50
-                      --model us.anthropic.claude-opus-4-6-v1
+                      --model us.anthropic.claude-opus-4-7
                       --append-system-prompt "${{ steps.review-prompt.outputs.content }}"
