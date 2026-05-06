@@ -31,7 +31,7 @@ fn register_notifier(
     threshold: u64,
 ) -> oneshot::Receiver<Arc<Signature>> {
     let (notify, rx) = oneshot::channel();
-    let outcome = state.process(CollectorMessageKind::RegisterNotifier { notify, threshold });
+    let outcome = state.register_request(notify, threshold);
     assert!(
         outcome.is_continue(),
         "register_notifier should not break the collector"
@@ -44,10 +44,7 @@ fn feed_partial_sig(
     operator_id: OperatorId,
     signature: Signature,
 ) {
-    let outcome = state.process(CollectorMessageKind::PartialSignature {
-        operator_id,
-        signature: Box::new(signature),
-    });
+    let outcome = state.add_partial_signature(operator_id, signature);
     assert!(
         outcome.is_continue(),
         "feed_partial_sig should not break the collector"
@@ -87,10 +84,7 @@ fn state_breaks_on_conflicting_thresholds() {
     let _first_rx = register_notifier(&mut state, THRESHOLD);
 
     let (second_notify, mut second_rx) = oneshot::channel();
-    let outcome = state.process(CollectorMessageKind::RegisterNotifier {
-        notify: second_notify,
-        threshold: THRESHOLD + 1,
-    });
+    let outcome = state.register_request(second_notify, THRESHOLD + 1);
 
     assert!(
         outcome.is_break(),

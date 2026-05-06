@@ -568,11 +568,25 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
 }
 
 /// The actual signature collector task, waiting for messages.
+///
+/// The recv loop is the only place that matches on [`CollectorMessageKind`];
+/// it dispatches each transport message to a typed method on
+/// [`SignatureCollectorState`] so the state machine never sees the channel
+/// shape (or the size-balancing `Box<Signature>` it carries).
 async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
     let mut state = SignatureCollectorState::default();
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
-        if state.process(message.kind).is_break() {
+        let outcome = match message.kind {
+            CollectorMessageKind::RegisterNotifier { notify, threshold } => {
+                state.register_request(notify, threshold)
+            }
+            CollectorMessageKind::PartialSignature {
+                operator_id,
+                signature,
+            } => state.add_partial_signature(operator_id, *signature),
+        };
+        if outcome.is_break() {
             return;
         }
     }
@@ -589,56 +603,72 @@ struct SignatureCollectorState {
 }
 
 impl SignatureCollectorState {
-    /// Returns `Break` when the collector should exit (conflicting thresholds,
-    /// unrecoverable reconstruction failure).
-    fn process(&mut self, kind: CollectorMessageKind) -> ControlFlow<()> {
-        match kind {
-            CollectorMessageKind::RegisterNotifier {
-                notify,
-                threshold: new_threshold,
-            } => {
-                if let Some(full_signature) = &self.full_signature {
-                    if let Err(err) = notify.send(Arc::clone(full_signature)) {
-                        warn!(?err, "Failed to send recovered signature");
-                    }
-                    return ControlFlow::Continue(());
-                }
-                self.notifiers.push(notify);
-                if let Some(old_threshold) = self.threshold
-                    && new_threshold != old_threshold
-                {
-                    // Different tasks expect different thresholds. We can not know which is
-                    // correct, so we exit this instance.
-                    error!(
-                        new_threshold,
-                        old_threshold, "Conflicting thresholds passed!"
-                    );
-                    return ControlFlow::Break(());
-                }
-                self.threshold = Some(new_threshold);
+    /// Register a task waiting for the reconstructed signature.
+    ///
+    /// If reconstruction has already completed, the cached signature is
+    /// delivered immediately. Otherwise the notifier is queued and the
+    /// threshold is recorded; conflicting thresholds from concurrent
+    /// requests cause the collector to `Break` (the recv loop drops the
+    /// state, surfacing `RecvError` to every waiter).
+    ///
+    /// Returns `Break` when the collector should exit (conflicting
+    /// thresholds, unrecoverable reconstruction failure).
+    fn register_request(
+        &mut self,
+        notify: oneshot::Sender<Arc<Signature>>,
+        new_threshold: u64,
+    ) -> ControlFlow<()> {
+        if let Some(full_signature) = &self.full_signature {
+            if let Err(err) = notify.send(Arc::clone(full_signature)) {
+                warn!(?err, "Failed to send recovered signature");
             }
-            CollectorMessageKind::PartialSignature {
-                operator_id,
-                signature,
-            } => {
-                if self.full_signature.is_some() {
-                    return ControlFlow::Continue(());
-                }
+            return ControlFlow::Continue(());
+        }
+        self.notifiers.push(notify);
+        if let Some(old_threshold) = self.threshold
+            && new_threshold != old_threshold
+        {
+            // Different tasks expect different thresholds. We can not know which is
+            // correct, so we exit this instance.
+            error!(
+                new_threshold,
+                old_threshold, "Conflicting thresholds passed!"
+            );
+            return ControlFlow::Break(());
+        }
+        self.threshold = Some(new_threshold);
+        self.try_reconstruct()
+    }
 
-                match self.signature_share.entry(operator_id) {
-                    hash_map::Entry::Vacant(entry) => {
-                        entry.insert(*signature);
-                    }
-                    hash_map::Entry::Occupied(entry) => {
-                        if entry.get() != &*signature {
-                            // We can not know which signature is correct. This is serious
-                            // misbehaviour from the operator!
-                            error!(
-                                ?operator_id,
-                                "Received conflicting signatures from operator"
-                            );
-                        }
-                    }
+    /// Ingest a partial signature from one operator.
+    ///
+    /// Late shares arriving after reconstruction are silently dropped.
+    /// Conflicting shares from the same operator are logged but not fatal,
+    /// since the source of the discrepancy is not knowable here.
+    ///
+    /// Returns `Break` when the collector should exit (unrecoverable
+    /// reconstruction failure).
+    fn add_partial_signature(
+        &mut self,
+        operator_id: OperatorId,
+        signature: Signature,
+    ) -> ControlFlow<()> {
+        if self.full_signature.is_some() {
+            return ControlFlow::Continue(());
+        }
+
+        match self.signature_share.entry(operator_id) {
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(signature);
+            }
+            hash_map::Entry::Occupied(entry) => {
+                if entry.get() != &signature {
+                    // We can not know which signature is correct. This is serious
+                    // misbehaviour from the operator!
+                    error!(
+                        ?operator_id,
+                        "Received conflicting signatures from operator"
+                    );
                 }
             }
         }
