@@ -33,7 +33,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
     message_tx
         .send(crate::QbftMessage {
             kind: QbftMessageKind::Initialize(QbftInitialization {
-                initial: manager_tests::generate_test_data(0).0,
+                initial: setup::generate_test_data(0).0,
                 validator: Box::new(NoDataValidation),
                 message_id: MessageId::new(
                     &DomainType::default(),
@@ -102,7 +102,7 @@ async fn test_relative_mode_timeout() {
     message_tx
         .send(crate::QbftMessage {
             kind: QbftMessageKind::Initialize(QbftInitialization {
-                initial: manager_tests::generate_test_data(0).0,
+                initial: setup::generate_test_data(0).0,
                 validator: Box::new(NoDataValidation),
                 message_id: MessageId::new(
                     &DomainType::default(),
@@ -181,7 +181,7 @@ async fn test_relative_vs_slottime_timing_difference() {
         message_tx
             .send(crate::QbftMessage {
                 kind: QbftMessageKind::Initialize(QbftInitialization {
-                    initial: manager_tests::generate_test_data(0).0,
+                    initial: setup::generate_test_data(0).0,
                     validator: Box::new(NoDataValidation),
                     message_id: MessageId::new(
                         &DomainType::default(),
