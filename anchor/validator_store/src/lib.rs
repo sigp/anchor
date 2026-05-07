@@ -157,6 +157,13 @@ fn get_cluster_size(cluster: &Cluster) -> usize {
     cluster.cluster_members.len()
 }
 
+fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Result<u128, SpecificError> {
+    let duration = slot_clock
+        .millis_from_current_slot_start()
+        .ok_or(SpecificError::SlotClock)?;
+    Ok(duration.as_millis())
+}
+
 pub struct AnchorValidatorStore<
     T: SlotClock + 'static,
     E: EthSpec,
@@ -2253,6 +2260,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             clock_slot = clock_slot.as_u64(),
             slot_elapsed_ms = tracing::field::Empty,
             signing_epoch = signing_epoch.as_u64(),
+            failure_reason = tracing::field::Empty,
             outcome = tracing::field::Empty,
             validator_pubkey = %validator_pubkey,
             validator_index = tracing::field::Empty,
@@ -2288,6 +2296,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
+            if let Ok(millis_from_slot_start) = determine_slot_elapsed_ms(&self.slot_clock) {
+                tracing::Span::current().record("slot_elapsed_ms", millis_from_slot_start);
+            }
+
             let outcome = instrumentation::outcome_from_result(&result);
             tracing::Span::current().record("outcome", outcome);
             match &result {
@@ -2305,12 +2317,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     tracing::Span::current().record("failure_reason", failure_reason);
                 }
             }
-
-            let millis_from_slot_start = self
-                .slot_clock
-                .millis_from_current_slot_start()
-                .ok_or(SpecificError::SlotClock)?;
-            tracing::Span::current().record("slot_elapsed_ms", millis_from_slot_start.as_millis());
 
             result
         }
