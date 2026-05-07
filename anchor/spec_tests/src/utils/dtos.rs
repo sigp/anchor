@@ -211,23 +211,24 @@ impl TryFrom<&RawConsensusData> for ProposerConsensusData {
 #[serde(rename_all = "PascalCase")]
 pub struct RawAssignedAggregator {
     pub validator_index: String,
+    /// Present in fixtures but unused: `AggregatorCommitteeDataValidator::do_validation()`
+    /// only reads `committee_index`. See `to_assigned_aggregator_for_validation()`.
     #[serde(deserialize_with = "deserialize_hex")]
-    // `AggregatorCommitteeDataValidator::do_validation()` does not currently read this field.
     pub selection_proof: Vec<u8>,
     pub committee_index: u64,
 }
 
-impl TryFrom<&RawAssignedAggregator> for AssignedAggregator {
-    type Error = String;
-
-    fn try_from(raw: &RawAssignedAggregator) -> Result<Self, String> {
-        let selection_proof = bls::Signature::deserialize(&raw.selection_proof)
-            .map_err(|e| format!("Invalid selection_proof BLS signature: {e:?}"))?;
-
+impl RawAssignedAggregator {
+    /// Builds an `AssignedAggregator` for `AggregatorCommitteeDataValidator::do_validation()`.
+    ///
+    /// `selection_proof` is replaced with `bls::Signature::empty()` because the validator does
+    /// not read it; this keeps the adapter focused on `Validate()` parity and avoids making BLS
+    /// proof validity an implicit precondition of these fixtures.
+    pub fn to_assigned_aggregator_for_validation(&self) -> Result<AssignedAggregator, String> {
         Ok(AssignedAggregator {
-            validator_index: parse_validator_index(&raw.validator_index)?,
-            selection_proof,
-            committee_index: raw.committee_index,
+            validator_index: parse_validator_index(&self.validator_index)?,
+            selection_proof: bls::Signature::empty(),
+            committee_index: self.committee_index,
         })
     }
 }
@@ -269,7 +270,7 @@ impl TryFrom<&RawAggregatorCommitteeConsensusData>
             .as_deref()
             .unwrap_or_default()
             .iter()
-            .map(AssignedAggregator::try_from)
+            .map(RawAssignedAggregator::to_assigned_aggregator_for_validation)
             .collect::<Result<Vec<_>, _>>()?;
         let aggregators =
             VariableList::new(aggregators).map_err(|_| "aggregators exceeds max length")?;
@@ -297,7 +298,7 @@ impl TryFrom<&RawAggregatorCommitteeConsensusData>
             .as_deref()
             .unwrap_or_default()
             .iter()
-            .map(AssignedAggregator::try_from)
+            .map(RawAssignedAggregator::to_assigned_aggregator_for_validation)
             .collect::<Result<Vec<_>, _>>()?;
         let contributors =
             VariableList::new(contributors).map_err(|_| "contributors exceeds max length")?;
