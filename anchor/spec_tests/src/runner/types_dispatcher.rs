@@ -68,6 +68,13 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
             DispatchOutcome::Executed(run_test::<types::ProposerConsensusDataTest>(path, contents))
         }
 
+        // Aggregator-committee consensus data validation tests
+        "aggregatorcommitteeconsensusdata.AggregatorCommitteeConsensusDataTest" => {
+            DispatchOutcome::Executed(run_test::<types::AggregatorCommitteeConsensusDataTest>(
+                path, contents,
+            ))
+        }
+
         // Proposer block data extraction tests
         "consensusdataproposer.ProposerSpecTest" => {
             DispatchOutcome::Executed(run_test::<types::ConsensusDataProposerTest>(path, contents))
