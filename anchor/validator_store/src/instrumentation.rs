@@ -9,6 +9,9 @@ pub fn outcome_from_result<T>(result: &Result<T, Error>) -> &'static str {
 }
 
 pub mod checkpoints {
+    pub const RANDAO_REVEAL_ENTERED: &str = "randao_reveal_entered";
+    pub const RANDAO_REVEAL_COMPLETED: &str = "randao_reveal_completed";
+    pub const RANDAO_REVEAL_FAILED: &str = "randao_reveal_failed";
     pub const DUTY_ENTRY: &str = "duty_entry";
     pub const PRE_CONSENSUS_HANDOFF: &str = "pre_consensus_handoff";
     pub const CONSENSUS_DECIDED: &str = "consensus_decided";
@@ -21,8 +24,13 @@ pub mod checkpoints {
 /// Common reasons for block signing failures.
 pub fn failure_reason(error: &Error) -> &'static str {
     match error {
+        Error::SpecificError(SpecificError::ArithError(_)) => "arith_error",
         Error::SpecificError(SpecificError::ClusterLiquidated) => "cluster_liquidated",
+        Error::SpecificError(SpecificError::DataTooLarge(_)) => "data_too_large",
         Error::SpecificError(SpecificError::InvalidQbftData(_)) => "invalid_qbft_data",
+        Error::SpecificError(SpecificError::KeyShareDecryptionFailed) => {
+            "key_share_decryption_failed"
+        }
         Error::SpecificError(SpecificError::MissingIndex) => "missing_index",
         Error::SpecificError(SpecificError::NoDataAgreed) => "no_data_agreed",
         Error::SpecificError(SpecificError::NotSynced) => "not_synced",
@@ -32,6 +40,9 @@ pub fn failure_reason(error: &Error) -> &'static str {
         }
         Error::SpecificError(SpecificError::SlotClock) => "slot_clock",
         Error::SpecificError(SpecificError::Timeout) => "timeout",
+        Error::SpecificError(SpecificError::ValidatorClusterMismatch { .. }) => {
+            "validator_cluster_mismatch"
+        }
         Error::Slashable(_) => "slashable",
         Error::SameData => "same_data",
         Error::SpecificError(_) => "other_specific_error",
