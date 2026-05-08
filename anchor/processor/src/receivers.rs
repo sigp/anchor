@@ -47,17 +47,17 @@ pub struct Receivers {
 }
 
 impl Receivers {
-    /// Retrieves the next work item from the permitless queue, or acquires a permit and delegates
-    /// to `next_work_item_with_permit`.
+    /// Acquires a permit and delegates to `next_work_item_with_permit`, or retrieves the next work
+    /// item from the permitless queue if no permit is available.
     ///
     /// Returns `None` if all queues are closed.
     pub async fn next_work_item(&mut self, semaphore: &Arc<Semaphore>) -> Option<ReceivedWork> {
         select! {
             biased;
-            Some(work_item) = self.permitless.recv() => Some(work_item),
             Ok(permit) = semaphore.clone().acquire_owned() => {
                 self.next_work_item_with_permit(permit).await
             },
+            Some(work_item) = self.permitless.recv() => Some(work_item),
             else => None,
         }
     }
