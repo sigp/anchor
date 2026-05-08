@@ -49,6 +49,22 @@ pub fn deserialize_base64_list<'de, D: serde::Deserializer<'de>>(
         .collect()
 }
 
+/// Deserializes a vector of base64 strings that may be `null` into `Vec<Vec<u8>>`,
+/// treating `null` as an empty vector. Mirrors Go's marshaling of empty slices.
+pub fn deserialize_base64_list_or_null<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Vec<u8>>, D::Error> {
+    let opt: Option<Vec<String>> = Option::deserialize(deserializer)?;
+    opt.unwrap_or_default()
+        .into_iter()
+        .map(|s| {
+            STANDARD
+                .decode(&s)
+                .map_err(|e| serde::de::Error::custom(format!("Failed to decode base64: {e}")))
+        })
+        .collect()
+}
+
 /// Deserializes a base64-encoded string that may be `null` into `Option<Vec<u8>>`.
 ///
 /// Error fixtures have `null` while success fixtures have a base64 string.
@@ -84,6 +100,14 @@ pub fn deserialize_base64_or_empty<'de, D: serde::Deserializer<'de>>(
 }
 
 // ─── Hex ─────────────────────────────────────────────────────────────────────
+
+/// Deserializes a hex string (with or without `0x` prefix) into `Vec<u8>`.
+pub fn deserialize_hex<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u8>, D::Error> {
+    let hex_str = String::deserialize(deserializer)?;
+    decode_hex::<D::Error>(&hex_str)
+}
 
 /// Deserializes an optional hex string (with or without `0x` prefix) into `Option<Vec<u8>>`.
 pub fn deserialize_hex_option<'de, D: serde::Deserializer<'de>>(

@@ -1,3 +1,4 @@
+mod aggregator_committee_consensus_data;
 mod aggregator_committee_consensus_data_encoding;
 mod beacon_vote_encoding;
 mod committee_member;
@@ -12,6 +13,7 @@ mod signed_ssv_msg_encoding;
 mod ssv_message_encoding;
 mod ssv_msg;
 
+pub use aggregator_committee_consensus_data::*;
 pub use aggregator_committee_consensus_data_encoding::*;
 pub use beacon_vote_encoding::*;
 pub use committee_member::*;
