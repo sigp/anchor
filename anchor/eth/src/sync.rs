@@ -85,19 +85,22 @@ const FOLLOW_DISTANCE: u64 = 8;
 // before assuming the WebSocket has gone stale and forcing a full reconnect.
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-// Awaits the next item from `stream`, returning `Err(WsError)` if no item arrives
-// within `STREAM_IDLE_TIMEOUT`. Caller is responsible for any metric updates.
+// Sole producer of the idle-timeout `WsError` so a unit test can pin the variant.
+fn record_idle_timeout() -> ExecutionError {
+    metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["ws_idle_timeout"]);
+    ExecutionError::WsError(format!(
+        "WebSocket idle for more than {}s, forcing full reconnect",
+        STREAM_IDLE_TIMEOUT.as_secs()
+    ))
+}
+
 async fn next_block_or_timeout<S>(stream: &mut S) -> Result<Option<Header>, ExecutionError>
 where
     S: Stream<Item = Header> + Unpin,
 {
-    match timeout(STREAM_IDLE_TIMEOUT, stream.next()).await {
-        Ok(item) => Ok(item),
-        Err(_) => Err(ExecutionError::WsError(format!(
-            "WebSocket idle for more than {}s, forcing full reconnect",
-            STREAM_IDLE_TIMEOUT.as_secs()
-        ))),
-    }
+    timeout(STREAM_IDLE_TIMEOUT, stream.next())
+        .await
+        .map_err(|_| record_idle_timeout())
 }
 
 // Connection timeout duration
@@ -707,16 +710,9 @@ impl SsvEventSyncer {
             info!("Successfully subscribed to block stream");
 
             loop {
-                let block_header = match next_block_or_timeout(&mut stream).await {
-                    Ok(Some(header)) => header,
-                    Ok(None) => break,
-                    Err(e) => {
-                        metrics::inc_counter_vec(
-                            &metrics::EXECUTION_CONNECTION_ERRORS,
-                            &["ws_idle_timeout"],
-                        );
-                        return Err(e);
-                    }
+                let block_header = match next_block_or_timeout(&mut stream).await? {
+                    Some(header) => header,
+                    None => break,
                 };
 
                 // Guard against integer underflow when calculating relevant_block.
