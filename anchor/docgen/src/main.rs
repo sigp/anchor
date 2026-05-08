@@ -5,8 +5,8 @@ use docgen::{anchor_command, interface::DocGen, render_docs};
 
 fn main() {
     let args = DocGen::parse();
-    let cmd = anchor_command();
-    let result = render_docs(args.command, &cmd);
+    let mut cmd = anchor_command();
+    let result = render_docs(args.command, &mut cmd);
 
     if let Err(e) = result {
         eprintln!("Error: {e}");

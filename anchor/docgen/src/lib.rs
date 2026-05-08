@@ -1,18 +1,16 @@
 mod checks;
 mod errors;
-mod format;
 pub mod interface;
 mod render;
 
 use std::path::Path;
 
-use checks::{check_file, update_file};
+use checks::{append_to_out_of_date_files, check_out_of_date_files, update_file};
 use clap::{Command, CommandFactory};
 use cli::Cli;
 use errors::DocGenError;
-use format::to_title_case;
 use interface::DocGenCommand;
-use render::{generate_cli_reference_snippet, generate_subcommand_reference_snippet};
+use render::{render_help_string, render_subcommand_help_snippet, to_title_case};
 
 const CLI_REFERENCE_FILE: &str = "cli-global-options.mdx";
 
@@ -24,12 +22,18 @@ const SUBCOMMAND_REFERENCE_PAGES: [(&str, &str); 3] = [
 ];
 
 /// Updates the generated reference snippets with the latest CLI documentation.
-fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
-    let cli_content = generate_cli_reference_snippet(cmd);
+fn run_update(cmd: &mut Command, docs_dir: &Path) -> Result<(), DocGenError> {
+    // Recommended by clap: https://docs.rs/clap/latest/clap/struct.Command.html#method.build.
+    // This forces the tree to be fully constructed before we start updating files, any further
+    // changes invoked in clap's internals to the command tree are no-op.
+    cmd.build();
+
+    let cli_content = render_help_string(cmd);
     update_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content)?;
 
+    let cli_name = cmd.get_name().to_string();
     for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
-        let content = generate_subcommand_reference_snippet(cmd, name)?;
+        let content = render_subcommand_help_snippet(cmd, name, &cli_name)?;
         update_file(&docs_dir.join(file), &content)?;
     }
 
@@ -38,43 +42,39 @@ fn run_update(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
 }
 
 /// Checks if the generated reference snippets are up to date with the current CLI definitions.
-fn run_check(cmd: &Command, docs_dir: &Path) -> Result<(), DocGenError> {
+fn run_check(cmd: &mut Command, docs_dir: &Path) -> Result<(), DocGenError> {
+    // Recommended by clap: https://docs.rs/clap/latest/clap/struct.Command.html#method.build.
+    // This forces the tree to be fully constructed before we start updating files, any further
+    // changes invoked in clap's internals to the command tree are no-op.
+    cmd.build();
+
     let mut out_of_date = Vec::new();
 
-    let cli_content = generate_cli_reference_snippet(cmd);
-    match check_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content) {
-        Ok(_) => {}
-        Err(DocGenError::OutOfDate(_)) => {
-            out_of_date.push(CLI_REFERENCE_FILE.to_string());
-        }
-        Err(e) => return Err(e),
-    }
+    let cli_content = render_help_string(cmd);
+    append_to_out_of_date_files(
+        &docs_dir.join(CLI_REFERENCE_FILE),
+        CLI_REFERENCE_FILE,
+        &cli_content,
+        &mut out_of_date,
+    )?;
 
+    let cli_name = cmd.get_name().to_string();
     for (name, file) in SUBCOMMAND_REFERENCE_PAGES {
-        let content = generate_subcommand_reference_snippet(cmd, name)?;
-        match check_file(&docs_dir.join(file), &content) {
-            Ok(_) => {}
-            Err(DocGenError::OutOfDate(_)) => {
-                out_of_date.push(file.to_string());
-            }
-            Err(e) => return Err(e),
-        }
+        let content = render_subcommand_help_snippet(cmd, name, &cli_name)?;
+        append_to_out_of_date_files(&docs_dir.join(file), file, &content, &mut out_of_date)?;
     }
 
-    if out_of_date.is_empty() {
-        Ok(())
-    } else {
-        Err(DocGenError::OutOfDate(out_of_date.join(", ")))
-    }
+    check_out_of_date_files(&out_of_date)
 }
 
 /// Renders generated CLI reference snippets from the `clap` struct definitions to stdout.
-fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
-    let cli_content = generate_cli_reference_snippet(anchor_command);
+fn display_help_docs(anchor_command: &mut Command) -> Result<(), DocGenError> {
+    let cli_content = &anchor_command.render_long_help();
     println!("---\n# Global Options\n");
     print!("{cli_content}");
+    let cli_name = anchor_command.get_name().to_string();
     for (name, _) in SUBCOMMAND_REFERENCE_PAGES {
-        let content = generate_subcommand_reference_snippet(anchor_command, name)?;
+        let content = render_subcommand_help_snippet(anchor_command, name, &cli_name)?;
         let title = format!("{} Command", to_title_case(name));
         println!("\n---\n# {title}\n");
         print!("{content}");
@@ -86,7 +86,7 @@ fn display_help_docs(anchor_command: &Command) -> Result<(), DocGenError> {
 /// `DocGenCommand`.
 pub fn render_docs(
     docgen_command: DocGenCommand,
-    anchor_command: &Command,
+    anchor_command: &mut Command,
 ) -> Result<(), DocGenError> {
     match docgen_command {
         DocGenCommand::Generate => {
@@ -105,6 +105,39 @@ pub fn render_docs(
 /// Returns the fully-built `clap::Command` tree for the Anchor CLI.
 ///
 /// This is the single source of truth — no parallel tree reconstruction needed.
-pub fn anchor_command() -> clap::Command {
+pub fn anchor_command() -> Command {
     Cli::command()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_update_then_check_agrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cmd = anchor_command();
+
+        run_update(&mut cmd, dir.path()).unwrap();
+
+        let mut cmd = anchor_command();
+        run_check(&mut cmd, dir.path()).unwrap();
+    }
+
+    #[test]
+    fn test_run_check_detects_stale_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write stale content to the global options file.
+        let stale_path = dir.path().join(CLI_REFERENCE_FILE);
+        std::fs::write(&stale_path, "stale content").unwrap();
+
+        let mut cmd = anchor_command();
+        let result = run_check(&mut cmd, dir.path());
+
+        assert!(
+            matches!(result, Err(DocGenError::OutOfDate(ref msg)) if msg.contains(CLI_REFERENCE_FILE)),
+            "Expected OutOfDate error mentioning {CLI_REFERENCE_FILE}, got: {result:?}"
+        );
+    }
 }

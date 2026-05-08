@@ -1,160 +1,111 @@
-use std::fmt::Write;
+use clap::{Command, builder::StyledStr};
 
-use clap::{Arg, Command};
+use crate::errors::DocGenError;
 
-use crate::{
-    errors::DocGenError,
-    format::{
-        GroupedCliArgs, format_default, format_description, format_option,
-        group_args_by_help_heading,
-    },
-};
-
-/// A postprocessing function that creates styled `.mdx` markdown tables from grouped CLI arguments.
-///
-/// The output is formatted to match the style
-/// ```markdown
-/// | Option | Description | Default |
-/// | --- | --- | --- |
-/// | --option | Option description (possible values: ...) | `default` |
-/// ```
-fn generate_formatted_option_table_doc(groups: &GroupedCliArgs, heading_prefix: &str) -> String {
-    let mut output = String::new();
-
-    for (heading, group_args) in groups {
-        if let Some(heading_text) = heading {
-            writeln!(output, "{heading_prefix} {heading_text}\n")
-                .expect("Infallible Write For String");
-        }
-        writeln!(output, "| Option | Description | Default |")
-            .expect("Infallible Write For String");
-        writeln!(output, "| --- | --- | --- |").expect("Infallible Write For String");
-        for arg in group_args {
-            write_arg_table_row(&mut output, arg);
-        }
-        writeln!(output).expect("Infallible Write For String");
-    }
-    output
+pub(crate) fn render_help_string(command: &mut Command) -> String {
+    wrap_help_as_code_block(&command.render_long_help())
 }
 
-/// Render a command's options as markdown tables grouped by struct-derived ArgGroups.
-pub fn render_options_tables(cmd: &Command, heading_prefix: &str) -> String {
-    let args: Vec<_> = cmd
-        .get_arguments()
-        .filter(|a| !a.is_positional() && !a.is_hide_set())
-        .collect();
-
-    let mut groups = group_args_by_help_heading(&args);
-    if groups.len() == 1 {
-        groups[0].0 = None;
-    }
-    generate_formatted_option_table_doc(&groups, heading_prefix)
-}
-
-/// Write a single argument row: `| Option | Description | Default |`
-fn write_arg_table_row(output: &mut String, arg: &Arg) {
-    let option_str = format_option(arg);
-    let description = format_description(arg);
-    let default = format_default(arg);
-
-    writeln!(output, "| {option_str} | {description} | {default} |")
-        .expect("Infallible Write For String");
-}
-
-/// Generate the CLI reference snippet for global options.
-pub fn generate_cli_reference_snippet(cmd: &Command) -> String {
-    render_options_tables(cmd, "####")
-}
-
-/// Generate CLI help snippet for a command with nested subcommands.
-fn generate_nested_command_reference_snippet(cmd: &Command) -> String {
-    let mut output = String::new();
-    for sub in cmd.get_subcommands() {
-        if sub.is_hide_set() {
-            continue;
-        }
-        let name = sub.get_name();
-        let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
-
-        writeln!(output, "#### {name} Subcommand\n").expect("Infallible Write For String");
-        writeln!(output, "{about}\n").expect("Infallible Write For String");
-        output.push_str(&render_options_tables(sub, "#####"));
-    }
-    output
-}
-
-/// Generate the CLI reference snippet for a subcommand page.
-pub fn generate_subcommand_reference_snippet(
-    cmd: &Command,
-    subcommand_name: &str,
+pub(crate) fn render_subcommand_help_snippet(
+    command: &mut Command,
+    name: &str,
+    cli_tree: &str,
 ) -> Result<String, DocGenError> {
     let subcmd =
-        cmd.find_subcommand(subcommand_name)
+        command
+            .find_subcommand_mut(name)
             .ok_or_else(|| DocGenError::SubcommandNotFound {
-                subcommand: subcommand_name.to_string(),
-                cli_tree: cmd.get_name().to_string(),
+                subcommand: name.to_string(),
+                cli_tree: cli_tree.to_string(),
             })?;
+    Ok(render_help_string(subcmd))
+}
 
-    if subcmd.get_subcommands().any(|s| !s.is_hide_set()) {
-        Ok(generate_nested_command_reference_snippet(subcmd))
-    } else {
-        Ok(generate_cli_reference_snippet(subcmd))
+/// Helper function that converts a word to title-case format.
+pub(crate) fn to_title_case(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
+}
+
+/// Wrap clap `render_long_help()` output in a fenced code block for MDX embedding.
+fn wrap_help_as_code_block(help: &StyledStr) -> String {
+    format!("```text\n{help}\n```\n")
 }
 
 #[cfg(test)]
 mod tests {
-    use clap::{CommandFactory, Parser};
+    use clap::Command;
 
-    use super::*;
-    use crate::anchor_command;
+    use super::{
+        render_help_string, render_subcommand_help_snippet, to_title_case, wrap_help_as_code_block,
+    };
+    use crate::{anchor_command, errors::DocGenError};
 
-    #[derive(Parser, Clone, Debug)]
-    pub struct TestFlag {
-        #[clap(
-            long,
-            short = 't',
-            value_name = "TEST",
-            help = "Test flag.",
-            alias = "test",
-            help_heading = "Test Group"
-        )]
-        pub test_flag: String,
-    }
+    #[test]
+    fn test_wrap_help_as_code_block_produces_fenced_block() {
+        let mut cmd = Command::new("test")
+            .about("A test command")
+            .arg(clap::Arg::new("option").long("option").help("An option"));
+        let help = cmd.render_long_help();
+        let wrapped = wrap_help_as_code_block(&help);
 
-    #[derive(Parser, Clone, Debug)]
-    #[clap(name = "testcli", about = "Test cli interface.", next_line_help = true)]
-    struct TestCli {
-        #[clap(flatten)]
-        pub test_flag: TestFlag,
+        assert!(wrapped.starts_with("```text\n"));
+        assert!(wrapped.ends_with("\n```\n"));
+        assert!(wrapped.contains("--option"));
+        assert!(wrapped.contains("A test command"));
     }
 
     #[test]
-    fn test_generate_formatted_option_table_doc_returns_valid_help_string() {
-        let cmd = TestCli::command();
-        let arg = cmd.get_arguments().next().unwrap();
-        let groups = Vec::from([(Some("Test Group".to_string()), vec![arg])]);
-        let result = generate_formatted_option_table_doc(&groups, "####");
-
-        assert!(result.contains("| Option | Description | Default |"));
-        assert!(result.contains("#### Test Group"));
-        assert!(result.contains("`-t`, `--test-flag <TEST>`"));
-        assert!(result.contains("Test flag."));
+    fn test_to_title_case_capitalizes_first_letter() {
+        assert_eq!(to_title_case("anchor"), "Anchor");
+        assert_eq!(to_title_case("Anchor"), "Anchor");
     }
 
     #[test]
-    fn test_render_options_tables_produces_table() {
-        let cmd = TestCli::command();
-        let result = render_options_tables(&cmd, "####");
+    fn test_render_subcommand_help_snippet_returns_error_for_missing_subcommand() {
+        let mut cmd = anchor_command();
+        cmd.build();
 
-        assert!(result.contains("| Option | Description | Default |"));
-        assert!(result.contains("`-t`, `--test-flag <TEST>`"));
+        let result = render_subcommand_help_snippet(&mut cmd, "nonexistent", "anchor");
+
+        assert!(
+            matches!(result, Err(DocGenError::SubcommandNotFound { .. })),
+            "Expected SubcommandNotFound, got: {result:?}"
+        );
     }
 
     #[test]
-    fn test_render_node_options_has_headings() {
-        let cmd = anchor_command();
-        let result = generate_subcommand_reference_snippet(&cmd, "node").unwrap();
+    fn test_render_help_string_contains_all_visible_node_args() {
+        let mut cmd = anchor_command();
+        cmd.build();
+
+        let node = cmd.find_subcommand("node").unwrap();
+        let expected_args: Vec<_> = node
+            .get_arguments()
+            .filter(|a| !a.is_positional() && !a.is_hide_set())
+            .filter_map(|a| a.get_long())
+            .map(|l| l.to_string())
+            .collect();
+
+        let result = render_help_string(cmd.find_subcommand_mut("node").unwrap());
+
+        for long in &expected_args {
+            assert!(
+                result.contains(&format!("--{long}")),
+                "Arg '--{long}' missing from rendered node help"
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_help_string_contains_node_help_headings() {
+        let mut cmd = anchor_command();
+        cmd.build();
+
+        let result = render_help_string(cmd.find_subcommand_mut("node").unwrap());
 
         for heading in [
             "Security Options",
@@ -167,48 +118,25 @@ mod tests {
         ] {
             assert!(
                 result.contains(heading),
-                "Missing heading '{heading}' in node options:\n{result}"
+                "Missing heading '{heading}' in rendered node help"
             );
         }
     }
 
     #[test]
-    fn test_render_keysplit_has_subcommand_sections() {
-        let cmd = anchor_command();
-        let result = generate_subcommand_reference_snippet(&cmd, "keysplit").unwrap();
+    fn test_render_subcommand_help_snippet_keysplit_contains_subcommands() {
+        let mut cmd = anchor_command();
+        cmd.build();
+
+        let result = render_subcommand_help_snippet(&mut cmd, "keysplit", "anchor").unwrap();
 
         assert!(
-            result.contains("#### onchain Subcommand"),
-            "Missing onchain subcommand section:\n{result}"
+            result.contains("onchain"),
+            "Missing 'onchain' subcommand in keysplit help"
         );
         assert!(
-            result.contains("#### manual Subcommand"),
-            "Missing manual subcommand section:\n{result}"
+            result.contains("manual"),
+            "Missing 'manual' subcommand in keysplit help"
         );
-    }
-
-    #[test]
-    fn test_render_cli_snippet_contains_options_table() {
-        let cmd = anchor_command();
-        let result = generate_cli_reference_snippet(&cmd);
-
-        assert!(result.contains("| Option | Description | Default |"));
-    }
-
-    #[test]
-    fn test_node_groups_cover_all_visible_args() {
-        let cmd = anchor_command();
-        let node = cmd.find_subcommand("node").unwrap();
-        let result = generate_subcommand_reference_snippet(&cmd, "node").unwrap();
-
-        for arg in node.get_arguments() {
-            if !arg.is_positional() && !arg.is_hide_set() {
-                let long = arg.get_long().unwrap();
-                assert!(
-                    result.contains(&format!("--{long}")),
-                    "Arg '--{long}' missing from generated node docs"
-                );
-            }
-        }
     }
 }
