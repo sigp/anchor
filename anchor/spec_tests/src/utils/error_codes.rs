@@ -3,7 +3,7 @@
 //! Only codes relevant to currently implemented spec tests are included.
 //! Add new codes as new test types are implemented.
 
-use ssv_types::message::SignedSSVMessageError;
+use ssv_types::{consensus::AggregatorCommitteeValidationError, message::SignedSSVMessageError};
 
 /// No error — validation passed.
 pub const NO_ERROR: i64 = 0;
@@ -55,6 +55,35 @@ pub const UNKNOWN_DUTY_ROLE_DATA: i64 = 10;
 /// `UnknownBlockVersionErrorCode` (iota 10 → value 11) — unrecognized fork version.
 pub const UNKNOWN_BLOCK_VERSION: i64 = 11;
 
+// --- AggregatorCommitteeConsensusData.Validate() codes ---
+
+/// `AggCommAggCommIdxCntMismatchErrorCode` (iota 70 → value 71)
+pub const AGG_COMM_INDEX_COUNT_MISMATCH: i64 = 71;
+
+/// `AggCommCommIdxMismatchErrorCode` (iota 71 → value 72)
+pub const AGG_COMM_INDEX_MISSING: i64 = 72;
+
+/// `AggCommUnusedCommIdxErrorCode` (iota 72 → value 73)
+pub const AGG_COMM_INDEX_UNUSED: i64 = 73;
+
+/// `AggCommDuplicatedCommIdxErrorCode` (iota 73 → value 74)
+pub const AGG_COMM_INDEX_DUPLICATE: i64 = 74;
+
+/// `AggCommSubnetNotInSCSubnetsErrorCode` (iota 74 → value 75)
+pub const AGG_COMM_SC_SUBNET_MISSING: i64 = 75;
+
+/// `AggCommSCCSubnetDuplicateErrorCode` (iota 75 → value 76)
+pub const AGG_COMM_SC_SUBNET_DUPLICATE: i64 = 76;
+
+/// `AggCommUnusedSubnetErrorCode` (iota 76 → value 77)
+pub const AGG_COMM_SC_SUBNET_UNUSED: i64 = 77;
+
+/// `AggCommConsensusDataNoValidatorErrorCode` (iota 77 → value 78)
+pub const AGG_COMM_NO_VALIDATORS: i64 = 78;
+
+/// `AggCommAttestationDecodingErrorCode` (iota 83 → value 84)
+pub const AGG_COMM_ATTESTATION_DECODE: i64 = 84;
+
 // --- Sentinel ---
 
 /// Sentinel for Anchor-specific errors without Go equivalents.
@@ -83,6 +112,25 @@ pub fn signed_ssv_message_error_code(err: &SignedSSVMessageError) -> i64 {
         | SignedSSVMessageError::FullDataTooLong { .. }
         | SignedSSVMessageError::SignersNotSorted
         | SignedSSVMessageError::SSVMessageError(_) => UNMAPPED_ERROR_CODE,
+    }
+}
+
+/// Maps `AggregatorCommitteeValidationError` variants to Go's integer error codes.
+///
+/// Exhaustive match: a new variant on the production enum will fail to compile here,
+/// preventing silent drift to `UNMAPPED_ERROR_CODE`.
+pub fn aggregator_committee_validation_error_code(err: AggregatorCommitteeValidationError) -> i64 {
+    use AggregatorCommitteeValidationError as E;
+    match err {
+        E::CommitteeIndexCountMismatch { .. } => AGG_COMM_INDEX_COUNT_MISMATCH,
+        E::DuplicateCommitteeIndex(_) => AGG_COMM_INDEX_DUPLICATE,
+        E::AggregatorCommitteeIndexMissing(_) => AGG_COMM_INDEX_MISSING,
+        E::AggregatorCommitteeUnusedIndex => AGG_COMM_INDEX_UNUSED,
+        E::DuplicateSyncSubcommittee(_) => AGG_COMM_SC_SUBNET_DUPLICATE,
+        E::ContributorSubcommitteeMissing(_) => AGG_COMM_SC_SUBNET_MISSING,
+        E::SyncSubcommitteeUnusedIndex => AGG_COMM_SC_SUBNET_UNUSED,
+        E::NoValidatorsAssigned => AGG_COMM_NO_VALIDATORS,
+        E::AttestationDecodeError(_) => AGG_COMM_ATTESTATION_DECODE,
     }
 }
 
