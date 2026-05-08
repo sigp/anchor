@@ -13,6 +13,70 @@ export default defineConfig({
   // Enable theme toggle
   themeToggle: true,
 
+  // EXPERIMENT: per-line hanging-indent wrap for `text` code blocks so
+  // render_long_help() output (CLI reference pages) wraps without losing
+  // Clap's column hierarchy. Wrapping is applied per Shiki `.line` span;
+  // a small client script reads each line's leading whitespace and sets
+  // padding-left + negative text-indent so wrapped overflow hangs at the
+  // original indent column. Remove this `head` block to revert.
+  head: () =>
+    React.createElement(React.Fragment, null,
+      React.createElement('style', {
+        dangerouslySetInnerHTML: {
+          __html: `
+            pre.shiki code {
+              white-space: normal !important;
+            }
+            pre.shiki code .line {
+              display: block;
+              white-space: pre-wrap;
+              word-break: break-word;
+              overflow-wrap: anywhere;
+            }
+          `,
+        },
+      }),
+      React.createElement('script', {
+        dangerouslySetInnerHTML: {
+          __html: `
+            (function () {
+              // Extra ch added to every indent level so Clap's 2-space step
+              // (header -> name) reads as a clear column on the docs page
+              // instead of a barely-visible 2ch nudge.
+              var INDENT_BOOST = 2;
+
+              function fix() {
+                var lines = document.querySelectorAll('pre.shiki code .line:not([data-indent-fixed])');
+                for (var i = 0; i < lines.length; i++) {
+                  var line = lines[i];
+                  line.setAttribute('data-indent-fixed', '');
+                  var inner = line.querySelector('span');
+                  var text = (inner || line).textContent;
+                  var m = text.match(/^( +)/);
+                  var n = m ? m[1].length : 0;
+                  if (n > 0) {
+                    // Strip leading whitespace from the inner span so we can
+                    // express the indent purely as padding (hang-indents
+                    // wrapped content automatically). Updating inner.textContent
+                    // (not line.textContent) keeps the span structure intact so
+                    // vocs' dark-mode color rule still applies.
+                    if (inner) inner.textContent = text.replace(/^ +/, '');
+                    else line.textContent = text.replace(/^ +/, '');
+                    line.style.paddingLeft = (n + INDENT_BOOST) + 'ch';
+                  }
+                }
+              }
+              if (document.readyState !== 'loading') fix();
+              else document.addEventListener('DOMContentLoaded', fix);
+              new MutationObserver(fix).observe(document.documentElement, {
+                childList: true, subtree: true
+              });
+            })();
+          `,
+        },
+      })
+    ),
+
   // Open source theme - matching design3 background and theming
   theme: {
     accentColor: '#00d4aa',
@@ -34,7 +98,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v1.1.0',
+      text: 'v1.2.3',
       items: [
         {
           text: 'Releases',
