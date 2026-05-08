@@ -2252,12 +2252,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         validator_pubkey: PublicKeyBytes,
         signing_epoch: Epoch,
     ) -> Result<Signature, Error> {
-        let clock_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
-
         let span = info_span!(
             "proposer_randao_reveal",
             cluster_size = tracing::field::Empty,
-            clock_slot = clock_slot.as_u64(),
+            clock_slot = tracing::field::Empty,
             slot_elapsed_ms = tracing::field::Empty,
             signing_epoch = signing_epoch.as_u64(),
             failure_reason = tracing::field::Empty,
@@ -2271,6 +2269,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 "Proposer randao reveal entered"
             );
             let result = async {
+                let clock_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+                tracing::Span::current().record("clock_slot", clock_slot.as_u64());
+
                 let domain_hash = self.get_domain(signing_epoch, Domain::Randao);
                 let signing_root = signing_epoch.signing_root(domain_hash);
 
