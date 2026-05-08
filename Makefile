@@ -1,4 +1,4 @@
-.PHONY: tests
+.PHONY: tests coverage coverage-html
 
 GIT_TAG := $(shell git describe --tags --candidates 1)
 BIN_DIR = "bin"
@@ -88,6 +88,14 @@ test-debug:
 # vectors, using nextest.
 nextest-debug:
 	cargo nextest run --workspace --features "$(TEST_FEATURES)"
+
+# Generates an lcov coverage report using the nextest runner.
+coverage:
+	cargo llvm-cov nextest --workspace --features "$(TEST_FEATURES)" --lcov --output-path lcov.info
+
+# Generates a local HTML coverage report in `target/llvm-cov/html`.
+coverage-html:
+	cargo llvm-cov nextest --workspace --features "$(TEST_FEATURES)" --html
 
 # Runs cargo-fmt (linter).
 cargo-fmt:
