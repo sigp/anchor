@@ -442,8 +442,8 @@ pub struct NetworkOptions {
     #[clap(
         long,
         global = true,
-        help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards.\
-                It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks.\
+        help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards. \
+                It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks. \
                 Setting this flag will disable discovery from updating the ENR from CLI set values.",
         display_order = 0
     )]
