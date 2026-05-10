@@ -5,17 +5,14 @@ use crate::errors::DocGenError;
 pub(crate) fn render_help_string(command: &mut Command) -> String {
     // Tune Clap's help formatting for docs rendering only (the actual CLI
     // keeps its terminal-friendly settings):
-    //   - term_width(MAX) disables Clap's column-width-based wrapping so each
-    //     description emits as a single long line per paragraph; the docs
-    //     site wraps to viewport width via CSS with hanging indent.
-    //   - next_line_help(false) puts each flag/subcommand and its description
-    //     on the same line so the column hierarchy under Options:/Commands:
-    //     reads clearly instead of name-on-its-own-line stacks.
+    //   - term_width(MAX) disables Clap's column-width-based wrapping so each description emits as
+    //     a single long line per paragraph; the docs site wraps to viewport width via CSS with
+    //     hanging indent.
+    //   - next_line_help(false) puts each flag/subcommand and its description on the same line so
+    //     the column hierarchy under Options:/Commands: reads clearly instead of
+    //     name-on-its-own-line stacks.
     // Cloning avoids mutating the caller's command tree (these are builders).
-    let mut cmd = command
-        .clone()
-        .term_width(10_000)
-        .next_line_help(false);
+    let mut cmd = command.clone().term_width(10_000).next_line_help(false);
     wrap_help_as_code_block(&cmd.render_long_help())
 }
 
