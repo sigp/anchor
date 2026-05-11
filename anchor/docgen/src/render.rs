@@ -2,17 +2,17 @@ use clap::{Command, builder::StyledStr};
 
 use crate::errors::DocGenError;
 
+/// Target rendered line width minus some arbitrary amount.
+/// Clap wraps at this narrower width to leave room for a small indent boost.
+const WRAP_WIDTH: usize = 74;
+/// Extra spaces added per indent level so Clap's 2-space hierarchy reads clearly in the docs.
+const INDENT_BOOST: usize = 2;
+
 pub(crate) fn render_help_string(command: &mut Command) -> String {
-    // Tune Clap's help formatting for docs rendering only (the actual CLI
-    // keeps its terminal-friendly settings):
-    //   - term_width(MAX) disables Clap's column-width-based wrapping so each description emits as
-    //     a single long line per paragraph; the docs site wraps to viewport width via CSS with
-    //     hanging indent.
-    //   - next_line_help(false) puts each flag/subcommand and its description on the same line so
-    //     the column hierarchy under Options:/Commands: reads clearly instead of
-    //     name-on-its-own-line stacks.
-    // Cloning avoids mutating the caller's command tree (these are builders).
-    let mut cmd = command.clone().term_width(10_000).next_line_help(false);
+    // Clap wraps the specified width so that after we boost indentation the output
+    // fits within WRAP_WIDTH + INDENT_BOOST. next_line_help(false) keeps flag name and description
+    // on the same line.
+    let mut cmd = command.clone().term_width(WRAP_WIDTH).next_line_help(false);
     wrap_help_as_code_block(&cmd.render_long_help())
 }
 
@@ -41,8 +41,24 @@ pub(crate) fn to_title_case(s: &str) -> String {
 }
 
 /// Wrap clap `render_long_help()` output in a fenced code block for MDX embedding.
+///
+/// Clap already word-wraps at the configured `term_width`. This function boosts
+/// indentation proportionally so Clap's tight 2-space hierarchy reads clearly.
 fn wrap_help_as_code_block(help: &StyledStr) -> String {
-    format!("```text\n{help}\n```\n")
+    let mut out = String::from("```text\n");
+    for line in help.to_string().lines() {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if indent > 0 {
+            let boosted = indent + (indent / 2).max(INDENT_BOOST);
+            out.extend(std::iter::repeat_n(' ', boosted));
+            out.push_str(line.trim_start_matches(' '));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out.push_str("```\n");
+    out
 }
 
 #[cfg(test)]
