@@ -153,15 +153,10 @@ async fn run_committee_signing<T>(
     }
 }
 
-fn get_cluster_size(cluster: &Cluster) -> usize {
-    cluster.cluster_members.len()
-}
-
-fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Result<u128, SpecificError> {
-    let duration = slot_clock
+fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Option<u128> {
+    slot_clock
         .millis_from_current_slot_start()
-        .ok_or(SpecificError::SlotClock)?;
-    Ok(duration.as_millis())
+        .map(|d| d.as_millis())
 }
 
 pub struct AnchorValidatorStore<
@@ -2281,7 +2276,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     tracing::Span::current().record("validator_index", *validator_idx);
                 }
 
-                let cluster_size = get_cluster_size(&cluster);
+                let cluster_size = cluster.cluster_members.len();
                 tracing::Span::current().record("cluster_size", cluster_size);
 
                 self.collect_signature(
@@ -2297,8 +2292,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
-            if let Ok(millis_from_slot_start) = determine_slot_elapsed_ms(&self.slot_clock) {
-                tracing::Span::current().record("slot_elapsed_ms", millis_from_slot_start);
+            match determine_slot_elapsed_ms(&self.slot_clock) {
+                Some(ms) => {
+                    tracing::Span::current().record("slot_elapsed_ms", ms);
+                }
+                None => trace!("slot_elapsed_ms unavailable: clock returned None"),
             }
 
             let outcome = instrumentation::outcome_from_result(&result);
@@ -2403,7 +2401,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 }
                 let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-                let cluster_size = get_cluster_size(&cluster);
+                let cluster_size = cluster.cluster_members.len();
                 tracing::Span::current().record("cluster_size", cluster_size);
 
                 if let Some(validator_idx) = validator.index {
