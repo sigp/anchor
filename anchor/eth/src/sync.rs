@@ -179,8 +179,6 @@ impl SsvEventSyncer {
         );
         debug!("Created event processor - done");
 
-        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
-
         Ok(Self {
             rpc_client,
             ws_client,
@@ -265,6 +263,7 @@ impl SsvEventSyncer {
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");
                     self.is_synced.send_replace(false);
+                    metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
 
                     match e {
                         ExecutionError::WsError(e) => {
@@ -773,7 +772,6 @@ impl SsvEventSyncer {
 
             // If we get here, the stream ended (likely due to disconnect)
             error!("WebSocket stream ended, reconnecting...");
-            metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
         }
     }
 }
