@@ -1,3 +1,4 @@
+import React from 'react'
 import { defineConfig } from 'vocs'
 
 export default defineConfig({
@@ -33,7 +34,7 @@ export default defineConfig({
     { text: 'Documentation', link: '/introduction' },
     { text: 'GitHub', link: 'https://github.com/sigp/anchor' },
     {
-      text: 'v1.2.3',
+      text: 'v1.1.0',
       items: [
         {
           text: 'Releases',
