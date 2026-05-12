@@ -1,51 +1,10 @@
-```text
-RSA key generation tool. Outputs key to data directory.
-
-Usage: anchor keygen [OPTIONS]
-
-Options:
-    -d, --data-dir <DIR>
-               Used to specify a custom root data directory for the Anchor key
-               and database. Defaults to $HOME/.anchor/{network} where network
-               is the value of the `network` flag Note: Users should specify
-               separate custom datadirs for different networks.
-
-         --force
-               Force file overwrite
-
-         --network <NETWORK>
-               Name of the chain Anchor will validate.
-               
-               [default: mainnet]
-               [possible values: mainnet, holesky, hoodi]
-
-    -t, --testnet-dir <DIR>
-               Path to directory containing eth2_testnet specs.
-
-         --encrypt
-               Enable password encryption. Password is read from terminal or
-               via --password-file
-
-         --password-file <PATH>
-               Path to a file containing the password to use for the new key
-               file
-
-         --debug-level <DEBUG_LEVEL>
-               Specifies the verbosity level used when emitting logs to the
-               terminal
-               
-               [default: INFO]
-
-         --use-existing <PATH>
-               Path to an existing key file to use instead of generating a new
-               one. If encrypted, the password is read from terminal or via
-               --password-file-for-existing. The existing file is NOT
-               automatically removed.
-
-         --password-file-for-existing <PATH>
-               Path to a file containing the password to use for the EXISTING
-               key file
-
-    -h, --help
-               Print help
-```
+| Option | Description | Default |
+| --- | --- | ---|
+| `-d, --data-dir <DIR>` | Directory to store generated keys | `~/.anchor/{network}` |
+| `--force` | Force overwrite of existing key files | Disabled |
+| `--encrypt` | Enable password encryption (password read from terminal or `--password-file`) | Disabled |
+| `--password-file <PATH>` | Path to a file containing the password to use | None |
+| `--network <NETWORK>` | Network to use (mainnet, holesky, hoodi) | `hoodi` |
+| `-t, --testnet-dir <DIR>` | Directory containing testnet specs | None |
+| `--debug-level <DEBUG_LEVEL>` | Verbosity level for terminal logs | `INFO` |
+| `-h, --help` | Display help information | |

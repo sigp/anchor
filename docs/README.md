@@ -79,7 +79,7 @@ All documentation content is in `docs/pages/` as `.mdx` files.
 
 CLI option details are stored as separate components:
 
-- `docs/docs/generated/*.mdx` are machine-owned CLI option information snippets generated using the `achor-docgen` binary.
+- `docs/docs/generated/*.mdx` are machine-owned CLI option information snippets generated using the `anchor-docgen` binary.
 - The `docs/docs/pages/cli*.mdx` pages contain hand-written sections with specific examples and usage information. Machine generated snippets are imported into these pages.
 
 ### Page Structure

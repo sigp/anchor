@@ -10,7 +10,7 @@ use clap::{Command, CommandFactory};
 use cli::Cli;
 use errors::DocGenError;
 use interface::DocGenCommand;
-use render::{render_help_string, render_subcommand_help_snippet, to_title_case};
+use render::{render_help_flat, render_subcommand_help_snippet, to_title_case};
 
 const CLI_REFERENCE_FILE: &str = "cli-global-options.mdx";
 
@@ -28,7 +28,7 @@ fn run_update(cmd: &mut Command, docs_dir: &Path) -> Result<(), DocGenError> {
     // changes invoked in clap's internals to the command tree are no-op.
     cmd.build();
 
-    let cli_content = render_help_string(cmd);
+    let cli_content = render_help_flat(cmd);
     update_file(&docs_dir.join(CLI_REFERENCE_FILE), &cli_content)?;
 
     let cli_name = cmd.get_name().to_string();
@@ -50,7 +50,7 @@ fn run_check(cmd: &mut Command, docs_dir: &Path) -> Result<(), DocGenError> {
 
     let mut out_of_date = Vec::new();
 
-    let cli_content = render_help_string(cmd);
+    let cli_content = render_help_flat(cmd);
     append_to_out_of_date_files(
         &docs_dir.join(CLI_REFERENCE_FILE),
         CLI_REFERENCE_FILE,
@@ -69,7 +69,7 @@ fn run_check(cmd: &mut Command, docs_dir: &Path) -> Result<(), DocGenError> {
 
 /// Renders generated CLI reference snippets from the `clap` struct definitions to stdout.
 fn display_help_docs(anchor_command: &mut Command) -> Result<(), DocGenError> {
-    let cli_content = &anchor_command.render_long_help();
+    let cli_content = render_help_flat(anchor_command);
     println!("---\n# Global Options\n");
     print!("{cli_content}");
     let cli_name = anchor_command.get_name().to_string();

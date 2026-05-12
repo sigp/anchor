@@ -8,12 +8,38 @@ const WRAP_WIDTH: usize = 74;
 /// Extra spaces added per indent level so Clap's 2-space hierarchy reads clearly in the docs.
 const INDENT_BOOST: usize = 2;
 
-pub(crate) fn render_help_string(command: &mut Command) -> String {
-    // Clap wraps the specified width so that after we boost indentation the output
-    // fits within WRAP_WIDTH + INDENT_BOOST. next_line_help(false) keeps flag name and description
-    // on the same line.
-    let mut cmd = command.clone().term_width(WRAP_WIDTH).next_line_help(false);
-    wrap_help_as_code_block(&cmd.render_long_help())
+/// Renders a long help description of the `Command` provided to the function with a fixed terminal
+/// width.
+///
+/// This is required for correctly indented and formatted code blocks when help snippets are written
+/// to project documentation. Text is wrapped with specified width so that after indentation is
+/// increased, the output fits within WRAP_WIDTH + INDENT_BOOST. next_line_help(false) keeps flag
+/// name and description on the same line.
+fn render_wrapped_help(command: &Command) -> StyledStr {
+    command
+        .clone()
+        .term_width(WRAP_WIDTH)
+        .next_line_help(false)
+        .render_long_help()
+}
+
+/// Render a command's own help as a fenced code block (no child subcommands).
+pub(crate) fn render_help_flat(command: &Command) -> String {
+    let help_string = render_wrapped_help(command).to_string();
+    wrap_help_as_code_block(&help_string)
+}
+
+/// Render a command's help followed by each visible subcommand's help, all in one fenced block.
+fn render_help_with_subcommands(command: &Command) -> String {
+    let mut help_string = render_wrapped_help(command).to_string();
+
+    for subcommand in command.get_subcommands() {
+        let subcommand_name = subcommand.get_name();
+        let help_body = render_wrapped_help(subcommand).to_string();
+        help_string.push_str(&format!("\n{subcommand_name}:\n\n"));
+        help_string.push_str(&help_body);
+    }
+    wrap_help_as_code_block(&help_string)
 }
 
 pub(crate) fn render_subcommand_help_snippet(
@@ -28,7 +54,7 @@ pub(crate) fn render_subcommand_help_snippet(
                 subcommand: name.to_string(),
                 cli_tree: cli_tree.to_string(),
             })?;
-    Ok(render_help_string(subcmd))
+    Ok(render_help_with_subcommands(subcmd))
 }
 
 /// Helper function that converts a word to title-case format.
@@ -44,9 +70,9 @@ pub(crate) fn to_title_case(s: &str) -> String {
 ///
 /// Clap already word-wraps at the configured `term_width`. This function boosts
 /// indentation proportionally so Clap's tight 2-space hierarchy reads clearly.
-fn wrap_help_as_code_block(help: &StyledStr) -> String {
+fn wrap_help_as_code_block(help: &str) -> String {
     let mut out = String::from("```text\n");
-    for line in help.to_string().lines() {
+    for line in help.lines() {
         let indent = line.len() - line.trim_start_matches(' ').len();
         if indent > 0 {
             let boosted = indent + (indent / 2).max(INDENT_BOOST);
@@ -66,7 +92,8 @@ mod tests {
     use clap::Command;
 
     use super::{
-        render_help_string, render_subcommand_help_snippet, to_title_case, wrap_help_as_code_block,
+        render_help_flat, render_help_with_subcommands, render_subcommand_help_snippet,
+        to_title_case, wrap_help_as_code_block,
     };
     use crate::{anchor_command, errors::DocGenError};
 
@@ -75,7 +102,7 @@ mod tests {
         let mut cmd = Command::new("test")
             .about("A test command")
             .arg(clap::Arg::new("option").long("option").help("An option"));
-        let help = cmd.render_long_help();
+        let help = cmd.render_long_help().to_string();
         let wrapped = wrap_help_as_code_block(&help);
 
         assert!(wrapped.starts_with("```text\n"));
@@ -104,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_help_string_contains_all_visible_node_args() {
+    fn test_render_help_with_subcommands_contains_all_visible_node_args() {
         let mut cmd = anchor_command();
         cmd.build();
 
@@ -116,7 +143,7 @@ mod tests {
             .map(|l| l.to_string())
             .collect();
 
-        let result = render_help_string(cmd.find_subcommand_mut("node").unwrap());
+        let result = render_help_with_subcommands(cmd.find_subcommand("node").unwrap());
 
         for long in &expected_args {
             assert!(
@@ -127,11 +154,11 @@ mod tests {
     }
 
     #[test]
-    fn test_render_help_string_contains_node_help_headings() {
+    fn test_render_help_with_subcommands_contains_node_help_headings() {
         let mut cmd = anchor_command();
         cmd.build();
 
-        let result = render_help_string(cmd.find_subcommand_mut("node").unwrap());
+        let result = render_help_with_subcommands(cmd.find_subcommand("node").unwrap());
 
         for heading in [
             "Security Options",
@@ -164,5 +191,44 @@ mod tests {
             result.contains("manual"),
             "Missing 'manual' subcommand in keysplit help"
         );
+    }
+
+    #[test]
+    fn test_render_help_flat_excludes_subcommand_content() {
+        let mut cmd = anchor_command();
+        cmd.build();
+
+        let result = render_help_flat(cmd.find_subcommand("keysplit").unwrap());
+
+        assert!(
+            !result.contains("onchain:"),
+            "Flat render should not contain nested subcommand 'onchain'"
+        );
+        assert!(
+            !result.contains("manual:"),
+            "Flat render should not contain nested subcommand 'manual'"
+        );
+    }
+
+    #[test]
+    fn test_render_help_flat_produces_fenced_block() {
+        let mut cmd = anchor_command();
+        cmd.build();
+
+        let result = render_help_flat(cmd.find_subcommand("node").unwrap());
+
+        assert!(result.starts_with("```text\n"));
+        assert!(result.ends_with("\n```\n"));
+    }
+
+    #[test]
+    fn test_render_help_with_subcommands_produces_fenced_block() {
+        let mut cmd = anchor_command();
+        cmd.build();
+
+        let result = render_help_with_subcommands(cmd.find_subcommand("keysplit").unwrap());
+
+        assert!(result.starts_with("```text\n"));
+        assert!(result.ends_with("\n```\n"));
     }
 }

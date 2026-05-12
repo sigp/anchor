@@ -117,7 +117,7 @@ test: test-release
 cli-reference-update:
 	cargo run --release --bin anchor-docgen update
 
-# Check generated CLI reference snippets are up to date+
+# Check generated CLI reference snippets are up to date
 cli-reference-check:
 	cargo run --release --bin anchor-docgen check
 

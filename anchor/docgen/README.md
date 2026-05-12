@@ -4,7 +4,7 @@ A standalone binary that generates CLI reference documentation for Anchor by int
 
 ## Purpose
 
-Anchor's documentation site includes hand-written CLI pages with explanatory prose and examples, plus generated option tables derived from the `clap` command tree. `anchor-docgen` generates those option-table snippets directly from the CLI definitions so the reference sections stay accurate without rewriting the full pages.
+Anchor's documentation site includes hand-written CLI pages with explanatory prose and examples, plus generated code block snippets derived from the `clap` command tree. `anchor-docgen` generates those snippets directly from the CLI definitions so the reference sections stay accurate without rewriting the full pages.
 
 ## Usage
 
@@ -36,8 +36,8 @@ cargo run -p docgen check
 ## How it works
 
 1. Builds the full `clap::Command` tree from `cli::Cli` via `CommandFactory`. This leverages struct definitions in the `cli` crate.
-2. Groups arguments by their `clap` `ArgGroup` (derived from `#[derive(Parser)]` structs).
-3. Renders each group as a markdown table with Option, Description, and Default columns.
+2. Generates CLI help descriptions using native `clap` functionality for both top-level commands and details grouped by subcommand.
+3. Renders each description grouping as a wrapped code block with outputs that emulate an `anchor <command> --help` CLI call.
 4. For `update`/`check`, writes and validates generated MDX snippets that are imported by the hand-written CLI pages.
 
 ## Generated pages
