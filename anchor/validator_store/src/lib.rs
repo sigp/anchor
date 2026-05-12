@@ -2,7 +2,6 @@ mod instrumentation;
 pub mod metadata_service;
 mod metrics;
 pub mod registration_service;
-
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -61,7 +60,7 @@ use tokio::{
     sync::{Barrier, RwLock, watch},
     time::{Instant, sleep},
 };
-use tracing::{Instrument, debug, error, info, info_span, trace, warn};
+use tracing::{Instrument, Span, debug, error, field, info, info_span, trace, warn};
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
@@ -2249,14 +2248,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
     ) -> Result<Signature, Error> {
         let span = info_span!(
             "proposer_randao_reveal",
-            cluster_size = tracing::field::Empty,
-            clock_slot = tracing::field::Empty,
-            slot_elapsed_ms = tracing::field::Empty,
+            cluster_size = field::Empty,
+            clock_slot = field::Empty,
+            slot_elapsed_ms = field::Empty,
             signing_epoch = signing_epoch.as_u64(),
-            failure_reason = tracing::field::Empty,
-            outcome = tracing::field::Empty,
+            failure_reason = field::Empty,
+            outcome = field::Empty,
             validator_pubkey = %validator_pubkey,
-            validator_index = tracing::field::Empty,
+            validator_index = field::Empty,
         );
         let future = async {
             trace!(
@@ -2265,7 +2264,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             );
             let result = async {
                 let clock_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
-                tracing::Span::current().record("clock_slot", clock_slot.as_u64());
+                Span::current().record("clock_slot", clock_slot.as_u64());
 
                 let domain_hash = self.get_domain(signing_epoch, Domain::Randao);
                 let signing_root = signing_epoch.signing_root(domain_hash);
@@ -2273,11 +2272,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
                 if let Some(validator_idx) = validator.index {
-                    tracing::Span::current().record("validator_index", *validator_idx);
+                    Span::current().record("validator_index", *validator_idx);
                 }
 
                 let cluster_size = cluster.cluster_members.len();
-                tracing::Span::current().record("cluster_size", cluster_size);
+                Span::current().record("cluster_size", cluster_size);
 
                 self.collect_signature(
                     PartialSignatureKind::RandaoPartialSig,
@@ -2294,13 +2293,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
             match determine_slot_elapsed_ms(&self.slot_clock) {
                 Some(ms) => {
-                    tracing::Span::current().record("slot_elapsed_ms", ms);
+                    Span::current().record("slot_elapsed_ms", ms);
                 }
                 None => trace!("slot_elapsed_ms unavailable: clock returned None"),
             }
 
             let outcome = instrumentation::outcome_from_result(&result);
-            tracing::Span::current().record("outcome", outcome);
+            Span::current().record("outcome", outcome);
             match &result {
                 Ok(_) => trace!(
                     checkpoint = instrumentation::checkpoints::RANDAO_REVEAL_COMPLETED,
@@ -2313,7 +2312,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                         outcome = &outcome,
                         failure_reason = &failure_reason
                     );
-                    tracing::Span::current().record("failure_reason", failure_reason);
+                    Span::current().record("failure_reason", failure_reason);
                 }
             }
 
@@ -2381,14 +2380,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let span = info_span!(
             "proposer_sign_block",
             block_type,
-            cluster_size = tracing::field::Empty,
+            cluster_size = field::Empty,
             clock_slot = current_slot.as_u64(),
-            failure_reason = tracing::field::Empty,
-            proposal_matched = tracing::field::Empty,
-            outcome = tracing::field::Empty,
+            failure_reason = field::Empty,
+            proposal_matched = field::Empty,
+            outcome = field::Empty,
             block_slot = block_slot.as_u64(),
             validator_pubkey = %validator_pubkey,
-            validator_index = tracing::field::Empty,
+            validator_index = field::Empty,
         );
         let future = async {
             trace!(
@@ -2402,10 +2401,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
                 let cluster_size = cluster.cluster_members.len();
-                tracing::Span::current().record("cluster_size", cluster_size);
+                Span::current().record("cluster_size", cluster_size);
 
                 if let Some(validator_idx) = validator.index {
-                    tracing::Span::current().record("validator_index", *validator_idx);
+                    Span::current().record("validator_index", *validator_idx);
                 }
 
                 let (blinded_block, local_full_block) = match block {
@@ -2457,8 +2456,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
                 let publish_decision =
                     select_publish_block(signed_block, &blinded_block, local_full_block);
-                tracing::Span::current()
-                    .record("proposal_matched", publish_decision.proposal_matched);
+                Span::current().record("proposal_matched", publish_decision.proposal_matched);
                 trace!(
                     checkpoint = instrumentation::checkpoints::PUBLISH_BLOCK,
                     publish_path = publish_decision.publish_path,
@@ -2470,7 +2468,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             .await;
 
             let outcome = instrumentation::outcome_from_result(&result);
-            tracing::Span::current().record("outcome", outcome);
+            Span::current().record("outcome", outcome);
             match &result {
                 Ok(_) => trace!(
                     checkpoint = instrumentation::checkpoints::DUTY_COMPLETED,
@@ -2483,7 +2481,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                         outcome = &outcome,
                         failure_reason = &failure_reason
                     );
-                    tracing::Span::current().record("failure_reason", failure_reason);
+                    Span::current().record("failure_reason", failure_reason);
                 }
             }
             result
