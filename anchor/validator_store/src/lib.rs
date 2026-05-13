@@ -152,10 +152,10 @@ async fn run_committee_signing<T>(
     }
 }
 
-fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Option<u128> {
+fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Option<u64> {
     slot_clock
         .millis_from_current_slot_start()
-        .map(|d| d.as_millis())
+        .map(|d| d.as_millis() as u64)
 }
 
 pub struct AnchorValidatorStore<
@@ -2291,13 +2291,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
-            match determine_slot_elapsed_ms(&self.slot_clock) {
-                Some(ms) => {
-                    Span::current().record("slot_elapsed_ms", ms);
-                }
-                None => trace!("slot_elapsed_ms unavailable: clock returned None"),
-            }
-
+            Span::current().record(
+                "slot_elapsed_ms",
+                determine_slot_elapsed_ms(&self.slot_clock),
+            );
             let outcome = instrumentation::outcome_from_result(&result);
             Span::current().record("outcome", outcome);
             match &result {
@@ -2472,13 +2469,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
-            match determine_slot_elapsed_ms(&self.slot_clock) {
-                Some(ms) => {
-                    Span::current().record("slot_elapsed_ms", ms);
-                }
-                None => trace!("slot_elapsed_ms unavailable: clock returned None"),
-            }
-
+            Span::current().record(
+                "slot_elapsed_ms",
+                determine_slot_elapsed_ms(&self.slot_clock),
+            );
             let outcome = instrumentation::outcome_from_result(&result);
             Span::current().record("outcome", outcome);
             match &result {
