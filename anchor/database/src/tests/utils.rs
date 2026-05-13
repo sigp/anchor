@@ -9,10 +9,7 @@ use ssv_types::{
     ValidatorIndex, ValidatorMetadata,
 };
 use tempfile::TempDir;
-use types::{
-    Address, Graffiti,
-    test_utils::{SeedableRng, XorShiftRng},
-};
+use types::{Address, Graffiti};
 
 use crate::{NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex};
 
@@ -20,7 +17,6 @@ use crate::{NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex};
 /// 4 operators allows for QBFT quorum (3) with 1 fault tolerance (f=1, n=3f+1=4)
 pub const DEFAULT_NUM_OPERATORS: u64 = 4;
 const RSA_KEY_SIZE: u32 = 2048;
-const DEFAULT_SEED: [u8; 16] = [42; 16];
 /// Test network name for database isolation
 pub const TEST_NETWORK: &str = "test";
 
@@ -302,8 +298,7 @@ pub mod generators {
     }
 
     pub mod pubkey {
-        use bls::PublicKeyBytes;
-        use types::test_utils::TestRandom;
+        use bls::{Keypair, PublicKeyBytes};
 
         use super::*;
 
@@ -316,10 +311,9 @@ pub mod generators {
                 .expect("Failed to process RSA key")
         }
 
-        // Generate a random public key for validators
+        // Generate a fresh public key for validators.
         pub fn random() -> PublicKeyBytes {
-            let rng = &mut XorShiftRng::from_seed(DEFAULT_SEED);
-            PublicKeyBytes::random_for_test(rng)
+            PublicKeyBytes::from(Keypair::random().pk)
         }
     }
 

@@ -113,7 +113,7 @@ impl TopicScoringOptions {
         message_rate: f64,
         chain_spec: &ChainSpec,
     ) -> Self {
-        let slot_duration = Duration::from_secs(chain_spec.seconds_per_slot);
+        let slot_duration = chain_spec.get_slot_duration();
         let one_epoch_duration = E::slots_per_epoch() as u32 * slot_duration;
 
         let network = NetworkConfig {

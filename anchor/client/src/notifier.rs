@@ -5,10 +5,7 @@ use database::NetworkState;
 use operator_doppelganger::OperatorDoppelgangerService;
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tokio::{
-    sync::watch,
-    time::{Duration, sleep},
-};
+use tokio::{sync::watch, time::sleep};
 use tracing::{error, info};
 use types::{ChainSpec, EthSpec};
 
@@ -82,7 +79,7 @@ pub fn spawn_notifier<E: EthSpec, T: SlotClock + 'static>(
     executor: TaskExecutor,
     spec: &ChainSpec,
 ) {
-    let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+    let slot_duration = spec.get_slot_duration();
 
     let interval_fut = async move {
         loop {

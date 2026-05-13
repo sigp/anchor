@@ -172,7 +172,7 @@ pub fn calculate_message_rate_for_topic<E: EthSpec>(
     }
 
     let slots_per_epoch_f64 = E::slots_per_epoch() as f64;
-    let slot_duration_seconds = chain_spec.seconds_per_slot as f64;
+    let slot_duration_seconds = chain_spec.get_slot_duration().as_secs_f64();
     let sync_committee_size = E::sync_committee_size() as f64;
 
     let mut total_msg_rate = 0.0;
