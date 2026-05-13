@@ -3039,6 +3039,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         _validator_pubkey: PublicKeyBytes,
         _envelope: ExecutionPayloadEnvelope<E>,
     ) -> Result<SignedExecutionPayloadEnvelope<E>, Error> {
+        // TODO(cstar)
         Err(Error::SpecificError(SpecificError::Unsupported))
     }
 
@@ -3048,7 +3049,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         _data: PayloadAttestationData,
     ) -> Result<PayloadAttestationMessage, Error> {
         // TODO(cstar)
-        todo!("sign_payload_attestation pending Gloas integration")
+        Err(Error::SpecificError(SpecificError::Unsupported))
     }
 
     async fn sign_proposer_preferences(
@@ -3057,7 +3058,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         _preferences: ProposerPreferences,
     ) -> Result<SignedProposerPreferences, Error> {
         // TODO(cstar)
-        todo!("sign_proposer_preferences pending Gloas integration")
+        Err(Error::SpecificError(SpecificError::Unsupported))
     }
 }
 
