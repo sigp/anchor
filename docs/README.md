@@ -77,10 +77,10 @@ npm run preview
 
 All documentation content is in `docs/pages/` as `.mdx` files.
 
-Specific CLI option detail is stored as separate imported components:
+CLI option details are stored as separate components:
 
-- `docs/docs/generated/*.mdx` contain specific CLI option implementation details generated using the structure of Anchor CLI source code.
-- The `docs/docs/pages/cli*.mdx` pages remain hand-written and import those generated snippets.
+- `docs/docs/generated/*.mdx` are machine-owned CLI option information snippets generated using the `anchor-docgen` binary.
+- The `docs/docs/pages/cli*.mdx` pages contain hand-written sections with specific examples and usage information. Machine generated snippets are imported into these pages.
 
 ### Page Structure
 
