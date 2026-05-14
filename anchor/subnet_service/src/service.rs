@@ -102,8 +102,10 @@ impl<S: SlotClock> SubnetService<S> {
 
         match fork {
             Fork::Alan => Ok(SubnetId::from_committee_alan(committee_id, SUBNET_COUNT)),
-            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
-                .map_err(SubnetServiceError::SubnetCalculation),
+            Fork::Boole | Fork::CStar => {
+                SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
+                    .map_err(SubnetServiceError::SubnetCalculation)
+            }
         }
     }
 

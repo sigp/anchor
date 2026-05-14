@@ -33,12 +33,19 @@ pub enum Fork {
     /// - Subnet topology: `min(SHA256(operator_id)) % 128`
     /// - Topic format: `/ssv/<network>/boole/<subnet>`
     Boole,
+
+    /// The CStar fork, the SSV-side rollout of Ethereum's Gloas (ePBS) features.
+    ///
+    /// Characteristics:
+    /// - Subnet topology: inherits Boole behavior (no subnet change at this fork).
+    /// - Topic format: `/ssv/<network>/cstar/<subnet>`
+    CStar,
 }
 
 impl Fork {
     /// Returns all known forks in chronological order.
     pub const fn all() -> &'static [Fork] {
-        &[Fork::Alan, Fork::Boole]
+        &[Fork::Alan, Fork::Boole, Fork::CStar]
     }
 
     /// Returns the name of this fork as a string.
@@ -46,6 +53,7 @@ impl Fork {
         match self {
             Fork::Alan => "alan",
             Fork::Boole => "boole",
+            Fork::CStar => "cstar",
         }
     }
 
@@ -74,6 +82,7 @@ impl std::str::FromStr for Fork {
         match s.to_lowercase().as_str() {
             "alan" => Ok(Fork::Alan),
             "boole" => Ok(Fork::Boole),
+            "cstar" => Ok(Fork::CStar),
             _ => Err(format!("Unknown fork: {s}")),
         }
     }
@@ -86,18 +95,21 @@ mod tests {
     #[test]
     fn test_fork_ordering() {
         assert!(Fork::Alan < Fork::Boole);
+        assert!(Fork::Boole < Fork::CStar);
     }
 
     #[test]
     fn test_fork_names() {
         assert_eq!(Fork::Alan.name(), "alan");
         assert_eq!(Fork::Boole.name(), "boole");
+        assert_eq!(Fork::CStar.name(), "cstar");
     }
 
     #[test]
     fn test_fork_display() {
         assert_eq!(format!("{}", Fork::Alan), "alan");
         assert_eq!(format!("{}", Fork::Boole), "boole");
+        assert_eq!(format!("{}", Fork::CStar), "cstar");
     }
 
     #[test]
@@ -105,14 +117,26 @@ mod tests {
         assert_eq!("alan".parse::<Fork>().unwrap(), Fork::Alan);
         assert_eq!("Boole".parse::<Fork>().unwrap(), Fork::Boole);
         assert_eq!("ALAN".parse::<Fork>().unwrap(), Fork::Alan);
+        assert_eq!("cstar".parse::<Fork>().unwrap(), Fork::CStar);
+        assert_eq!("CSTAR".parse::<Fork>().unwrap(), Fork::CStar);
         assert!("unknown".parse::<Fork>().is_err());
     }
 
     #[test]
     fn test_all_forks() {
         let all = Fork::all();
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 3);
         assert_eq!(all[0], Fork::Alan);
         assert_eq!(all[1], Fork::Boole);
+        assert_eq!(all[2], Fork::CStar);
+    }
+
+    #[test]
+    fn test_cstar_topic_prefix() {
+        let prefix = Fork::CStar.topic_prefix("mainnet");
+        assert_eq!(prefix, "/ssv/mainnet/cstar/");
+
+        let prefix_holesky = Fork::CStar.topic_prefix("holesky");
+        assert_eq!(prefix_holesky, "/ssv/holesky/cstar/");
     }
 }
