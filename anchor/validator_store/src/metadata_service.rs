@@ -156,7 +156,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 
     pub fn start_update_service(self) -> Result<(), String> {
-        let slot_duration = Duration::from_secs(self.spec.seconds_per_slot);
+        let slot_duration = self.spec.get_slot_duration();
         let duration_to_next_slot = self
             .slot_clock
             .duration_to_next_slot()
