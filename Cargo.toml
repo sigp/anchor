@@ -172,6 +172,7 @@ tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 tree_hash = "0.12.0"
 tree_hash_derive = "0.12.0"
 typenum = "1.18"
+unicode-normalization = "0.1.25"
 zeroize = "1.8.1"
 
 [patch.crates-io]
