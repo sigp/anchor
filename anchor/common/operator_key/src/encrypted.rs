@@ -103,6 +103,9 @@ impl EncryptedKey {
     /// On `InvalidPassword`, retries with [`alt_normalize_password`] to support keystores produced
     /// by go-ssv. Any password containing precomposed characters (e.g. `ñ`, `ü`, `é`) yields
     /// different KDF input bytes than the EIP-2335 spec NFKD path used by `eth2_keystore`.
+    ///
+    /// The fallback is decrypt-only: encryption (see [`EncryptedKey::encrypt`]) remains
+    /// EIP-2335 spec-compliant, so Anchor never produces non-spec keystores.
     pub fn decrypt(&self, password: &str) -> Result<Rsa<Private>, DecryptionError> {
         let crypto = self.as_crypto();
         let pem = match eth2_keystore::decrypt(password.as_ref(), &crypto) {
@@ -161,9 +164,19 @@ impl EncryptedKey {
     }
 }
 
-/// Reproduces `wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.1.3`'s `normPassphrase`: NFKD
-/// decomposes the input then keeps only starter code points, discarding the combining marks emitted
-/// by decomposition. The result is non-spec, but matches what go-ssv currently uses as KDF input.
+/// Reproduces the practical effect of `wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.1.3`'s
+/// `normPassphrase`: NFKD-decomposes the input and drops combining marks (canonical combining
+/// class != 0). Control-character handling is intentionally left to `eth2_keystore`, which strips
+/// `char::is_control()` on both the primary spec-NFKD attempt and this fallback, so the resulting
+/// KDF input matches wealdtech's `stripChars` (C0 + DEL) for every realistic input.
+///
+/// The only theoretical divergence is a password mixing C1 controls (U+0080–U+009F) with combining
+/// marks: wealdtech's `len(buf) == 1` guard skips control stripping for multi-byte segments, but
+/// `eth2_keystore` strips them unconditionally. Such inputs are not encountered in practice.
+///
+/// Source: <https://github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4/blob/v1.1.3/norm.go>.
+/// The non-spec behavior was acknowledged upstream and an alt-normalization fallback was added in
+/// v1.4.1; go-ssv has not bumped past v1.1.3.
 fn alt_normalize_password(password: &str) -> Zeroizing<String> {
     Zeroizing::new(
         password
