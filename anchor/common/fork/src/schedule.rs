@@ -228,6 +228,7 @@ mod tests {
     const TEST_NETWORK: &str = "mainnet";
     const BASELINE_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
     const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
+    const CSTAR_DOMAIN: DomainType = DomainType([0, 0, 0, 3]);
 
     fn schedule_with_boole(epoch: u64) -> ForkSchedule {
         let mut configs = BTreeMap::new();
@@ -316,6 +317,23 @@ mod tests {
         assert_eq!(schedule.fork_epoch(Fork::Boole), Some(Epoch::new(100)));
         assert_eq!(schedule.domain_type(Fork::Alan), Some(BASELINE_DOMAIN));
         assert_eq!(schedule.domain_type(Fork::Boole), Some(BOOLE_DOMAIN));
+    }
+
+    #[test]
+    fn test_with_three_forks() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(100), BOOLE_DOMAIN));
+        configs.insert(Fork::CStar, (Epoch::new(200), CSTAR_DOMAIN));
+
+        let schedule = ForkSchedule::from_fork_configs(configs, TEST_NETWORK).unwrap();
+
+        assert_eq!(schedule.active_fork(Epoch::new(199)), Fork::Boole);
+        assert_eq!(schedule.active_fork(Epoch::new(200)), Fork::CStar);
+        assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::CStar);
+
+        assert_eq!(schedule.fork_epoch(Fork::CStar), Some(Epoch::new(200)));
+        assert_eq!(schedule.domain_type(Fork::CStar), Some(CSTAR_DOMAIN));
     }
 
     #[test]
