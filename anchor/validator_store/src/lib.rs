@@ -1480,7 +1480,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
         let timeout_mode = TimeoutMode::SlotTime {
             instance_start_time: self
-                .get_instant_in_slot(slot, self.spec.get_slot_duration() / 3)?,
+                .get_instant_in_slot(slot, self.spec.get_attestation_due::<E>(slot))?,
         };
 
         let completed = self
@@ -3392,5 +3392,26 @@ mod tests {
         } else {
             panic!("Should have voting assignments cached");
         }
+    }
+
+    /// Anchors that `get_attestation_due` flips from `unaggregated_attestation_due`
+    /// to `unaggregated_attestation_due_gloas` at the Gloas activation boundary.
+    /// A LH bump that changes the fork-gating logic will surface here.
+    #[test]
+    fn attestation_due_switches_at_gloas_boundary() {
+        use types::MainnetEthSpec;
+
+        let mut spec = ChainSpec::mainnet();
+        let gloas_activation_epoch = Epoch::new(100);
+        spec.gloas_fork_epoch = Some(gloas_activation_epoch);
+        let first_gloas_slot = gloas_activation_epoch.start_slot(MainnetEthSpec::slots_per_epoch());
+        let last_pre_gloas_slot = first_gloas_slot - 1;
+
+        let pre = spec.get_attestation_due::<MainnetEthSpec>(last_pre_gloas_slot);
+        let post = spec.get_attestation_due::<MainnetEthSpec>(first_gloas_slot);
+
+        assert_ne!(pre, post);
+        assert_eq!(pre, spec.unaggregated_attestation_due);
+        assert_eq!(post, spec.unaggregated_attestation_due_gloas);
     }
 }
