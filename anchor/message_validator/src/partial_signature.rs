@@ -144,7 +144,7 @@ fn validate_partial_signature_message_semantics(
 
 fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -> bool {
     match role {
-        Role::Committee => kind == PartialSignatureKind::PostConsensus,
+        Role::Committee | Role::PTCCommittee => kind == PartialSignatureKind::PostConsensus,
         Role::Aggregator => {
             kind == PartialSignatureKind::PostConsensus
                 || kind == PartialSignatureKind::SelectionProofPartialSig
@@ -310,6 +310,31 @@ fn validate_partial_sig_messages_by_duty_logic(
                         validator_index: message.validator_index,
                         got: *count,
                         limit: 5,
+                    });
+                }
+            }
+        }
+        Role::PTCCommittee => {
+            // PTC produces exactly one partial signature per locally-assigned
+            // validator per slot.
+            if message_count > validator_count {
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit: validator_count,
+                });
+            }
+
+            let mut validator_index_count = HashMap::new();
+            for message in &partial_signature_messages.messages {
+                let count = validator_index_count
+                    .entry(message.validator_index)
+                    .or_insert(0);
+                *count += 1;
+                if *count > 1 {
+                    return Err(ValidationFailure::TooManyValidatorIndexOccurrences {
+                        validator_index: message.validator_index,
+                        got: *count,
+                        limit: 1,
                     });
                 }
             }
@@ -1629,6 +1654,386 @@ mod tests {
                 )
             },
             "TooManyValidatorIndexOccurrences (limit exceeded for AggregatorCommittee)",
+        );
+    }
+
+    #[test]
+    fn test_ptc_committee_validator_index_occurrence_limit() {
+        // PTC allows exactly 1 occurrence per validator index per partial-sig packet.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+
+        // 1 occurrence: should pass.
+        let messages = vec![PartialSignatureMessage {
+            partial_signature: Signature::empty(),
+            signing_root: Hash256::from([0u8; 32]),
+            signer: OperatorId(1),
+            validator_index: ValidatorIndex(100),
+        }];
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::PTCCommittee);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        let map = create_operator_pub_keys(
+            committee_info.committee_members.clone(),
+            vec![public_key.clone()],
+        );
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        let fork_schedule = generate_fork_schedule(Fork::CStar);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::PTCCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: fork_schedule.clone(),
+        };
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert!(
+            result.is_ok(),
+            "Expected 1 occurrence to be valid for PTCCommittee, but got: {:?}",
+            result
+        );
+
+        // 2 occurrences: should fail.
+        let messages: Vec<_> = (0..2)
+            .map(|_| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(100),
+            })
+            .collect();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::PTCCommittee);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        let slot_clock2 = ManualSlotClock::new(
+            Slot::new(1),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::PTCCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: slot_clock2,
+            operator_pub_keys: &map,
+            fork_schedule,
+        };
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyValidatorIndexOccurrences { limit: 1, .. }
+                )
+            },
+            "TooManyValidatorIndexOccurrences (limit exceeded for PTCCommittee)",
+        );
+    }
+
+    #[test]
+    fn test_ptc_committee_message_count_exceeds_validator_count() {
+        // V+1 distinct validator indices: must trip the message_count > V
+        // check before the per-validator-index occurrence check fires.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let validator_count = committee_info.validator_indices.len();
+        let (private_key, public_key) = generate_test_key_pair();
+
+        let messages: Vec<_> = (0..=validator_count)
+            .map(|i| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(i),
+            })
+            .collect();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PostConsensus,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::PTCCommittee);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::PTCCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(Fork::CStar),
+        };
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { limit, .. } if *limit == validator_count
+                )
+            },
+            "TooManyPartialSignatureMessages (PTCCommittee message_count > V)",
+        );
+    }
+
+    #[test]
+    fn test_ptc_committee_rejected_before_cstar() {
+        use crate::validate_role_for_fork;
+
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::PTCCommittee,
+            PartialSignatureKind::PostConsensus,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let fork_schedule = generate_fork_schedule(Fork::Boole);
+        let validation_context = create_test_validation_context_with_fork(
+            &signed_msg,
+            &committee_info,
+            Role::PTCCommittee,
+            &map,
+            Some(fork_schedule),
+        );
+
+        let result = validate_role_for_fork(Slot::new(0), &validation_context);
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeFork {
+                        minimum_fork: Fork::CStar,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveBeforeFork (PTCCommittee pre-CStar)",
+        );
+    }
+
+    #[test]
+    fn test_ptc_committee_within_ttl_accepted() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::PTCCommittee,
+            PartialSignatureKind::PostConsensus,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::PTCCommittee,
+            &map,
+            TTL_SLOTS,
+            generate_fork_schedule(Fork::CStar),
+        );
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_ptc_committee_beyond_ttl_rejected() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::PTCCommittee,
+            PartialSignatureKind::PostConsensus,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::PTCCommittee,
+            &map,
+            BEYOND_TTL_SLOTS,
+            generate_fork_schedule(Fork::CStar),
+        );
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+            "LateSlotMessage",
+        );
+    }
+
+    #[test]
+    fn test_ptc_committee_invalid_partial_sig_kind_rejected() {
+        // PTC binds to PartialSignatureKind::PostConsensus. Any other kind
+        // must trip PartialSignatureTypeRoleMismatch.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+
+        let (_, signed_msg) = create_test_partial_signature(
+            Role::PTCCommittee,
+            PartialSignatureKind::RandaoPartialSig,
+            OperatorId(1),
+            PartialSigTestOptions::default(),
+            None,
+        );
+
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
+
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::PTCCommittee,
+            &map,
+            generate_fork_schedule(Fork::CStar),
+        );
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::PartialSignatureTypeRoleMismatch),
+            "PartialSignatureTypeRoleMismatch",
         );
     }
 
