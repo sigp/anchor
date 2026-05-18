@@ -206,11 +206,16 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         executor.spawn(
             async move {
                 loop {
+                    // We sleep into the next slot, so look up the deadline for that slot, not
+                    // the current one. Otherwise the tighter Gloas deadline would apply one
+                    // slot late at the fork boundary.
                     if let Some(duration_to_next_slot) =
                         self_clone_phase2.slot_clock.duration_to_next_slot()
+                        && let Some(next_slot) = self_clone_phase2.slot_clock.now().map(|s| s + 1)
                     {
-                        // Sleep until 1/3 into slot
-                        sleep(duration_to_next_slot + slot_duration / 3).await;
+                        let attestation_due =
+                            self_clone_phase2.spec.get_attestation_due::<E>(next_slot);
+                        sleep(duration_to_next_slot + attestation_due).await;
 
                         if let Err(err) = self_clone_phase2.update_voting_context().await {
                             error!(err, "Failed to update voting context")
