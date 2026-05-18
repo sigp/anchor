@@ -331,7 +331,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                         )
                     }
                     Some(Role::PTCCommittee) => {
-                        //todo(cstar): wire PTC instance routing
+                        // TODO(cstar): wire PTC instance routing and add pre-CStar
+                        // fork gate (mirror `AggregatorCommittee` arm above).
                         let slot = types::Slot::new(qbft_message.height);
                         warn!(%slot, "Ignoring PTCCommittee message; routing not wired");
                         Err(QbftError::RoleNotActive)
