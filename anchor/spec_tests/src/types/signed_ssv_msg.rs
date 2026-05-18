@@ -2,7 +2,7 @@ use openssl::{hash::MessageDigest, pkey::PKey, sign::Verifier};
 use serde::Deserialize;
 use ssv_types::{
     OperatorId,
-    message::{SSVMessage, SignedSSVMessage, SignedSSVMessageError},
+    message::{SSVMessage, SignedSSVMessage},
 };
 use ssz::Encode;
 
@@ -47,13 +47,7 @@ impl SpecTest for SignedSSVMessageTest {
                 Ok(()) => error_codes::NO_ERROR,
                 Err(code) => code,
             };
-
-            if actual_code != self.expected_error_code {
-                return Err(format!(
-                    "Expected error code {}, got {actual_code}",
-                    self.expected_error_code,
-                ));
-            }
+            error_codes::assert_error_code(self.expected_error_code, actual_code)?;
         }
         Ok(())
     }
@@ -81,7 +75,7 @@ impl SignedSSVMessageTest {
             ssv_message.clone(),
             msg.full_data.clone().unwrap_or_default(),
         )
-        .map_err(|e| Self::error_code_for(&e))?;
+        .map_err(|e| error_codes::signed_ssv_message_error_code(&e))?;
 
         self.verify_rsa_signatures(&signed_msg, &ssv_message)
     }
@@ -143,29 +137,5 @@ impl SignedSSVMessageTest {
             return Err("RSA signature verification failed".into());
         }
         Ok(())
-    }
-
-    /// Map Anchor's `SignedSSVMessageError` variants to Go's integer error codes.
-    fn error_code_for(error: &SignedSSVMessageError) -> i64 {
-        match error {
-            SignedSSVMessageError::NoSigners => error_codes::NO_SIGNERS,
-            SignedSSVMessageError::NoSignatures => error_codes::NO_SIGNATURES,
-            SignedSSVMessageError::ZeroSigner => error_codes::ZERO_SIGNER_NOT_ALLOWED,
-            SignedSSVMessageError::DuplicatedSigner => error_codes::NON_UNIQUE_SIGNER,
-            SignedSSVMessageError::SignersAndSignaturesWithDifferentLength => {
-                error_codes::INCORRECT_NUMBER_OF_SIGNATURES
-            }
-            // Unreachable: `prepare_signatures()` pads all sigs to exactly `[u8; 256]`
-            // before `new()` runs, so the size check inside `new()` always passes.
-            SignedSSVMessageError::WrongRSASignatureSize { .. } => error_codes::EMPTY_SIGNATURE,
-            SignedSSVMessageError::TooManySignatures { .. }
-            | SignedSSVMessageError::TooManyOperatorIDs { .. }
-            | SignedSSVMessageError::FullDataTooLong { .. }
-            | SignedSSVMessageError::SignersNotSorted
-            | SignedSSVMessageError::SSVMessageError(_) => {
-                // No Go error code equivalent —> sentinel forces test failure on mismatch.
-                error_codes::UNMAPPED_ERROR_CODE
-            }
-        }
     }
 }

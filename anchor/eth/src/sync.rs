@@ -8,16 +8,21 @@ use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
     providers::{Provider, ProviderBuilder, RootProvider, WsConnect},
-    rpc::types::{Filter, Log, SyncStatus},
+    rpc::types::{Filter, Header, Log, SyncStatus},
     sol_types::SolEvent,
     transports::{RpcError, TransportErrorKind},
 };
 use database::{NetworkDatabase, SlashingProtection};
-use futures::{FutureExt, StreamExt, stream::FuturesOrdered};
+use futures::{FutureExt, Stream, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
-use tokio::{select, sync::watch, task::spawn_blocking, time::Duration};
+use tokio::{
+    select,
+    sync::watch,
+    task::spawn_blocking,
+    time::{Duration, timeout},
+};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -75,6 +80,28 @@ const MAX_BACKOFF_MS: u64 = 30_000; // Don't wait longer than 30 seconds
 
 // Block follow distance
 const FOLLOW_DISTANCE: u64 = 8;
+
+// Maximum time to wait for the next block on the live `subscribe_blocks` stream
+// before assuming the WebSocket has gone stale and forcing a full reconnect.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+// Sole producer of the idle-timeout `WsError` so a unit test can pin the variant.
+fn record_idle_timeout() -> ExecutionError {
+    metrics::inc_counter_vec(&metrics::EXECUTION_CONNECTION_ERRORS, &["ws_idle_timeout"]);
+    ExecutionError::WsError(format!(
+        "WebSocket idle for more than {}s, forcing full reconnect",
+        STREAM_IDLE_TIMEOUT.as_secs()
+    ))
+}
+
+async fn next_block_or_timeout<S>(stream: &mut S) -> Result<Option<Header>, ExecutionError>
+where
+    S: Stream<Item = Header> + Unpin,
+{
+    timeout(STREAM_IDLE_TIMEOUT, stream.next())
+        .await
+        .map_err(|_| record_idle_timeout())
+}
 
 // Connection timeout duration
 pub const CONNECT_TIMEOUT: u64 = 10;
@@ -151,8 +178,6 @@ impl SsvEventSyncer {
             },
         );
         debug!("Created event processor - done");
-
-        metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
 
         Ok(Self {
             rpc_client,
@@ -238,6 +263,7 @@ impl SsvEventSyncer {
                 Err(e) => {
                     error!(?e, "Sync failed, attempting recovery");
                     self.is_synced.send_replace(false);
+                    metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
 
                     match e {
                         ExecutionError::WsError(e) => {
@@ -682,8 +708,12 @@ impl SsvEventSyncer {
 
             info!("Successfully subscribed to block stream");
 
-            // If we have a connection, continuously stream in blocks
-            while let Some(block_header) = stream.next().await {
+            loop {
+                let block_header = match next_block_or_timeout(&mut stream).await? {
+                    Some(header) => header,
+                    None => break,
+                };
+
                 // Guard against integer underflow when calculating relevant_block.
                 if block_header.number < self.network.ssv_contract_block + FOLLOW_DISTANCE {
                     warn!(
@@ -695,11 +725,9 @@ impl SsvEventSyncer {
                     continue;
                 }
 
-                // Block we are interested in is the current block number - follow distance
                 let relevant_block = block_header.number - FOLLOW_DISTANCE;
 
-                // If the relevant block was already processed, do not process it again. This can
-                // happen if `block_header.number` was seen before due to a reorg.
+                // Skip blocks already processed (e.g. due to a reorg replaying numbers).
                 let last_processed_block =
                     self.event_processor.db.state().get_last_processed_block();
                 if relevant_block <= last_processed_block {
@@ -744,7 +772,6 @@ impl SsvEventSyncer {
 
             // If we get here, the stream ended (likely due to disconnect)
             error!("WebSocket stream ended, reconnecting...");
-            metrics::set_gauge(&metrics::EXECUTION_SYNC_STATUS, 0);
         }
     }
 }
@@ -774,5 +801,59 @@ mod provider_tests {
         let provider = http_with_timeout_and_fallback(&urls);
         let block_number = provider.get_block_number().await;
         assert!(block_number.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod live_sync_tests {
+    use futures::stream;
+
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn next_block_or_timeout_returns_ws_error_when_stream_is_idle() {
+        let mut idle_stream = stream::pending::<Header>();
+        let outer = STREAM_IDLE_TIMEOUT + Duration::from_secs(10);
+
+        let result = timeout(outer, next_block_or_timeout(&mut idle_stream)).await;
+
+        match result {
+            Ok(Err(ExecutionError::WsError(msg))) => {
+                assert!(
+                    msg.contains(&STREAM_IDLE_TIMEOUT.as_secs().to_string()),
+                    "WsError message should mention the idle timeout, got: {msg}"
+                );
+            }
+            Ok(other) => panic!("expected Err(WsError), got {other:?}"),
+            Err(_) => panic!(
+                "next_block_or_timeout hung past {}s — timeout guard missing?",
+                outer.as_secs()
+            ),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_block_or_timeout_returns_header_when_stream_yields() {
+        let header: Header = Header::default();
+        let mut live_stream = stream::iter(vec![header]);
+
+        let result = next_block_or_timeout(&mut live_stream).await;
+
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "expected Ok(Some(header)), got {result:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_block_or_timeout_returns_none_when_stream_ends() {
+        let mut empty_stream = stream::empty::<Header>();
+
+        let result = next_block_or_timeout(&mut empty_stream).await;
+
+        assert!(
+            matches!(result, Ok(None)),
+            "expected Ok(None), got {result:?}"
+        );
     }
 }

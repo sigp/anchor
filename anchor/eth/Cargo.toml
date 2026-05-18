@@ -7,6 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 alloy = { workspace = true }
 anchor_validator_store = { workspace = true }
+base64 = { workspace = true }
 beacon_node_fallback = { workspace = true }
 bls = { workspace = true }
 database = { workspace = true }
@@ -31,7 +32,7 @@ tracing = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
-base64 = { workspace = true }
 bls = { workspace = true }
 database = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = "0.3"

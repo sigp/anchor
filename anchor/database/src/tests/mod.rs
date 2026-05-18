@@ -5,6 +5,8 @@ mod metadata_tests;
 #[cfg(test)]
 mod operator_tests;
 #[cfg(test)]
+mod share_tests;
+#[cfg(test)]
 mod state_tests;
 #[cfg(test)]
 mod validator_tests;

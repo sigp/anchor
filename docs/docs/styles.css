@@ -1,0 +1,9 @@
+:root {
+  --vocs-content_width: 90ch !important;
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --vocs-content_width: 100ch !important;
+  }
+}

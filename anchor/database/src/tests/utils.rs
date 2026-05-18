@@ -359,7 +359,7 @@ pub mod queries {
     const GET_SHARES: &str = "SELECT share_pubkey, encrypted_key, cluster_id, operator_id FROM shares WHERE validator_pubkey = ?1";
     const GET_VALIDATOR: &str = "SELECT validator_pubkey, cluster_id, validator_index,  graffiti FROM validators WHERE validator_pubkey = ?1";
     const GET_MEMBERS: &str = "SELECT operator_id FROM cluster_members WHERE cluster_id = ?1";
-    const GET_METADATA: &str = "SELECT schema_version, network_name, block_number FROM metadata";
+    const GET_METADATA: &str = "SELECT network_name, block_number FROM metadata";
 
     // Get an operator from the database
     pub fn get_operator(id: OperatorId, tx: &Transaction<'_>) -> Option<Operator> {
@@ -457,7 +457,6 @@ pub mod queries {
     }
 
     pub struct Metadata {
-        pub schema_version: u64,
         pub network_name: String,
         pub block_number: u64,
     }
@@ -465,11 +464,22 @@ pub mod queries {
     pub fn get_metadata(conn: &Connection) -> Result<Metadata, rusqlite::Error> {
         conn.query_row(GET_METADATA, [], |row| {
             Ok(Metadata {
-                schema_version: row.get("schema_version")?,
                 network_name: row.get("network_name")?,
                 block_number: row.get("block_number")?,
             })
         })
+    }
+
+    pub fn get_skipped_operator_reason(
+        operator_id: OperatorId,
+        tx: &Transaction<'_>,
+    ) -> Option<String> {
+        tx.query_row(
+            crate::sql_operations::GET_SKIPPED_OPERATOR_ADD_REASON,
+            params![operator_id],
+            |row| row.get(0),
+        )
+        .ok()
     }
 }
 

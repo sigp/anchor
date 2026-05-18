@@ -1,7 +1,7 @@
 use ssv_types::message::SignedSSVMessageError;
 
 /// Error associated with Config building.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigBuilderError {
     /// No participants were specified
     NoParticipants,
@@ -9,8 +9,8 @@ pub enum ConfigBuilderError {
     ZeroMaxRounds,
     /// Starting round exceeds maximum rounds
     ExceedingStartingRound,
-    /// Quorum must be in \[2f+1, participants-f\]
-    InvalidQuorumSize,
+    /// Committee size must be canonical for SSV QBFT
+    InvalidCommitteeSize,
     /// Operator ID must be specified
     MissingOperatorId,
     /// Operator ID must be contained in participants
@@ -33,8 +33,11 @@ impl std::fmt::Display for ConfigBuilderError {
             Self::ExceedingStartingRound => {
                 write!(f, "Starting round exceeds maximum rounds")
             }
-            Self::InvalidQuorumSize => {
-                write!(f, "Quorum must be in [2f+1, participants-f]")
+            Self::InvalidCommitteeSize => {
+                write!(
+                    f,
+                    "Committee size must be of the form 3f + 1 (4, 7, 10, or 13)"
+                )
             }
             Self::MissingOperatorId => {
                 write!(f, "Operator ID must be specified")

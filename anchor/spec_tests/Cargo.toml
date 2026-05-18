@@ -4,9 +4,16 @@ version = "0.1.0"
 edition.workspace = true
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
+[features]
+# Replaces real BLS cryptography with stub implementations, allowing SSZ decode
+# of blocks with synthetic BLS points (as used in Go ssv-spec fixtures).
+# Mirrors Lighthouse's ef_tests pattern: ef_tests/Cargo.toml also uses bls/fake_crypto.
+fake_crypto = ["bls/fake_crypto"]
+
 [dependencies]
 base64 = { workspace = true }
 bls = { workspace = true }
+eth2 = { workspace = true }
 ethereum_ssz = { workspace = true }
 ethereum_ssz_derive = { workspace = true }
 hex = { workspace = true }

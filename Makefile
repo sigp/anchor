@@ -1,4 +1,4 @@
-.PHONY: tests
+.PHONY: tests coverage coverage-html
 
 GIT_TAG := $(shell git describe --tags --candidates 1)
 BIN_DIR = "bin"
@@ -89,6 +89,14 @@ test-debug:
 nextest-debug:
 	cargo nextest run --workspace --features "$(TEST_FEATURES)"
 
+# Generates an lcov coverage report using the nextest runner.
+coverage:
+	cargo llvm-cov nextest --workspace --features "$(TEST_FEATURES)" --lcov --output-path lcov.info
+
+# Generates a local HTML coverage report in `target/llvm-cov/html`.
+coverage-html:
+	cargo llvm-cov nextest --workspace --features "$(TEST_FEATURES)" --html
+
 # Runs cargo-fmt (linter).
 cargo-fmt:
 	cargo +$(PINNED_NIGHTLY) fmt --all
@@ -104,6 +112,17 @@ check-benches:
 # Runs the full workspace tests in release, without downloading any additional
 # test vectors.
 test: test-release
+
+# Update generated CLI reference snippets from current clap definitions
+cli-reference-update:
+	cargo run --release --bin anchor-docgen update
+
+# Check generated CLI reference snippets are up to date
+cli-reference-check:
+	cargo run --release --bin anchor-docgen check
+
+# Runs both update and check on the project to update the docs and check that they are consistent
+cli-reference: cli-reference-update cli-reference-check
 
 # Updates the CLI help text pages in the Anchor book, building with Docker.
 cli:
@@ -144,8 +163,11 @@ audit: install-audit audit-CI
 install-audit:
 	cargo install --force cargo-audit
 
+# Tracked in sigp/anchor#989. Drop the hickory-proto ignores once libp2p ships
+# a release with hickory >= 0.26.1 (libp2p/rust-libp2p#6395) and we bump our
+# libp2p dep. See the tracking issue for the reachability analysis.
 audit-CI:
-	cargo audit
+	cargo audit --ignore RUSTSEC-2026-0118 --ignore RUSTSEC-2026-0119
 
 # Runs `cargo vendor` to make sure dependencies can be vendored for packaging, reproducibility and archival purpose.
 vendor:

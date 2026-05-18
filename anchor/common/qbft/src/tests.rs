@@ -85,7 +85,7 @@ impl Default for TestQBFTCommitteeBuilder {
             config: ConfigBuilder::new(
                 1.into(),
                 InstanceHeight::default(),
-                (1..6).map(OperatorId::from).collect(),
+                (1..=4).map(OperatorId::from).collect(),
             ),
         }
     }
@@ -202,7 +202,7 @@ fn test_basic_committee() {
 
     // Wait until consensus is reached or all the instances have ended
     let num_consensus = test_instance.wait_until_end();
-    assert!(num_consensus == 5);
+    assert_eq!(num_consensus, 4);
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn test_consensus_with_f_faulty_operators() {
 
     // Wait until consensus is reached or all the instances have ended
     let num_consensus = test_instance.wait_until_end();
-    assert!(num_consensus == 4);
+    assert_eq!(num_consensus, 3);
 }
 
 #[test]
@@ -228,7 +228,96 @@ fn test_node_recovery() {
     test_instance.restart_instance(&OperatorId::from(2));
 
     let num_consensus = test_instance.wait_until_end();
-    assert_eq!(num_consensus, 5); // Should reach full consensus after recovery
+    assert_eq!(num_consensus, 4); // Should reach full consensus after recovery
+}
+
+#[test]
+/// A decided message from an earlier round should complete the instance even after the local
+/// round timer has advanced.
+fn test_receive_accepts_past_round_decided_message_after_round_timeout() {
+    init_test_logging();
+
+    use ssv_types::{
+        consensus::QbftMessage,
+        message::{MsgType, SSVMessage},
+    };
+
+    // Arrange: create a round-1 instance, then simulate the local timer moving it to round 2.
+    let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+        1.into(),
+        InstanceHeight::default(),
+        (1..=4).map(OperatorId::from).collect(),
+    )
+    .build()
+    .expect("config should be valid");
+
+    let decided_data = TestData(42);
+    let decided_root = decided_data.hash();
+    let mut qbft_instance = Qbft::new(
+        config,
+        decided_data.clone(),
+        Box::new(NoDataValidation),
+        MessageId::from([0; 56]),
+        |_| {},
+    );
+
+    qbft_instance.end_round();
+    assert_eq!(qbft_instance.current_round, 2.into());
+
+    let decided_commit = QbftMessage {
+        qbft_message_type: QbftMessageType::Commit,
+        height: 0,
+        round: 1,
+        identifier: VariableList::repeat_full(0),
+        root: decided_root,
+        data_round: 0,
+        round_change_justification: VariableList::empty(),
+        prepare_justification: VariableList::empty(),
+    };
+
+    let ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        MessageId::from([0; 56]),
+        decided_commit.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    let signed_decided = SignedSSVMessage::new(
+        vec![[0; RSA_SIGNATURE_SIZE]; 3],
+        vec![
+            OperatorId::from(1),
+            OperatorId::from(2),
+            OperatorId::from(3),
+        ],
+        ssv_message,
+        decided_data.as_ssz_bytes(),
+    )
+    .expect("should create signed decided message");
+
+    let wrapped_decided = WrappedQbftMessage {
+        signed_message: signed_decided,
+        qbft_message: decided_commit,
+    };
+
+    // Act: deliver the round-1 decided message after the node has already moved to round 2.
+    let result = qbft_instance.receive(wrapped_decided);
+
+    // Assert: the decided certificate is stronger than the local liveness round cursor.
+    assert!(
+        result.is_ok(),
+        "past-round decided message should complete the instance, got {result:?}"
+    );
+    assert!(
+        matches!(
+            &qbft_instance.completed,
+            Some(Completed::Success(root)) if *root == decided_root
+        ),
+        "instance should complete with the decided root, got {:?}",
+        qbft_instance.completed
+    );
+    assert!(qbft_instance.aggregated_commit.is_some());
+    assert!(matches!(qbft_instance.state, InstanceState::Complete));
+    assert!(qbft_instance.data.contains_key(&decided_root));
 }
 
 #[test]
@@ -256,7 +345,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // 3 nodes, quorum = 3
+        (1..=4).map(OperatorId::from).collect(), // 4 nodes, quorum = 3
     )
     .with_operator_id(OperatorId::from(1))
     .build()
@@ -287,7 +376,7 @@ fn test_round_change_validation_skips_round_one_prepared_values() {
                                                        * preparation! */
     };
 
-    // Create signed round change messages (need quorum of 3 for 3-node committee)
+    // Create signed round change messages (need quorum of 3 for 4-node committee)
     let mut signed_round_changes = vec![];
     for operator_id in [1, 2, 3] {
         // Create the SSVMessage properly
@@ -399,11 +488,11 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
 
     // Create QBFT instance that will be leader for round 2
     // Leader for round R: committee[(R-1 + height) % committee_size]
-    // Round 2: (2-1+0) % 3 = 1 -> operator 2 (index 1 in [1,2,3])
+    // Round 2: (2-1+0) % 4 = 1 -> operator 2 (index 1 in [1,2,3,4])
     let config = ConfigBuilder::<DefaultLeaderFunction>::new(
         1.into(),
         InstanceHeight::default(),
-        (1..4).map(OperatorId::from).collect(), // [1, 2, 3]
+        (1..=4).map(OperatorId::from).collect(), // [1, 2, 3, 4]
     )
     .with_operator_id(OperatorId::from(2)) // This node is leader for round 2
     .build()

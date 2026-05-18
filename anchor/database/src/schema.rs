@@ -1,51 +1,34 @@
 use std::path::Path;
 
-use rusqlite::{Connection, types::Value};
+use refinery::{Target, embed_migrations};
+use rusqlite::{Connection, OptionalExtension, params, types::Value};
 
 use crate::{DatabaseError, sql_operations};
 
+embed_migrations!("src/migrations");
+
 type SchemaVersion = u32;
 
-/// Migration from schema version 1 to 2: Add max_operator_id_seen column to metadata table
-const MIGRATION_V1_TO_V2: &str = r#"
-    ALTER TABLE metadata ADD COLUMN max_operator_id_seen INTEGER;
-    UPDATE metadata SET schema_version = 2;
-"#;
-
-/// Migration from schema version 2 to 3: Add network_name column to metadata table.
-///
-/// This replaces domain_type-based network isolation with network name.
-/// The domain_type column is NOT removed because:
-/// 1. SQLite doesn't support DROP COLUMN easily (requires table recreation)
-/// 2. Keeping it maintains backwards compatibility
-/// 3. It's harmless as dead data - we simply ignore it
-///
-/// The domain_type was problematic because it changes at each fork activation,
-/// causing "database for different network" errors after fork transitions.
-/// Network name (e.g., "mainnet", "hoodi") is stable across forks.
-const MIGRATION_V2_TO_V3: &str = r#"
-    ALTER TABLE metadata ADD COLUMN network_name TEXT;
-    UPDATE metadata SET schema_version = 3;
-"#;
-
-enum UpgradeAction {
-    UpToDate,
-    DoUpdate {
-        script: &'static str,
-        new_version: SchemaVersion,
-    },
-    Outdated,
-    Future,
-}
+const SUPPORTED_PRE_REFINERY_SCHEMA_VERSION: SchemaVersion = 1;
+const BASELINE_MIGRATION_VERSION: i32 = 1;
 
 enum DatabaseType {
-    /// If the Option is none, the database is from an older version of Anchor where we did not
-    /// track the schema version yet. We can change the type to "SchemaVersion" at some point and
-    /// treat older versions as "Unknown".
-    Anchor(Option<SchemaVersion>),
-    /// Database belongs to a different network
-    IncorrectNetwork(String),
+    New,
+    RefineryManaged {
+        stored_network: Option<String>,
+    },
+    ManualAnchor {
+        schema_version: SchemaVersion,
+        stored_network: Option<String>,
+    },
+    LegacyUnsupported,
     Unknown,
+}
+
+fn migration_runner() -> refinery::Runner {
+    // Treat the pending startup migrations as one unit so we do not leave the database halfway
+    // upgraded if a later step fails.
+    migrations::runner().set_grouped(true)
 }
 
 /// Ensure that there is an up-to-date database available at `db_path`. Also check or set the
@@ -56,134 +39,232 @@ pub fn ensure_up_to_date(
 ) -> Result<(), DatabaseError> {
     let db_path = db_path.as_ref();
     let is_new_file = !db_path.exists();
-    let conn = Connection::open(db_path)?;
+    let mut conn = Connection::open(db_path)?;
+    ensure_up_to_date_with_connection(&mut conn, network_name, is_new_file)
+}
 
-    let mut schema_version = if is_new_file {
-        Some(create_initial_schema(&conn, network_name)?)
+#[cfg(feature = "test-utils")]
+pub(crate) fn initialize_in_memory(
+    conn: &mut Connection,
+    network_name: &str,
+) -> Result<(), DatabaseError> {
+    ensure_up_to_date_with_connection(conn, network_name, true)
+}
+
+#[cfg(test)]
+pub(crate) fn stamp_baseline_for_tests(conn: &mut Connection) -> Result<(), DatabaseError> {
+    migration_runner()
+        .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
+        .run(conn)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn run_migrations_for_tests(conn: &mut Connection) -> Result<(), DatabaseError> {
+    migration_runner().run(conn)?;
+    Ok(())
+}
+
+fn ensure_up_to_date_with_connection(
+    conn: &mut Connection,
+    network_name: &str,
+    assume_new_database: bool,
+) -> Result<(), DatabaseError> {
+    let database_type = if assume_new_database && is_empty_database(conn)? {
+        DatabaseType::New
     } else {
-        match determine_database_type(&conn, network_name) {
-            DatabaseType::Anchor(schema_version) => schema_version,
-            DatabaseType::Unknown => {
-                // We do not know what this is. Let's be safe and error out.
-                return Err(DatabaseError::AlreadyPresent(
-                    "Unknown database schema".to_string(),
-                ));
-            }
-            DatabaseType::IncorrectNetwork(stored_network) => {
-                return Err(DatabaseError::AlreadyPresent(format!(
-                    "Database is for network '{stored_network}', expected '{network_name}'"
-                )));
-            }
-        }
+        determine_database_type(conn)?
     };
 
-    // Upgrade scripts are step by step, so we need to loop until we are up to date.
-    loop {
-        match get_upgrade_action(schema_version) {
-            UpgradeAction::UpToDate => {
-                // After all upgrades, ensure network_name is set (for migrated databases)
-                conn.execute(
-                    "UPDATE metadata SET network_name = ?1 WHERE network_name IS NULL",
-                    [network_name],
-                )?;
-                return Ok(());
-            }
-            UpgradeAction::DoUpdate {
-                script,
-                new_version,
-            } => {
-                conn.execute_batch(script)?;
-                schema_version = Some(new_version);
-            }
-            UpgradeAction::Outdated => {
-                return Err(DatabaseError::AlreadyPresent(
-                    "Database is outdated - please remove \"anchor_db.sqlite\" or use another data dir.".to_string(),
-                ));
-            }
-            UpgradeAction::Future => {
-                return Err(DatabaseError::AlreadyPresent(
-                    "Database schema is newer than supported by this version of Anchor".to_string(),
-                ));
-            }
+    match database_type {
+        DatabaseType::New => {}
+        DatabaseType::RefineryManaged { stored_network } => {
+            validate_network_name(stored_network.as_deref(), network_name)?;
+        }
+        DatabaseType::ManualAnchor {
+            schema_version,
+            stored_network,
+        } => {
+            validate_network_name(stored_network.as_deref(), network_name)?;
+            bridge_manual_anchor_database(conn, schema_version)?;
+        }
+        DatabaseType::LegacyUnsupported => {
+            return Err(DatabaseError::AlreadyPresent(
+                "Database is from an unsupported pre-refinery Anchor version. Please remove \"anchor_db.sqlite\" and let Anchor recreate it."
+                    .to_string(),
+            ));
+        }
+        DatabaseType::Unknown => {
+            return Err(DatabaseError::AlreadyPresent(
+                "Unknown database schema".to_string(),
+            ));
         }
     }
+
+    migration_runner().run(conn)?;
+    ensure_metadata_row(conn, network_name)?;
+    Ok(())
 }
 
-fn determine_database_type(conn: &Connection, network_name: &str) -> DatabaseType {
-    // First, try to get the schema version from metadata table
-    let schema_version_result: Result<SchemaVersion, _> =
-        conn.query_row(sql_operations::GET_METADATA, [], |row| {
-            row.get("schema_version")
-        });
+fn determine_database_type(conn: &Connection) -> Result<DatabaseType, DatabaseError> {
+    let has_metadata = has_table(conn, "metadata")?;
+    let has_refinery_history = has_table(conn, "refinery_schema_history")?;
 
-    match schema_version_result {
-        Ok(schema_version) => {
-            // Metadata table exists. Now try to get network_name (may not exist in v1/v2)
-            let network_result: Result<Option<String>, _> =
-                conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0));
+    if has_refinery_history {
+        // Once refinery owns the DB, `refinery_schema_history` is the authoritative signal. The
+        // legacy `metadata.schema_version` column may still exist for compatibility, but it is no
+        // longer the source of truth for schema state. A DB can also be in the stamped-only V1
+        // bridge state after `FakeVersion(1)` but before V2 has added `network_name`, so guard
+        // the read the same way we do for manual schema-v1 DBs.
+        let stored_network = if has_metadata && has_column(conn, "metadata", "network_name")? {
+            conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
+                .optional()?
+                .flatten()
+        } else {
+            None
+        };
 
-            match network_result {
-                Ok(Some(stored)) if stored == network_name => {
-                    DatabaseType::Anchor(Some(schema_version))
-                }
-                Ok(Some(stored)) => DatabaseType::IncorrectNetwork(stored),
-                Ok(None) | Err(_) => {
-                    // Either network_name is NULL or the column doesn't exist (v1/v2 database)
-                    // Accept for migration
-                    DatabaseType::Anchor(Some(schema_version))
-                }
-            }
-        }
-        Err(_) => {
-            // Metadata table doesn't exist or query failed.
-            // Check if this is a legacy Anchor database (pre-metadata table).
-            let legacy = conn
-                .query_row(sql_operations::GET_LEGACY_BLOCK, [], |row| {
-                    // Check if there is the expected column and no further columns.
-                    Ok(
-                        row.get::<_, u64>("block_number").is_ok()
-                            && row.get::<_, Value>(1).is_err(),
-                    )
-                })
-                .unwrap_or(false);
+        return Ok(DatabaseType::RefineryManaged { stored_network });
+    }
 
-            if legacy {
-                DatabaseType::Anchor(None)
+    if has_metadata {
+        // A metadata table without refinery history is the pre-cutover manual Anchor path. Those
+        // DBs are classified by the legacy `schema_version` field so we can decide whether to
+        // adopt them into the refinery baseline or reject them as unsupported.
+        let schema_version = conn
+            .query_row("SELECT schema_version FROM metadata", [], |row| row.get(0))
+            .optional()?;
+
+        if let Some(schema_version) = schema_version {
+            // Shipped schema-v1 databases do not have `network_name` yet, so check for the column
+            // before reading it. Later manual schemas would have it, and we still want to enforce
+            // cross-network safety before doing any bridge work.
+            let stored_network = if has_column(conn, "metadata", "network_name")? {
+                conn.query_row("SELECT network_name FROM metadata", [], |row| row.get(0))
+                    .optional()?
+                    .flatten()
             } else {
-                DatabaseType::Unknown
-            }
+                None
+            };
+
+            return Ok(DatabaseType::ManualAnchor {
+                schema_version,
+                stored_network,
+            });
         }
+
+        // A metadata table with no singleton row is not a valid refinery-era or supported manual
+        // Anchor state. Treat it like an unsupported legacy DB rather than trying to infer shape
+        // from half-initialized contents.
+        return Ok(DatabaseType::LegacyUnsupported);
+    }
+
+    let legacy = conn
+        .query_row(sql_operations::GET_LEGACY_BLOCK, [], |row| {
+            Ok(row.get::<_, u64>("block_number").is_ok() && row.get::<_, Value>(1).is_err())
+        })
+        .unwrap_or(false);
+
+    if legacy {
+        Ok(DatabaseType::LegacyUnsupported)
+    } else if is_empty_database(conn)? {
+        Ok(DatabaseType::New)
+    } else {
+        Ok(DatabaseType::Unknown)
     }
 }
 
-// Before release, update the return value of this function if the initial table schema was changed.
-pub(crate) fn create_initial_schema(
-    conn: &rusqlite::Connection,
-    network_name: &str,
-) -> Result<SchemaVersion, DatabaseError> {
-    conn.execute_batch(include_str!("table_schema.sql"))?;
-    conn.execute(sql_operations::INSERT_METADATA, [network_name])?;
-    let schema_version = conn.query_row(sql_operations::GET_METADATA, [], |row| {
-        row.get("schema_version")
-    })?;
-    Ok(schema_version)
+fn validate_network_name(
+    stored_network: Option<&str>,
+    expected_network: &str,
+) -> Result<(), DatabaseError> {
+    if let Some(stored_network) = stored_network
+        && stored_network != expected_network
+    {
+        return Err(DatabaseError::AlreadyPresent(format!(
+            "Database is for network '{stored_network}', expected '{expected_network}'"
+        )));
+    }
+
+    Ok(())
 }
 
-// Register upgrade scripts in this function and mark the current version. Define any versions for
-// which the schema is not upgradable as "Outdated" and all versions after the current version as
-// "Future".
-fn get_upgrade_action(version: Option<SchemaVersion>) -> UpgradeAction {
-    match version {
-        None | Some(0) => UpgradeAction::Outdated,
-        Some(1) => UpgradeAction::DoUpdate {
-            script: MIGRATION_V1_TO_V2,
-            new_version: 2,
-        },
-        Some(2) => UpgradeAction::DoUpdate {
-            script: MIGRATION_V2_TO_V3,
-            new_version: 3,
-        },
-        Some(3) => UpgradeAction::UpToDate,
-        Some(4..) => UpgradeAction::Future,
+fn bridge_manual_anchor_database(
+    conn: &mut Connection,
+    schema_version: SchemaVersion,
+) -> Result<(), DatabaseError> {
+    if schema_version != SUPPORTED_PRE_REFINERY_SCHEMA_VERSION {
+        return Err(DatabaseError::AlreadyPresent(
+            "Database is from an unsupported pre-refinery Anchor version. Please remove \"anchor_db.sqlite\" and let Anchor recreate it."
+                .to_string(),
+        ));
     }
+
+    // Manual schema v1 is now the refinery baseline, so pre-refinery production databases can be
+    // adopted by stamping V1 as already applied and then letting refinery run the combined V2
+    // upgrade normally. This avoids replaying synthetic historical states: the DB stays in place,
+    // refinery history is bootstrapped once, and all later evolution goes through real migration
+    // files. Stamping V1 and then applying V2 happen in separate runner invocations, so the
+    // bridge+upgrade path is resumable rather than fully atomic: if V1 is stamped and V2 fails,
+    // the next startup will see a refinery-managed DB and retry V2.
+    migration_runner()
+        .set_target(Target::FakeVersion(BASELINE_MIGRATION_VERSION))
+        .run(conn)?;
+
+    Ok(())
+}
+
+fn ensure_metadata_row(conn: &Connection, network_name: &str) -> Result<(), DatabaseError> {
+    conn.execute(sql_operations::INSERT_METADATA, params![network_name])?;
+    // V2 mirrors the old additive path, so pre-refinery rows still need runtime normalization
+    // after the migration runs. Fresh DBs already inserted the full row through INSERT_METADATA;
+    // adopted schema-v1 DBs still need the new columns populated and the legacy columns brought to
+    // the post-upgrade values expected by the rest of the code.
+    conn.execute(
+        "UPDATE metadata
+         SET schema_version = 4,
+             domain_type = COALESCE(domain_type, 0),
+             network_name = COALESCE(network_name, ?1)",
+        params![network_name],
+    )?;
+    Ok(())
+}
+
+fn has_table(conn: &Connection, table_name: &str) -> Result<bool, DatabaseError> {
+    // Use sqlite_master as a pure existence check. `.optional()` keeps the common "not present"
+    // case cheap while still propagating real SQL errors instead of misclassifying broken DBs.
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        [table_name],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|exists| exists.is_some())
+    .map_err(DatabaseError::from)
+}
+
+fn has_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<bool, DatabaseError> {
+    // Legacy manual schema-v1 databases legitimately lack newer columns such as `network_name`, so
+    // callers need an existence probe that preserves real SQL failures.
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2 LIMIT 1",
+        params![table_name, column_name],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|exists| exists.is_some())
+    .map_err(DatabaseError::from)
+}
+
+fn is_empty_database(conn: &Connection) -> Result<bool, DatabaseError> {
+    let objects: u64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(objects == 0)
 }
