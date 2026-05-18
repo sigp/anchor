@@ -103,6 +103,7 @@ impl EncryptedKey {
     /// On `InvalidPassword`, retries with [`alt_normalize_password`] to support keystores produced
     /// by go-ssv. Any password containing precomposed characters (e.g. `ñ`, `ü`, `é`) yields
     /// different KDF input bytes than the EIP-2335 spec NFKD path used by `eth2_keystore`.
+    /// Encryption remains EIP-2335 spec-compliant; the fallback is decrypt-only.
     pub fn decrypt(&self, password: &str) -> Result<Rsa<Private>, DecryptionError> {
         let crypto = self.as_crypto();
         let pem = match eth2_keystore::decrypt(password.as_ref(), &crypto) {
@@ -161,9 +162,18 @@ impl EncryptedKey {
     }
 }
 
-/// Reproduces `wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.1.3`'s `normPassphrase`: NFKD
-/// decomposes the input then keeps only starter code points, discarding the combining marks emitted
-/// by decomposition. The result is non-spec, but matches what go-ssv currently uses as KDF input.
+/// Approximates `wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.1.3`'s `normPassphrase`: NFKD
+/// decomposes the input then keeps only starter code points, discarding the combining marks
+/// emitted by decomposition. The result is non-spec, but matches what go-ssv currently uses as KDF
+/// input for the common case (passwords containing precomposed Latin chars).
+///
+/// Control-char handling is intentionally not replicated here. wealdtech v1.1.3 strips C0 + DEL
+/// from single-byte starters; `eth2_keystore::decrypt` then strips all `char::is_control()` code
+/// points on both the primary and fallback attempts, which covers the same ground (and more) for
+/// every realistic password. The only theoretical divergence is a C1 control combined with a
+/// combining mark in the same password.
+///
+/// Reference: <https://github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4/blob/v1.1.3/norm.go>.
 fn alt_normalize_password(password: &str) -> Zeroizing<String> {
     Zeroizing::new(
         password
