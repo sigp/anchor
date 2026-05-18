@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use beacon_node_fallback::BeaconNodeFallback;
+use beacon_node_fallback::{BeaconNodeFallback, beacon_head_monitor::HeadEvent};
 use bls::PublicKeyBytes;
 use eth2::{
     BeaconNodeHttpClient,
@@ -19,7 +19,10 @@ use ssv_types::{
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::{
+    sync::{Mutex, mpsc},
+    time::{Instant, sleep, sleep_until},
+};
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
@@ -129,6 +132,7 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     spec: Arc<ChainSpec>,
     fork_schedule: Arc<ForkSchedule>,
     weighted_attestation_data: bool,
+    head_monitor_rx: Option<Arc<Mutex<mpsc::Receiver<HeadEvent>>>>,
 }
 
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
@@ -142,6 +146,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         spec: Arc<ChainSpec>,
         fork_schedule: Arc<ForkSchedule>,
         weighted_attestation_data: bool,
+        head_monitor_rx: Option<Arc<Mutex<mpsc::Receiver<HeadEvent>>>>,
     ) -> Self {
         Self {
             duties_service,
@@ -152,6 +157,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             spec,
             fork_schedule,
             weighted_attestation_data,
+            head_monitor_rx,
         }
     }
 

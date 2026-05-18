@@ -341,14 +341,51 @@ impl Client {
 
         // Only the beacon_nodes are used for attestation duties, so proposer_nodes do not need a
         // head_send ref.
-        let head_monitor_rx = if config.enable_beacon_head_monitor {
-            let (head_monitor_tx, head_monitor_rx) =
-                mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
-            beacon_nodes.set_head_send(Arc::new(head_monitor_tx));
-            Some(Mutex::new(head_monitor_rx))
-        } else {
-            None
-        };
+        let (attestation_head_monitor_rx, metadata_head_monitor_rx) =
+            if config.enable_beacon_head_monitor {
+                let (head_event_tx, mut head_event_rx) =
+                    mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
+                let (attestation_service_tx, attestation_service_rx) =
+                    mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
+                let (metadata_service_tx, metadata_service_rx) =
+                    mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
+                beacon_nodes.set_head_send(Arc::new(head_event_tx));
+
+                executor.spawn(
+                    async move {
+                        while let Some(head_event) = head_event_rx.recv().await {
+                            let HeadEvent {
+                                beacon_node_index,
+                                slot,
+                                beacon_block_root,
+                            } = head_event;
+                            let to_attest = HeadEvent {
+                                beacon_node_index,
+                                slot,
+                                beacon_block_root,
+                            };
+                            let to_meta = HeadEvent {
+                                beacon_node_index,
+                                slot,
+                                beacon_block_root,
+                            };
+                            if attestation_service_tx.send(to_attest).await.is_err()
+                                || metadata_service_tx.send(to_meta).await.is_err()
+                            {
+                                warn!("head event fan-out: downstream closed, exiting relay");
+                                return;
+                            }
+                        }
+                    },
+                    "head_event_fanout",
+                );
+                (
+                    Some(Mutex::new(attestation_service_rx)),
+                    Some(Arc::new(Mutex::new(metadata_service_rx))),
+                )
+            } else {
+                (None, None)
+            };
 
         let beacon_nodes = Arc::new(beacon_nodes);
         start_fallback_updater_service::<_, E>(executor.clone(), beacon_nodes.clone())?;
@@ -674,7 +711,7 @@ impl Client {
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
             .chain_spec(spec.clone())
-            .head_monitor_rx(head_monitor_rx)
+            .head_monitor_rx(attestation_head_monitor_rx)
             .build()?;
 
         let preparation_service = PreparationServiceBuilder::new()
@@ -717,6 +754,7 @@ impl Client {
             spec.clone(),
             fork_schedule.clone(),
             config.with_weighted_attestation_data,
+            metadata_head_monitor_rx,
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
