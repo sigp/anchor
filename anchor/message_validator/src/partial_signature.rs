@@ -1807,8 +1807,7 @@ mod tests {
 
     #[test]
     fn test_ptc_committee_message_count_exceeds_validator_count() {
-        // V+1 distinct validator indices: must trip the message_count > V
-        // check before the per-validator-index occurrence check fires.
+        // V+1 distinct validator indices: verifies the structural message-count cap (V).
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let validator_count = committee_info.validator_indices.len();
         let (private_key, public_key) = generate_test_key_pair();
