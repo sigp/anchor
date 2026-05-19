@@ -78,11 +78,11 @@ impl Role {
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
-            // PTC duty starts at 75% slot with ~3s remaining; QUICK_TIMEOUT = 2s
-            // gives one useful round within the slot (round 1 expires at +2s).
-            // Rounds 2-4 (cumulative +4/+6/+8s) recover from operator start delay
-            // or round-1 message loss; rounds 5+ exceed any realistic inclusion
-            // window and are dead weight.
+            // PTC is expected near 75% of a 12s slot, leaving about 3s.
+            // With 2s quick round timeouts, only round 1 is likely to finish
+            // before slot end. Allow up to 4 rounds as a small local grace
+            // window for delayed starts or message loss; this is not a
+            // consensus-spec requirement.
             Role::PTCCommittee => Some(4),
             // These roles don't use QBFT consensus
             Role::ValidatorRegistration | Role::VoluntaryExit => None,
