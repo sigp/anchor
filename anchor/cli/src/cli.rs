@@ -78,7 +78,7 @@ pub struct ExternalApis {
 
     #[clap(
         long,
-        value_name = "CERTIFICATE-FILES",
+        value_name = "CERTIFICATE_FILES",
         value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
@@ -90,7 +90,7 @@ pub struct ExternalApis {
 
     #[clap(
         long,
-        value_name = "CERTIFICATE-FILES",
+        value_name = "CERTIFICATE_FILES",
         value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an execution node. These certificates must be in PEM format and are used \
