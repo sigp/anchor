@@ -205,27 +205,64 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         );
 
         // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 2: VotingContext (1/3 slot)
+        // PHASE 2: VotingContext (head event or 1/3 slot, whichever fires first)
         // Gets cached voting assignments, fetches beacon_vote, builds VotingContext.
         // ═══════════════════════════════════════════════════════════════════════
         let self_clone_phase2 = self.clone();
         executor.spawn(
             async move {
                 loop {
-                    if let Some(duration_to_next_slot) =
+                    let Some(duration_to_next_slot) =
                         self_clone_phase2.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until 1/3 into slot
-                        sleep(duration_to_next_slot + slot_duration / 3).await;
-
-                        if let Err(err) = self_clone_phase2.update_voting_context().await {
-                            error!(err, "Failed to update voting context")
-                        } else {
-                            trace!("Updated voting context");
-                        }
-                    } else {
+                    else {
                         error!("Failed to read slot clock");
                         sleep(slot_duration).await;
+                        continue;
+                    };
+
+                    // Cross the slot boundary first so we race head events only within
+                    // the slot we're about to attest in.
+                    sleep(duration_to_next_slot).await;
+
+                    let Some(intended_slot) = self_clone_phase2.slot_clock.now() else {
+                        error!("Failed to read slot clock");
+                        continue;
+                    };
+
+                    // Race the 1/3-slot fallback timer against an in-slot head event.
+                    let from_head_event = if self_clone_phase2.head_monitor_rx.is_some() {
+                        tokio::select! {
+                            _ = sleep(slot_duration / 3) => false,
+                            _ = self_clone_phase2.wait_for_head_event() => true,
+                        }
+                    } else {
+                        sleep(slot_duration / 3).await;
+                        false
+                    };
+
+                    let trigger = if from_head_event {
+                        metrics::TRIGGER_HEAD_EVENT
+                    } else {
+                        metrics::TRIGGER_TIMER
+                    };
+                    metrics::inc_counter_vec(
+                        &metrics::METADATA_SERVICE_VOTING_CONTEXT_TRIGGERS_TOTAL,
+                        &[trigger],
+                    );
+                    if let Some(offset) =
+                        self_clone_phase2.slot_clock.millis_from_current_slot_start()
+                    {
+                        metrics::observe_timer_vec(
+                            &metrics::METADATA_SERVICE_VOTING_CONTEXT_OFFSET_SECONDS,
+                            &[trigger],
+                            offset,
+                        );
+                    }
+
+                    if let Err(err) = self_clone_phase2.update_voting_context().await {
+                        error!(err, "Failed to update voting context")
+                    } else {
+                        trace!(%intended_slot, from_head_event, "Updated voting context");
                     }
                 }
             },
@@ -343,7 +380,33 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Phase 2: Build and publish `VotingContext` at 1/3 slot.
+    /// Wait for a head event matching the current slot. Stale events for past
+    /// slots are dropped. Resolves to `None` if the channel is closed or no
+    /// head monitor is configured.
+    async fn wait_for_head_event(&self) -> Option<HeadEvent> {
+        let receiver = self.head_monitor_rx.as_ref()?;
+        let mut receiver = receiver.lock().await;
+        loop {
+            match receiver.recv().await {
+                Some(head_event) => {
+                    // Only return head events for the current slot - this ensures the
+                    // block for this slot has been produced before triggering attestation.
+                    let current_slot = self.slot_clock.now()?;
+                    if head_event.slot == current_slot {
+                        return Some(head_event);
+                    }
+                    // Head event is for a previous slot, keep waiting
+                }
+                None => {
+                    warn!("Head monitor channel closed unexpectedly");
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// Phase 2: Build and publish `VotingContext`, triggered by a head event or
+    /// the 1/3-slot fallback timer.
     async fn update_voting_context(&self) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 

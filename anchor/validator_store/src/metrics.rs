@@ -55,6 +55,31 @@ pub static METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL: LazyLock<Result<IntCounter>
         )
     });
 
+pub const TRIGGER_HEAD_EVENT: &str = "head_event";
+pub const TRIGGER_TIMER: &str = "timer";
+
+/// Count of Phase 2 firings, labelled by trigger source.
+pub static METADATA_SERVICE_VOTING_CONTEXT_TRIGGERS_TOTAL: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_metadata_service_voting_context_triggers_total",
+            "Number of voting context updates by trigger source (head_event or timer)",
+            &["trigger"],
+        )
+    });
+
+/// Offset within the slot at which Phase 2 fired, in seconds.
+/// Buckets target the 0–4s window before the 1/3-slot fallback timer.
+pub static METADATA_SERVICE_VOTING_CONTEXT_OFFSET_SECONDS: LazyLock<Result<HistogramVec>> =
+    LazyLock::new(|| {
+        try_create_histogram_vec_with_buckets(
+            "anchor_metadata_service_voting_context_offset_seconds",
+            "Time into slot (seconds) when voting context was triggered, by source",
+            Ok(vec![0.05, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]),
+            &["trigger"],
+        )
+    });
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // AggregatorCommittee metrics
 // ═══════════════════════════════════════════════════════════════════════════════
