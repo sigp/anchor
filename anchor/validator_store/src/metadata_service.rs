@@ -263,16 +263,18 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     };
 
                     // Race the 1/3-slot fallback timer against an in-slot head event.
-                    let from_head_event = if self_clone_phase2.head_monitor_rx.is_some() {
-                        tokio::select! {
-                            _ = sleep(slot_duration / 3) => false,
-                            _ = self_clone_phase2.wait_for_head_event() => true,
-                        }
-                    } else {
-                        sleep(slot_duration / 3).await;
-                        false
-                    };
+                    let head_event: Option<HeadEvent> =
+                        if self_clone_phase2.head_monitor_rx.is_some() {
+                            tokio::select! {
+                                _ = sleep(slot_duration / 3) => None,
+                                event = self_clone_phase2.wait_for_head_event() => event,
+                            }
+                        } else {
+                            sleep(slot_duration / 3).await;
+                            None
+                        };
 
+                    let from_head_event = head_event.is_some();
                     let trigger = if from_head_event {
                         metrics::TRIGGER_HEAD_EVENT
                     } else {
@@ -293,7 +295,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                         );
                     }
 
-                    if let Err(err) = self_clone_phase2.update_voting_context().await {
+                    if let Err(err) =
+                        self_clone_phase2.update_voting_context(head_event).await
+                    {
                         error!(err, "Failed to update voting context")
                     } else {
                         trace!(%intended_slot, from_head_event, "Updated voting context");
@@ -422,8 +426,13 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     }
 
     /// Phase 2: Build and publish `VotingContext`, triggered by a head event or
-    /// the 1/3-slot fallback timer.
-    async fn update_voting_context(&self) -> Result<(), String> {
+    /// the 1/3-slot fallback timer. When `head_event` is `Some`, the firing BN
+    /// is queried directly (bypassing WAD); any failure or block-root mismatch
+    /// falls back to the WAD/first_success path.
+    async fn update_voting_context(
+        &self,
+        head_event: Option<HeadEvent>,
+    ) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
         let voting_assignments = self
@@ -432,24 +441,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .await
             .map_err(|e| format!("Failed to get cached voting assignments: {:?}", e))?;
 
-        // Fetch beacon_vote - use WAD if enabled, otherwise fallback to first_success
-        let attestation_data = if self.weighted_attestation_data {
-            self.weighted_calculation(slot).await?
-        } else {
-            self.beacon_nodes
-                .first_success(|beacon_node| async move {
-                    let _timer = validator_metrics::start_timer_vec(
-                        &validator_metrics::ATTESTATION_SERVICE_TIMES,
-                        &[validator_metrics::ATTESTATIONS_HTTP_GET],
-                    );
-                    beacon_node
-                        .get_validator_attestation_data(slot, 0)
-                        .await
-                        .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
-                        .map(|result| result.data)
-                })
-                .await
-                .map_err(|e| e.to_string())?
+        let attestation_data = match head_event {
+            Some(event) => match self.fetch_attestation_data_from_event(slot, &event).await {
+                Some(data) => data,
+                None => self.fetch_attestation_data(slot).await?,
+            },
+            None => self.fetch_attestation_data(slot).await?,
         };
 
         let beacon_vote = BeaconVote {
@@ -465,8 +462,63 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         self.validator_store.update_voting_context(voting_context);
 
-        trace!(%slot, "Published VotingContext at 1/3 slot");
+        trace!(%slot, "Published VotingContext");
         Ok(())
+    }
+
+    /// Eager-attest path: query the BN that fired the head event. Verifies the
+    /// returned block_root matches the event's. Returns `None` on any failure
+    /// or mismatch so the caller can fall back.
+    async fn fetch_attestation_data_from_event(
+        &self,
+        slot: Slot,
+        event: &HeadEvent,
+    ) -> Option<AttestationData> {
+        match self
+            .beacon_nodes
+            .run_on_candidate_index(event.beacon_node_index, |beacon_node| async move {
+                beacon_node.get_validator_attestation_data(slot, 0).await
+            })
+            .await
+        {
+            Ok(response) if response.data.beacon_block_root == event.beacon_block_root => {
+                Some(response.data)
+            }
+            Ok(response) => {
+                warn!(
+                    expected = ?event.beacon_block_root,
+                    got = ?response.data.beacon_block_root,
+                    "Head-event BN returned mismatched block root, falling back",
+                );
+                None
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to fetch attestation data from head-event BN, falling back");
+                None
+            }
+        }
+    }
+
+    /// Fallback path: WAD if enabled, otherwise first_success across all BNs.
+    async fn fetch_attestation_data(&self, slot: Slot) -> Result<AttestationData, String> {
+        if self.weighted_attestation_data {
+            self.weighted_calculation(slot).await
+        } else {
+            self.beacon_nodes
+                .first_success(|beacon_node| async move {
+                    let _timer = validator_metrics::start_timer_vec(
+                        &validator_metrics::ATTESTATION_SERVICE_TIMES,
+                        &[validator_metrics::ATTESTATIONS_HTTP_GET],
+                    );
+                    beacon_node
+                        .get_validator_attestation_data(slot, 0)
+                        .await
+                        .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
+                        .map(|result| result.data)
+                })
+                .await
+                .map_err(|e| e.to_string())
+        }
     }
 
     /// Phase 3: Build and publish `AggregationAssignments` at 2/3 slot.
