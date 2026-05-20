@@ -2322,61 +2322,33 @@ mod tests {
         assert!((result_distance_2.score - 201.333333).abs() < 0.001);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════════════
-    // Phase 2 head-event race tests
-    //
-    // These cover `wait_for_head_event` and the timer-vs-event race it participates in.
-    // They use the free-function form of `wait_for_head_event` (extracted from the
-    // method body) so they can exercise the logic without constructing a full
-    // `MetadataService`, which would require a duties service, validator store,
-    // beacon node fallback, and task executor.
-    // ═══════════════════════════════════════════════════════════════════════════════════
-
     use slot_clock::ManualSlotClock;
     use tokio::time::{Duration as TokioDuration, timeout};
 
-    /// Slot used as the "current" slot in head-event race tests.
-    const HEAD_EVENT_TEST_SLOT: u64 = 100;
-    /// Slot duration used by the test slot clock. Value is arbitrary; tests
-    /// rely only on relative ordering produced by `set_slot`.
-    const HEAD_EVENT_SLOT_DURATION_SECS: u64 = 12;
-    /// Capacity for the head-event mpsc channel. The receiver-side logic does
-    /// not depend on capacity; a small bound is sufficient and matches the
-    /// production channel's bounded nature.
-    const HEAD_EVENT_CHANNEL_CAPACITY: usize = 8;
-    /// Upper bound for `tokio::time::timeout` calls that assert
-    /// `wait_for_head_event` resolves "quickly". With `start_paused = true`
-    /// virtual time advances only when the runtime is idle, so a generous
-    /// value is fine — the test still completes in real-time milliseconds.
+    const TEST_SLOT: u64 = 100;
+    const SLOT_DURATION_SECS: u64 = 12;
+    const CHANNEL_CAPACITY: usize = 8;
     const FAST_RESOLVE_TIMEOUT: TokioDuration = TokioDuration::from_secs(1);
-    /// Short virtual-time sleep used to model the 1/3-slot fallback timer in
-    /// the race-against-timer test.
     const TIMER_ARM_DURATION: TokioDuration = TokioDuration::from_millis(50);
 
-    /// Build a `ManualSlotClock` whose `now()` returns `HEAD_EVENT_TEST_SLOT`.
     fn make_test_slot_clock() -> ManualSlotClock {
         let clock = ManualSlotClock::new(
             Slot::new(0),
             std::time::Duration::from_secs(0),
-            std::time::Duration::from_secs(HEAD_EVENT_SLOT_DURATION_SECS),
+            std::time::Duration::from_secs(SLOT_DURATION_SECS),
         );
-        clock.set_slot(HEAD_EVENT_TEST_SLOT);
+        clock.set_slot(TEST_SLOT);
         clock
     }
 
-    /// Build a fresh `(sender, receiver)` pair wrapped to match the
-    /// `MetadataService::head_monitor_rx` shape.
     fn make_head_event_channel() -> (
         mpsc::Sender<HeadEvent>,
         Arc<Mutex<mpsc::Receiver<HeadEvent>>>,
     ) {
-        let (tx, rx) = mpsc::channel(HEAD_EVENT_CHANNEL_CAPACITY);
+        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         (tx, Arc::new(Mutex::new(rx)))
     }
 
-    /// Construct a `HeadEvent` for a given slot. `beacon_node_index` and
-    /// `beacon_block_root` are not inspected by `wait_for_head_event`, so
-    /// fixed dummy values are used.
     fn make_head_event(slot: u64) -> HeadEvent {
         HeadEvent {
             beacon_node_index: 0,
@@ -2385,84 +2357,50 @@ mod tests {
         }
     }
 
-    /// A head event matching `slot_clock.now()` resolves `wait_for_head_event`
-    /// immediately with `Some(event)`. This is the happy path that lets Phase 2
-    /// short-circuit the 1/3-slot fallback timer.
+    // A head event for the current slot should resolve the wait immediately.
     #[tokio::test(start_paused = true)]
     async fn wait_for_head_event_returns_matching_slot_event() {
-        // Arrange
         let slot_clock = make_test_slot_clock();
         let (tx, rx) = make_head_event_channel();
-        tx.send(make_head_event(HEAD_EVENT_TEST_SLOT))
-            .await
-            .expect("channel should accept event");
+        tx.send(make_head_event(TEST_SLOT)).await.unwrap();
 
-        // Act
         let result = timeout(
             FAST_RESOLVE_TIMEOUT,
             wait_for_head_event(Some(&rx), &slot_clock),
         )
         .await
-        .expect("wait_for_head_event must resolve quickly for current-slot event");
+        .unwrap();
 
-        // Assert
-        let event = result.expect("matching-slot event must be returned");
-        assert_eq!(
-            event.slot,
-            Slot::new(HEAD_EVENT_TEST_SLOT),
-            "returned event slot must equal current slot",
-        );
+        let event = result.unwrap();
+        assert_eq!(event.slot, Slot::new(TEST_SLOT));
     }
 
-    /// Stale head events (slot < current slot) are dropped and not returned.
-    /// We then race `wait_for_head_event` against a short timer in a
-    /// `tokio::select!` and assert the timer arm wins — mirroring the Phase 2
-    /// fallback path when no in-slot event ever arrives.
+    // A stale event (past slot) gets dropped, so the timer arm wins the race.
     #[tokio::test(start_paused = true)]
     async fn wait_for_head_event_drops_stale_events() {
-        // Arrange
         let slot_clock = make_test_slot_clock();
         let (tx, rx) = make_head_event_channel();
-        // Send a stale event for the previous slot. It must be consumed
-        // without resolving `wait_for_head_event`.
-        tx.send(make_head_event(HEAD_EVENT_TEST_SLOT - 1))
-            .await
-            .expect("channel should accept stale event");
+        tx.send(make_head_event(TEST_SLOT - 1)).await.unwrap();
 
-        // Act: race the helper against the same kind of fallback timer used in
-        // Phase 2's `tokio::select!`. With only a stale event in the channel,
-        // the timer arm must win.
         let from_head_event = tokio::select! {
             biased;
             _ = tokio::time::sleep(TIMER_ARM_DURATION) => false,
             _ = wait_for_head_event(Some(&rx), &slot_clock) => true,
         };
 
-        // Assert
-        assert!(
-            !from_head_event,
-            "stale head event must not resolve wait_for_head_event; timer arm must win",
-        );
+        assert!(!from_head_event);
     }
 
-    /// When `head_monitor_rx` is `None`, `wait_for_head_event` short-circuits
-    /// via `?` on `as_ref()` and returns `None` without blocking. This is the
-    /// existing behaviour the Phase 2 loop relies on when head monitoring is
-    /// disabled (it then falls through to the bare-sleep branch).
+    // When the head monitor is disabled, the wait returns None right away
+    // instead of blocking, so Phase 2 falls back to the bare timer.
     #[tokio::test(start_paused = true)]
     async fn wait_for_head_event_returns_none_when_disabled() {
-        // Arrange
         let slot_clock = make_test_slot_clock();
 
-        // Act
         let result = timeout(FAST_RESOLVE_TIMEOUT, wait_for_head_event(None, &slot_clock))
             .await
-            .expect("wait_for_head_event must resolve immediately when receiver is None");
+            .unwrap();
 
-        // Assert
-        assert!(
-            result.is_none(),
-            "wait_for_head_event must return None when head monitor is disabled",
-        );
+        assert!(result.is_none());
     }
 }
