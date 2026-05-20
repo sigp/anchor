@@ -6,7 +6,7 @@ use std::{
 };
 
 use alloy::primitives::{Address, Bytes};
-use bls::PublicKeyBytes;
+use bls::{PublicKeyBytes, SecretKey};
 use database::test_utils::queries;
 use eth::{
     SlashingProtection,
@@ -69,6 +69,192 @@ async fn test_operator_added_event_processing() {
 
     // Verify operator was stored in database and memory
     verify_operator_stored(&test.processor, OperatorId(operator_id));
+}
+
+#[tokio::test]
+async fn test_wrapped_hex_duplicate_operator_add_is_skipped_and_later_remove_does_not_abort() {
+    setup_tracing();
+
+    // Arrange: register one operator normally, then replay the same canonical RSA key under a
+    // different operator id using the wrapped-hex payload shape seen on-chain.
+    let test = ProcessorFixture::new_empty();
+    let owner = Address::random();
+    let first_block = 12345;
+    let second_block = 12346;
+    let third_block = 12347;
+
+    let base64_public_key = create_valid_rsa_public_key_bytes();
+    let wrapped_base64_public_key = wrap_operator_public_key_bytes(base64_public_key.as_ref());
+    let wrapped_hex_public_key = create_wrapped_hex_operator_public_key_bytes(&base64_public_key);
+
+    let first_add = create_operator_added_log_at_position(
+        1,
+        owner,
+        wrapped_base64_public_key,
+        1000,
+        first_block,
+        0,
+        0,
+    );
+
+    // Act: process the initial add and then the duplicate-key add in separate replay steps.
+    assert!(
+        test.processor
+            .process_logs(vec![first_add], true, first_block)
+            .is_ok(),
+        "Wrapped base64 operator keys should still decode successfully"
+    );
+
+    // Assert: the first operator is committed normally.
+    verify_operator_stored(&test.processor, OperatorId(1));
+
+    let second_add = create_operator_added_log_at_position(
+        2,
+        owner,
+        wrapped_hex_public_key,
+        1001,
+        second_block,
+        0,
+        0,
+    );
+    assert!(
+        test.processor
+            .process_logs(vec![second_add], true, second_block)
+            .is_ok(),
+        "A duplicate canonical operator key should be skipped without aborting the block"
+    );
+
+    // Assert: the duplicate operator is skipped and leaves a marker behind.
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+
+    assert!(
+        queries::get_operator(OperatorId(2), &tx).is_none(),
+        "The duplicate operator should not be inserted"
+    );
+    let skip_reason = queries::get_skipped_operator_reason(OperatorId(2), &tx)
+        .expect("Skipped operator marker should be recorded");
+    assert!(
+        skip_reason.contains("already exists as operator 1"),
+        "Skip reason should explain the canonical key conflict: {skip_reason}"
+    );
+    drop(tx);
+    drop(conn);
+
+    // Act: process the later remove for the skipped operator id.
+    let remove = create_operator_removed_log_at_position(2, third_block, 0, 0);
+    assert!(
+        test.processor
+            .process_logs(vec![remove], true, third_block)
+            .is_ok(),
+        "Removing a previously skipped operator should no longer abort replay"
+    );
+
+    // Assert: the original operator remains, the marker is consumed, and replay keeps advancing.
+    verify_operator_stored(&test.processor, OperatorId(1));
+
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    assert!(
+        queries::get_skipped_operator_reason(OperatorId(2), &tx).is_none(),
+        "The skipped operator marker should be consumed by the later remove"
+    );
+    drop(tx);
+    drop(conn);
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        third_block,
+        "Replay should advance past the later operator removal"
+    );
+}
+
+#[tokio::test]
+async fn test_malformed_operator_add_is_skipped_and_later_remove_does_not_abort() {
+    setup_tracing();
+
+    // Arrange: replay an operator add whose wrapped payload decodes as hex text but not PEM.
+    let test = ProcessorFixture::new_empty();
+    let owner = Address::random();
+    let add_block = 12345;
+    let remove_block = 12346;
+    let malformed_wrapped_public_key =
+        wrap_operator_public_key_bytes(hex::encode("not a pem").as_bytes());
+
+    let add = create_operator_added_log_at_position(
+        1,
+        owner,
+        malformed_wrapped_public_key,
+        1000,
+        add_block,
+        0,
+        0,
+    );
+
+    // Act: process the malformed add and let replay classify it as skipped.
+    assert!(
+        test.processor
+            .process_logs(vec![add], true, add_block)
+            .is_ok(),
+        "An unparseable operator key should be skipped without aborting the block"
+    );
+
+    // Assert: the operator is not inserted and the skip marker records the parse failure.
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+
+    assert!(
+        queries::get_operator(OperatorId(1), &tx).is_none(),
+        "A malformed operator should not be inserted"
+    );
+    let skip_reason = queries::get_skipped_operator_reason(OperatorId(1), &tx)
+        .expect("Skipped operator marker should be recorded");
+    assert!(
+        skip_reason.contains("did not decode to PEM"),
+        "Skip reason should record the parse failure: {skip_reason}"
+    );
+    drop(tx);
+    drop(conn);
+
+    // Act: process the later remove for that skipped operator id.
+    let remove = create_operator_removed_log_at_position(1, remove_block, 0, 0);
+    assert!(
+        test.processor
+            .process_logs(vec![remove], true, remove_block)
+            .is_ok(),
+        "Removing a previously skipped malformed operator should no longer abort replay"
+    );
+
+    // Assert: the skip marker is consumed and replay advances through the remove.
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    assert!(
+        queries::get_skipped_operator_reason(OperatorId(1), &tx).is_none(),
+        "The skipped operator marker should be consumed by the later remove"
+    );
+    drop(tx);
+    drop(conn);
+
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        remove_block,
+        "Replay should advance past the later operator removal"
+    );
 }
 
 #[tokio::test]
@@ -293,6 +479,136 @@ async fn test_cross_block_operator_and_validator_processing_succeeds() {
         _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
             panic!("validator should have been queued for index sync");
         }
+    }
+}
+
+/// Ensures a later `ValidatorAdded` for the same pubkey but a different owner does not abort the
+/// fetched batch.
+///
+/// The underlying schema mismatch predates the recent sync/refinery PRs: Anchor has always keyed
+/// validator state globally by pubkey. This test captures the user-visible regression boundary:
+/// historical sync must keep progressing even when the later block contains this contract-permitted
+/// edge case.
+#[tokio::test]
+async fn test_cross_owner_duplicate_validator_pubkey_is_skipped() {
+    setup_tracing();
+
+    // Arrange: one fetched batch contains operator setup, an initial validator registration, and
+    // then a second registration of the same validator pubkey under a different owner.
+    let mut test = ProcessorFixture::new_empty();
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_block = 12410;
+    let first_validator_block = 12411;
+    let duplicate_validator_block = 12412;
+    let first_owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let second_owner = Address::random();
+    let validator_secret_key = SecretKey::random();
+    let (first_shares, validator_pubkey_bytes) =
+        create_valid_shares_data_for_validator_owner_and_nonce(
+            &operator_ids,
+            &validator_secret_key,
+            first_owner,
+            0,
+        );
+    let (second_shares, _) = create_valid_shares_data_for_validator_owner_and_nonce(
+        &operator_ids,
+        &validator_secret_key,
+        second_owner,
+        0,
+    );
+    let validator_public_key = Bytes::from(validator_pubkey_bytes.serialize().to_vec());
+
+    let mut logs = Vec::new();
+    for (log_index, operator_id) in operator_ids.iter().enumerate() {
+        logs.push(create_operator_added_log_at_position(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000 + *operator_id,
+            operator_block,
+            0,
+            log_index as u64,
+        ));
+    }
+
+    logs.push(create_validator_added_log_at_position(
+        first_owner,
+        operator_ids.clone(),
+        validator_public_key.clone(),
+        first_shares,
+        first_validator_block,
+        0,
+        0,
+    ));
+    logs.push(create_validator_added_log_at_position(
+        second_owner,
+        operator_ids.clone(),
+        validator_public_key,
+        second_shares,
+        duplicate_validator_block,
+        0,
+        0,
+    ));
+
+    // Act: process the entire fetched batch in one call, matching historical sync behavior.
+    let result = test
+        .processor
+        .process_logs(logs, false, duplicate_validator_block);
+
+    // Assert: the later duplicate-owner event is skipped rather than aborting the batch.
+    assert!(
+        result.is_ok(),
+        "cross-owner duplicate validator pubkey should not abort batch processing"
+    );
+
+    let cluster_id = compute_cluster_id(first_owner, &operator_ids);
+    let duplicate_cluster_id = compute_cluster_id(second_owner, &operator_ids);
+    let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+    let mut conn = test
+        .processor
+        .db
+        .connection()
+        .expect("Failed to get database connection");
+    let tx = conn.transaction().expect("Failed to start transaction");
+    let stored_validator =
+        queries::get_validator(&validator_pubkey_str, &tx).expect("validator should exist");
+
+    assert_eq!(
+        stored_validator.cluster_id, cluster_id,
+        "the first registration should remain authoritative"
+    );
+    assert!(
+        queries::get_cluster(cluster_id, &tx).is_some(),
+        "the original cluster should exist"
+    );
+    assert!(
+        queries::get_cluster(duplicate_cluster_id, &tx).is_none(),
+        "the duplicate-owner cluster should not be created"
+    );
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        duplicate_validator_block,
+        "historical sync should advance through the duplicate-owner block"
+    );
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            assert_eq!(
+                validator_key,
+                Some(validator_pubkey_bytes),
+                "only the first registration should queue index sync"
+            );
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+            panic!("the first registration should queue index sync");
+        }
+    }
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            panic!("unexpected second index-sync enqueue for duplicate-owner event: {validator_key:?}");
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {}
     }
 }
 

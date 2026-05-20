@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, hash_map},
     future::Future,
     mem,
+    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
 };
@@ -566,90 +567,140 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
     }
 }
 
-/// The actual signature collector task, waiting for messages
+/// The actual signature collector task, waiting for messages.
+///
+/// The recv loop is the only place that matches on [`CollectorMessageKind`];
+/// it dispatches each transport message to a typed method on
+/// [`SignatureCollectorState`] so the state machine never sees the channel
+/// shape (or the size-balancing `Box<Signature>` it carries).
 async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
-    let mut notifiers = vec![];
-    let mut signature_share = HashMap::new();
-    let mut full_signature: Option<Arc<Signature>> = None;
-    let mut threshold = None;
-
+    let mut state = SignatureCollectorState::default();
     while let Some(message) = rx.recv().await {
         trace!(msg=?message.kind, "Signature collector received message");
-        match message.kind {
-            CollectorMessageKind::RegisterNotifier {
-                notify,
-                threshold: new_threshold,
-            } => {
-                if let Some(full_signature) = &full_signature {
-                    // We already got a reconstructed signature, send it immediately.
-                    if let Err(err) = notify.send(full_signature.clone()) {
-                        warn!(?err, "Failed to send recovered signature");
-                    }
-                } else {
-                    // Register the notifier and threshold.
-                    notifiers.push(notify);
-                    if let Some(old_threshold) = threshold
-                        && new_threshold != old_threshold
-                    {
-                        // Different tasks expect different thresholds. We can not know which is
-                        // correct, so we exit this instance.
-                        error!(
-                            new_threshold,
-                            old_threshold, "Conflicting thresholds passed!"
-                        );
-                        return;
-                    }
-                    threshold = Some(new_threshold);
-                }
+        let outcome = match message.kind {
+            CollectorMessageKind::RegisterNotifier { notify, threshold } => {
+                state.register_request(notify, threshold)
             }
             CollectorMessageKind::PartialSignature {
                 operator_id,
                 signature,
-            } => {
-                if full_signature.is_some() {
-                    // Already got the full signature.
-                    continue;
-                }
-
-                // Insert the signature into our map.
-                match signature_share.entry(operator_id) {
-                    hash_map::Entry::Vacant(entry) => {
-                        entry.insert(*signature);
-                    }
-                    hash_map::Entry::Occupied(entry) => {
-                        if entry.get() != &*signature {
-                            // We can not know which signature is correct. This is serious
-                            // misbehaviour from the operator!
-                            error!(
-                                ?operator_id,
-                                "Received conflicting signatures from operator"
-                            );
-                        }
-                    }
-                }
-            }
+            } => state.add_partial_signature(operator_id, *signature),
+        };
+        if outcome.is_break() {
+            return;
         }
+    }
+}
 
-        if let Some(threshold) = threshold
-            && signature_share.len() as u64 >= threshold
+/// Invariant: once `full_signature` is `Some`, both `signature_share` and
+/// `notifiers` are empty (drained by `try_reconstruct`).
+#[derive(Default)]
+struct SignatureCollectorState {
+    notifiers: Vec<oneshot::Sender<Arc<Signature>>>,
+    signature_share: HashMap<OperatorId, Signature>,
+    full_signature: Option<Arc<Signature>>,
+    threshold: Option<u64>,
+}
+
+impl SignatureCollectorState {
+    /// Register a task waiting for the reconstructed signature.
+    ///
+    /// If reconstruction has already completed, the cached signature is
+    /// delivered immediately. Otherwise the notifier is queued and the
+    /// threshold is recorded; conflicting thresholds from concurrent
+    /// requests cause the collector to `Break` (the recv loop drops the
+    /// state, surfacing `RecvError` to every waiter).
+    ///
+    /// Returns `Break` when the collector should exit (conflicting
+    /// thresholds, unrecoverable reconstruction failure).
+    fn register_request(
+        &mut self,
+        notify: oneshot::Sender<Arc<Signature>>,
+        new_threshold: u64,
+    ) -> ControlFlow<()> {
+        if let Some(full_signature) = &self.full_signature {
+            if let Err(err) = notify.send(Arc::clone(full_signature)) {
+                warn!(?err, "Failed to send recovered signature");
+            }
+            return ControlFlow::Continue(());
+        }
+        self.notifiers.push(notify);
+        if let Some(old_threshold) = self.threshold
+            && new_threshold != old_threshold
         {
-            let signature = match combine_signatures(mem::take(&mut signature_share)) {
-                Ok(signature) => Arc::new(signature),
-                Err(err) => {
-                    error!(?err, "Failed to recover signature");
-                    return;
-                }
-            };
+            // Different tasks expect different thresholds. We can not know which is
+            // correct, so we exit this instance.
+            error!(
+                new_threshold,
+                old_threshold, "Conflicting thresholds passed!"
+            );
+            return ControlFlow::Break(());
+        }
+        self.threshold = Some(new_threshold);
+        self.try_reconstruct()
+    }
 
-            trace!(?signature, "Successfully recovered signature");
+    /// Ingest a partial signature from one operator.
+    ///
+    /// Late shares arriving after reconstruction are silently dropped.
+    /// Conflicting shares from the same operator are logged but not fatal,
+    /// since the source of the discrepancy is not knowable here.
+    ///
+    /// Returns `Break` when the collector should exit (unrecoverable
+    /// reconstruction failure).
+    fn add_partial_signature(
+        &mut self,
+        operator_id: OperatorId,
+        signature: Signature,
+    ) -> ControlFlow<()> {
+        if self.full_signature.is_some() {
+            return ControlFlow::Continue(());
+        }
 
-            for notifier in mem::take(&mut notifiers) {
-                if notifier.send(Arc::clone(&signature)).is_err() {
-                    warn!("Callback dropped - signature is no longer relevant");
+        match self.signature_share.entry(operator_id) {
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(signature);
+            }
+            hash_map::Entry::Occupied(entry) => {
+                if entry.get() != &signature {
+                    // We can not know which signature is correct. This is serious
+                    // misbehaviour from the operator!
+                    error!(
+                        ?operator_id,
+                        "Received conflicting signatures from operator"
+                    );
                 }
             }
-            full_signature = Some(signature);
         }
+
+        self.try_reconstruct()
+    }
+
+    fn try_reconstruct(&mut self) -> ControlFlow<()> {
+        let Some(threshold) = self.threshold else {
+            return ControlFlow::Continue(());
+        };
+        if (self.signature_share.len() as u64) < threshold {
+            return ControlFlow::Continue(());
+        }
+
+        let signature = match combine_signatures(mem::take(&mut self.signature_share)) {
+            Ok(signature) => Arc::new(signature),
+            Err(err) => {
+                error!(?err, "Failed to recover signature");
+                return ControlFlow::Break(());
+            }
+        };
+
+        trace!(?signature, "Successfully recovered signature");
+
+        for notifier in mem::take(&mut self.notifiers) {
+            if notifier.send(Arc::clone(&signature)).is_err() {
+                warn!("Callback dropped - signature is no longer relevant");
+            }
+        }
+        self.full_signature = Some(signature);
+        ControlFlow::Continue(())
     }
 }
 
@@ -663,3 +714,6 @@ fn combine_signatures(
 
     Ok(bls_lagrange::combine_signatures(&signatures, &ids)?)
 }
+
+#[cfg(test)]
+mod tests;

@@ -12,6 +12,7 @@ pub enum DatabaseError {
     AlreadyPresent(String),
     IOError(ErrorKind),
     OpenSSLError(String),
+    MigrationError(String),
     SQLError(String),
     SQLPoolError(String),
 }
@@ -25,6 +26,12 @@ impl From<IOError> for DatabaseError {
 impl From<SQLError> for DatabaseError {
     fn from(error: SQLError) -> DatabaseError {
         DatabaseError::SQLError(error.to_string())
+    }
+}
+
+impl From<refinery::Error> for DatabaseError {
+    fn from(error: refinery::Error) -> DatabaseError {
+        DatabaseError::MigrationError(error.to_string())
     }
 }
 
@@ -46,3 +53,5 @@ impl Display for DatabaseError {
         write!(f, "{self:?}")
     }
 }
+
+impl std::error::Error for DatabaseError {}
