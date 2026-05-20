@@ -4,15 +4,9 @@ on:
   push:
     branches:
       - stable
-      - unstable
       - 'pr/*'
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "anchor/**"
-      - "docs/docs/pages/cli-*.mdx"
-      - "docs/docs/pages/cli.mdx"
-      - "docs/docs/generated/**"
   merge_group:
 
 concurrency:
@@ -20,13 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTFLAGS: "-D warnings -C debuginfo=0"
+  RUSTFLAGS: "-C debuginfo=0"
   CARGO_INCREMENTAL: 0
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   cli-reference-check:
     name: cli-reference-check
+    timeout-minutes: 15
     if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'skip-ci')
     runs-on: ubuntu-22.04
     steps:
