@@ -8,6 +8,8 @@ pub const BEACON_VOTE: &str = "beacon_vote";
 pub const SYNC_CONTRIBUTION_AND_PROOF: &str = "sync_contribution_and_proof";
 pub const TIMEOUT: &str = "timeout";
 pub const OTHER_ERROR: &str = "other_error";
+pub const TRIGGER_HEAD_EVENT: &str = "head_event";
+pub const TRIGGER_TIMER: &str = "timer";
 
 pub static CONSENSUS_TIMES: LazyLock<Result<HistogramVec>> = LazyLock::new(|| {
     try_create_histogram_vec(
@@ -55,9 +57,6 @@ pub static METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL: LazyLock<Result<IntCounter>
         )
     });
 
-pub const TRIGGER_HEAD_EVENT: &str = "head_event";
-pub const TRIGGER_TIMER: &str = "timer";
-
 /// Count of Phase 2 firings, labelled by trigger source.
 pub static METADATA_SERVICE_VOTING_CONTEXT_TRIGGERS_TOTAL: LazyLock<Result<IntCounterVec>> =
     LazyLock::new(|| {
@@ -69,7 +68,7 @@ pub static METADATA_SERVICE_VOTING_CONTEXT_TRIGGERS_TOTAL: LazyLock<Result<IntCo
     });
 
 /// Offset within the slot at which Phase 2 fired, in seconds.
-/// Buckets target the 0–4s window before the 1/3-slot fallback timer.
+/// Buckets target the 0–4s window before the spec-derived fallback timer.
 pub static METADATA_SERVICE_VOTING_CONTEXT_OFFSET_SECONDS: LazyLock<Result<HistogramVec>> =
     LazyLock::new(|| {
         try_create_histogram_vec_with_buckets(

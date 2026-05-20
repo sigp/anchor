@@ -266,11 +266,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     let head_event: Option<HeadEvent> =
                         if self_clone_phase2.head_monitor_rx.is_some() {
                             tokio::select! {
-                                _ = sleep(slot_duration / 3) => None,
+                                _ = sleep(self_clone_phase2.spec.get_unaggregated_attestation_due()) => None,
                                 event = self_clone_phase2.wait_for_head_event() => event,
                             }
                         } else {
-                            sleep(slot_duration / 3).await;
+                            sleep(self_clone_phase2.spec.get_unaggregated_attestation_due()).await;
                             None
                         };
 
@@ -295,9 +295,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                         );
                     }
 
-                    if let Err(err) =
-                        self_clone_phase2.update_voting_context(head_event).await
-                    {
+                    if let Err(err) = self_clone_phase2.update_voting_context(head_event).await {
                         error!(err, "Failed to update voting context")
                     } else {
                         trace!(%intended_slot, from_head_event, "Updated voting context");
@@ -429,10 +427,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     /// the 1/3-slot fallback timer. When `head_event` is `Some`, the firing BN
     /// is queried directly (bypassing WAD); any failure or block-root mismatch
     /// falls back to the WAD/first_success path.
-    async fn update_voting_context(
-        &self,
-        head_event: Option<HeadEvent>,
-    ) -> Result<(), String> {
+    async fn update_voting_context(&self, head_event: Option<HeadEvent>) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
         let voting_assignments = self
