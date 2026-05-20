@@ -158,4 +158,50 @@ mod operator_database_tests {
                 .is_err()
         )
     }
+
+    #[test]
+    fn test_skipped_operator_add_round_trip() {
+        // Arrange: start from an empty in-memory database and an operator id with no marker.
+        let fixture = InMemoryTestFixture::new_empty();
+        let mut conn = fixture.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        // Act/Assert: the marker should be absent before insertion.
+        assert!(
+            !fixture
+                .db
+                .was_operator_add_skipped_tx(OperatorId(7), &tx)
+                .expect("Failed to query skipped operator marker")
+        );
+
+        // Act: insert a skipped-operator marker.
+        fixture
+            .db
+            .insert_skipped_operator_add_tx(OperatorId(7), "duplicate key", &tx)
+            .expect("Failed to insert skipped operator marker");
+
+        // Assert: the inserted marker is visible through the typed helper.
+        assert!(
+            fixture
+                .db
+                .was_operator_add_skipped_tx(OperatorId(7), &tx)
+                .expect("Failed to query skipped operator marker")
+        );
+
+        // Act: delete the skipped-operator marker.
+        assert!(
+            fixture
+                .db
+                .delete_skipped_operator_add_tx(OperatorId(7), &tx)
+                .expect("Failed to delete skipped operator marker")
+        );
+
+        // Assert: the marker is gone again after deletion.
+        assert!(
+            !fixture
+                .db
+                .was_operator_add_skipped_tx(OperatorId(7), &tx)
+                .expect("Failed to query skipped operator marker")
+        );
+    }
 }

@@ -45,6 +45,9 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
         }
 
         // Validation tests
+        "committeemember.CommitteeMemberTest" => {
+            DispatchOutcome::Executed(run_test::<types::CommitteeMemberTest>(path, contents))
+        }
         "signedssvmsg.SignedSSVMessageTest" => {
             DispatchOutcome::Executed(run_test::<types::SignedSSVMessageTest>(path, contents))
         }
@@ -53,6 +56,55 @@ fn dispatch_fixture_by_prefix(prefix: &str, path: &Path, contents: &str) -> Disp
         }
         "partialsigmessage.MsgSpecTest" => {
             DispatchOutcome::Executed(run_test::<types::PartialSigMsgSpecTest>(path, contents))
+        }
+
+        // Encryption tests
+        "encryption.EncryptionSpecTest" => {
+            DispatchOutcome::Executed(run_test::<types::EncryptionSpecTest>(path, contents))
+        }
+
+        // Proposer consensus data validation tests
+        "proposerconsensusdata.ProposerConsensusDataTest" => {
+            DispatchOutcome::Executed(run_test::<types::ProposerConsensusDataTest>(path, contents))
+        }
+
+        // Aggregator-committee consensus data validation tests
+        "aggregatorcommitteeconsensusdata.AggregatorCommitteeConsensusDataTest" => {
+            DispatchOutcome::Executed(run_test::<types::AggregatorCommitteeConsensusDataTest>(
+                path, contents,
+            ))
+        }
+
+        // Proposer block data extraction tests
+        "consensusdataproposer.ProposerSpecTest" => {
+            DispatchOutcome::Executed(run_test::<types::ConsensusDataProposerTest>(path, contents))
+        }
+
+        // Go's spec test pins ssv-spec's historical deposit-data primitive
+        // (used when DKG lived in ssv-spec pre-2023; now in ssvlabs/ssv-dkg
+        // which uses its own Go primitives). No Anchor production path generates
+        // or verifies deposit data: deposit signing is ssv-dkg's responsibility,
+        // on-chain verification is Ethereum's, and Anchor only consumes RSA-
+        // encrypted shares from `ValidatorAdded` events. Lighthouse drift in
+        // deposit primitives cannot affect Anchor or its ssv-dkg interop.
+        // Not applicable.
+        "beacon.DepositDataSpecTest" => {
+            eprintln!("SKIP (known-inapplicable): {prefix}");
+            DispatchOutcome::SkippedKnown
+        }
+
+        // Lighthouse's VC drives Anchor through per-duty trait methods (`sign_block_proposal`,
+        // `sign_aggregate`, …), so Anchor always knows which duty it's in at the call site
+        // and hardcodes the wire `Role` there for parity with go-ssv. It never holds a
+        // `BeaconRole` and needs to dispatch on it.
+        //
+        // Go-ssv does need that dispatch — its `Validator` keeps `runners map[RunnerRole]Runner`
+        // and looks up the right runner per incoming duty, which is what `MapDutyToRunnerRole`
+        // (the function this spec test verifies) provides. Anchor has no equivalent and no
+        // caller for one. Not applicable.
+        "duty.DutySpecTest" => {
+            eprintln!("SKIP (known-inapplicable): {prefix}");
+            DispatchOutcome::SkippedKnown
         }
 
         // TODO(spec-tests): Add more test types here as they are implemented.

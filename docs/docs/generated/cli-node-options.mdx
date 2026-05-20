@@ -1,0 +1,361 @@
+```text
+Start Anchor node
+
+Usage: anchor node [OPTIONS]
+
+Options:
+    -d, --data-dir <DIR>
+               Used to specify a custom root data directory for the Anchor key
+               and database. Defaults to $HOME/.anchor/{network} where network
+               is the value of the `network` flag Note: Users should specify
+               separate custom datadirs for different networks.
+
+         --network <NETWORK>
+               Name of the chain Anchor will validate.
+               
+               [default: mainnet]
+               [possible values: mainnet, holesky, hoodi]
+
+    -t, --testnet-dir <DIR>
+               Path to directory containing eth2_testnet specs.
+
+         --debug-level <DEBUG_LEVEL>
+               Specifies the verbosity level used when emitting logs to the
+               terminal
+               
+               [default: INFO]
+
+    -h, --help
+               Print help
+
+Security Options:
+         --key-file <PATH>
+               Path to the operator key file. File name needs to end in `.txt`
+               for unencrypted keys, or `.json` for encrypted keys. If not
+               provided, Anchor will look for the key in the data dir. If
+               provided and the file does not exist, Anchor will exit.
+
+         --password-file <PATH>
+               Path to the password used to decrypt the operator private key.
+               If not provided but required, Anchor will request the password
+               interactively.
+
+External APIs:
+         --beacon-nodes <NETWORK_ADDRESSES>
+               Comma-separated addresses to one or more beacon node HTTP APIs.
+               
+               [default: http://localhost:5052/]
+
+         --beacon-nodes-sync-tolerances <SYNC_TOLERANCES>
+               A comma-separated list of 3 values which sets the size of each
+               sync distance range when determining the health of each
+               connected beacon node. The first value determines the `Synced`
+               range. If a connected beacon node is synced to within this
+               number of slots it is considered 'Synced'. The second value
+               determines the `Small` sync distance range. This range starts
+               immediately after the `Synced` range. The third value determines
+               the `Medium` sync distance range. This range starts immediately
+               after the `Small` range. Any sync distance larger than the
+               `Medium` range is considered `Large`. For example, a value of
+               '8,8,48' would mean: Synced: 0..=8, Small: 9..=16, Medium:
+               17..=64, Large: 65..
+               
+               [default: 8,8,48]
+
+         --beacon-nodes-tls-certs <CERTIFICATE_FILES>
+               Comma-separated paths to custom TLS certificates to use when
+               connecting to a beacon node (and/or proposer node). These
+               certificates must be in PEM format and are used in addition to
+               the OS trust store. Commas must only be used as a delimiter, and
+               must not be part of the certificate path.
+
+         --broadcast <API_TOPICS>
+               Comma-separated list of beacon API topics to broadcast to all
+               beacon nodes. Default (when flag is omitted) is to broadcast
+               subscriptions only.
+               
+               [possible values: none, attestations, blocks, subscriptions,
+               sync-committee]
+
+         --execution-nodes-tls-certs <CERTIFICATE_FILES>
+               Comma-separated paths to custom TLS certificates to use when
+               connecting to an execution node. These certificates must be in
+               PEM format and are used in addition to the OS trust store.
+               Commas must only be used as a delimiter, and must not be part of
+               the certificate path
+
+         --execution-rpc <NETWORK_ADDRESSES>
+               Comma-separated addresses to one or more execution node JSON-RPC
+               APIs.
+               
+               [default: http://localhost:8545/]
+
+         --execution-ws <NETWORK_ADDRESSES>
+               Address of execution node WS API.
+               
+               [default: ws://localhost:8546/]
+
+HTTP API Options:
+         --http
+               Enable the RESTful HTTP API server. Disabled by default.
+
+         --http-address <ADDRESS>
+               Set the address for the HTTP address. The HTTP server is not
+               encrypted and therefore it is unsafe to publish on a public
+               network. When this flag is used, it additionally requires the
+               explicit use of the `--unencrypted-http-transport` flag to
+               ensure the user is aware of the risks involved. For access via
+               the Internet, users should apply transport-layer security like a
+               HTTPS reverse-proxy or SSH tunneling.
+
+         --http-allow-origin <ORIGIN>
+               Set the value of the Access-Control-Allow-Origin response HTTP
+               header. Use * to allow any origin (not recommended in
+               production). If no value is supplied, the CORS allowed origin is
+               set to the listen address of this server (e.g.,
+               http://localhost:5062).
+
+         --http-port <PORT>
+               Set the listen TCP port for the RESTful HTTP API server.
+               Defaults to 5062 if --http is set.
+
+         --unencrypted-http-transport
+               This is a safety flag to ensure that the user is aware that the
+               http transport is unencrypted and using a custom HTTP address is
+               unsafe.
+
+Metrics Options:
+         --enable-high-validator-count-metrics
+               Enable per validator metrics for > 64 validators. Note: This
+               flag is automatically enabled for < 65 validators. Enabling this
+               metric for higher validator counts will lead to higher volume of
+               prometheus metrics being collected.
+
+         --metrics
+               Enable the Prometheus metrics HTTP server. Disabled by default.
+
+         --metrics-address <ADDRESS>
+               Set the listen address for the Prometheus metrics HTTP server.
+               Defaults to 127.0.0.1 if --metrics is set.
+
+         --metrics-allow-origin <ORIGIN>
+               Set the value of the Access-Control-Allow-Origin response HTTP
+               header for the metrics server. Use * to allow any origin (not
+               recommended in production). If no value is supplied, the CORS
+               allowed origin is set to the listen address of this server
+               (e.g., http://localhost:5164).
+
+         --metrics-port <PORT>
+               Set the listen TCP port for the Prometheus metrics HTTP server.
+               Defaults to 5164 if --metrics is set.
+
+Network Options:
+         --boot-nodes <BOOT_NODES>
+               One or more comma-delimited ENRs or Multiaddrs to bootstrap the
+               p2p network
+
+         --disable-enr-auto-update
+               Discovery can automatically discover external addresses if the
+               node has correctly set up port forwards. It will automatically
+               update this nodes ENR with values it finds. This can have
+               undesired effects for complicated networks. Setting this flag
+               will disable discovery from updating the ENR from CLI set
+               values.
+
+         --disable-gossipsub-peer-scoring
+               Disables gossipsub peer scoring.
+
+         --enr-address <ADDRESS>
+               The IPv4 address to broadcast to other peers on how to reach
+               this node. Set this only if you are sure other nodes can connect
+               to your local node on this address. This will update the `ip4`
+               ENR field accordingly.
+
+         --enr-address6 <ADDRESS>
+               The IPv6 address to broadcast to other peers on how to reach
+               this node. Set this only if you are sure other nodes can connect
+               to your local node on this address. This will update the `ip6`
+               ENR field accordingly.
+
+         --enr-quic-port <PORT>
+               The quic UDP4 port that will be set on the local ENR. Set this
+               only if you are sure other nodes can connect to your local node
+               on this port over IPv4.
+
+         --enr-quic6-port <PORT>
+               The quic UDP6 port that will be set on the local ENR. Set this
+               only if you are sure other nodes can connect to your local node
+               on this port over IPv6.
+
+         --enr-tcp-port <PORT>
+               The TCP4 port of the local ENR. Set this only if you are sure
+               other nodes can connect to your local node on this port over
+               IPv4. The --port flag is used if this is not set.
+
+         --enr-tcp6-port <PORT>
+               The TCP6 port of the local ENR. Set this only if you are sure
+               other nodes can connect to your local node on this port over
+               IPv6. The --port6 flag is used if this is not set.
+
+         --enr-udp-port <PORT>
+               The UDP4 port of the local ENR. Set this only if you are sure
+               other nodes can connect to your local node on this port over
+               IPv4.
+
+         --enr-udp6-port <PORT>
+               The UDP6 port of the local ENR. Set this only if you are sure
+               other nodes can connect to your local node on this port over
+               IPv6.
+
+         --subscribe-all-subnets
+               Subscribe to all subnets, regardless of committee membership.
+
+         --listen-addresses [<ADDRESS>...]
+               The address anchor will listen for UDP and TCP connections. To
+               listen over IpV4 and IpV6 set this flag twice with the different
+               values.
+               Examples:
+               - --listen-addresses '0.0.0.0' will listen over IPv4.
+               - --listen-addresses '::' will listen over IPv6.
+               - --listen-addresses '0.0.0.0' --listen-addresses '::' will
+               listen over both IPv4 and IPv6. The order of the given addresses
+               is not relevant. However, multiple IPv4, or multiple IPv6
+               addresses will not be accepted.
+               
+               [default: 0.0.0.0]
+
+         --port <PORT>
+               The TCP/UDP ports to listen on. There are two UDP ports. The
+               discovery UDP and TCP port will be set to this value. The Quic
+               UDP port will be set to this value + 1. The discovery port can
+               be modified by the --discovery-port flag and the quic port can
+               be modified by the --quic-port flag. If listening over both IPv4
+               and IPv6 the --port flag will apply to the IPv4 address and
+               --port6 to the IPv6 address. If this flag is not set, the
+               default values will be 12001 for discovery and 13001 for TCP.
+
+         --port6 <PORT>
+               The TCP/UDP ports to listen on over IPv6 when listening over
+               both IPv4 and IPv6. The Quic UDP port will be set to this value
+               + 1.
+
+         --discovery-port <PORT>
+               The UDP port that discovery will listen on. Defaults to --port
+               if --port is explicitly specified, and `12001` otherwise.
+
+         --discovery-port6 <PORT>
+               The UDP port that discovery will listen on over IPv6 if
+               listening over both IPv4 and IPv6. Defaults to `discovery_port`
+
+         --quic-port <PORT>
+               The UDP port that quic will listen on. Defaults to `port` + 1
+
+         --quic-port6 <PORT>
+               The UDP port that quic will listen on over IPv6 if listening
+               over both IPv4 and IPv6. Defaults to `port6` + 1
+
+         --disable-upnp
+               Disables UPnP support. Setting this will prevent Anchor from
+               attempting to automatically establish external port mappings.
+
+         --target-peers <TARGET_PEERS>
+               Specify the target number of connected peers. If omitted, the
+               target is calculated dynamically based on active subnets (60
+               base + 3 per subnet, capped at 150)
+
+Payload Building Options:
+         --builder-boost-factor <UINT64>
+               Defines the boost factor, a percentage multiplier to apply to
+               the builder's payload value when choosing between a builder
+               payload header and payload from the local execution node.
+
+         --disable-latency-measurement-service
+               Disable the latency measurement service.
+
+         --gas-limit <INTEGER>
+               The gas limit to be used in all builder proposals for all
+               validators managed. Note this will not necessarily be used if
+               the gas limit set here moves too far from the previous block's
+               gas limit.
+               
+               [default: 36000000]
+
+         --operator-dg <OPERATOR_DG>
+               Enable operator doppelgänger protection. When enabled, the node
+               blocks all outgoing messages and monitors the network for
+               messages signed with its operator ID that reference slots after
+               startup. Shuts down if a twin operator is detected to prevent
+               QBFT protocol violations.
+               
+               [default: false]
+               [possible values: true, false]
+
+         --operator-dg-wait-epochs <EPOCHS>
+               Number of epochs to monitor for twin operators using slot-based
+               detection. During monitoring, outgoing messages remain blocked
+               and the node checks incoming messages for slots after startup to
+               detect duplicate operator instances.
+               
+               [default: 2]
+
+         --prefer-builder-proposals
+               If this flag is set, Anchor will always prefer blocks
+               constructed by builders, regardless of payload value.
+
+         --strict-mfp
+               Enable strict majority fork protection. When enabled, the node
+               will not participate in attestation production if the checkpoint
+               roots mismatch. Using this flag might reduce validator
+               performance if cluster operators have struggling nodes, but can
+               help to avoid finalization of a faulty majority fork.
+
+         --with-weighted-attestation-data
+               Enable parallel querying and scoring of attestation data across
+               multiple beacon nodes. When enabled, Anchor queries all
+               configured beacon nodes simultaneously and selects the
+               attestation data with the highest score based on checkpoint
+               epochs and head block proximity. Only useful with multiple
+               beacon nodes.
+
+Logging Options:
+         --logfile-debug-level <LOGFILE_DEBUG_LEVEL>
+               Specifies the verbosity level used when emitting logs to the log
+               file
+               
+               [default: DEBUG]
+
+         --logfile-max-size <SIZE>
+               Maximum size of each log file in MB. Set to 0 to disable file
+               logging.
+               
+               [default: 50]
+
+         --logfile-max-number <NUMBER>
+               Maximum number of log files to keep. Set to 0 to disable file
+               logging.
+               
+               [default: 10]
+
+         --logfile-dir <DIR>
+               Directory path where the log file will be stored
+
+         --logfile-compression
+               If present, compress old log files. This can help reduce the
+               space needed to store old logs.
+
+         --logfile-color
+               Enables colors in logfile.
+
+         --discv5-log-level <DISCV5_LOG_LEVEL>
+               Specifies the verbosity level used for the discv5 dependency log
+               file
+               
+               [default: DEBUG]
+
+         --libp2p-log-level <LIBP2P_LOG_LEVEL>
+               Specifies the verbosity level used for the libp2p dependency log
+               file. Certain score penalty information is logged regardless of
+               this setting.
+               
+               [default: DEBUG]
+```

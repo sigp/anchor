@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use alloy::{primitives::Address, rpc::types::Log, sol_types::SolEvent};
+use base64::prelude::*;
 use bls::PublicKeyBytes;
 use database::{NetworkDatabase, PendingStateUpdates, SlashingProtection};
 use indexmap::IndexSet;
@@ -380,24 +381,29 @@ impl EventProcessor {
             .set_max_operator_id_seen_tx(operatorId, tx, state_updates)
             .map_err(|e| ExecutionError::Database(e.to_string()))?;
 
-        let data = publicKey.as_ref();
-
-        // If the data is 704 bytes, remove the ssv encoding. Else, just parse the key
-        let data = if data.len() == 704 {
-            let mut data = &data[64..];
-            // while there is a 0 at the end of the data, remove it
-            while let [rest @ .., 0] = data {
-                data = rest;
+        let operator = match parse_operator_public_key(publicKey.as_ref(), operator_id, owner) {
+            Ok(operator) => operator,
+            Err(reason) => {
+                self.db
+                    .insert_skipped_operator_add_tx(operator_id, &reason, tx)
+                    .map_err(|e| ExecutionError::Database(e.to_string()))?;
+                return Err(ExecutionError::InvalidEvent(reason));
             }
-            data
-        } else {
-            data
         };
 
-        // Construct the Operator and insert it into the database
-        let operator = Operator::new(data, operator_id, owner).map_err(|e| {
-            ExecutionError::InvalidEvent(format!("Failed to construct operator: {e}"))
-        })?;
+        if let Some(existing_operator_id) = self
+            .db
+            .get_any_operator_id_by_public_key_tx(&operator.rsa_pubkey, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        {
+            let reason =
+                format!("Operator public key already exists as operator {existing_operator_id}");
+            self.db
+                .insert_skipped_operator_add_tx(operator_id, &reason, tx)
+                .map_err(|e| ExecutionError::Database(e.to_string()))?;
+            return Err(ExecutionError::InvalidEvent(reason));
+        }
+
         self.db
             .insert_operator_tx(&operator, tx, state_updates)
             .map_err(|e| {
@@ -425,6 +431,16 @@ impl EventProcessor {
             SSVContract::OperatorRemoved::decode_from_log(log)?;
         let operator_id = OperatorId(operatorId);
         trace!(operator_id = ?operator_id, "Processing operator removed");
+
+        if self
+            .db
+            .delete_skipped_operator_add_tx(operator_id, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        {
+            return Err(ExecutionError::SkippedEvent(format!(
+                "Operator {operator_id} was previously skipped during registration"
+            )));
+        }
 
         // Delete the operator from database and in memory
         self.db
@@ -495,6 +511,8 @@ impl EventProcessor {
             ));
         }
 
+        self.validate_validator_added_conflict(&owner, &validator_pubkey, &cluster_id, tx)?;
+
         // Fetch the validator metadata
         let validator_metadata = construct_validator_metadata(&validator_pubkey, &cluster_id)
             .map_err(|e| {
@@ -541,6 +559,58 @@ impl EventProcessor {
         );
         metrics::inc_counter_vec(&metrics::EXECUTION_EVENTS_PROCESSED, &["validator_added"]);
         Ok(())
+    }
+
+    /// Rejects `ValidatorAdded` events that conflict with validator state already reconstructed by
+    /// Anchor.
+    ///
+    /// Anchor and the Go SSV node both key reconstructed validator state globally by validator
+    /// pubkey, even though the contract stores registrations per `(owner, pubkey)`. Until the
+    /// wider data model changes, treat a second owner for an existing pubkey as malformed and skip
+    /// it rather than aborting historical sync on a DB uniqueness error.
+    fn validate_validator_added_conflict(
+        &self,
+        owner: &Address,
+        validator_pubkey: &PublicKeyBytes,
+        computed_cluster_id: &ClusterId,
+        tx: &Transaction<'_>,
+    ) -> Result<(), ExecutionError> {
+        let Some(_) = self
+            .db
+            .get_validator_metadata_tx(validator_pubkey, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        else {
+            return Ok(());
+        };
+
+        let Some(existing_cluster) = self
+            .db
+            .get_cluster_by_validator_tx(validator_pubkey, tx)
+            .map_err(|e| ExecutionError::Database(e.to_string()))?
+        else {
+            return Err(ExecutionError::MissingCommittedState(
+                "Failed to fetch cluster for existing validator metadata".to_string(),
+            ));
+        };
+
+        if existing_cluster.owner != *owner {
+            return Err(ExecutionError::InvalidEvent(format!(
+                "Validator already exists with different owner address. Expected {}. Got {}",
+                existing_cluster.owner, owner
+            )));
+        }
+
+        if existing_cluster.cluster_id != *computed_cluster_id {
+            return Err(ExecutionError::InvalidEvent(format!(
+                "Validator already exists with different cluster id. Expected {:?}. Got {:?}",
+                existing_cluster.cluster_id, computed_cluster_id
+            )));
+        }
+
+        Err(ExecutionError::Duplicate(format!(
+            "Validator already exists for owner {} and cluster {:?}",
+            owner, computed_cluster_id
+        )))
     }
 
     // A validator has been removed from the network and its respective cluster
@@ -904,5 +974,240 @@ impl EventProcessor {
         }
 
         Ok(())
+    }
+}
+
+fn parse_operator_public_key(
+    data: &[u8],
+    operator_id: OperatorId,
+    owner: Address,
+) -> Result<Operator, String> {
+    let data = unwrap_operator_public_key(data);
+    let data = normalize_operator_public_key_bytes(data)?;
+    Operator::new(&data, operator_id, owner)
+        .map_err(|e| format!("Failed to construct operator: {e}"))
+}
+
+fn unwrap_operator_public_key(data: &[u8]) -> &[u8] {
+    abi_decode_single_dynamic_bytes(data).unwrap_or(data)
+}
+
+fn normalize_operator_public_key_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    if let Some(pem_base64) = decode_hex_encoded_operator_pem(data)? {
+        return Ok(pem_base64);
+    }
+
+    Ok(data.to_vec())
+}
+
+fn decode_hex_encoded_operator_pem(data: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let text = match std::str::from_utf8(data) {
+        Ok(text) => text,
+        Err(_) => return Ok(None),
+    };
+    let text = text.strip_prefix("0x").unwrap_or(text);
+
+    if text.is_empty() || !text.len().is_multiple_of(2) {
+        return Ok(None);
+    }
+    if !text.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Ok(None);
+    }
+
+    let pem = hex::decode(text)
+        .map_err(|e| format!("Failed to decode hex-encoded operator public key: {e}"))?;
+    if !pem.starts_with(b"-----BEGIN") {
+        return Err("Hex-encoded operator public key did not decode to PEM".to_string());
+    }
+
+    Ok(Some(BASE64_STANDARD.encode(pem).into_bytes()))
+}
+
+fn abi_decode_single_dynamic_bytes(data: &[u8]) -> Option<&[u8]> {
+    if data.len() < 64 || !data.len().is_multiple_of(32) {
+        return None;
+    }
+
+    let offset = abi_word_to_usize(&data[..32])?;
+    if offset != 32 {
+        return None;
+    }
+
+    let len = abi_word_to_usize(&data[32..64])?;
+    let padded_len = len.checked_add(31)?.checked_div(32)?.checked_mul(32)?;
+    let end = 64usize.checked_add(len)?;
+    if data.len() != 64 + padded_len || end > data.len() {
+        return None;
+    }
+
+    Some(&data[64..end])
+}
+
+fn abi_word_to_usize(word: &[u8]) -> Option<usize> {
+    if word.len() != 32 || word[..24].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+
+    usize::try_from(u64::from_be_bytes(word[24..].try_into().ok()?)).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+
+    use super::*;
+
+    fn create_base64_operator_public_key() -> Vec<u8> {
+        let rsa_key = database::test_utils::generators::pubkey::random_rsa();
+        BASE64_STANDARD
+            .encode(
+                rsa_key
+                    .public_key_to_pem()
+                    .expect("Failed to serialize RSA public key"),
+            )
+            .into_bytes()
+    }
+
+    fn wrap_dynamic_bytes(data: &[u8]) -> Vec<u8> {
+        let padded_len = data.len().div_ceil(32) * 32;
+        let mut encoded = vec![0u8; 64 + padded_len];
+
+        encoded[31] = 32;
+        encoded[56..64].copy_from_slice(&(data.len() as u64).to_be_bytes());
+        encoded[64..64 + data.len()].copy_from_slice(data);
+
+        encoded
+    }
+
+    #[test]
+    fn parse_operator_public_key_normalizes_wrapped_base64_and_hex_payloads() {
+        // Arrange: encode the same PEM key once as wrapped base64 and once as wrapped ASCII hex.
+        let base64_public_key = create_base64_operator_public_key();
+        let pem_bytes = BASE64_STANDARD
+            .decode(&base64_public_key)
+            .expect("Failed to decode base64 operator key");
+        let wrapped_base64 = wrap_dynamic_bytes(&base64_public_key);
+        let wrapped_hex = wrap_dynamic_bytes(hex::encode(pem_bytes).as_bytes());
+
+        // Act: parse both payload shapes through the operator-key normalization path.
+        let base64_operator =
+            parse_operator_public_key(&wrapped_base64, OperatorId(1), Address::random())
+                .expect("Wrapped base64 operator key should parse");
+        let hex_operator =
+            parse_operator_public_key(&wrapped_hex, OperatorId(2), Address::random())
+                .expect("Wrapped hex operator key should parse");
+
+        // Assert: both payloads normalize to the same canonical RSA key.
+        assert_eq!(
+            base64_operator
+                .rsa_pubkey
+                .public_key_to_pem()
+                .expect("Failed to serialize parsed base64 operator key"),
+            hex_operator
+                .rsa_pubkey
+                .public_key_to_pem()
+                .expect("Failed to serialize parsed hex operator key"),
+        );
+    }
+
+    #[test]
+    fn unwrap_operator_public_key_returns_original_bytes_for_non_abi_input() {
+        // Arrange: build a plain base64 operator key without the outer ABI wrapper.
+        let public_key = create_base64_operator_public_key();
+
+        // Act/Assert: non-ABI input should pass through unchanged.
+        assert_eq!(
+            unwrap_operator_public_key(&public_key),
+            public_key.as_slice()
+        );
+    }
+
+    #[test]
+    fn decode_hex_encoded_operator_pem_rejects_non_pem_hex_payload() {
+        // Arrange: build hex text that decodes successfully but does not contain PEM bytes.
+        let hex_payload = hex::encode("not a pem");
+
+        // Act: attempt to normalize it as a hex-encoded operator key.
+        let error = decode_hex_encoded_operator_pem(hex_payload.as_bytes())
+            .expect_err("Non-PEM hex should be rejected");
+
+        // Assert: the helper rejects it explicitly rather than silently accepting garbage.
+        assert!(
+            error.contains("did not decode to PEM"),
+            "Unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn decode_hex_encoded_operator_pem_accepts_0x_prefixed_hex_payload() {
+        // Arrange: encode a valid PEM payload as hex and add the optional 0x prefix.
+        let base64_public_key = create_base64_operator_public_key();
+        let pem_bytes = BASE64_STANDARD
+            .decode(&base64_public_key)
+            .expect("Failed to decode base64 operator key");
+        let hex_payload = format!("0x{}", hex::encode(pem_bytes));
+
+        // Act: normalize the prefixed hex payload.
+        let decoded = decode_hex_encoded_operator_pem(hex_payload.as_bytes())
+            .expect("0x-prefixed PEM hex should parse")
+            .expect("0x-prefixed PEM hex should normalize to base64 PEM");
+
+        // Assert: the normalized bytes match the canonical base64 PEM form.
+        assert_eq!(decoded, base64_public_key);
+    }
+
+    #[test]
+    fn decode_hex_encoded_operator_pem_returns_none_for_non_hex_like_inputs() {
+        // Arrange: gather malformed inputs that should be ignored as "not hex", not rejected.
+        for input in [&b""[..], b"abc", b"zzzz", &[0xff, 0xfe]] {
+            // Act/Assert: all of them should fall back to the non-hex path.
+            assert!(
+                decode_hex_encoded_operator_pem(input)
+                    .expect("Malformed non-hex inputs should not error")
+                    .is_none(),
+                "Input {input:?} should not be treated as hex-encoded PEM"
+            );
+        }
+    }
+
+    #[test]
+    fn abi_decode_single_dynamic_bytes_rejects_invalid_offset() {
+        // Arrange: encode a valid payload, then corrupt the ABI offset word.
+        let mut encoded = wrap_dynamic_bytes(b"test");
+        encoded[31] = 0;
+        encoded[30] = 64;
+
+        // Act/Assert: non-standard offsets should be rejected.
+        assert!(
+            abi_decode_single_dynamic_bytes(&encoded).is_none(),
+            "ABI payload with a non-standard offset should be rejected"
+        );
+    }
+
+    #[test]
+    fn abi_decode_single_dynamic_bytes_rejects_length_mismatch_buffer() {
+        // Arrange: encode a short payload, then lie about the dynamic length word.
+        let mut encoded = wrap_dynamic_bytes(b"test");
+        encoded[56..64].copy_from_slice(&40u64.to_be_bytes());
+
+        // Act/Assert: buffers whose declared length does not match the padded body are rejected.
+        assert!(
+            abi_decode_single_dynamic_bytes(&encoded).is_none(),
+            "ABI payloads whose declared length does not match the padded buffer should be rejected"
+        );
+    }
+
+    #[test]
+    fn abi_word_to_usize_rejects_non_zero_high_bytes() {
+        // Arrange: create a 32-byte ABI word with non-zero high-order bytes.
+        let mut word = [0u8; 32];
+        word[0] = 1;
+        word[31] = 32;
+
+        // Act/Assert: values that do not fit the narrow ABI decoding contract are rejected.
+        assert!(
+            abi_word_to_usize(&word).is_none(),
+            "ABI words with non-zero high-order bytes should be rejected"
+        );
     }
 }

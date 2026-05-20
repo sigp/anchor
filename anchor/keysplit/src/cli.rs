@@ -87,7 +87,7 @@ pub struct SharedKeygenOptions {
     )]
     pub owner: Address,
 
-    #[clap(long, help = "Path for output", value_name = "OUTPUT PATH")]
+    #[clap(long, help = "Path for output", value_name = "OUTPUT_PATH")]
     pub output_path: String,
 
     #[clap(long, help = "Operators to split key among", value_name = "IDS")]

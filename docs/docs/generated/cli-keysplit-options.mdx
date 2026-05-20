@@ -1,0 +1,149 @@
+```text
+SSV Keysplitting Tool
+
+Usage: anchor keysplit [OPTIONS] <COMMAND>
+
+Commands:
+    onchain  Utilize onchain data to split the key
+    manual   Split the key by manually providing data
+    help     Print this message or the help of the given subcommand(s)
+
+Options:
+    -d, --data-dir <DIR>
+               Used to specify a custom root data directory for the Anchor key
+               and database. Defaults to $HOME/.anchor/{network} where network
+               is the value of the `network` flag Note: Users should specify
+               separate custom datadirs for different networks.
+
+         --network <NETWORK>
+               Name of the chain Anchor will validate.
+               
+               [default: mainnet]
+               [possible values: mainnet, holesky, hoodi]
+
+    -t, --testnet-dir <DIR>
+               Path to directory containing eth2_testnet specs.
+
+         --debug-level <DEBUG_LEVEL>
+               Specifies the verbosity level used when emitting logs to the
+               terminal
+               
+               [default: INFO]
+
+    -h, --help
+               Print help
+
+onchain:
+
+Utilize onchain data to split the key
+
+Usage: anchor keysplit onchain [OPTIONS] --owner <ADDRESS> --output-path <OUTPUT_PATH> --operators <IDS> --rpc <ENDPOINT>
+
+Options:
+    -d, --data-dir <DIR>
+               Used to specify a custom root data directory for the Anchor key
+               and database. Defaults to $HOME/.anchor/{network} where network
+               is the value of the `network` flag Note: Users should specify
+               separate custom datadirs for different networks.
+
+         --keystore-paths <PATH>...
+               Path(s) to the validator keystore file
+
+         --network <NETWORK>
+               Name of the chain Anchor will validate.
+               
+               [default: mainnet]
+               [possible values: mainnet, holesky, hoodi]
+
+    -t, --testnet-dir <DIR>
+               Path to directory containing eth2_testnet specs.
+
+         --password-file <PATH>
+               Path to a file containing the password for the validator
+               keystore. If omitted, the password will be prompted for.
+
+         --owner <ADDRESS>
+               EOA address that owns the validator
+
+         --debug-level <DEBUG_LEVEL>
+               Specifies the verbosity level used when emitting logs to the
+               terminal
+               
+               [default: INFO]
+
+         --output-path <OUTPUT_PATH>
+               Path for output
+
+         --operators <IDS>
+               Operators to split key among
+
+         --rpc <ENDPOINT>
+               RPC endpoint to access L1 data
+
+    -h, --help
+               Print help
+
+manual:
+
+Split the key by manually providing data
+
+Usage: anchor keysplit manual [OPTIONS] --owner <ADDRESS> --output-path <OUTPUT_PATH> --operators <IDS> --nonce <NONCE> --public-keys <KEYS>...
+
+Options:
+    -d, --data-dir <DIR>
+               Used to specify a custom root data directory for the Anchor key
+               and database. Defaults to $HOME/.anchor/{network} where network
+               is the value of the `network` flag Note: Users should specify
+               separate custom datadirs for different networks.
+
+         --keystore-paths <PATH>...
+               Path(s) to the validator keystore file
+
+         --network <NETWORK>
+               Name of the chain Anchor will validate.
+               
+               [default: mainnet]
+               [possible values: mainnet, holesky, hoodi]
+
+    -t, --testnet-dir <DIR>
+               Path to directory containing eth2_testnet specs.
+
+         --password-file <PATH>
+               Path to a file containing the password for the validator
+               keystore. If omitted, the password will be prompted for.
+
+         --owner <ADDRESS>
+               EOA address that owns the validator
+
+         --debug-level <DEBUG_LEVEL>
+               Specifies the verbosity level used when emitting logs to the
+               terminal
+               
+               [default: INFO]
+
+         --output-path <OUTPUT_PATH>
+               Path for output
+
+         --operators <IDS>
+               Operators to split key among
+
+         --nonce <NONCE>
+               Nonce for the owner address
+
+         --public-keys <KEYS>...
+               RSA public keys for the operators
+
+    -h, --help
+               Print help
+
+help:
+
+Print this message or the help of the given subcommand(s)
+
+Usage: anchor keysplit help [COMMAND]
+
+Commands:
+    onchain  Utilize onchain data to split the key
+    manual   Split the key by manually providing data
+    help     Print this message or the help of the given subcommand(s)
+```

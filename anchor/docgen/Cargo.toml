@@ -1,0 +1,17 @@
+[package]
+name = "docgen"
+version = "0.1.0"
+edition = { workspace = true }
+authors = ["Sigma Prime <contact@sigmaprime.io>"]
+
+[[bin]]
+name = "anchor-docgen"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+cli = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

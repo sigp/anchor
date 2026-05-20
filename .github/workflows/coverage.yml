@@ -1,0 +1,57 @@
+name: coverage
+
+on:
+  push:
+    branches:
+      - stable
+      - unstable
+      - 'pr/*'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  coverage:
+    name: coverage
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'skip-ci')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: Get latest version of stable Rust
+      uses: moonrepo/setup-rust@v1
+      with:
+        cache: false
+        channel: stable
+        bins: cargo-nextest, cargo-llvm-cov
+    - name: Generate coverage report
+      run: make coverage
+    - name: Upload lcov report artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: lcov-report
+        path: lcov.info
+        if-no-files-found: error
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v6
+      with:
+        files: lcov.info
+        flags: rust
+        name: anchor-rust
+        use_oidc: true
+        fail_ci_if_error: false

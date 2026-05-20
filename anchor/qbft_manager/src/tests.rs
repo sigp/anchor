@@ -14,8 +14,10 @@ use ssv_types::{
     Cluster, ClusterId, CommitteeId, IndexSet, OperatorId,
     consensus::{BeaconVote, NoDataValidation, QbftMessage, QbftMessageType},
     domain_type::DomainType,
+    get_f,
     message::SignedSSVMessage,
     msgid::{DutyExecutor, MessageId, Role},
+    quorum_size,
 };
 use ssz::Decode;
 use task_executor::{ShutdownReason, TaskExecutor};
@@ -36,6 +38,10 @@ use super::{
     QbftMessageKind, TimeoutMode, WrappedQbftMessage,
 };
 use crate::instance::qbft_instance;
+
+mod aggregator_tests;
+mod setup;
+mod timeout_tests;
 
 /// The time we wait at most for consensus results until the test times out. Note that this is not
 /// real time, but simulated time, if the test is started with `start_paused = true`
@@ -153,7 +159,7 @@ where
                         .expect("If consensus was reached, this must exist");
                     assert!(
                         aggregated_commit.signatures().len() as u64
-                            >= (self.tester.size as u64 - self.tester.size.get_f())
+                            >= quorum_size(self.tester.size as usize) as u64
                     );
                 },
                 _ = &mut timeout => {
@@ -177,18 +183,6 @@ pub enum CommitteeSize {
     Seven = 7,
     Ten = 10,
     Thirteen = 13,
-}
-
-impl CommitteeSize {
-    // The number of fault nodes that the committee can tolerate
-    fn get_f(&self) -> u64 {
-        match self {
-            CommitteeSize::Four => 1,
-            CommitteeSize::Seven => 2,
-            CommitteeSize::Ten => 3,
-            CommitteeSize::Thirteen => 4,
-        }
-    }
 }
 
 /// The main test coordinator that manages multiple QBFT instances
@@ -362,7 +356,7 @@ where
             self.identifiers.insert(height, data_id.clone());
 
             // Track the consensus results
-            let min_for_consensus = self.size as u64 - self.size.get_f();
+            let min_for_consensus = quorum_size(self.size as usize) as u64;
             self.results.write().unwrap().insert(
                 data.hash(),
                 ConsensusResult {
@@ -512,7 +506,7 @@ where
         let mut finished = true;
         // Make sure there are no more running instances
         for running in self.num_running.read().unwrap().values() {
-            finished &= *running <= self.size.get_f();
+            finished &= *running <= get_f(self.size as usize) as u64;
         }
 
         // Make sure we have received all of the aggregated commit message. There is race condition
@@ -635,70 +629,7 @@ pub struct ConsensusResult {
 
 #[cfg(test)]
 mod manager_tests {
-    use super::*;
-
-    // Provides test setup
-    struct Setup {
-        executor: TaskExecutor,
-        _signal: async_channel::Sender<()>,
-        _shutdown: futures::channel::mpsc::Sender<ShutdownReason>,
-        clock: ManualSlotClock,
-        all_data: Vec<(BeaconVote, CommitteeInstanceId)>,
-    }
-
-    // Generate unique test data
-    pub(crate) fn generate_test_data(id: usize) -> (BeaconVote, CommitteeInstanceId) {
-        // setup mock data
-        let id = CommitteeInstanceId {
-            committee: CommitteeId([0; 32]),
-            instance_height: id.into(),
-        };
-
-        let data = BeaconVote {
-            block_root: Hash256::random(),
-            source: types::Checkpoint::default(),
-            target: types::Checkpoint::default(),
-        };
-
-        (data, id)
-    }
-
-    // Setup env for the test
-    fn setup_test(num_instances: usize) -> Setup {
-        *TRACING;
-
-        // setup the executor
-        let handle = tokio::runtime::Handle::current();
-        let (signal, exit) = async_channel::bounded(1);
-        let (shutdown, _) = futures::channel::mpsc::channel(1);
-        let executor = TaskExecutor::new(handle, exit, shutdown.clone());
-
-        // setup the slot clock
-        let slot_duration = Duration::from_secs(12);
-        let genesis_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let clock = ManualSlotClock::new(
-            Slot::new(0),
-            Duration::from_secs(genesis_time),
-            slot_duration,
-        );
-
-        let mut all_data = vec![];
-        for id in 1..num_instances + 1 {
-            all_data.push(generate_test_data(id))
-        }
-
-        Setup {
-            executor,
-            _signal: signal,
-            _shutdown: shutdown,
-            clock,
-            all_data,
-        }
-    }
+    use super::{setup::setup_test, *};
 
     #[tokio::test]
     // Test running a single instance and confirm that it reaches consensus
@@ -913,82 +844,6 @@ mod manager_tests {
         context.verify_consensus().await;
     }
 
-    /// Test that AggregatorCommittee messages are rejected before the Boole fork.
-    /// This is a critical security test - the role should not be processed until Boole is active.
-    #[tokio::test]
-    async fn test_aggregator_committee_rejected_before_boole() {
-        use fork::ForkSchedule;
-        use message_sender::testing::MockMessageSender;
-        use ssv_types::{
-            RSA_SIGNATURE_SIZE,
-            consensus::{QbftMessage, QbftMessageType},
-            message::{MsgType, SSVMessage, SignedSSVMessage},
-        };
-        use ssz::Encode;
-
-        let setup = setup_test(1);
-
-        // Create QbftManager with default fork schedule (no Boole)
-        let config = processor::Config {
-            max_workers: 4,
-            queue_size: Default::default(),
-        };
-        let senders = processor::spawn(config, setup.executor);
-        let (network_tx, _network_rx) = mpsc::unbounded_channel();
-
-        let manager = QbftManager::<types::MainnetEthSpec, _>::new(
-            senders,
-            OperatorId(1).into(),
-            setup.clock,
-            Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
-            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
-            Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test")), // No Boole fork
-        )
-        .expect("Manager creation should succeed");
-
-        // Create an AggregatorCommittee message
-        let msg_id = MessageId::new(
-            &DomainType([0; 4]),
-            Role::AggregatorCommittee,
-            &DutyExecutor::Committee(CommitteeId([0; 32])),
-        );
-
-        let qbft_message = QbftMessage {
-            qbft_message_type: QbftMessageType::Proposal,
-            height: 100, // Slot 100, well before any Boole epoch
-            round: 1,
-            identifier: (&msg_id).into(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: ssv_types::VariableList::empty(),
-            prepare_justification: ssv_types::VariableList::empty(),
-        };
-
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVConsensusMsgType,
-            msg_id,
-            qbft_message.as_ssz_bytes(),
-        )
-        .expect("SSVMessage creation should succeed");
-
-        let signed_msg = SignedSSVMessage::new(
-            vec![[0xAA; RSA_SIGNATURE_SIZE]],
-            vec![OperatorId(1)],
-            ssv_msg,
-            vec![],
-        )
-        .expect("SignedSSVMessage creation should succeed");
-
-        // Call receive_data - should return RoleNotActive
-        let result = manager.receive_data(signed_msg, qbft_message);
-
-        assert!(
-            matches!(result, Err(QbftError::RoleNotActive)),
-            "Expected RoleNotActive error before Boole fork, got: {:?}",
-            result
-        );
-    }
-
     /// Test that AggregatorCommittee messages are accepted after the Boole fork.
     /// Verifies the fork gating allows messages through when Boole is active.
     #[tokio::test]
@@ -1068,225 +923,4 @@ mod manager_tests {
             result
         );
     }
-}
-
-// very important: set paused to true for deterministic timer
-#[tokio::test(start_paused = true)]
-async fn test_timeouts() {
-    for i in 1..=10 {
-        test_timeout(i).await;
-    }
-}
-
-async fn test_timeout(round_timeout_to_test: usize) {
-    let (sender_tx, _sender_rx) = unbounded_channel();
-    let (message_tx, message_rx) = unbounded_channel();
-    let (result_tx, result_rx) = oneshot::channel();
-    let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-    let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
-        message_rx,
-        Arc::new(message_sender),
-    ));
-
-    // create a slot clock at slot 0 with a slot duration of 12 seconds
-    // we are now at the beginning of the slot and remember that instant
-    let slot_clock = ManualSlotClock::new(
-        Slot::new(0),
-        Duration::from_secs(0),
-        Duration::from_secs(12),
-    );
-    let slot_start_time = Instant::now();
-
-    // start at one third slot duration into the slot
-    let qbft_start_time = slot_start_time + slot_clock.slot_duration() / 3;
-
-    message_tx
-        .send(crate::QbftMessage {
-            kind: QbftMessageKind::Initialize(QbftInitialization {
-                initial: manager_tests::generate_test_data(0).0,
-                validator: Box::new(NoDataValidation),
-                message_id: MessageId::new(
-                    &DomainType::default(),
-                    Role::Committee,
-                    &DutyExecutor::Committee(CommitteeId::default()),
-                ),
-                timeout_mode: TimeoutMode::SlotTime {
-                    instance_start_time: qbft_start_time,
-                },
-                config: qbft::ConfigBuilder::new(
-                    OperatorId(1),
-                    InstanceHeight::from(0),
-                    IndexSet::from([1, 2, 3, 4].map(OperatorId)),
-                )
-                // we set the round we want to test as maximum round so that the instance times
-                // out at the end of that round
-                .with_max_rounds(round_timeout_to_test)
-                .build()
-                .unwrap(),
-                on_completed: result_tx,
-            }),
-            drop_on_finish: None,
-        })
-        .unwrap();
-
-    // we now wait for the instance to time out
-    assert!(matches!(result_rx.await, Ok(Completed::TimedOut)));
-
-    // we now measure the time it took for the instance to time out
-    let timeout = Instant::now() - slot_start_time;
-
-    // Calculate the expected timeout
-    let mut expected_timeout = Duration::ZERO;
-    // first, the instance should not start until start time, so we add the difference from slot
-    // start to qbft start.
-    expected_timeout += qbft_start_time - slot_start_time;
-    // now, we account for the actual rounds:
-    for i in 1..=round_timeout_to_test {
-        // check if we use short round timeout or long round timeout for this round
-        if i <= 8 {
-            expected_timeout += Duration::from_secs(2);
-        } else {
-            expected_timeout += Duration::from_secs(120);
-        }
-    }
-    assert_eq!(timeout, expected_timeout);
-}
-
-/// Test that Relative mode uses single-round timeouts starting from Instant::now()
-/// after the sleep_until, not cumulative timeouts from start_time.
-#[tokio::test(start_paused = true)]
-async fn test_relative_mode_timeout() {
-    let (sender_tx, _sender_rx) = unbounded_channel();
-    let (message_tx, message_rx) = unbounded_channel();
-    let (result_tx, result_rx) = oneshot::channel();
-    let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-    let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
-        message_rx,
-        Arc::new(message_sender),
-    ));
-
-    let slot_start_time = Instant::now();
-    // Set start_time 4 seconds in the future (simulating slot timing)
-    let qbft_start_time = slot_start_time + Duration::from_secs(4);
-
-    message_tx
-        .send(crate::QbftMessage {
-            kind: QbftMessageKind::Initialize(QbftInitialization {
-                initial: manager_tests::generate_test_data(0).0,
-                validator: Box::new(NoDataValidation),
-                message_id: MessageId::new(
-                    &DomainType::default(),
-                    Role::Committee,
-                    &DutyExecutor::Committee(CommitteeId::default()),
-                ),
-                timeout_mode: TimeoutMode::Relative {
-                    current_round_start_time: qbft_start_time,
-                },
-                config: qbft::ConfigBuilder::new(
-                    OperatorId(1),
-                    InstanceHeight::from(0),
-                    IndexSet::from([1, 2, 3, 4].map(OperatorId)),
-                )
-                .with_max_rounds(3) // Test 3 rounds
-                .build()
-                .unwrap(),
-                on_completed: result_tx,
-            }),
-            drop_on_finish: None,
-        })
-        .unwrap();
-
-    assert!(matches!(result_rx.await, Ok(Completed::TimedOut)));
-
-    let total_time = Instant::now() - slot_start_time;
-
-    // For Relative mode:
-    // - Wait 4 seconds until current_round_start_time
-    // - Round 1: 2 seconds (single round timeout, not cumulative)
-    // - Round 2: 2 seconds
-    // - Round 3: 2 seconds
-    // Total: 4 + 2 + 2 + 2 = 10 seconds
-    //
-    // If it were SlotTime mode (cumulative), it would be:
-    // - Wait 4 seconds
-    // - Round 1 ends at start_time + 2 = 6 seconds total
-    // - Round 2 ends at start_time + 4 = 8 seconds total
-    // - Round 3 ends at start_time + 6 = 10 seconds total
-    // Which happens to be the same for this test, but the key difference is
-    // Relative mode resets start_time to Instant::now() after sleep_until
-
-    let expected = Duration::from_secs(4 + 2 + 2 + 2);
-    assert_eq!(total_time, expected);
-}
-
-/// Test that SlotTime and Relative modes differ when start_time is in the past.
-/// This tests the key behavioral difference between the modes.
-#[tokio::test(start_paused = true)]
-async fn test_relative_vs_slottime_timing_difference() {
-    // Test with start_time in the past - this highlights the difference
-    // between SlotTime (uses original instance_start_time) and Relative (uses Instant::now())
-
-    async fn run_with_mode(use_relative: bool) -> Duration {
-        let (sender_tx, _sender_rx) = unbounded_channel();
-        let (message_tx, message_rx) = unbounded_channel();
-        let (result_tx, result_rx) = oneshot::channel();
-        let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-        let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
-            message_rx,
-            Arc::new(message_sender),
-        ));
-
-        let now = Instant::now();
-
-        let timeout_mode = if use_relative {
-            TimeoutMode::Relative {
-                current_round_start_time: now,
-            }
-        } else {
-            TimeoutMode::SlotTime {
-                instance_start_time: now,
-            }
-        };
-
-        message_tx
-            .send(crate::QbftMessage {
-                kind: QbftMessageKind::Initialize(QbftInitialization {
-                    initial: manager_tests::generate_test_data(0).0,
-                    validator: Box::new(NoDataValidation),
-                    message_id: MessageId::new(
-                        &DomainType::default(),
-                        Role::Committee,
-                        &DutyExecutor::Committee(CommitteeId::default()),
-                    ),
-                    timeout_mode,
-                    config: qbft::ConfigBuilder::new(
-                        OperatorId(1),
-                        InstanceHeight::from(0),
-                        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
-                    )
-                    .with_max_rounds(2)
-                    .build()
-                    .unwrap(),
-                    on_completed: result_tx,
-                }),
-                drop_on_finish: None,
-            })
-            .unwrap();
-
-        assert!(matches!(result_rx.await, Ok(Completed::TimedOut)));
-        Instant::now() - now
-    }
-
-    let slottime_duration = run_with_mode(false).await;
-    let relative_duration = run_with_mode(true).await;
-
-    // Both should complete in 4 seconds (2 rounds * 2 seconds each)
-    // The difference is in HOW they calculate it:
-    // - SlotTime: cumulative from original instance_start_time
-    // - Relative: single-round from current_round_start_time (reset each round)
-    //
-    // When start_time is now, both should behave similarly for the first run,
-    // but the internal calculations differ.
-    assert_eq!(slottime_duration, Duration::from_secs(4));
-    assert_eq!(relative_duration, Duration::from_secs(4));
 }
