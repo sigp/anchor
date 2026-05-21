@@ -486,7 +486,7 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        OperatorId, RSA_SIGNATURE_SIZE, VariableList,
+        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
@@ -1715,6 +1715,72 @@ mod tests {
         let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
 
         assert_eq!(result, Ok(Some(expected_duty_count)));
+    }
+
+    #[test]
+    fn test_duty_limit_ptc_committee() {
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(100),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        let msg_id = MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            Role::PTCCommittee,
+            &DutyExecutor::Committee(CommitteeId([0u8; 32])),
+        );
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
+            .expect("SSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+        let mock_duties_provider = Arc::new(MockDutiesProvider {
+            voluntary_exit_duty_count: 0,
+        });
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::PTCCommittee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: slot_clock.clone(),
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
+        };
+
+        let slot = slot_clock.now().unwrap();
+
+        // V < slots_per_epoch: V is the binding constraint.
+        let small_cluster = vec![ValidatorIndex(0); 4];
+        let result = duty_limit(
+            &validation_context,
+            slot,
+            &small_cluster,
+            mock_duties_provider.clone(),
+        );
+        assert_eq!(result, Ok(Some(4)));
+
+        // V > slots_per_epoch: slot count is the binding constraint.
+        let large_cluster = vec![ValidatorIndex(0); 100];
+        let result = duty_limit(
+            &validation_context,
+            slot,
+            &large_cluster,
+            mock_duties_provider,
+        );
+        assert_eq!(result, Ok(Some(32)));
     }
 
     /// Helper function for testing role validation against fork schedules.
