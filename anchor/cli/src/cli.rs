@@ -540,9 +540,7 @@ pub struct Node {
         help = "Disable the beacon head monitor which tries to attest as soon as any of the \
                 configured beacon nodes sends a head event. Leaving the service enabled is \
                 recommended, but disabling it can lead to reduced bandwidth and more predictable \
-                usage of the primary beacon node (rather than the fastest BN).",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+                usage of the primary beacon node (rather than the fastest BN)."
     )]
     pub disable_beacon_head_monitor: bool,
 
