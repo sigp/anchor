@@ -906,6 +906,27 @@ impl QbftData for BeaconVote {
     }
 }
 
+#[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
+pub struct PayloadAttestationVote {
+    pub beacon_block_root: Hash256,
+    pub payload_present: bool,
+    pub blob_data_available: bool,
+}
+
+impl QbftData for PayloadAttestationVote {
+    type Hash = Hash256;
+
+    fn hash(&self) -> Self::Hash {
+        let bytes = self.as_ssz_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
+    }
+}
+
 /// Identifies a batch of pre-consensus selection proofs for a committee.
 /// All operators compute the same hash for a given `(slot, committee_id)` pair, ensuring
 /// consistent batching across the network.
@@ -1179,6 +1200,48 @@ pub enum BeaconVoteValidationError {
     EpochMismatch(Box<EpochMismatch>),
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
+}
+
+#[derive(Error, Debug)]
+pub enum PayloadAttestationVoteValidationError {
+    #[error("Beacon block root is zero")]
+    ZeroBeaconBlockRoot,
+}
+
+/// Validator for `PayloadAttestationVote` during QBFT consensus.
+///
+/// Per SIP-94 SC-2, `payload_present` and `blob_data_available` are trusted
+/// from the QBFT leader and intentionally not compared against any local view.
+/// The only required check is that `beacon_block_root` is non-zero.
+#[derive(Debug, Default)]
+pub struct PayloadAttestationVoteValidator;
+
+impl QbftDataValidator<PayloadAttestationVote> for PayloadAttestationVoteValidator {
+    fn validate(
+        &self,
+        value: &PayloadAttestationVote,
+        _our_value: &PayloadAttestationVote,
+    ) -> bool {
+        match self.do_validation(value) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(%err, "Operator proposed invalid payload attestation vote");
+                false
+            }
+        }
+    }
+}
+
+impl PayloadAttestationVoteValidator {
+    pub fn do_validation(
+        &self,
+        value: &PayloadAttestationVote,
+    ) -> Result<(), PayloadAttestationVoteValidationError> {
+        if value.beacon_block_root.is_zero() {
+            return Err(PayloadAttestationVoteValidationError::ZeroBeaconBlockRoot);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2045,5 +2108,124 @@ mod tests {
             // All operators should get the same hash
             assert_eq!(batch_id.hash(), expected_hash);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // PayloadAttestationVote Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fn create_payload_attestation_vote(
+        root: Hash256,
+        payload_present: bool,
+        blob_data_available: bool,
+    ) -> PayloadAttestationVote {
+        PayloadAttestationVote {
+            beacon_block_root: root,
+            payload_present,
+            blob_data_available,
+        }
+    }
+
+    #[test]
+    fn test_payload_attestation_vote_ssz_roundtrip() {
+        for (payload_present, blob_data_available) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let vote = create_payload_attestation_vote(
+                Hash256::from_low_u64_be(0xabcd),
+                payload_present,
+                blob_data_available,
+            );
+
+            let encoded = vote.as_ssz_bytes();
+            let decoded = PayloadAttestationVote::from_ssz_bytes(&encoded).unwrap();
+
+            assert_eq!(vote, decoded);
+        }
+    }
+
+    #[test]
+    fn test_payload_attestation_vote_ssz_byte_layout() {
+        // Fixed-length container: 32-byte root + 1-byte bool + 1-byte bool = 34 bytes.
+        let root_bytes = [0xAA; 32];
+        let vote = create_payload_attestation_vote(Hash256::from(root_bytes), true, false);
+
+        let encoded = vote.as_ssz_bytes();
+
+        assert_eq!(
+            encoded.len(),
+            34,
+            "PayloadAttestationVote should encode to 34 bytes"
+        );
+        assert_eq!(&encoded[0..32], &root_bytes);
+        assert_eq!(encoded[32], 1, "payload_present byte");
+        assert_eq!(encoded[33], 0, "blob_data_available byte");
+    }
+
+    #[test]
+    fn test_payload_attestation_vote_hash_deterministic() {
+        let root = Hash256::from_low_u64_be(0x1234);
+        let vote = create_payload_attestation_vote(root, true, false);
+
+        // Hashing two independently-constructed values with the same inputs
+        // must produce the same hash (catches identity- or address-dependent hashing).
+        let same = create_payload_attestation_vote(root, true, false);
+        assert_eq!(vote.hash(), same.hash());
+
+        let different_root =
+            create_payload_attestation_vote(Hash256::from_low_u64_be(0x5678), true, false);
+        assert_ne!(vote.hash(), different_root.hash());
+
+        let flipped_payload = create_payload_attestation_vote(root, false, false);
+        assert_ne!(vote.hash(), flipped_payload.hash());
+
+        let flipped_blob = create_payload_attestation_vote(root, true, true);
+        assert_ne!(vote.hash(), flipped_blob.hash());
+    }
+
+    #[test]
+    fn test_payload_attestation_vote_validator_rejects_zero_root() {
+        let validator = PayloadAttestationVoteValidator;
+        let zero_vote = create_payload_attestation_vote(Hash256::zero(), true, true);
+
+        let result = validator.do_validation(&zero_vote);
+        assert!(matches!(
+            result,
+            Err(PayloadAttestationVoteValidationError::ZeroBeaconBlockRoot)
+        ));
+    }
+
+    #[test]
+    fn test_payload_attestation_vote_validator_accepts_nonzero_root() {
+        let validator = PayloadAttestationVoteValidator;
+        let root = Hash256::from_low_u64_be(0xdead);
+
+        for (payload_present, blob_data_available) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let vote = create_payload_attestation_vote(root, payload_present, blob_data_available);
+            assert!(
+                validator.do_validation(&vote).is_ok(),
+                "validator should accept non-zero root regardless of payload-status flags \
+                 (payload_present={payload_present}, blob_data_available={blob_data_available})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_payload_attestation_vote_validator_ignores_start_value() {
+        // SIP-94 SC-2: payload-status fields are trusted from the QBFT leader;
+        // the validator must NOT compare the proposed value against the local
+        // operator's view (start_value). Verified at the trait-surface level by
+        // calling `validate(value, our_value)` with divergent values and asserting
+        // acceptance; structurally also guaranteed by `do_validation` only taking
+        // `value`.
+        let validator = PayloadAttestationVoteValidator;
+        let proposed =
+            create_payload_attestation_vote(Hash256::from_low_u64_be(0x1111), true, true);
+        let local_view =
+            create_payload_attestation_vote(Hash256::from_low_u64_be(0x2222), false, false);
+
+        assert!(validator.validate(&proposed, &local_view));
     }
 }
