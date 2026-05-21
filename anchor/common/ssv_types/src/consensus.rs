@@ -906,11 +906,21 @@ impl QbftData for BeaconVote {
     }
 }
 
+/// QBFT consensus value for PTC (Payload Timeliness Committee) duties at Gloas.
+///
+/// PTC operators run one QBFT instance per slot over this stripped shape; the
+/// slot is pinned by the QBFT instance and reconstructed from the duty when
+/// signing the full `PayloadAttestationData` under `DOMAIN_PTC_ATTESTER` after
+/// consensus decides.
 #[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct PayloadAttestationVote {
+    /// Root of the beacon block whose payload-timeliness this vote describes.
     pub beacon_block_root: Hash256,
+    /// Whether the operator observed the execution payload envelope by the
+    /// PTC cutoff.
     pub payload_present: bool,
+    /// Whether the operator observed blob data availability by the PTC cutoff.
     pub blob_data_available: bool,
 }
 
@@ -1202,17 +1212,28 @@ pub enum BeaconVoteValidationError {
     SlashableAttestation(NotSafe),
 }
 
+/// Validation errors for `PayloadAttestationVote`.
 #[derive(Error, Debug)]
 pub enum PayloadAttestationVoteValidationError {
+    /// The proposed `beacon_block_root` is the zero hash, which can never be a
+    /// real block root and signals an empty or corrupt leader proposal.
     #[error("Beacon block root is zero")]
     ZeroBeaconBlockRoot,
 }
 
 /// Validator for `PayloadAttestationVote` during QBFT consensus.
 ///
-/// Per SIP-94 SC-2, `payload_present` and `blob_data_available` are trusted
-/// from the QBFT leader and intentionally not compared against any local view.
-/// The only required check is that `beacon_block_root` is non-zero.
+/// Reflects [SIP-94 §3][sip-94]: the cluster contributes one shared PTC
+/// observation per slot, sourced from the QBFT leader. `payload_present` and
+/// `blob_data_available` are intentionally not compared against the local
+/// operator's view (SC-2: trust-leader for payload-status fields). The only
+/// required check here is that `beacon_block_root` is non-zero.
+///
+/// If SIP-94 is later amended to require local-view equality on the
+/// payload-status booleans, extend `do_validation` with the additional rule;
+/// the `do_validation -> Result` shape is the extension point.
+///
+/// [sip-94]: https://github.com/ssvlabs/SIPs/blob/7e8b5bd6d4007682d8bd75b06a2f2ac7b617e9e5/sips/epbs_support.md#3-new-duty-payload-timeliness-committee-ptc-attestation
 #[derive(Debug, Default)]
 pub struct PayloadAttestationVoteValidator;
 
@@ -2213,18 +2234,18 @@ mod tests {
     }
 
     #[test]
-    fn test_payload_attestation_vote_validator_ignores_start_value() {
-        // SIP-94 SC-2: payload-status fields are trusted from the QBFT leader;
-        // the validator must NOT compare the proposed value against the local
-        // operator's view (start_value). Verified at the trait-surface level by
-        // calling `validate(value, our_value)` with divergent values and asserting
-        // acceptance; structurally also guaranteed by `do_validation` only taking
-        // `value`.
+    fn test_payload_attestation_vote_validator_accepts_status_flag_disagreement() {
+        // SIP-94 SC-2: `payload_present` and `blob_data_available` are trusted
+        // from the QBFT leader and must NOT be compared against the local
+        // operator's observation. Tested by holding `beacon_block_root` constant
+        // between proposed and local values and flipping only the payload-status
+        // flags, asserting acceptance. Root-mismatch behavior is intentionally
+        // not pinned here; the trait surface (`do_validation` taking only `value`)
+        // and the zero-root rejection test cover the root contract.
         let validator = PayloadAttestationVoteValidator;
-        let proposed =
-            create_payload_attestation_vote(Hash256::from_low_u64_be(0x1111), true, true);
-        let local_view =
-            create_payload_attestation_vote(Hash256::from_low_u64_be(0x2222), false, false);
+        let root = Hash256::from_low_u64_be(0x1111);
+        let proposed = create_payload_attestation_vote(root, true, true);
+        let local_view = create_payload_attestation_vote(root, false, false);
 
         assert!(validator.validate(&proposed, &local_view));
     }
