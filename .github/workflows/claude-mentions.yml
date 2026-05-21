@@ -54,7 +54,7 @@ jobs:
 
             - name: Checkout repository
               if: steps.check.outputs.is_member == 'true'
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   repository: ${{ github.event.issue.pull_request && steps.pr-info.outputs.is_fork == 'true' && format('{0}/{1}', steps.pr-info.outputs.pr_head_owner, steps.pr-info.outputs.pr_head_repo) || github.repository }}
                   ref: ${{ github.event.issue.pull_request && steps.pr-info.outputs.pr_head_ref || github.ref }}
@@ -63,14 +63,14 @@ jobs:
             - name: Generate GitHub App token
               if: steps.check.outputs.is_member == 'true'
               id: app-token
-              uses: actions/create-github-app-token@v2
+              uses: actions/create-github-app-token@v3
               with:
                   app-id: ${{ vars.APP_ID }}
                   private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
             - name: Configure AWS Credentials (OIDC)
               if: steps.check.outputs.is_member == 'true'
-              uses: aws-actions/configure-aws-credentials@v4
+              uses: aws-actions/configure-aws-credentials@v6
               with:
                   role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
                   aws-region: us-west-2
@@ -92,7 +92,7 @@ jobs:
             - name: Run Claude Code Action
               if: steps.check.outputs.is_member == 'true'
               timeout-minutes: 15
-              uses: anthropics/claude-code-action@v1.0.52
+              uses: anthropics/claude-code-action@v1.0.127
               with:
                   github_token: ${{ steps.app-token.outputs.token }}
                   use_bedrock: "true"
