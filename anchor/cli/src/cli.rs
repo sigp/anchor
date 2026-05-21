@@ -619,7 +619,10 @@ pub struct Node {
         help = "Enable parallel querying and scoring of attestation data across multiple beacon \
                 nodes. When enabled, Anchor queries all configured beacon nodes simultaneously \
                 and selects the attestation data with the highest score based on checkpoint \
-                epochs and head block proximity. Only useful with multiple beacon nodes.",
+                epochs and head block proximity. Only useful with multiple beacon nodes. \
+                Note: WAD is bypassed when the beacon head monitor (enabled by default, see \
+                --disable-beacon-head-monitor) wins the eager-attest race for a slot; the \
+                firing BN is queried directly. WAD still runs on the fallback path.",
         display_order = 0
     )]
     pub with_weighted_attestation_data: bool,

@@ -48,7 +48,7 @@ use tokio::{
     select,
     sync::{
         Mutex,
-        mpsc::{self, unbounded_channel},
+        mpsc::{self, error::TrySendError, unbounded_channel},
     },
     time::{Instant, interval, sleep},
 };
@@ -354,6 +354,8 @@ impl Client {
                 executor.spawn(
                     async move {
                         while let Some(head_event) = head_event_rx.recv().await {
+                            // LH's `HeadEvent` doesn't derive Clone, so rebuild for each
+                            // downstream. All fields are Copy so this is essentially free.
                             let HeadEvent {
                                 beacon_node_index,
                                 slot,
@@ -369,11 +371,29 @@ impl Client {
                                 slot,
                                 beacon_block_root,
                             };
-                            if attestation_service_tx.send(to_attest).await.is_err()
-                                || metadata_service_tx.send(to_meta).await.is_err()
-                            {
-                                warn!("head event fan-out: downstream closed, exiting relay");
-                                return;
+                            // try_send avoids back-pressuring LH's SSE poll task during
+                            // cold-start when consumers aren't draining yet.
+                            match attestation_service_tx.try_send(to_attest) {
+                                Ok(()) => {}
+                                Err(TrySendError::Full(_)) => metrics::inc_counter_vec(
+                                    &metrics::HEAD_EVENT_FANOUT_DROPS,
+                                    &["attestation_service"],
+                                ),
+                                Err(TrySendError::Closed(_)) => {
+                                    warn!("head event fan-out: attestation downstream closed");
+                                    return;
+                                }
+                            }
+                            match metadata_service_tx.try_send(to_meta) {
+                                Ok(()) => {}
+                                Err(TrySendError::Full(_)) => metrics::inc_counter_vec(
+                                    &metrics::HEAD_EVENT_FANOUT_DROPS,
+                                    &["metadata_service"],
+                                ),
+                                Err(TrySendError::Closed(_)) => {
+                                    warn!("head event fan-out: metadata downstream closed");
+                                    return;
+                                }
                             }
                         }
                     },
@@ -381,7 +401,7 @@ impl Client {
                 );
                 (
                     Some(Mutex::new(attestation_service_rx)),
-                    Some(Arc::new(Mutex::new(metadata_service_rx))),
+                    Some(metadata_service_rx),
                 )
             } else {
                 (None, None)
@@ -754,7 +774,6 @@ impl Client {
             spec.clone(),
             fork_schedule.clone(),
             config.with_weighted_attestation_data,
-            metadata_head_monitor_rx,
         );
 
         // We use `SLOTS_PER_EPOCH` as the capacity of the block notification channel, because
@@ -778,7 +797,7 @@ impl Client {
             .map_err(|e| format!("Unable to start sync committee service: {e}"))?;
 
         metadata_service
-            .start_update_service()
+            .start_update_service(metadata_head_monitor_rx)
             .map_err(|e| format!("Unable to start metadata service: {e}"))?;
 
         preparation_service

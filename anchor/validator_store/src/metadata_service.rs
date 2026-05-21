@@ -20,7 +20,7 @@ use ssv_types::{
 use ssz::Encode;
 use task_executor::TaskExecutor;
 use tokio::{
-    sync::{Mutex, mpsc},
+    sync::mpsc,
     time::{Instant, sleep, sleep_until},
 };
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
@@ -132,33 +132,24 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     spec: Arc<ChainSpec>,
     fork_schedule: Arc<ForkSchedule>,
     weighted_attestation_data: bool,
-    head_monitor_rx: Option<Arc<Mutex<mpsc::Receiver<HeadEvent>>>>,
 }
 
 /// Wait for a head event matching the current slot reported by `slot_clock`.
 ///
-/// Drops events for past slots and keeps waiting. Resolves to `None` if
-/// `receiver` is `None`, the channel is closed, or `slot_clock.now()` fails.
-///
-/// Extracted as a free function so it can be unit-tested without constructing
-/// a full `MetadataService` (which requires a beacon node, duties service,
-/// validator store, etc.).
+/// Drops events whose slot doesn't match the current slot and keeps waiting.
+/// Resolves to `None` if the channel is closed or `slot_clock.now()` fails.
 async fn wait_for_head_event<T: SlotClock>(
-    receiver: Option<&Arc<Mutex<mpsc::Receiver<HeadEvent>>>>,
+    receiver: &mut mpsc::Receiver<HeadEvent>,
     slot_clock: &T,
 ) -> Option<HeadEvent> {
-    let receiver = receiver?;
-    let mut receiver = receiver.lock().await;
     loop {
         match receiver.recv().await {
             Some(head_event) => {
-                // Only return head events for the current slot - this ensures the
-                // block for this slot has been produced before triggering attestation.
                 let current_slot = slot_clock.now()?;
                 if head_event.slot == current_slot {
                     return Some(head_event);
                 }
-                // Head event is for a previous slot, keep waiting
+                // Head event slot doesn't match current; drop and keep waiting.
             }
             None => {
                 warn!("Head monitor channel closed unexpectedly");
@@ -179,7 +170,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         spec: Arc<ChainSpec>,
         fork_schedule: Arc<ForkSchedule>,
         weighted_attestation_data: bool,
-        head_monitor_rx: Option<Arc<Mutex<mpsc::Receiver<HeadEvent>>>>,
     ) -> Self {
         Self {
             duties_service,
@@ -190,11 +180,13 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             spec,
             fork_schedule,
             weighted_attestation_data,
-            head_monitor_rx,
         }
     }
 
-    pub fn start_update_service(self) -> Result<(), String> {
+    pub fn start_update_service(
+        self,
+        mut head_monitor_rx: Option<mpsc::Receiver<HeadEvent>>,
+    ) -> Result<(), String> {
         let slot_duration = Duration::from_secs(self.spec.seconds_per_slot);
         let duration_to_next_slot = self
             .slot_clock
@@ -238,7 +230,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         );
 
         // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 2: VotingContext (head event or 1/3 slot, whichever fires first)
+        // PHASE 2: VotingContext (head event or spec-derived fallback, first to fire)
         // Gets cached voting assignments, fetches beacon_vote, builds VotingContext.
         // ═══════════════════════════════════════════════════════════════════════
         let self_clone_phase2 = self.clone();
@@ -257,25 +249,19 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     // the slot we're about to attest in.
                     sleep(duration_to_next_slot).await;
 
-                    let Some(intended_slot) = self_clone_phase2.slot_clock.now() else {
-                        error!("Failed to read slot clock");
-                        continue;
+                    let fallback = self_clone_phase2.spec.get_unaggregated_attestation_due();
+                    let head_event = match head_monitor_rx.as_mut() {
+                        Some(rx) => tokio::select! {
+                            _ = sleep(fallback) => None,
+                            event = wait_for_head_event(rx, &self_clone_phase2.slot_clock) => event,
+                        },
+                        None => {
+                            sleep(fallback).await;
+                            None
+                        }
                     };
 
-                    // Race the 1/3-slot fallback timer against an in-slot head event.
-                    let head_event: Option<HeadEvent> =
-                        if self_clone_phase2.head_monitor_rx.is_some() {
-                            tokio::select! {
-                                _ = sleep(self_clone_phase2.spec.get_unaggregated_attestation_due()) => None,
-                                event = self_clone_phase2.wait_for_head_event() => event,
-                            }
-                        } else {
-                            sleep(self_clone_phase2.spec.get_unaggregated_attestation_due()).await;
-                            None
-                        };
-
-                    let from_head_event = head_event.is_some();
-                    let trigger = if from_head_event {
+                    let trigger = if head_event.is_some() {
                         metrics::TRIGGER_HEAD_EVENT
                     } else {
                         metrics::TRIGGER_TIMER
@@ -297,8 +283,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
                     if let Err(err) = self_clone_phase2.update_voting_context(head_event).await {
                         error!(err, "Failed to update voting context")
-                    } else {
-                        trace!(%intended_slot, from_head_event, "Updated voting context");
                     }
                 }
             },
@@ -416,17 +400,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Wait for a head event matching the current slot. Stale events for past
-    /// slots are dropped. Resolves to `None` if the channel is closed or no
-    /// head monitor is configured.
-    async fn wait_for_head_event(&self) -> Option<HeadEvent> {
-        wait_for_head_event(self.head_monitor_rx.as_ref(), &self.slot_clock).await
-    }
-
     /// Phase 2: Build and publish `VotingContext`, triggered by a head event or
-    /// the 1/3-slot fallback timer. When `head_event` is `Some`, the firing BN
-    /// is queried directly (bypassing WAD); any failure or block-root mismatch
-    /// falls back to the WAD/first_success path.
+    /// the spec-derived fallback timer. When `head_event` is `Some`, the firing
+    /// BN is queried directly (bypassing WAD); any failure or block-root
+    /// mismatch falls back to the WAD/first_success path.
     async fn update_voting_context(&self, head_event: Option<HeadEvent>) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
@@ -2388,12 +2365,8 @@ mod tests {
         clock
     }
 
-    fn make_head_event_channel() -> (
-        mpsc::Sender<HeadEvent>,
-        Arc<Mutex<mpsc::Receiver<HeadEvent>>>,
-    ) {
-        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
-        (tx, Arc::new(Mutex::new(rx)))
+    fn make_head_event_channel() -> (mpsc::Sender<HeadEvent>, mpsc::Receiver<HeadEvent>) {
+        mpsc::channel(CHANNEL_CAPACITY)
     }
 
     fn make_head_event(slot: u64) -> HeadEvent {
@@ -2408,12 +2381,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn wait_for_head_event_returns_matching_slot_event() {
         let slot_clock = make_test_slot_clock();
-        let (tx, rx) = make_head_event_channel();
+        let (tx, mut rx) = make_head_event_channel();
         tx.send(make_head_event(TEST_SLOT)).await.unwrap();
 
         let result = timeout(
             FAST_RESOLVE_TIMEOUT,
-            wait_for_head_event(Some(&rx), &slot_clock),
+            wait_for_head_event(&mut rx, &slot_clock),
         )
         .await
         .unwrap();
@@ -2426,28 +2399,15 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn wait_for_head_event_drops_stale_events() {
         let slot_clock = make_test_slot_clock();
-        let (tx, rx) = make_head_event_channel();
+        let (tx, mut rx) = make_head_event_channel();
         tx.send(make_head_event(TEST_SLOT - 1)).await.unwrap();
 
         let from_head_event = tokio::select! {
             biased;
             _ = tokio::time::sleep(TIMER_ARM_DURATION) => false,
-            _ = wait_for_head_event(Some(&rx), &slot_clock) => true,
+            _ = wait_for_head_event(&mut rx, &slot_clock) => true,
         };
 
         assert!(!from_head_event);
-    }
-
-    // When the head monitor is disabled, the wait returns None right away
-    // instead of blocking, so Phase 2 falls back to the bare timer.
-    #[tokio::test(start_paused = true)]
-    async fn wait_for_head_event_returns_none_when_disabled() {
-        let slot_clock = make_test_slot_clock();
-
-        let result = timeout(FAST_RESOLVE_TIMEOUT, wait_for_head_event(None, &slot_clock))
-            .await
-            .unwrap();
-
-        assert!(result.is_none());
     }
 }
