@@ -1,6 +1,16 @@
-use bls::{SecretKey, Signature};
+use std::{sync::Mutex, time::Duration};
+
+use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::{KeyId, split_with_rng};
+use database::OwnOperatorId;
+use fork::{Fork, ForkSchedule};
+use message_sender::{Error as MessageSenderError, MessageSender};
+use processor::{Config as ProcessorConfig, spawn as spawn_processor};
 use rand::{prelude::*, rngs::StdRng};
+use slot_clock::ManualSlotClock;
+use ssv_types::{domain_type::DomainType, message::SignedSSVMessage};
+use ssz::Decode;
+use task_executor::TaskExecutor;
 use tokio::sync::oneshot;
 
 use super::*;
@@ -9,6 +19,77 @@ const TEST_RNG_SEED: u64 = 0xDEAD_BEEF_CAFE_0001;
 const TOTAL_SHARES: u64 = 4;
 const THRESHOLD: u64 = 3;
 const SIGNING_ROOT: Hash256 = Hash256::repeat_byte(0xAB);
+const TEST_OPERATOR_ID: OperatorId = OperatorId(1);
+const TEST_SLOT: Slot = Slot::new(64);
+const SLOTS_PER_EPOCH: u64 = 32;
+
+#[derive(Default)]
+struct CapturingMessageSender {
+    messages: Mutex<Vec<UnsignedSSVMessage>>,
+}
+
+impl CapturingMessageSender {
+    fn messages(&self) -> Vec<UnsignedSSVMessage> {
+        self.messages
+            .lock()
+            .expect("messages mutex should not be poisoned")
+            .clone()
+    }
+}
+
+impl MessageSender for CapturingMessageSender {
+    fn sign_and_send(
+        &self,
+        message: UnsignedSSVMessage,
+        _committee_id: CommitteeId,
+        _additional_message_callback: Option<Box<dyn FnOnce(&SignedSSVMessage) + Send + 'static>>,
+    ) -> Result<(), MessageSenderError> {
+        self.messages
+            .lock()
+            .expect("messages mutex should not be poisoned")
+            .push(message);
+        Ok(())
+    }
+
+    fn send(
+        &self,
+        _message: SignedSSVMessage,
+        _committee_id: CommitteeId,
+    ) -> Result<(), MessageSenderError> {
+        Ok(())
+    }
+}
+
+fn create_test_executor() -> (TaskExecutor, async_channel::Sender<()>) {
+    let handle = tokio::runtime::Handle::current();
+    let (signal, exit) = async_channel::bounded::<()>(1);
+    let (shutdown, _) = futures::channel::mpsc::channel(1);
+    let executor = TaskExecutor::new(handle, exit, shutdown);
+    (executor, signal)
+}
+
+fn new_test_manager(
+    message_sender: Arc<CapturingMessageSender>,
+) -> Arc<SignatureCollectorManager<ManualSlotClock>> {
+    let (executor, _exit_signal) = create_test_executor();
+    let processor = spawn_processor(ProcessorConfig::default(), executor);
+    let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
+    let slot_clock = ManualSlotClock::new(
+        Slot::new(0),
+        Duration::from_secs(0),
+        Duration::from_secs(12),
+    );
+
+    SignatureCollectorManager::new(
+        processor,
+        OwnOperatorId::Known(TEST_OPERATOR_ID),
+        fork_schedule,
+        SLOTS_PER_EPOCH,
+        message_sender,
+        slot_clock,
+    )
+    .expect("manager should be created")
+}
 
 fn split_random_master() -> Vec<(OperatorId, SecretKey)> {
     let rng = &mut StdRng::seed_from_u64(TEST_RNG_SEED);
@@ -53,6 +134,93 @@ fn feed_partial_sig(
 
 fn expect_signature(rx: &mut oneshot::Receiver<Arc<Signature>>, context: &str) {
     rx.try_recv().expect(context);
+}
+
+#[tokio::test]
+async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
+    let message_sender = Arc::new(CapturingMessageSender::default());
+    let manager = new_test_manager(Arc::clone(&message_sender));
+    let validator_pubkey = PublicKeyBytes::empty();
+    let validator_index = ValidatorIndex(42);
+    let signing_roots = [
+        Hash256::repeat_byte(0x01),
+        Hash256::repeat_byte(0x02),
+        Hash256::repeat_byte(0x03),
+    ];
+    let metadata = SignatureMetadata {
+        kind: PartialSignatureKind::ContributionProofs,
+        role: Role::SyncCommittee,
+        threshold: 1,
+        slot: TEST_SLOT,
+        committee_id: CommitteeId::default(),
+    };
+    let duty_executor = DutyExecutor::Validator(validator_pubkey);
+    let base_hash = Hash256::repeat_byte(0xAA);
+
+    for (index, signing_root) in signing_roots.iter().enumerate() {
+        manager.send_batched_partial_signature(
+            &metadata,
+            duty_executor.clone(),
+            signing_roots.len(),
+            base_hash,
+            PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: *signing_root,
+                signer: TEST_OPERATOR_ID,
+                validator_index,
+            },
+        );
+
+        let expected_messages = usize::from(index + 1 == signing_roots.len());
+        assert_eq!(
+            message_sender.messages().len(),
+            expected_messages,
+            "outbound message should only be sent once the local validator batch is complete"
+        );
+    }
+
+    assert!(
+        manager.partial_signature_batches.is_empty(),
+        "completed batch should be removed after sending"
+    );
+
+    let sent_messages = message_sender.messages();
+    let sent_message = sent_messages
+        .first()
+        .expect("completed batch should send one message");
+    assert_eq!(sent_messages.len(), 1);
+    assert!(sent_message.full_data.is_empty());
+
+    let ssv_message = &sent_message.ssv_message;
+    assert_eq!(ssv_message.msg_type(), &MsgType::SSVPartialSignatureMsgType);
+    assert_eq!(
+        ssv_message.msg_id(),
+        &MessageId::new(&DomainType::default(), Role::SyncCommittee, &duty_executor)
+    );
+
+    let partial_signature_messages = PartialSignatureMessages::from_ssz_bytes(ssv_message.data())
+        .expect("partial signature message should decode");
+    assert_eq!(
+        partial_signature_messages.kind,
+        PartialSignatureKind::ContributionProofs
+    );
+    assert_eq!(partial_signature_messages.slot, TEST_SLOT);
+    assert_eq!(
+        partial_signature_messages.messages.len(),
+        signing_roots.len()
+    );
+
+    let actual_roots = partial_signature_messages
+        .messages
+        .iter()
+        .map(|message| message.signing_root)
+        .collect::<Vec<_>>();
+    assert_eq!(actual_roots, signing_roots);
+
+    for message in partial_signature_messages.messages {
+        assert_eq!(message.signer, TEST_OPERATOR_ID);
+        assert_eq!(message.validator_index, validator_index);
+    }
 }
 
 /// Once `THRESHOLD` valid partial signatures have been fed in, the state
