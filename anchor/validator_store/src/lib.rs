@@ -1927,8 +1927,7 @@ pub struct VotingAssignments {
     /// Sync committee validators mapped to their subnet IDs.
     /// A validator may participate in multiple subnets.
     pub sync_validators_by_subnet: HashMap<ValidatorIndex, HashSet<SyncSubnetId>>,
-    /// The indices of local validators with a PTC duty in this slot. Empty when the operator has
-    /// no local PTC duties in this slot.
+    /// The indices of local validators with a PTC duty in this slot.
     pub ptc_validators: Vec<ValidatorIndex>,
 }
 

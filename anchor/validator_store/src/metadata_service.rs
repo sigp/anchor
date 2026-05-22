@@ -312,9 +312,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             })
             .unwrap_or_default();
 
-        // Get PTC validators (CStar+ only). Duties are read from LH's epoch-cached
-        // `PtcMap`; the per-pubkey check is the same `get_validator_and_cluster`
-        // shape used by the Phase-2/3 consensus-data builder.
+        // Get PTC validators
         let epoch = slot.epoch(E::slots_per_epoch());
         let ptc_validators = if self.fork_schedule.active_fork(epoch) >= Fork::CStar {
             let duties = self.duties_service.get_ptc_duties_for_slot(slot);
@@ -1278,10 +1276,6 @@ pub fn filter_contributors_with_contributions<E: EthSpec>(
 }
 
 /// Build the local PTC validator-index list for one slot from LH-provided duties.
-///
-/// `is_local_active` returns true for pubkeys whose validator resolves to a
-/// non-liquidated SSV cluster on this operator (i.e.
-/// `get_validator_and_cluster(pubkey).is_ok()`).
 pub fn build_ptc_validators<F>(duties: &[PtcDuty], is_local_active: F) -> Vec<ValidatorIndex>
 where
     F: Fn(&PublicKeyBytes) -> bool,
