@@ -3,7 +3,13 @@
 //! Provides a `ValidatorStoreTestHarness` that wires up a real `AnchorValidatorStore` with
 //! in-memory database, mock consensus, and a mock signature collector.
 
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::{NetworkDatabase, PendingStateUpdates};
@@ -31,7 +37,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
-    Hash256, MainnetEthSpec, SelectionProof, Slot,
+    Hash256, MainnetEthSpec, SelectionProof, Slot, SyncSubnetId,
 };
 use validator_store::{AggregateToSign, AttestationToSign};
 
@@ -178,6 +184,14 @@ pub(super) struct ValidatorStoreTestHarness {
 
 impl ValidatorStoreTestHarness {
     pub(super) fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
+        Self::new_with_fork(committee_setups, our_operator_id, Fork::Boole)
+    }
+
+    pub(super) fn new_with_fork(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        active_fork: Fork,
+    ) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = database::test_utils::generators::pubkey::random_rsa();
 
@@ -193,7 +207,7 @@ impl ValidatorStoreTestHarness {
         let (executor, exit_signal) = create_test_executor();
 
         let fork_schedule = Arc::new(ForkSchedule::new(
-            Fork::Boole,
+            active_fork,
             ssv_types::domain_type::DomainType::default(),
             "test",
         ));
@@ -292,6 +306,14 @@ impl ValidatorStoreTestHarness {
         }
     }
 
+    pub(super) fn validator_metadata(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> ValidatorMetadata {
+        self.committee_setups[committee_idx].validators[validator_idx].clone()
+    }
+
     /// Seeds the `VotingContext` so `get_voting_context` returns immediately for `TEST_SLOT`.
     pub(super) fn seed_voting_context(&self) {
         let mut attesting_committees = HashMap::new();
@@ -325,6 +347,25 @@ impl ValidatorStoreTestHarness {
                 },
             },
         });
+    }
+
+    pub(super) fn seed_sync_voting_assignments_for_slot(
+        &self,
+        slot: u64,
+        sync_validators_by_subnet: Vec<(ValidatorIndex, Vec<SyncSubnetId>)>,
+    ) {
+        let sync_validators_by_subnet: HashMap<_, HashSet<_>> = sync_validators_by_subnet
+            .into_iter()
+            .map(|(validator_index, subnets)| (validator_index, subnets.into_iter().collect()))
+            .collect();
+
+        self.validator_store
+            .update_voting_assignments(VotingAssignments {
+                slot: Slot::new(slot),
+                attesting_validators: Vec::new(),
+                attesting_committees: HashMap::new(),
+                sync_validators_by_subnet,
+            });
     }
 
     /// Seeds `AggregationAssignments` for the given committees at the provided slot.

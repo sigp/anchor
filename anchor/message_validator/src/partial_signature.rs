@@ -212,8 +212,8 @@ fn validate_partial_sig_messages_by_duty_logic(
         // - 1 PostConsensusPartialSig, for Committee duty
         // - 1 RandaoPartialSig and 1 PostConsensusPartialSig for Proposer
         // - 1 SelectionProofPartialSig and 1 PostConsensusPartialSig for Aggregator
-        // - up to one ContributionProofs envelope per sync subcommittee and 1
-        //   PostConsensusPartialSig for Sync committee contribution
+        // - 1 SelectionProofPartialSig and 1 PostConsensusPartialSig for Sync committee
+        //   contribution
         // - 1 ValidatorRegistrationPartialSig for Validator Registration
         // - 1 VoluntaryExitPartialSig for Voluntary Exit
         signer_state

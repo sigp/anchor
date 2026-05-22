@@ -475,6 +475,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
                     pubkey: validator.public_key,
                 },
+                CollectionMode::SingleValidatorBatch {
+                    validator_partial_signature_batch_size,
+                    base_hash,
+                } => SignatureRequester::SingleValidatorBatch {
+                    pubkey: validator.public_key,
+                    validator_partial_signature_batch_size,
+                    base_hash,
+                },
                 CollectionMode::Committee {
                     validator_partial_signature_batch_size,
                     base_hash,
@@ -1940,6 +1948,19 @@ impl VotingAssignments {
         self.sync_validators_by_subnet.keys().copied().collect()
     }
 
+    /// Returns how many sync subnets a validator participates in for this slot if the requested
+    /// subnet is one of them.
+    pub fn sync_subnet_count_for_validator_on_subnet(
+        &self,
+        validator_index: ValidatorIndex,
+        subnet_id: SyncSubnetId,
+    ) -> Option<usize> {
+        self.sync_validators_by_subnet
+            .get(&validator_index)
+            .filter(|subnets| subnets.contains(&subnet_id))
+            .map(HashSet::len)
+    }
+
     /// Counts expected signatures for selection proof collection.
     ///
     /// For each validator in the committee:
@@ -2080,6 +2101,14 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
 #[derive(Clone, Copy)]
 enum CollectionMode {
     SingleValidator,
+    SingleValidatorBatch {
+        /// The number of partial signatures this operator batches locally into the outgoing
+        /// validator message for the round.
+        validator_partial_signature_batch_size: usize,
+        /// Identifies which validator partial signatures belong in the same outgoing validator
+        /// message.
+        base_hash: Hash256,
+    },
     Committee {
         /// The number of validator partial signatures this operator batches locally into the
         /// outgoing committee message for the round.
@@ -2804,14 +2833,27 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 )
                 .await?
             } else {
-                // Use the original single-validator path.
+                let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
+                let voting_assignments = self.get_voting_assignments(slot).await?;
+                let validator_partial_signature_batch_size = voting_assignments
+                    .sync_subnet_count_for_validator_on_subnet(validator_index, subnet_id)
+                    .filter(|count| *count > 0)
+                    .ok_or(SpecificError::ValidatorNotInSyncCommittee {
+                        validator_pubkey: *validator_pubkey,
+                        slot,
+                    })?;
+                let base_hash = SelectionProofBatchId::new(slot, cluster.committee_id()).hash();
+
                 self.timeout_within_slot(
                     slot,
                     delay,
                     self.collect_signature(
                         PartialSignatureKind::ContributionProofs, // Original Alan-only enum
                         Role::SyncCommittee,
-                        CollectionMode::SingleValidator,
+                        CollectionMode::SingleValidatorBatch {
+                            validator_partial_signature_batch_size,
+                            base_hash,
+                        },
                         &validator,
                         &cluster,
                         signing_root,

@@ -100,7 +100,7 @@ impl DutyState {
         // Record the partial signature (only once)
         signer_state
             .message_counts
-            .record_partial_signature(partial_signature_messages);
+            .record_partial_signature(partial_signature_messages.kind);
 
         Ok(())
     }
