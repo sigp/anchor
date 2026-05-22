@@ -2014,7 +2014,7 @@ impl VotingAssignments {
     {
         self.ptc_validators
             .iter()
-            .filter(|idx| is_in_committee(idx))
+            .filter(|&idx| is_in_committee(idx))
             .count()
     }
 }
@@ -3342,6 +3342,17 @@ mod tests {
         // Voting message: 2 attesting + 2 sync = 4
         let message_count = voting_assignments.voting_message_count_for_committee(all_in_committee);
         assert_eq!(message_count, 4);
+    }
+
+    #[test]
+    fn test_ptc_signature_count_with_filter() {
+        let mut voting_assignments = create_test_voting_assignments(vec![], vec![]);
+        voting_assignments.ptc_validators =
+            vec![ValidatorIndex(1), ValidatorIndex(2), ValidatorIndex(3)];
+
+        let in_committee = |idx: &ValidatorIndex| matches!(idx.0, 1 | 3);
+        let count = voting_assignments.ptc_signature_count_for_committee(in_committee);
+        assert_eq!(count, 2);
     }
 
     #[tokio::test]
