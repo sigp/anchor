@@ -8,7 +8,7 @@ use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
 use eth2::{
     BeaconNodeHttpClient,
-    types::{BlockId, SyncContributionData},
+    types::{BlockId, PtcDuty, SyncContributionData},
 };
 use fork::{Fork, ForkSchedule};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -312,14 +312,31 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             })
             .unwrap_or_default();
 
+        // Get PTC validators (CStar+ only). Duties are read from LH's epoch-cached
+        // `PtcMap`; the per-pubkey check is the same `get_validator_and_cluster`
+        // shape used by the Phase-2/3 consensus-data builder.
+        let epoch = slot.epoch(E::slots_per_epoch());
+        let ptc_validators = if self.fork_schedule.active_fork(epoch) >= Fork::CStar {
+            let duties = self.duties_service.get_ptc_duties_for_slot(slot);
+            build_ptc_validators(&duties, |pubkey| {
+                self.validator_store
+                    .get_validator_and_cluster(*pubkey)
+                    .is_ok()
+            })
+        } else {
+            Vec::new()
+        };
+
         let attester_count = attesting_validators.len();
         let sync_count = sync_validators_by_subnet.len();
+        let ptc_count = ptc_validators.len();
 
         let voting_assignments = VotingAssignments {
             slot,
             attesting_validators,
             attesting_committees,
             sync_validators_by_subnet,
+            ptc_validators,
         };
 
         self.validator_store
@@ -334,11 +351,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             &metrics::METADATA_SERVICE_SYNC_VALIDATORS,
             sync_count as i64,
         );
-        if attester_count == 0 && sync_count == 0 {
+        metrics::set_gauge(&metrics::METADATA_SERVICE_PTC_VALIDATORS, ptc_count as i64);
+        if attester_count == 0 && sync_count == 0 && ptc_count == 0 {
             metrics::inc_counter(&metrics::METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL);
         }
 
-        trace!(%slot, attester_count, sync_count, "Published VotingAssignments at slot start");
+        trace!(%slot, attester_count, sync_count, ptc_count, "Published VotingAssignments at slot start");
         Ok(())
     }
 
@@ -1257,6 +1275,22 @@ pub fn filter_contributors_with_contributions<E: EthSpec>(
     contributors_with_roots.retain(|(_, contrib)| {
         sync_contributions.contains_key(&SyncSubnetId::new(contrib.committee_index))
     });
+}
+
+/// Build the local PTC validator-index list for one slot from LH-provided duties.
+///
+/// `is_local_active` returns true for pubkeys whose validator resolves to a
+/// non-liquidated SSV cluster on this operator (i.e.
+/// `get_validator_and_cluster(pubkey).is_ok()`).
+pub fn build_ptc_validators<F>(duties: &[PtcDuty], is_local_active: F) -> Vec<ValidatorIndex>
+where
+    F: Fn(&PublicKeyBytes) -> bool,
+{
+    duties
+        .iter()
+        .filter(|d| is_local_active(&d.pubkey))
+        .map(|d| ValidatorIndex(d.validator_index as usize))
+        .collect()
 }
 
 #[cfg(test)]
@@ -2240,5 +2274,60 @@ mod tests {
 
         let result_distance_2 = calculate_attestation_score(&data, Some(Slot::new(3230)));
         assert!((result_distance_2.score - 201.333333).abs() < 0.001);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════
+    // build_ptc_validators tests
+    // ═══════════════════════════════════════════════════════════════════════════════════
+
+    fn create_ptc_duty(pubkey_byte: u8, validator_index: u64) -> PtcDuty {
+        PtcDuty {
+            pubkey: PublicKeyBytes::deserialize(&[pubkey_byte; 48]).expect("valid length"),
+            validator_index,
+            slot: Slot::new(1000),
+        }
+    }
+
+    #[test]
+    fn test_build_ptc_validators_empty_input() {
+        let duties: Vec<PtcDuty> = vec![];
+        let out = build_ptc_validators(&duties, |_| true);
+        assert!(out.is_empty(), "Empty input must produce empty output");
+    }
+
+    #[test]
+    fn test_build_ptc_validators_all_local() {
+        let duties = vec![
+            create_ptc_duty(0x01, 100),
+            create_ptc_duty(0x02, 200),
+            create_ptc_duty(0x03, 300),
+        ];
+        let out = build_ptc_validators(&duties, |_| true);
+        assert_eq!(
+            out,
+            vec![
+                ValidatorIndex(100),
+                ValidatorIndex(200),
+                ValidatorIndex(300)
+            ],
+            "All-local predicate must keep every duty in order and convert u64 -> usize"
+        );
+    }
+
+    #[test]
+    fn test_build_ptc_validators_filters_liquidated() {
+        // Simulate ClusterLiquidated: predicate returns false for the second pubkey.
+        let liquidated = PublicKeyBytes::deserialize(&[0x02; 48]).expect("valid length");
+        let duties = vec![
+            create_ptc_duty(0x01, 100),
+            create_ptc_duty(0x02, 200),
+            create_ptc_duty(0x03, 300),
+        ];
+        let out = build_ptc_validators(&duties, |pubkey| *pubkey != liquidated);
+        assert_eq!(
+            out,
+            vec![ValidatorIndex(100), ValidatorIndex(300)],
+            "Liquidated-cluster duty must be excluded"
+        );
     }
 }

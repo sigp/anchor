@@ -46,6 +46,14 @@ pub static METADATA_SERVICE_SYNC_VALIDATORS: LazyLock<Result<IntGauge>> = LazyLo
     )
 });
 
+/// Current count of PTC validators in VotingAssignments (CStar+; 0 pre-fork)
+pub static METADATA_SERVICE_PTC_VALIDATORS: LazyLock<Result<IntGauge>> = LazyLock::new(|| {
+    try_create_int_gauge(
+        "anchor_metadata_service_ptc_validators",
+        "Count of validators with PTC duties this slot",
+    )
+});
+
 /// Count of slots where VotingAssignments was empty
 pub static METADATA_SERVICE_EMPTY_ASSIGNMENTS_TOTAL: LazyLock<Result<IntCounter>> =
     LazyLock::new(|| {

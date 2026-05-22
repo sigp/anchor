@@ -312,6 +312,7 @@ impl ValidatorStoreTestHarness {
                 attesting_validators,
                 attesting_committees,
                 sync_validators_by_subnet: HashMap::new(),
+                ptc_validators: Vec::new(),
             }),
             beacon_vote: ssv_types::consensus::BeaconVote {
                 block_root: Hash256::zero(),

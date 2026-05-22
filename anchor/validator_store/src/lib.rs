@@ -1927,6 +1927,9 @@ pub struct VotingAssignments {
     /// Sync committee validators mapped to their subnet IDs.
     /// A validator may participate in multiple subnets.
     pub sync_validators_by_subnet: HashMap<ValidatorIndex, HashSet<SyncSubnetId>>,
+    /// The indices of local validators with a PTC duty in this slot. Empty when the operator has
+    /// no local PTC duties in this slot.
+    pub ptc_validators: Vec<ValidatorIndex>,
 }
 
 impl VotingAssignments {
@@ -1998,6 +2001,21 @@ impl VotingAssignments {
         }
 
         count
+    }
+
+    /// Counts expected PTC partial signatures for a given cluster.
+    ///
+    /// PTC runs a separate QBFT instance from attestation/sync, so its batch
+    /// size is tallied independently rather than being folded into
+    /// `voting_message_count_for_committee`.
+    pub fn ptc_signature_count_for_committee<F>(&self, is_in_committee: F) -> usize
+    where
+        F: Fn(&ValidatorIndex) -> bool,
+    {
+        self.ptc_validators
+            .iter()
+            .filter(|idx| is_in_committee(idx))
+            .count()
     }
 }
 
@@ -3201,6 +3219,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            ptc_validators: Vec::new(),
         }
     }
 
@@ -3355,6 +3374,7 @@ mod tests {
             attesting_validators: vec![ValidatorIndex(1)],
             attesting_committees: HashMap::new(),
             sync_validators_by_subnet: HashMap::new(),
+            ptc_validators: Vec::new(),
         };
         tx.send_replace(Some(Arc::new(voting_assignments)));
 
@@ -3377,6 +3397,7 @@ mod tests {
             attesting_validators: vec![],
             attesting_committees: HashMap::new(),
             sync_validators_by_subnet: HashMap::new(),
+            ptc_validators: Vec::new(),
         };
         tx.send_replace(Some(Arc::new(voting_assignments)));
 
