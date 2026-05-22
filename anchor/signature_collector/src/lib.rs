@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map},
+    collections::{HashMap, HashSet, hash_map},
     future::Future,
     mem,
     ops::ControlFlow,
@@ -69,6 +69,9 @@ struct SignatureCollector {
 /// sent.
 struct PartialSignatureBatch {
     batched_validator_partial_signatures: Vec<PartialSignatureMessage>,
+    seen_validator_partial_signature_keys: HashSet<(ValidatorIndex, Hash256)>,
+    expected_signature_count: usize,
+    completed: bool,
     for_slot: Slot,
 }
 
@@ -267,38 +270,68 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             return;
         }
 
-        let mut entry = match self
-            .partial_signature_batches
-            .entry((base_hash, duty_executor.clone()))
-        {
-            Entry::Occupied(occupied) => occupied,
-            Entry::Vacant(vacant) => vacant.insert_entry(PartialSignatureBatch {
-                batched_validator_partial_signatures: Vec::with_capacity(
-                    validator_partial_signature_batch_size,
-                ),
-                for_slot: metadata.slot,
-            }),
-        };
+        let signatures = {
+            let mut entry = match self
+                .partial_signature_batches
+                .entry((base_hash, duty_executor.clone()))
+            {
+                Entry::Occupied(occupied) => occupied,
+                Entry::Vacant(vacant) => vacant.insert_entry(PartialSignatureBatch {
+                    batched_validator_partial_signatures: Vec::with_capacity(
+                        validator_partial_signature_batch_size,
+                    ),
+                    seen_validator_partial_signature_keys: HashSet::with_capacity(
+                        validator_partial_signature_batch_size,
+                    ),
+                    expected_signature_count: validator_partial_signature_batch_size,
+                    completed: false,
+                    for_slot: metadata.slot,
+                }),
+            };
+            let batch = entry.get_mut();
 
-        let batch_is_ready = {
-            let validator_partial_signature_batch =
-                &mut entry.get_mut().batched_validator_partial_signatures;
-            validator_partial_signature_batch.push(message);
+            if batch.completed {
+                trace!("Ignoring duplicate partial signature for completed batch");
+                return;
+            }
 
+            if batch.expected_signature_count != validator_partial_signature_batch_size {
+                error!(
+                    expected = batch.expected_signature_count,
+                    got = validator_partial_signature_batch_size,
+                    "Partial signature batch expected count mismatch"
+                );
+                return;
+            }
+
+            let partial_signature_key = (message.validator_index, message.signing_root);
+            if !batch
+                .seen_validator_partial_signature_keys
+                .insert(partial_signature_key)
+            {
+                trace!(
+                    ?partial_signature_key,
+                    "Ignoring duplicate validator partial signature for batch"
+                );
+                return;
+            }
+
+            batch.batched_validator_partial_signatures.push(message);
             trace!(
-                have = validator_partial_signature_batch.len(),
-                need = validator_partial_signature_batch_size,
+                have = batch.batched_validator_partial_signatures.len(),
+                need = batch.expected_signature_count,
                 "Checking whether the batch of validator partial signatures is ready to send"
             );
 
-            validator_partial_signature_batch.len() == validator_partial_signature_batch_size
+            if batch.batched_validator_partial_signatures.len() == batch.expected_signature_count {
+                batch.completed = true;
+                Some(mem::take(&mut batch.batched_validator_partial_signatures))
+            } else {
+                None
+            }
         };
 
-        if !batch_is_ready {
-            return;
-        }
-
-        let signatures = entry.remove().batched_validator_partial_signatures;
+        let Some(signatures) = signatures else { return };
 
         let msg = match self.create_message(metadata, signatures, &duty_executor) {
             Ok(msg) => msg,

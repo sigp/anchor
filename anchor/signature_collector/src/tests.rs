@@ -70,8 +70,11 @@ fn create_test_executor() -> (TaskExecutor, async_channel::Sender<()>) {
 
 fn new_test_manager(
     message_sender: Arc<CapturingMessageSender>,
-) -> Arc<SignatureCollectorManager<ManualSlotClock>> {
-    let (executor, _exit_signal) = create_test_executor();
+) -> (
+    Arc<SignatureCollectorManager<ManualSlotClock>>,
+    async_channel::Sender<()>,
+) {
+    let (executor, exit_signal) = create_test_executor();
     let processor = spawn_processor(ProcessorConfig::default(), executor);
     let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
     let slot_clock = ManualSlotClock::new(
@@ -80,7 +83,7 @@ fn new_test_manager(
         Duration::from_secs(12),
     );
 
-    SignatureCollectorManager::new(
+    let manager = SignatureCollectorManager::new(
         processor,
         OwnOperatorId::Known(TEST_OPERATOR_ID),
         fork_schedule,
@@ -88,7 +91,9 @@ fn new_test_manager(
         message_sender,
         slot_clock,
     )
-    .expect("manager should be created")
+    .expect("manager should be created");
+
+    (manager, exit_signal)
 }
 
 fn split_random_master() -> Vec<(OperatorId, SecretKey)> {
@@ -136,10 +141,66 @@ fn expect_signature(rx: &mut oneshot::Receiver<Arc<Signature>>, context: &str) {
     rx.try_recv().expect(context);
 }
 
+struct BatchSigningFixture<'a> {
+    manager: &'a Arc<SignatureCollectorManager<ManualSlotClock>>,
+    metadata: &'a SignatureMetadata,
+    validator_pubkey: PublicKeyBytes,
+    base_hash: Hash256,
+    validator_index: ValidatorIndex,
+    shares: &'a [(OperatorId, SecretKey)],
+    expected_batch_size: usize,
+}
+
+impl BatchSigningFixture<'_> {
+    async fn sign_and_collect_root(&self, signing_root: Hash256) {
+        let manager_for_collect = Arc::clone(self.manager);
+        let slot = self.metadata.slot;
+        let metadata = self.metadata.clone();
+        let validator_pubkey = self.validator_pubkey;
+        let base_hash = self.base_hash;
+        let validator_index = self.validator_index;
+        let expected_batch_size = self.expected_batch_size;
+        let local_share = self.shares[0].1.clone();
+        let collect = async move {
+            manager_for_collect
+                .sign_and_collect(
+                    metadata,
+                    SignatureRequester::SingleValidatorBatch {
+                        pubkey: validator_pubkey,
+                        validator_partial_signature_batch_size: expected_batch_size,
+                        base_hash,
+                    },
+                    ValidatorSigningData {
+                        root: signing_root,
+                        index: validator_index,
+                        share: Some(local_share),
+                    },
+                )
+                .await
+        };
+
+        for (operator_id, share) in &self.shares[1..THRESHOLD as usize] {
+            self.manager
+                .receive_partial_signature(
+                    PartialSignatureMessage {
+                        partial_signature: share.sign(signing_root),
+                        signing_root,
+                        signer: *operator_id,
+                        validator_index,
+                    },
+                    slot,
+                )
+                .expect("remote share should be queued");
+        }
+
+        collect.await.expect("signature should be collected");
+    }
+}
+
 #[tokio::test]
 async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
     let message_sender = Arc::new(CapturingMessageSender::default());
-    let manager = new_test_manager(Arc::clone(&message_sender));
+    let (manager, _exit_signal) = new_test_manager(Arc::clone(&message_sender));
     let validator_pubkey = PublicKeyBytes::empty();
     let validator_index = ValidatorIndex(42);
     let signing_roots = [
@@ -150,38 +211,60 @@ async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
     let metadata = SignatureMetadata {
         kind: PartialSignatureKind::ContributionProofs,
         role: Role::SyncCommittee,
-        threshold: 1,
+        threshold: THRESHOLD,
         slot: TEST_SLOT,
         committee_id: CommitteeId::default(),
     };
     let duty_executor = DutyExecutor::Validator(validator_pubkey);
     let base_hash = Hash256::repeat_byte(0xAA);
+    let shares = split_random_master();
+    let batch_signer = BatchSigningFixture {
+        manager: &manager,
+        metadata: &metadata,
+        validator_pubkey,
+        base_hash,
+        validator_index,
+        shares: &shares,
+        expected_batch_size: signing_roots.len(),
+    };
+    let signing_requests = [
+        signing_roots[0],
+        signing_roots[0],
+        signing_roots[1],
+        signing_roots[2],
+    ];
 
-    for (index, signing_root) in signing_roots.iter().enumerate() {
-        manager.send_batched_partial_signature(
-            &metadata,
-            duty_executor.clone(),
-            signing_roots.len(),
-            base_hash,
-            PartialSignatureMessage {
-                partial_signature: Signature::empty(),
-                signing_root: *signing_root,
-                signer: TEST_OPERATOR_ID,
-                validator_index,
-            },
-        );
+    for (index, signing_root) in signing_requests.iter().enumerate() {
+        batch_signer.sign_and_collect_root(*signing_root).await;
 
-        let expected_messages = usize::from(index + 1 == signing_roots.len());
+        let expected_messages = usize::from(index + 1 == signing_requests.len());
         assert_eq!(
             message_sender.messages().len(),
             expected_messages,
-            "outbound message should only be sent once the local validator batch is complete"
+            "outbound message should only be sent once the unique local validator batch is complete"
         );
     }
 
+    batch_signer.sign_and_collect_root(signing_roots[2]).await;
+
+    assert_eq!(
+        message_sender.messages().len(),
+        1,
+        "duplicates after completion should not send another envelope"
+    );
+
+    let batch = manager
+        .partial_signature_batches
+        .get(&(base_hash, duty_executor.clone()))
+        .expect("completed batch should be retained until slot cleanup");
+    assert!(batch.completed, "batch should be marked complete");
     assert!(
-        manager.partial_signature_batches.is_empty(),
-        "completed batch should be removed after sending"
+        batch.batched_validator_partial_signatures.is_empty(),
+        "sent signatures should be drained from completed batch"
+    );
+    assert_eq!(
+        batch.seen_validator_partial_signature_keys.len(),
+        signing_roots.len()
     );
 
     let sent_messages = message_sender.messages();

@@ -9,6 +9,7 @@ use types::{Slot, SyncSubnetId};
 use validator_store::ValidatorStore;
 
 use super::common::*;
+use crate::{Error, SpecificError};
 
 const OUR_OPERATOR_ID: OperatorId = OperatorId(1);
 const COMMITTEE_INDEX: usize = 0;
@@ -80,5 +81,54 @@ async fn produce_sync_selection_proof_pre_boole_batches_multi_subnet_contributio
         base_hashes.len(),
         1,
         "all per-subnet requests should use the same local batch id"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn produce_sync_selection_proof_pre_boole_rejects_unassigned_subnet() {
+    // Arrange
+    let committee = create_committee_setup(
+        &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
+        1,
+        0,
+    );
+    let harness =
+        ValidatorStoreTestHarness::new_with_fork(vec![committee], OUR_OPERATOR_ID, Fork::Alan);
+    let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+    let validator_index = validator.index.expect("test validator should have index");
+    let assigned_subnets: Vec<_> = SYNC_SUBNET_IDS.into_iter().map(SyncSubnetId::new).collect();
+    harness.seed_sync_voting_assignments_for_slot(
+        TEST_SLOT,
+        vec![(validator_index, assigned_subnets)],
+    );
+
+    // Act
+    let result = harness
+        .validator_store
+        .produce_sync_selection_proof(
+            &validator.public_key,
+            Slot::new(TEST_SLOT),
+            SyncSubnetId::new(3),
+        )
+        .await;
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(
+                SpecificError::ValidatorNotInSyncCommittee {
+                    validator_pubkey,
+                    slot,
+                }
+            )) if validator_pubkey == validator.public_key && slot == Slot::new(TEST_SLOT)
+        ),
+        "expected ValidatorNotInSyncCommittee for unassigned subnet, got: {result:?}"
+    );
+
+    let captured = harness.captured_calls.lock();
+    assert!(
+        captured.is_empty(),
+        "collector should not be called for an unassigned sync subnet"
     );
 }
