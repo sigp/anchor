@@ -46,6 +46,7 @@ use eth2_keystore::{
 use openssl::{pkey::Private, rsa::Rsa};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use unicode_normalization::{UnicodeNormalization, char::canonical_combining_class};
 use zeroize::Zeroizing;
 
 use crate::{ConversionError, public};
@@ -98,9 +99,22 @@ impl EncryptedKey {
     /// If the pubkey was provided along the encrypted key in a "pubkey" attribute, it is verified
     /// whether the encrypted key matches the public key. "pubKey" is also accepted for backwards
     /// compatibility with legacy keys.
+    ///
+    /// On `InvalidPassword`, retries with [`alt_normalize_password`] to support keystores produced
+    /// by go-ssv. Any password containing precomposed characters (e.g. `ñ`, `ü`, `é`) yields
+    /// different KDF input bytes than the EIP-2335 spec NFKD path used by `eth2_keystore`.
+    /// Encryption remains EIP-2335 spec-compliant; the fallback is decrypt-only.
     pub fn decrypt(&self, password: &str) -> Result<Rsa<Private>, DecryptionError> {
-        let pem = eth2_keystore::decrypt(password.as_ref(), &self.as_crypto())
-            .map_err(DecryptionError::Keystore)?;
+        let crypto = self.as_crypto();
+        let pem = match eth2_keystore::decrypt(password.as_ref(), &crypto) {
+            Ok(pem) => pem,
+            Err(eth2_keystore::Error::InvalidPassword) => {
+                let alt = alt_normalize_password(password);
+                eth2_keystore::decrypt(alt.as_bytes(), &crypto)
+                    .map_err(DecryptionError::Keystore)?
+            }
+            Err(e) => return Err(DecryptionError::Keystore(e)),
+        };
         let key = Rsa::private_key_from_pem(pem.as_ref())?;
         if let Some(pubkey) = &self.pubkey {
             let pubkey = public::from_base64(pubkey.as_ref())?;
@@ -146,6 +160,27 @@ impl EncryptedKey {
             pubkey: Some(public::to_base64(key)?),
         })
     }
+}
+
+/// Approximates `wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.1.3`'s `normPassphrase`: NFKD
+/// decomposes the input then keeps only starter code points, discarding the combining marks
+/// emitted by decomposition. The result is non-spec, but matches what go-ssv currently uses as KDF
+/// input for the common case (passwords containing precomposed Latin chars).
+///
+/// Control-char handling is intentionally not replicated here. wealdtech v1.1.3 strips C0 + DEL
+/// from single-byte starters; `eth2_keystore::decrypt` then strips all `char::is_control()` code
+/// points on both the primary and fallback attempts, which covers the same ground (and more) for
+/// every realistic password. The only theoretical divergence is a C1 control combined with a
+/// combining mark in the same password.
+///
+/// Reference: <https://github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4/blob/v1.1.3/norm.go>.
+fn alt_normalize_password(password: &str) -> Zeroizing<String> {
+    Zeroizing::new(
+        password
+            .nfkd()
+            .filter(|c| canonical_combining_class(*c) == 0)
+            .collect(),
+    )
 }
 
 impl TryFrom<EncryptedKey> for String {
@@ -213,5 +248,63 @@ mod tests {
         let json = serde_json::to_string(&encrypted).unwrap();
         assert!(json.contains(r#""pubkey":"#));
         assert!(!json.contains(r#""pubKey":"#));
+    }
+
+    #[test]
+    fn test_alt_normalize_password_ascii_passthrough() {
+        let result = alt_normalize_password("hello");
+        assert_eq!(result.as_str(), "hello");
+    }
+
+    #[test]
+    fn test_alt_normalize_password_strips_n_tilde() {
+        let result = alt_normalize_password("ñ");
+        assert_eq!(result.as_str(), "n");
+    }
+
+    #[test]
+    fn test_alt_normalize_password_strips_cafe_accent() {
+        let result = alt_normalize_password("café");
+        assert_eq!(result.as_str(), "cafe");
+    }
+
+    /// Simulates a go-ssv keystore (pinned to `wealdtech/keystorev4 v1.1.3`, whose
+    /// `normPassphrase` drops combining marks): encrypt with the alt-normalized form and decrypt
+    /// with the original NFC password. The primary spec-NFKD path fails; the fallback succeeds.
+    #[test]
+    fn test_decrypt_with_alt_normalized_password() {
+        let key = Rsa::generate(2048).unwrap();
+        let encrypted = EncryptedKey::encrypt(&key, "cafe").unwrap();
+
+        let decrypted = encrypted.decrypt("café").unwrap();
+
+        assert_eq!(key.p(), decrypted.p());
+        assert_eq!(key.q(), decrypted.q());
+    }
+
+    #[test]
+    fn test_decrypt_alt_norm_multiple_diacritics() {
+        let key = Rsa::generate(2048).unwrap();
+        let encrypted = EncryptedKey::encrypt(&key, "pinata").unwrap();
+
+        let decrypted = encrypted.decrypt("piñata").unwrap();
+
+        assert_eq!(key.p(), decrypted.p());
+        assert_eq!(key.q(), decrypted.q());
+    }
+
+    #[test]
+    fn test_decrypt_wrong_password_still_fails() {
+        let key = Rsa::generate(2048).unwrap();
+        let encrypted = EncryptedKey::encrypt(&key, "correct-password").unwrap();
+
+        let result = encrypted.decrypt("totally-different-password");
+
+        assert!(matches!(
+            result,
+            Err(DecryptionError::Keystore(
+                eth2_keystore::Error::InvalidPassword
+            ))
+        ));
     }
 }

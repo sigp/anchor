@@ -18,7 +18,8 @@ use anchor_validator_store::{
     registration_service::RegistrationService,
 };
 use beacon_node_fallback::{
-    BeaconNodeFallback, CandidateBeaconNode, start_fallback_updater_service,
+    BeaconNodeFallback, CandidateBeaconNode, beacon_head_monitor::HeadEvent,
+    start_fallback_updater_service,
 };
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
@@ -45,7 +46,10 @@ use task_executor::TaskExecutor;
 use tokio::{
     net::TcpListener,
     select,
-    sync::{mpsc, mpsc::unbounded_channel},
+    sync::{
+        Mutex,
+        mpsc::{self, unbounded_channel},
+    },
     time::{Instant, interval, sleep},
 };
 use tracing::{debug, error, info, warn};
@@ -78,6 +82,8 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
+// Mirrors Lighthouse's value at `validator_client/src/lib.rs:75`.
+const MAX_HEAD_EVENT_QUEUE_LEN: usize = 1_024;
 
 pub struct Client {}
 
@@ -333,6 +339,18 @@ impl Client {
 
         beacon_nodes.set_slot_clock(slot_clock.clone());
         proposer_nodes.set_slot_clock(slot_clock.clone());
+
+        // Only the beacon_nodes are used for attestation duties, so proposer_nodes do not need a
+        // head_send ref.
+        let head_monitor_rx = if config.enable_beacon_head_monitor {
+            let (head_monitor_tx, head_monitor_rx) =
+                mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
+            beacon_nodes.set_head_send(Arc::new(head_monitor_tx));
+            // Mutex required by `AttestationServiceBuilder::head_monitor_rx`'s signature.
+            Some(Mutex::new(head_monitor_rx))
+        } else {
+            None
+        };
 
         let beacon_nodes = Arc::new(beacon_nodes);
         start_fallback_updater_service::<_, E>(executor.clone(), beacon_nodes.clone())?;
@@ -658,6 +676,7 @@ impl Client {
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
             .chain_spec(spec.clone())
+            .head_monitor_rx(head_monitor_rx)
             .build()?;
 
         let preparation_service = PreparationServiceBuilder::new()
