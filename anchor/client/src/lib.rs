@@ -82,6 +82,7 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
+// Mirrors Lighthouse's value at `validator_client/src/lib.rs:75`.
 const MAX_HEAD_EVENT_QUEUE_LEN: usize = 1_024;
 
 pub struct Client {}
@@ -400,6 +401,7 @@ impl Client {
                     "head_event_fanout",
                 );
                 (
+                    // Mutex required by `AttestationServiceBuilder::head_monitor_rx`'s signature.
                     Some(Mutex::new(attestation_service_rx)),
                     Some(metadata_service_rx),
                 )

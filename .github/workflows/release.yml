@@ -40,7 +40,7 @@ jobs:
         needs: extract-version
         steps:
             - name: Checkout sources
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
             - name: Get latest version of stable Rust
               run: rustup update stable
 
@@ -93,14 +93,14 @@ jobs:
             # =======================================================================
 
             - name: Upload artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v6
               with:
                   name: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
                   path: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
                   compression-level: 0
 
             - name: Upload signature
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v6
               with:
                   name: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
                   path: anchor-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
@@ -115,7 +115,7 @@ jobs:
         steps:
             # This is necessary for generating the changelog. It has to come before "Download Artifacts" or else it deletes the artifacts.
             - name: Checkout sources
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   fetch-depth: 0
 
@@ -124,7 +124,7 @@ jobs:
             # ==============================
 
             - name: Download artifacts
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v7
 
             # ==============================
             #       Create release draft
