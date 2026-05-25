@@ -40,26 +40,12 @@ jobs:
                     exit 1
                   fi
 
-            - name: Get PR info for fork support
-              if: steps.check.outputs.is_member == 'true' && github.event.issue.pull_request
-              id: pr-info
-              run: |
-                  PR_DATA=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }})
-                  echo "pr_head_owner=$(echo "$PR_DATA" | jq -r '.head.repo.owner.login')" >> $GITHUB_OUTPUT
-                  echo "pr_head_repo=$(echo "$PR_DATA" | jq -r '.head.repo.name')" >> $GITHUB_OUTPUT
-                  echo "pr_head_ref=$(echo "$PR_DATA" | jq -r '.head.ref')" >> $GITHUB_OUTPUT
-                  echo "is_fork=$(echo "$PR_DATA" | jq -r '.head.repo.fork')" >> $GITHUB_OUTPUT
-              env:
-                  GH_TOKEN: ${{ github.token }}
-
-            - name: Checkout repository
-              if: steps.check.outputs.is_member == 'true'
-              uses: actions/checkout@v6
-              with:
-                  repository: ${{ github.event.issue.pull_request && steps.pr-info.outputs.is_fork == 'true' && format('{0}/{1}', steps.pr-info.outputs.pr_head_owner, steps.pr-info.outputs.pr_head_repo) || github.repository }}
-                  ref: ${{ github.event.issue.pull_request && steps.pr-info.outputs.pr_head_ref || github.ref }}
-                  fetch-depth: 0
-
+            # Generate the app token before checkout so it can be used for
+            # git operations. `claude-code-action` calls `setupBranch()` (which
+            # fetches PR refs via `git fetch origin pull/N/head:...`) before
+            # `configureGitAuth()`, so the token embedded in `origin` by
+            # `actions/checkout` must already have permission to fetch fork
+            # PR refs.
             - name: Generate GitHub App token
               if: steps.check.outputs.is_member == 'true'
               id: app-token
@@ -67,6 +53,12 @@ jobs:
               with:
                   app-id: ${{ vars.APP_ID }}
                   private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+            - name: Checkout repository
+              if: steps.check.outputs.is_member == 'true'
+              uses: actions/checkout@v6
+              with:
+                  token: ${{ steps.app-token.outputs.token }}
 
             - name: Configure AWS Credentials (OIDC)
               if: steps.check.outputs.is_member == 'true'
