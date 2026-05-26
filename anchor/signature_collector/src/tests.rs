@@ -1,10 +1,11 @@
-use std::{sync::Mutex, time::Duration};
+use std::time::Duration;
 
 use bls::{PublicKeyBytes, SecretKey, Signature};
 use bls_lagrange::{KeyId, split_with_rng};
 use database::OwnOperatorId;
 use fork::{Fork, ForkSchedule};
 use message_sender::{Error as MessageSenderError, MessageSender};
+use parking_lot::Mutex;
 use processor::{Config as ProcessorConfig, spawn as spawn_processor};
 use rand::{prelude::*, rngs::StdRng};
 use slot_clock::ManualSlotClock;
@@ -30,10 +31,7 @@ struct CapturingMessageSender {
 
 impl CapturingMessageSender {
     fn messages(&self) -> Vec<UnsignedSSVMessage> {
-        self.messages
-            .lock()
-            .expect("messages mutex should not be poisoned")
-            .clone()
+        self.messages.lock().clone()
     }
 }
 
@@ -44,10 +42,7 @@ impl MessageSender for CapturingMessageSender {
         _committee_id: CommitteeId,
         _additional_message_callback: Option<Box<dyn FnOnce(&SignedSSVMessage) + Send + 'static>>,
     ) -> Result<(), MessageSenderError> {
-        self.messages
-            .lock()
-            .expect("messages mutex should not be poisoned")
-            .push(message);
+        self.messages.lock().push(message);
         Ok(())
     }
 

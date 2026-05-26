@@ -23,5 +23,6 @@ types = { workspace = true }
 [dev-dependencies]
 async-channel = { workspace = true }
 futures = { workspace = true }
+parking_lot = { workspace = true }
 rand = { workspace = true }
 task_executor = { workspace = true }
