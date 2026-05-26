@@ -317,6 +317,13 @@ Payload Building Options:
                epochs and head block proximity. Only useful with multiple
                beacon nodes.
 
+         --disable-beacon-head-monitor
+               Disable the beacon head monitor which tries to attest as soon as
+               any of the configured beacon nodes sends a head event. Leaving
+               the service enabled is recommended, but disabling it can lead to
+               reduced bandwidth and more predictable usage of the primary
+               beacon node (rather than the fastest BN).
+
 Logging Options:
          --logfile-debug-level <LOGFILE_DEBUG_LEVEL>
                Specifies the verbosity level used when emitting logs to the log
