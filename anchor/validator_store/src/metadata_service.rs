@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use beacon_node_fallback::BeaconNodeFallback;
+use beacon_node_fallback::{BeaconNodeFallback, beacon_head_monitor::HeadEvent};
 use bls::PublicKeyBytes;
 use eth2::{
     BeaconNodeHttpClient,
@@ -19,7 +19,10 @@ use ssv_types::{
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::{
+    sync::mpsc,
+    time::{Instant, sleep, sleep_until},
+};
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
@@ -131,6 +134,31 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     weighted_attestation_data: bool,
 }
 
+/// Wait for a head event matching the current slot reported by `slot_clock`.
+///
+/// Drops events whose slot doesn't match the current slot and keeps waiting.
+/// Resolves to `None` if the channel is closed or `slot_clock.now()` fails.
+async fn wait_for_head_event<T: SlotClock>(
+    receiver: &mut mpsc::Receiver<HeadEvent>,
+    slot_clock: &T,
+) -> Option<HeadEvent> {
+    loop {
+        match receiver.recv().await {
+            Some(head_event) => {
+                let current_slot = slot_clock.now()?;
+                if head_event.slot == current_slot {
+                    return Some(head_event);
+                }
+                // Head event slot doesn't match current; drop and keep waiting.
+            }
+            None => {
+                warn!("Head monitor channel closed unexpectedly");
+                return None;
+            }
+        }
+    }
+}
+
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
@@ -155,7 +183,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         }
     }
 
-    pub fn start_update_service(self) -> Result<(), String> {
+    pub fn start_update_service(
+        self,
+        mut head_monitor_rx: Option<mpsc::Receiver<HeadEvent>>,
+    ) -> Result<(), String> {
         let slot_duration = Duration::from_secs(self.spec.seconds_per_slot);
         let duration_to_next_slot = self
             .slot_clock
@@ -199,27 +230,59 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         );
 
         // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 2: VotingContext (1/3 slot)
+        // PHASE 2: VotingContext (head event or spec-derived fallback, first to fire)
         // Gets cached voting assignments, fetches beacon_vote, builds VotingContext.
         // ═══════════════════════════════════════════════════════════════════════
         let self_clone_phase2 = self.clone();
         executor.spawn(
             async move {
                 loop {
-                    if let Some(duration_to_next_slot) =
+                    let Some(duration_to_next_slot) =
                         self_clone_phase2.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until 1/3 into slot
-                        sleep(duration_to_next_slot + slot_duration / 3).await;
-
-                        if let Err(err) = self_clone_phase2.update_voting_context().await {
-                            error!(err, "Failed to update voting context")
-                        } else {
-                            trace!("Updated voting context");
-                        }
-                    } else {
+                    else {
                         error!("Failed to read slot clock");
                         sleep(slot_duration).await;
+                        continue;
+                    };
+
+                    // Cross the slot boundary first so we race head events only within
+                    // the slot we're about to attest in.
+                    sleep(duration_to_next_slot).await;
+
+                    let fallback = self_clone_phase2.spec.get_unaggregated_attestation_due();
+                    let head_event = match head_monitor_rx.as_mut() {
+                        Some(rx) => tokio::select! {
+                            _ = sleep(fallback) => None,
+                            event = wait_for_head_event(rx, &self_clone_phase2.slot_clock) => event,
+                        },
+                        None => {
+                            sleep(fallback).await;
+                            None
+                        }
+                    };
+
+                    let trigger = if head_event.is_some() {
+                        metrics::TRIGGER_HEAD_EVENT
+                    } else {
+                        metrics::TRIGGER_TIMER
+                    };
+                    metrics::inc_counter_vec(
+                        &metrics::METADATA_SERVICE_VOTING_CONTEXT_TRIGGERS_TOTAL,
+                        &[trigger],
+                    );
+                    if let Some(offset) = self_clone_phase2
+                        .slot_clock
+                        .millis_from_current_slot_start()
+                    {
+                        metrics::observe_timer_vec(
+                            &metrics::METADATA_SERVICE_VOTING_CONTEXT_OFFSET_SECONDS,
+                            &[trigger],
+                            offset,
+                        );
+                    }
+
+                    if let Err(err) = self_clone_phase2.update_voting_context(head_event).await {
+                        error!(err, "Failed to update voting context")
                     }
                 }
             },
@@ -337,8 +400,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
-    /// Phase 2: Build and publish `VotingContext` at 1/3 slot.
-    async fn update_voting_context(&self) -> Result<(), String> {
+    /// Phase 2: Build and publish `VotingContext`, triggered by a head event or
+    /// the spec-derived fallback timer. When `head_event` is `Some`, the firing
+    /// BN is queried directly (bypassing WAD); any failure or block-root
+    /// mismatch falls back to the WAD/first_success path.
+    async fn update_voting_context(&self, head_event: Option<HeadEvent>) -> Result<(), String> {
         let slot = self.slot_clock.now().ok_or("Failed to read slot clock")?;
 
         let voting_assignments = self
@@ -347,24 +413,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .await
             .map_err(|e| format!("Failed to get cached voting assignments: {:?}", e))?;
 
-        // Fetch beacon_vote - use WAD if enabled, otherwise fallback to first_success
-        let attestation_data = if self.weighted_attestation_data {
-            self.weighted_calculation(slot).await?
-        } else {
-            self.beacon_nodes
-                .first_success(|beacon_node| async move {
-                    let _timer = validator_metrics::start_timer_vec(
-                        &validator_metrics::ATTESTATION_SERVICE_TIMES,
-                        &[validator_metrics::ATTESTATIONS_HTTP_GET],
-                    );
-                    beacon_node
-                        .get_validator_attestation_data(slot, 0)
-                        .await
-                        .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
-                        .map(|result| result.data)
-                })
-                .await
-                .map_err(|e| e.to_string())?
+        let attestation_data = match head_event {
+            Some(event) => match self.fetch_attestation_data_from_event(slot, &event).await {
+                Some(data) => data,
+                None => self.fetch_attestation_data(slot).await?,
+            },
+            None => self.fetch_attestation_data(slot).await?,
         };
 
         let beacon_vote = BeaconVote {
@@ -380,8 +434,63 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         self.validator_store.update_voting_context(voting_context);
 
-        trace!(%slot, "Published VotingContext at 1/3 slot");
+        trace!(%slot, "Published VotingContext");
         Ok(())
+    }
+
+    /// Eager-attest path: query the BN that fired the head event. Verifies the
+    /// returned block_root matches the event's. Returns `None` on any failure
+    /// or mismatch so the caller can fall back.
+    async fn fetch_attestation_data_from_event(
+        &self,
+        slot: Slot,
+        event: &HeadEvent,
+    ) -> Option<AttestationData> {
+        match self
+            .beacon_nodes
+            .run_on_candidate_index(event.beacon_node_index, |beacon_node| async move {
+                beacon_node.get_validator_attestation_data(slot, 0).await
+            })
+            .await
+        {
+            Ok(response) if response.data.beacon_block_root == event.beacon_block_root => {
+                Some(response.data)
+            }
+            Ok(response) => {
+                warn!(
+                    expected = ?event.beacon_block_root,
+                    got = ?response.data.beacon_block_root,
+                    "Head-event BN returned mismatched block root, falling back",
+                );
+                None
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to fetch attestation data from head-event BN, falling back");
+                None
+            }
+        }
+    }
+
+    /// Fallback path: WAD if enabled, otherwise first_success across all BNs.
+    async fn fetch_attestation_data(&self, slot: Slot) -> Result<AttestationData, String> {
+        if self.weighted_attestation_data {
+            self.weighted_calculation(slot).await
+        } else {
+            self.beacon_nodes
+                .first_success(|beacon_node| async move {
+                    let _timer = validator_metrics::start_timer_vec(
+                        &validator_metrics::ATTESTATION_SERVICE_TIMES,
+                        &[validator_metrics::ATTESTATIONS_HTTP_GET],
+                    );
+                    beacon_node
+                        .get_validator_attestation_data(slot, 0)
+                        .await
+                        .map_err(|e| format!("Failed to produce attestation data: {e:?}"))
+                        .map(|result| result.data)
+                })
+                .await
+                .map_err(|e| e.to_string())
+        }
     }
 
     /// Phase 3: Build and publish `AggregationAssignments` at 2/3 slot.
@@ -2235,5 +2344,70 @@ mod tests {
 
         let result_distance_2 = calculate_attestation_score(&data, Some(Slot::new(3230)));
         assert!((result_distance_2.score - 201.333333).abs() < 0.001);
+    }
+
+    use slot_clock::ManualSlotClock;
+    use tokio::time::{Duration as TokioDuration, timeout};
+
+    const TEST_SLOT: u64 = 100;
+    const SLOT_DURATION_SECS: u64 = 12;
+    const CHANNEL_CAPACITY: usize = 8;
+    const FAST_RESOLVE_TIMEOUT: TokioDuration = TokioDuration::from_secs(1);
+    const TIMER_ARM_DURATION: TokioDuration = TokioDuration::from_millis(50);
+
+    fn make_test_slot_clock() -> ManualSlotClock {
+        let clock = ManualSlotClock::new(
+            Slot::new(0),
+            std::time::Duration::from_secs(0),
+            std::time::Duration::from_secs(SLOT_DURATION_SECS),
+        );
+        clock.set_slot(TEST_SLOT);
+        clock
+    }
+
+    fn make_head_event_channel() -> (mpsc::Sender<HeadEvent>, mpsc::Receiver<HeadEvent>) {
+        mpsc::channel(CHANNEL_CAPACITY)
+    }
+
+    fn make_head_event(slot: u64) -> HeadEvent {
+        HeadEvent {
+            beacon_node_index: 0,
+            slot: Slot::new(slot),
+            beacon_block_root: Hash256::zero(),
+        }
+    }
+
+    // A head event for the current slot should resolve the wait immediately.
+    #[tokio::test(start_paused = true)]
+    async fn wait_for_head_event_returns_matching_slot_event() {
+        let slot_clock = make_test_slot_clock();
+        let (tx, mut rx) = make_head_event_channel();
+        tx.send(make_head_event(TEST_SLOT)).await.unwrap();
+
+        let result = timeout(
+            FAST_RESOLVE_TIMEOUT,
+            wait_for_head_event(&mut rx, &slot_clock),
+        )
+        .await
+        .unwrap();
+
+        let event = result.unwrap();
+        assert_eq!(event.slot, Slot::new(TEST_SLOT));
+    }
+
+    // A stale event (past slot) gets dropped, so the timer arm wins the race.
+    #[tokio::test(start_paused = true)]
+    async fn wait_for_head_event_drops_stale_events() {
+        let slot_clock = make_test_slot_clock();
+        let (tx, mut rx) = make_head_event_channel();
+        tx.send(make_head_event(TEST_SLOT - 1)).await.unwrap();
+
+        let from_head_event = tokio::select! {
+            biased;
+            _ = tokio::time::sleep(TIMER_ARM_DURATION) => false,
+            _ = wait_for_head_event(&mut rx, &slot_clock) => true,
+        };
+
+        assert!(!from_head_event);
     }
 }
