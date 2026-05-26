@@ -106,7 +106,7 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     processor: Senders,
     /// The local operator we act for.
     operator_id: OwnOperatorId,
-    /// The fork schedule for looking up the slot-based domain type.
+    /// The fork schedule for looking up the domain type based on the slot.
     fork_schedule: Arc<ForkSchedule>,
     /// The slot clock for determining the current epoch.
     slot_clock: S,
@@ -116,9 +116,10 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     message_sender: Arc<dyn MessageSender>,
     /// A map from the signing root and signing validator to the corresponding signature collector.
     signature_collectors: DashMap<(Hash256, ValidatorIndex), SignatureCollector>,
-    /// A map from a caller-provided batch ID and duty executor to the local batch of validator
-    /// partial signatures for one outgoing message. The batch ID may differ from the actual
-    /// signing root when the outgoing message contains signatures over multiple roots.
+    /// A map keyed by a batch ID provided by the caller and the duty executor. Each value is the
+    /// local batch of validator partial signatures for one outgoing message. The batch ID may differ
+    /// from the actual signing root when the outgoing message contains signatures over multiple
+    /// roots.
     partial_signature_batches: DashMap<(Hash256, DutyExecutor), PartialSignatureBatch>,
 }
 
@@ -514,7 +515,7 @@ pub struct SignatureMetadata {
     pub kind: PartialSignatureKind,
     /// The role to transmit. Only needed for the network message we send.
     pub role: Role,
-    /// The threshold of operator shares used by the per-validator reconstruction collector.
+    /// The threshold of operator shares used by the reconstruction collector for each validator.
     /// Once partial signatures from this many operators have arrived over the network, the full
     /// validator signature can be reconstructed.
     ///
@@ -534,13 +535,18 @@ pub struct SignatureMetadata {
 /// committee. This matters because the committee case sends one message for the whole batch.
 #[derive(Debug, Clone)]
 pub enum SignatureRequester {
-    /// The only validator signing this is the one passed when `sign_and_collect` is called.
+    /// Send one validator partial signature as soon as this operator signs it.
+    ///
+    /// Use this when the duty has one validator signing root and there is no local batching step
+    /// before the network message is sent.
     SingleValidator {
         /// The public key of the validator. Used in the created network message.
         pubkey: PublicKeyBytes,
     },
-    /// The local operator is signing multiple roots for a single validator in one duty.
-    /// We batch those validator partial signatures into a single outgoing validator message.
+    /// Collect several roots for one validator before sending one validator message.
+    ///
+    /// Use this when one validator produces multiple partial signatures for the same duty, such as
+    /// sync contribution proofs before Boole across multiple sync subnets.
     SingleValidatorBatch {
         /// The public key of the validator. Used in the created network message.
         pubkey: PublicKeyBytes,
@@ -551,9 +557,10 @@ pub enum SignatureRequester {
         /// We cannot use the signing root because the batched signatures have different roots.
         base_hash: Hash256,
     },
-    /// The local operator is signing for multiple validators in one committee round.
-    /// We batch those validator partial signatures into a single outgoing committee message instead
-    /// of sending one message per validator.
+    /// Collect partial signatures from several validators before sending one committee message.
+    ///
+    /// Use this when a committee duty batches the local operator's partial signatures for multiple
+    /// validators into a single outgoing message for the round.
     Committee {
         /// How many validator partial signatures this operator must produce locally before sending
         /// the batched committee message.
@@ -662,7 +669,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
 /// The recv loop is the only place that matches on [`CollectorMessageKind`];
 /// it dispatches each transport message to a typed method on
 /// [`SignatureCollectorState`] so the state machine never sees the channel
-/// shape (or the size-balancing `Box<Signature>` it carries).
+/// shape (or the size balancing `Box<Signature>` it carries).
 async fn signature_collector(mut rx: mpsc::UnboundedReceiver<CollectorMessage>) {
     let mut state = SignatureCollectorState::default();
     while let Some(message) = rx.recv().await {
