@@ -81,7 +81,7 @@ use validator_store::{
 
 /// Number of epochs of slashing protection history to keep.
 ///
-/// This acts as a maximum safe-guard against clock drift.
+/// This acts as a maximum safeguard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
@@ -98,7 +98,7 @@ const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution"
 /// A request to collect a committee signature for a single validator.
 ///
 /// The shared fields (`validator`, `signing_root`) drive `collect_prepared_signatures`,
-/// while `duty_data` carries duty-specific context needed by the assembly step.
+/// while `duty_data` carries context needed by the duty assembly step.
 struct SigningRequest<T> {
     validator: ValidatorMetadata,
     signing_root: Hash256,
@@ -126,7 +126,7 @@ impl<T> SigningRequest<T> {
 /// Handle committee signing errors with consistent timeout/failure metrics.
 ///
 /// On success, returns the signed results. On timeout or failure, logs,
-/// increments per-validator metrics, and returns an empty vec.
+/// increments metrics for each validator, and returns an empty vec.
 async fn run_committee_signing<T>(
     committee_id: CommitteeId,
     count: usize,
@@ -919,7 +919,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .collect::<HashMap<_, _>>()
     }
 
-    /// Sign a single aggregate and proof (pre-Boole per-validator path).
+    /// Sign a single aggregate and proof before Boole, with a path for each validator.
     async fn sign_single_aggregate_and_proof(
         self: &Arc<Self>,
         aggregate: AggregateToSign<E>,
@@ -1040,7 +1040,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .await
     }
 
-    /// Sign a single sync committee contribution (pre-Boole per-validator path).
+    /// Sign a single sync committee contribution before Boole, with a path for each validator.
     async fn sign_single_sync_committee_contribution(
         self: &Arc<Self>,
         contribution: ContributionToSign<E>,
@@ -1187,7 +1187,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .await
     }
 
-    /// Boole+ committee-based contribution signing: single QBFT consensus per committee,
+    /// Boole+ contribution signing by committee: single QBFT consensus per committee,
     /// batch signature collection for all contributors.
     ///
     /// Cannot use `collect_prepared_signatures` because a validator in multiple subcommittees
@@ -1650,7 +1650,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         })
     }
 
-    /// Boole+ committee-based aggregate signing: single QBFT consensus per committee,
+    /// Boole+ aggregate signing by committee: single QBFT consensus per committee,
     /// batch signature collection for all aggregators.
     async fn sign_committee_aggregate_and_proofs(
         &self,
@@ -1967,7 +1967,7 @@ impl VotingAssignments {
     /// - `+1` if the validator is attesting
     /// - `+N` if the validator is in sync committee (N = number of subnets)
     ///
-    /// This counting pattern is used for aggregator committee pre-consensus where
+    /// This counting pattern is used for aggregator committee work before consensus where
     /// each sync validator produces one selection proof per subnet they participate in.
     pub fn selection_proof_count_for_committee<F>(&self, is_in_committee: F) -> usize
     where
@@ -1998,7 +1998,7 @@ impl VotingAssignments {
     /// - `+1` if the validator is attesting
     /// - `+1` if the validator is in sync committee (regardless of subnet count)
     ///
-    /// This counting pattern is used for post-consensus attestation and sync committee
+    /// This counting pattern is used for attestation and sync committee work after consensus:
     /// voting messages where each validator produces one message regardless of
     /// how many subnets they participate in.
     pub fn voting_message_count_for_committee<F>(&self, is_in_committee: F) -> usize
@@ -2033,7 +2033,7 @@ impl VotingAssignments {
 ///
 /// At 2/3 slot, `DutyAndProof.selection_proof.is_some()` indicates `is_aggregator = true`.
 ///
-/// Also tracks multi-subnet sync aggregators. When a validator aggregates for multiple
+/// Also tracks sync aggregators with multiple subnets. When a validator aggregates for multiple
 /// sync subnets, `produce_signed_contribution_and_proof` is called multiple times (once
 /// per subnet). The waiter ensures all contributions are collected before starting QBFT.
 pub struct AggregationAssignments<E: EthSpec> {
@@ -2043,16 +2043,16 @@ pub struct AggregationAssignments<E: EthSpec> {
     /// `Pubkey` -> `committee_index` for aggregating validators
     pub aggregator_committees: HashMap<PublicKeyBytes, u64>,
 
-    /// Multi-subnet sync aggregators (validators aggregating > 1 subnet)
+    /// Sync aggregators with multiple subnets (validators aggregating > 1 subnet)
     multi_sync_aggregators: HashMap<PublicKeyBytes, ContributionWaiter<E>>,
 
-    /// Pre-built consensus data per SSV committee (for Boole+)
+    /// Consensus data built ahead of time for each SSV committee (for Boole+)
     /// Maps `CommitteeId` -> `AggregatorCommitteeConsensusData`
     consensus_data_by_ssv_committee: HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>,
 }
 
 impl<E: EthSpec> AggregationAssignments<E> {
-    /// Get the pre-built consensus data for an SSV committee.
+    /// Get the consensus data built ahead of time for an SSV committee.
     /// Returns None if fork < Boole or no aggregators in committee.
     pub fn get_consensus_data(
         &self,
@@ -2100,7 +2100,15 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
 
 #[derive(Clone, Copy)]
 enum CollectionMode {
+    /// Send one validator partial signature as soon as this operator signs it.
+    ///
+    /// Use this when the duty has one validator signing root and the outgoing network message does
+    /// not batch local signatures.
     SingleValidator,
+    /// Collect several roots for one validator before sending one validator message.
+    ///
+    /// Use this when one validator produces multiple partial signatures for the same duty, such as
+    /// sync contribution proofs before Boole across multiple sync subnets.
     SingleValidatorBatch {
         /// The number of partial signatures this operator batches locally into the outgoing
         /// validator message for the round.
@@ -2109,6 +2117,10 @@ enum CollectionMode {
         /// message.
         base_hash: Hash256,
     },
+    /// Collect partial signatures from several validators before sending one committee message.
+    ///
+    /// Use this when a committee duty batches the local operator's partial signatures for multiple
+    /// validators into a single outgoing message for the round.
     Committee {
         /// The number of validator partial signatures this operator batches locally into the
         /// outgoing committee message for the round.
@@ -2629,7 +2641,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
             Either::Right(committee_futures)
         } else {
-            // Pre-Boole: per-validator processing, no committee grouping needed
+            // Before Boole: processing for each validator, no committee grouping needed
             let this = Arc::clone(self);
             Either::Left(stream::once(async move {
                 let futures = aggregates.into_iter().map(|agg| {
@@ -2682,7 +2694,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let committee_validator_indices =
                     self.get_committee_validator_indices(&committee_id);
 
-                // Count how many selection-proof partial signatures belong in this batch.
+                // Count how many selection proof partial signatures belong in this batch.
                 let validator_partial_signature_batch_size = voting_assignments
                     .selection_proof_count_for_committee(|idx| {
                         committee_validator_indices.contains(idx)
@@ -2719,7 +2731,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 )
                 .await?
             } else {
-                // Use the original single-validator path.
+                // Use the original path for one validator.
                 self.timeout_within_slot(
                     slot,
                     delay,
@@ -2795,7 +2807,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let committee_validator_indices =
                     self.get_committee_validator_indices(&committee_id);
 
-                // Count how many selection-proof partial signatures belong in this batch.
+                // Count how many selection proof partial signatures belong in this batch.
                 let validator_partial_signature_batch_size = voting_assignments
                     .selection_proof_count_for_committee(|idx| {
                         committee_validator_indices.contains(idx)
@@ -2943,7 +2955,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
             Either::Right(committee_futures)
         } else {
-            // Pre-Boole: per-validator processing, no committee grouping needed
+            // Before Boole: processing for each validator, no committee grouping needed
             let this = Arc::clone(self);
             Either::Left(stream::once(async move {
                 let futures = contributions.into_iter().map(|contrib| {
