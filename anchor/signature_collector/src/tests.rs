@@ -192,8 +192,95 @@ impl BatchSigningFixture<'_> {
     }
 }
 
+async fn sign_roots_and_record_outbound_counts(
+    batch_signer: &BatchSigningFixture<'_>,
+    message_sender: &CapturingMessageSender,
+    signing_roots: &[Hash256],
+) -> Vec<usize> {
+    let mut outbound_counts = Vec::with_capacity(signing_roots.len());
+
+    for signing_root in signing_roots {
+        batch_signer.sign_and_collect_root(*signing_root).await;
+        outbound_counts.push(message_sender.messages().len());
+    }
+
+    outbound_counts
+}
+
+fn assert_completed_batch(
+    manager: &Arc<SignatureCollectorManager<ManualSlotClock>>,
+    base_hash: Hash256,
+    duty_executor: &DutyExecutor,
+    expected_unique_roots: usize,
+) {
+    let batch = manager
+        .partial_signature_batches
+        .get(&(base_hash, duty_executor.clone()))
+        .expect("completed batch should be retained until slot cleanup");
+
+    assert!(batch.completed, "batch should be marked complete");
+    assert!(
+        batch.batched_validator_partial_signatures.is_empty(),
+        "sent signatures should be drained from completed batch"
+    );
+    assert_eq!(
+        batch.seen_validator_partial_signature_keys.len(),
+        expected_unique_roots
+    );
+}
+
+fn assert_single_contribution_proofs_envelope(
+    message_sender: &CapturingMessageSender,
+    duty_executor: &DutyExecutor,
+    expected_signing_roots: &[Hash256],
+    validator_index: ValidatorIndex,
+) {
+    let sent_messages = message_sender.messages();
+    let sent_message = sent_messages
+        .first()
+        .expect("completed batch should send one message");
+    assert_eq!(sent_messages.len(), 1);
+    assert!(sent_message.full_data.is_empty());
+
+    let ssv_message = &sent_message.ssv_message;
+    assert_eq!(ssv_message.msg_type(), &MsgType::SSVPartialSignatureMsgType);
+    assert_eq!(
+        ssv_message.msg_id(),
+        &MessageId::new(&DomainType::default(), Role::SyncCommittee, duty_executor)
+    );
+
+    let partial_signature_messages = PartialSignatureMessages::from_ssz_bytes(ssv_message.data())
+        .expect("partial signature message should decode");
+    assert_eq!(
+        partial_signature_messages.kind,
+        PartialSignatureKind::ContributionProofs
+    );
+    assert_eq!(partial_signature_messages.slot, TEST_SLOT);
+    assert_eq!(
+        partial_signature_messages.messages.len(),
+        expected_signing_roots.len()
+    );
+
+    let actual_roots = partial_signature_messages
+        .messages
+        .iter()
+        .map(|message| message.signing_root)
+        .collect::<Vec<_>>();
+    assert_eq!(actual_roots, expected_signing_roots);
+
+    for message in partial_signature_messages.messages {
+        assert_eq!(message.signer, TEST_OPERATOR_ID);
+        assert_eq!(message.validator_index, validator_index);
+    }
+}
+
+/// Regression for pre-Boole sync contribution proofs. A validator can be assigned to multiple
+/// sync subnets in one slot, so Anchor must collect those distinct signing roots into one
+/// validator-level `ContributionProofs` envelope. The duplicate requests model retries before and
+/// after the batch completes.
 #[tokio::test]
 async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
+    // Arrange.
     let message_sender = Arc::new(CapturingMessageSender::default());
     let (manager, _exit_signal) = new_test_manager(Arc::clone(&message_sender));
     let validator_pubkey = PublicKeyBytes::empty();
@@ -222,6 +309,7 @@ async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
         shares: &shares,
         expected_batch_size: signing_roots.len(),
     };
+    // The first root is repeated to prove duplicates do not count toward batch readiness.
     let signing_requests = [
         signing_roots[0],
         signing_roots[0],
@@ -229,76 +317,34 @@ async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
         signing_roots[2],
     ];
 
-    for (index, signing_root) in signing_requests.iter().enumerate() {
-        batch_signer.sign_and_collect_root(*signing_root).await;
-
-        let expected_messages = usize::from(index + 1 == signing_requests.len());
-        assert_eq!(
-            message_sender.messages().len(),
-            expected_messages,
-            "outbound message should only be sent once the unique local validator batch is complete"
-        );
-    }
-
+    // Act.
+    let outbound_counts = sign_roots_and_record_outbound_counts(
+        &batch_signer,
+        message_sender.as_ref(),
+        &signing_requests,
+    )
+    .await;
+    // Repeat a root after completion to prove retries do not create another envelope.
     batch_signer.sign_and_collect_root(signing_roots[2]).await;
 
+    // Assert.
+    assert_eq!(
+        outbound_counts,
+        vec![0, 0, 0, 1],
+        "batch should send only after all unique roots are present"
+    );
     assert_eq!(
         message_sender.messages().len(),
         1,
-        "duplicates after completion should not send another envelope"
+        "completed-batch retry should not send a second envelope"
     );
-
-    let batch = manager
-        .partial_signature_batches
-        .get(&(base_hash, duty_executor.clone()))
-        .expect("completed batch should be retained until slot cleanup");
-    assert!(batch.completed, "batch should be marked complete");
-    assert!(
-        batch.batched_validator_partial_signatures.is_empty(),
-        "sent signatures should be drained from completed batch"
+    assert_completed_batch(&manager, base_hash, &duty_executor, signing_roots.len());
+    assert_single_contribution_proofs_envelope(
+        message_sender.as_ref(),
+        &duty_executor,
+        &signing_roots,
+        validator_index,
     );
-    assert_eq!(
-        batch.seen_validator_partial_signature_keys.len(),
-        signing_roots.len()
-    );
-
-    let sent_messages = message_sender.messages();
-    let sent_message = sent_messages
-        .first()
-        .expect("completed batch should send one message");
-    assert_eq!(sent_messages.len(), 1);
-    assert!(sent_message.full_data.is_empty());
-
-    let ssv_message = &sent_message.ssv_message;
-    assert_eq!(ssv_message.msg_type(), &MsgType::SSVPartialSignatureMsgType);
-    assert_eq!(
-        ssv_message.msg_id(),
-        &MessageId::new(&DomainType::default(), Role::SyncCommittee, &duty_executor)
-    );
-
-    let partial_signature_messages = PartialSignatureMessages::from_ssz_bytes(ssv_message.data())
-        .expect("partial signature message should decode");
-    assert_eq!(
-        partial_signature_messages.kind,
-        PartialSignatureKind::ContributionProofs
-    );
-    assert_eq!(partial_signature_messages.slot, TEST_SLOT);
-    assert_eq!(
-        partial_signature_messages.messages.len(),
-        signing_roots.len()
-    );
-
-    let actual_roots = partial_signature_messages
-        .messages
-        .iter()
-        .map(|message| message.signing_root)
-        .collect::<Vec<_>>();
-    assert_eq!(actual_roots, signing_roots);
-
-    for message in partial_signature_messages.messages {
-        assert_eq!(message.signer, TEST_OPERATOR_ID);
-        assert_eq!(message.validator_index, validator_index);
-    }
 }
 
 /// Once `THRESHOLD` valid partial signatures have been fed in, the state
