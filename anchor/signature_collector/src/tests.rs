@@ -326,7 +326,10 @@ impl ContributionProofBatchScenario {
 
 /// Regression coverage for pre-Boole sync contribution proofs. A validator can be assigned to
 /// multiple sync subnets in one slot, so Anchor must collect those distinct signing roots into one
-/// validator-level `ContributionProofs` envelope.
+/// `ContributionProofs` envelope for that validator.
+///
+/// Scenario: the validator signs three different subnet selection roots. The collector should wait
+/// until all three unique roots are present before sending the single outgoing envelope.
 #[tokio::test]
 async fn single_validator_batch_waits_for_three_unique_roots_before_sending() {
     let scenario = ContributionProofBatchScenario::new();
@@ -344,6 +347,8 @@ async fn single_validator_batch_waits_for_three_unique_roots_before_sending() {
         .assert_one_envelope_sent("the third unique contribution-proof root completes the batch");
 }
 
+/// Scenario: the validator signs one subnet selection root twice before the batch is complete.
+/// The duplicate root should be ignored, so the batch still waits for the remaining unique root.
 #[tokio::test]
 async fn single_validator_batch_ignores_duplicate_roots_before_completion() {
     let scenario = ContributionProofBatchScenario::new();
@@ -357,6 +362,8 @@ async fn single_validator_batch_ignores_duplicate_roots_before_completion() {
     scenario.assert_one_envelope_sent("the batch should complete after the third unique root");
 }
 
+/// Scenario: the validator signs all expected subnet roots and then retries one of them. The
+/// completed batch marker should suppress a second outgoing envelope until slot cleanup.
 #[tokio::test]
 async fn completed_single_validator_batch_ignores_retried_roots() {
     let scenario = ContributionProofBatchScenario::new();
@@ -368,6 +375,8 @@ async fn completed_single_validator_batch_ignores_retried_roots() {
     scenario.assert_completed_batch_is_retained();
 }
 
+/// Scenario: once the batch completes, the sent SSV `ContributionProofs` envelope should contain
+/// one inner partial signature for each unique subnet selection root.
 #[tokio::test]
 async fn single_validator_batch_envelope_contains_all_contribution_proof_roots() {
     let scenario = ContributionProofBatchScenario::new();
