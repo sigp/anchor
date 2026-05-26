@@ -200,6 +200,12 @@ impl ContributionProofBatchScenario {
         self.sign_subnet_selection_root(2).await;
     }
 
+    async fn complete_batch(&self) {
+        self.sign_subnet_0_selection_root().await;
+        self.sign_subnet_1_selection_root().await;
+        self.sign_subnet_2_selection_root().await;
+    }
+
     async fn sign_subnet_selection_root(&self, subnet_position: usize) {
         let signing_root = self.signing_roots[subnet_position];
         let manager_for_collect = Arc::clone(&self.manager);
@@ -318,34 +324,53 @@ impl ContributionProofBatchScenario {
     }
 }
 
-/// Regression for pre-Boole sync contribution proofs. A validator can be assigned to multiple
-/// sync subnets in one slot, so Anchor must collect those distinct signing roots into one
-/// validator-level `ContributionProofs` envelope. The duplicate requests model retries before and
-/// after the batch completes.
+/// Regression coverage for pre-Boole sync contribution proofs. A validator can be assigned to
+/// multiple sync subnets in one slot, so Anchor must collect those distinct signing roots into one
+/// validator-level `ContributionProofs` envelope.
 #[tokio::test]
-async fn single_validator_batch_sends_one_contribution_proofs_envelope() {
-    // Arrange.
+async fn single_validator_batch_waits_for_all_unique_roots_before_sending() {
     let scenario = ContributionProofBatchScenario::new();
 
-    // Act and assert each state transition, because the regression can show up as either sending
-    // too early or sending twice after a retry.
     scenario.sign_subnet_0_selection_root().await;
     scenario.assert_no_envelope_sent("one subnet root is not enough to complete the batch");
-
-    scenario.retry_subnet_0_selection_root().await;
-    scenario.assert_no_envelope_sent("retrying the same root must not advance the batch");
 
     scenario.sign_subnet_1_selection_root().await;
     scenario.assert_no_envelope_sent("the batch is still waiting for the third unique root");
 
     scenario.sign_subnet_2_selection_root().await;
     scenario.assert_one_envelope_sent("all unique subnet roots should complete the batch");
+}
 
+#[tokio::test]
+async fn single_validator_batch_ignores_duplicate_roots_before_completion() {
+    let scenario = ContributionProofBatchScenario::new();
+
+    scenario.sign_subnet_0_selection_root().await;
+    scenario.retry_subnet_0_selection_root().await;
+    scenario.sign_subnet_1_selection_root().await;
+    scenario.assert_no_envelope_sent("duplicate roots must not count toward batch readiness");
+
+    scenario.sign_subnet_2_selection_root().await;
+    scenario.assert_one_envelope_sent("the batch should complete after the third unique root");
+}
+
+#[tokio::test]
+async fn completed_single_validator_batch_ignores_retried_roots() {
+    let scenario = ContributionProofBatchScenario::new();
+
+    scenario.complete_batch().await;
     scenario.retry_subnet_2_selection_root().await;
     scenario.assert_one_envelope_sent("a retry after completion must not send another envelope");
 
-    // Assert.
     scenario.assert_completed_batch_is_retained();
+}
+
+#[tokio::test]
+async fn single_validator_batch_envelope_contains_all_contribution_proof_roots() {
+    let scenario = ContributionProofBatchScenario::new();
+
+    scenario.complete_batch().await;
+
     scenario.assert_sent_envelope_contains_all_subnet_roots();
 }
 
