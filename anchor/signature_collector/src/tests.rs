@@ -328,17 +328,20 @@ impl ContributionProofBatchScenario {
 /// multiple sync subnets in one slot, so Anchor must collect those distinct signing roots into one
 /// validator-level `ContributionProofs` envelope.
 #[tokio::test]
-async fn single_validator_batch_waits_for_all_unique_roots_before_sending() {
+async fn single_validator_batch_waits_for_three_unique_roots_before_sending() {
     let scenario = ContributionProofBatchScenario::new();
 
     scenario.sign_subnet_0_selection_root().await;
-    scenario.assert_no_envelope_sent("one subnet root is not enough to complete the batch");
+    scenario.assert_no_envelope_sent("one of three contribution-proof roots is not enough to send");
 
     scenario.sign_subnet_1_selection_root().await;
-    scenario.assert_no_envelope_sent("the batch is still waiting for the third unique root");
+    scenario.assert_no_envelope_sent(
+        "two of three contribution-proof roots are still not enough to send",
+    );
 
     scenario.sign_subnet_2_selection_root().await;
-    scenario.assert_one_envelope_sent("all unique subnet roots should complete the batch");
+    scenario
+        .assert_one_envelope_sent("the third unique contribution-proof root completes the batch");
 }
 
 #[tokio::test]
