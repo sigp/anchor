@@ -72,8 +72,8 @@ struct PartialSignatureBatch {
     /// This is drained once the batch reaches the expected size.
     batched_validator_partial_signatures: Vec<PartialSignatureMessage>,
     /// Validator/root pairs already accepted into this batch.
-    /// The set remains populated after the message is drained so duplicate or retried signing calls
-    /// cannot create another envelope before slot cleanup removes the batch.
+    /// The set remains populated after the message is drained so duplicate or retried signing
+    /// calls cannot create another envelope before slot cleanup removes the batch.
     seen_validator_partial_signature_keys: HashSet<(ValidatorIndex, Hash256)>,
     /// Number of unique partial signatures required before sending this outgoing message.
     /// This is a local message batch size, not the BLS reconstruction threshold.
