@@ -34,8 +34,8 @@ use tracing::{debug, error};
 use types::{EthSpec, Hash256, Slot};
 
 use super::{
-    CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftInitialization, QbftManager,
-    QbftMessageKind, TimeoutMode, WrappedQbftMessage,
+    CommitteeInstanceId, Completed, PTCCommitteeInstanceId, QbftDecidable, QbftError,
+    QbftInitialization, QbftManager, QbftMessageKind, TimeoutMode, WrappedQbftMessage,
 };
 use crate::instance::qbft_instance;
 

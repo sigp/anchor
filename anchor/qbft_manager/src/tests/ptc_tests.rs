@@ -148,14 +148,27 @@ async fn test_ptc_committee_accepted_after_cstar() {
     )
     .expect("SignedSSVMessage creation should succeed");
 
-    // Call receive_data - should NOT return RoleNotActive
+    // Call receive_data - should pass the fork gate, spawn a PTC instance,
+    // and queue the message on the urgent_consensus processor.
     let result = manager.receive_data(signed_msg, qbft_message);
 
-    // It might return Ok or some other error (e.g., no instance running),
-    // but critically it should NOT be RoleNotActive
+    assert!(result.is_ok(), "Expected Ok after CStar, got: {:?}", result);
+
+    // Verify routing reached the PTC arm specifically: the new instance lives
+    // in payload_attestation_vote_instances at the expected committee+height.
+    let expected_id = PTCCommitteeInstanceId {
+        committee: CommitteeId([0; 32]),
+        instance_height: InstanceHeight::from(100usize),
+    };
     assert!(
-        !matches!(result, Err(QbftError::RoleNotActive)),
-        "Should not return RoleNotActive after CStar fork, got: {:?}",
-        result
+        manager
+            .payload_attestation_vote_instances
+            .contains_key(&expected_id),
+        "Expected payload_attestation_vote_instances to contain the routed entry",
+    );
+    assert_eq!(
+        manager.payload_attestation_vote_instances.len(),
+        1,
+        "Only the PTC arm should have spawned an instance",
     );
 }
