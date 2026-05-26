@@ -40,6 +40,7 @@ use super::{
 use crate::instance::qbft_instance;
 
 mod aggregator_tests;
+mod ptc_tests;
 mod setup;
 mod timeout_tests;
 

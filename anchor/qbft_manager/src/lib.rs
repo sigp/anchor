@@ -14,8 +14,8 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, OperatorId,
     consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
-        QbftDataValidator,
+        AggregatorCommitteeConsensusData, BeaconVote, PayloadAttestationVote,
+        ProposerConsensusData, QbftData, QbftDataValidator,
     },
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -68,6 +68,13 @@ pub struct CommitteeInstanceId {
 // Unique Identifier for an aggregator committee QBFT instance
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct AggregatorCommitteeInstanceId {
+    pub committee: CommitteeId,
+    pub instance_height: InstanceHeight,
+}
+
+// Unique Identifier for a PTC committee QBFT instance
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct PTCCommitteeInstanceId {
     pub committee: CommitteeId,
     pub instance_height: InstanceHeight,
 }
@@ -140,6 +147,8 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // QBFT instances for AggregatorCommitteeConsensusData
     aggregator_committee_instances:
         Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
+    // QBFT instances for PayloadAttestationVote
+    payload_attestation_vote_instances: Map<PTCCommitteeInstanceId, PayloadAttestationVote>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
     // Number of slots per epoch
@@ -166,6 +175,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             proposer_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
+            payload_attestation_vote_instances: DashMap::new(),
             message_sender,
             slots_per_epoch,
             fork_schedule,
@@ -331,11 +341,27 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                         )
                     }
                     Some(Role::PTCCommittee) => {
-                        // TODO(cstar): wire PTC instance routing and add pre-CStar
-                        // fork gate (mirror `AggregatorCommittee` arm above).
+                        // Route to PTC committee instances with fork gating
                         let slot = types::Slot::new(qbft_message.height);
-                        warn!(%slot, "Ignoring PTCCommittee message; routing not wired");
-                        Err(QbftError::RoleNotActive)
+                        let epoch = slot.epoch(E::slots_per_epoch());
+
+                        // Fork gating: Reject before CStar
+                        if self.fork_schedule.active_fork(epoch) < Fork::CStar {
+                            warn!(%slot, "Ignoring PTCCommittee message before CStar fork");
+                            return Err(QbftError::RoleNotActive);
+                        }
+
+                        let id = PTCCommitteeInstanceId {
+                            committee,
+                            instance_height,
+                        };
+                        self.pass_to_instance::<PayloadAttestationVote>(
+                            id,
+                            WrappedQbftMessage {
+                                signed_message: full_message,
+                                qbft_message,
+                            },
+                        )
                     }
                     // Validator roles should use DutyExecutor::Validator, not Committee
                     Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
@@ -387,6 +413,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             self.proposer_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
             self.aggregator_committee_instances
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+            self.payload_attestation_vote_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
     }
@@ -507,6 +535,25 @@ impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
         MessageId::new(
             domain,
             Role::AggregatorCommittee,
+            &DutyExecutor::Committee(id.committee),
+        )
+    }
+}
+
+impl<E: EthSpec> QbftDecidable<E> for PayloadAttestationVote {
+    type Id = PTCCommitteeInstanceId;
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
+        &manager.payload_attestation_vote_instances
+    }
+
+    fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
+        id.instance_height
+    }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        MessageId::new(
+            domain,
+            Role::PTCCommittee,
             &DutyExecutor::Committee(id.committee),
         )
     }
