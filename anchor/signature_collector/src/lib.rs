@@ -117,9 +117,9 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     /// A map from the signing root and signing validator to the corresponding signature collector.
     signature_collectors: DashMap<(Hash256, ValidatorIndex), SignatureCollector>,
     /// A map keyed by a batch ID provided by the caller and the duty executor. Each value is the
-    /// local batch of validator partial signatures for one outgoing message. The batch ID may differ
-    /// from the actual signing root when the outgoing message contains signatures over multiple
-    /// roots.
+    /// local batch of validator partial signatures for one outgoing message. The batch ID may
+    /// differ from the actual signing root when the outgoing message contains signatures over
+    /// multiple roots.
     partial_signature_batches: DashMap<(Hash256, DutyExecutor), PartialSignatureBatch>,
 }
 
