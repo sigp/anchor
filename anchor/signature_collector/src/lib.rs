@@ -68,10 +68,20 @@ struct SignatureCollector {
 /// As soon as this operator has produced the full validator batch for the duty, the message is
 /// sent.
 struct PartialSignatureBatch {
+    /// Unique validator partial signatures that will be placed in the outgoing SSV message.
+    /// This is drained once the batch reaches the expected size.
     batched_validator_partial_signatures: Vec<PartialSignatureMessage>,
+    /// Validator/root pairs already accepted into this batch.
+    /// The set remains populated after the message is drained so duplicate or retried signing calls
+    /// cannot create another envelope before slot cleanup removes the batch.
     seen_validator_partial_signature_keys: HashSet<(ValidatorIndex, Hash256)>,
-    expected_signature_count: usize,
+    /// Number of unique partial signatures required before sending this outgoing message.
+    /// This is a local message batch size, not the BLS reconstruction threshold.
+    expected_unique_partial_signature_count: usize,
+    /// True after the batch has reached the expected size and been drained for a send attempt.
+    /// Completed batches are retained until slot cleanup to suppress duplicate sends.
     completed: bool,
+    /// Slot used by the cleaner to expire pending and completed batches.
     for_slot: Slot,
 }
 
@@ -283,7 +293,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     seen_validator_partial_signature_keys: HashSet::with_capacity(
                         validator_partial_signature_batch_size,
                     ),
-                    expected_signature_count: validator_partial_signature_batch_size,
+                    expected_unique_partial_signature_count: validator_partial_signature_batch_size,
                     completed: false,
                     for_slot: metadata.slot,
                 }),
@@ -295,9 +305,11 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                 return;
             }
 
-            if batch.expected_signature_count != validator_partial_signature_batch_size {
+            if batch.expected_unique_partial_signature_count
+                != validator_partial_signature_batch_size
+            {
                 error!(
-                    expected = batch.expected_signature_count,
+                    expected = batch.expected_unique_partial_signature_count,
                     got = validator_partial_signature_batch_size,
                     "Partial signature batch expected count mismatch"
                 );
@@ -319,11 +331,13 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             batch.batched_validator_partial_signatures.push(message);
             trace!(
                 have = batch.batched_validator_partial_signatures.len(),
-                need = batch.expected_signature_count,
+                need = batch.expected_unique_partial_signature_count,
                 "Checking whether the batch of validator partial signatures is ready to send"
             );
 
-            if batch.batched_validator_partial_signatures.len() == batch.expected_signature_count {
+            if batch.batched_validator_partial_signatures.len()
+                == batch.expected_unique_partial_signature_count
+            {
                 batch.completed = true;
                 Some(mem::take(&mut batch.batched_validator_partial_signatures))
             } else {
