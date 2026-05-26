@@ -85,6 +85,22 @@ struct PartialSignatureBatch {
     for_slot: Slot,
 }
 
+impl PartialSignatureBatch {
+    fn new(expected_unique_partial_signature_count: usize, for_slot: Slot) -> Self {
+        Self {
+            batched_validator_partial_signatures: Vec::with_capacity(
+                expected_unique_partial_signature_count,
+            ),
+            seen_validator_partial_signature_keys: HashSet::with_capacity(
+                expected_unique_partial_signature_count,
+            ),
+            expected_unique_partial_signature_count,
+            completed: false,
+            for_slot,
+        }
+    }
+}
+
 pub struct SignatureCollectorManager<S: SlotClock> {
     /// The handle to the processor, for queueing messages to the instances.
     processor: Senders,
@@ -286,17 +302,10 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                 .entry((base_hash, duty_executor.clone()))
             {
                 Entry::Occupied(occupied) => occupied,
-                Entry::Vacant(vacant) => vacant.insert_entry(PartialSignatureBatch {
-                    batched_validator_partial_signatures: Vec::with_capacity(
-                        validator_partial_signature_batch_size,
-                    ),
-                    seen_validator_partial_signature_keys: HashSet::with_capacity(
-                        validator_partial_signature_batch_size,
-                    ),
-                    expected_unique_partial_signature_count: validator_partial_signature_batch_size,
-                    completed: false,
-                    for_slot: metadata.slot,
-                }),
+                Entry::Vacant(vacant) => vacant.insert_entry(PartialSignatureBatch::new(
+                    validator_partial_signature_batch_size,
+                    metadata.slot,
+                )),
             };
             let batch = entry.get_mut();
 
