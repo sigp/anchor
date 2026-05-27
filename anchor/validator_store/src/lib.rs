@@ -46,8 +46,8 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
-        ValidatorDuty,
+        GloasBeaconVote, ProposerConsensusData, ProposerConsensusDataValidator, QbftData,
+        QbftDataValidator, SelectionProofBatchId, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -885,6 +885,17 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         ))
     }
 
+    /// Constructs the QBFT data validator for Gloas-era committee attestation duties.
+    /// Body lands in #1026 (`GloasBeaconVoteValidator`); the helper is wired into the
+    /// fork branch of `sign_committee_attestations` now so #1026 is a body-only change.
+    fn create_gloas_beacon_vote_validator(
+        &self,
+        _slot: Slot,
+        _validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+    ) -> Box<dyn QbftDataValidator<GloasBeaconVote>> {
+        todo!("#1026: implement GloasBeaconVoteValidator")
+    }
+
     fn get_attesting_validators_in_committee(
         &self,
         metadata: &VotingContext,
@@ -1483,33 +1494,78 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 .get_instant_in_slot(slot, self.spec.get_attestation_due::<E>(slot))?,
         };
 
-        let completed = self
-            .consensus
-            .decide_instance(
-                CommitteeInstanceId {
-                    committee: committee_id,
-                    instance_height: slot.as_usize().into(),
-                },
-                BeaconVote {
-                    block_root: first_att_data.beacon_block_root,
-                    source: first_att_data.source,
-                    target: first_att_data.target,
-                },
-                self.create_beacon_vote_validator(slot, validator_attestation_committees),
-                timeout_mode,
-                &cluster.cluster_members,
-            )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
+        let instance_id = CommitteeInstanceId {
+            committee: committee_id,
+            instance_height: slot.as_usize().into(),
+        };
 
-        let data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
+        let (block_root, source, target, decided_hash) = if self
+            .fork_schedule
+            .active_fork(slot.epoch(E::slots_per_epoch()))
+            >= Fork::CStar
+        {
+            let completed = self
+                .consensus
+                .decide_instance(
+                    instance_id,
+                    GloasBeaconVote {
+                        block_root: first_att_data.beacon_block_root,
+                        source: first_att_data.source,
+                        target: first_att_data.target,
+                        attestation_data_index: first_att_data.index,
+                    },
+                    self.create_gloas_beacon_vote_validator(slot, validator_attestation_committees),
+                    timeout_mode,
+                    &cluster.cluster_members,
+                )
+                .await
+                .map_err(SpecificError::from)?;
+            drop(timer);
+            match completed {
+                Completed::TimedOut => {
+                    return Err(Error::SpecificError(SpecificError::Timeout));
+                }
+                // TODO(#1027): apply `decided.attestation_data_index` to each validator's
+                // `attestation.data.index` before signing.
+                Completed::Success(decided) => (
+                    decided.block_root,
+                    decided.source,
+                    decided.target,
+                    decided.hash(),
+                ),
+            }
+        } else {
+            let completed = self
+                .consensus
+                .decide_instance(
+                    instance_id,
+                    BeaconVote {
+                        block_root: first_att_data.beacon_block_root,
+                        source: first_att_data.source,
+                        target: first_att_data.target,
+                    },
+                    self.create_beacon_vote_validator(slot, validator_attestation_committees),
+                    timeout_mode,
+                    &cluster.cluster_members,
+                )
+                .await
+                .map_err(SpecificError::from)?;
+            drop(timer);
+            match completed {
+                Completed::TimedOut => {
+                    return Err(Error::SpecificError(SpecificError::Timeout));
+                }
+                Completed::Success(decided) => (
+                    decided.block_root,
+                    decided.source,
+                    decided.target,
+                    decided.hash(),
+                ),
+            }
         };
 
         // Shared values for all validators in this committee
-        let domain_hash = self.get_domain(data.target.epoch, Domain::BeaconAttester);
+        let domain_hash = self.get_domain(target.epoch, Domain::BeaconAttester);
 
         // Prepare all validators and apply consensus results upfront
         // (metadata already resolved by `group_by_committee`)
@@ -1517,9 +1573,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .into_iter()
             .map(|(validator, mut att)| {
                 // Apply consensus result to this attestation
-                att.attestation.data_mut().beacon_block_root = data.block_root;
-                att.attestation.data_mut().source = data.source;
-                att.attestation.data_mut().target = data.target;
+                att.attestation.data_mut().beacon_block_root = block_root;
+                att.attestation.data_mut().source = source;
+                att.attestation.data_mut().target = target;
 
                 let signing_root = att.attestation.data().signing_root(domain_hash);
                 SigningRequest {
@@ -1542,7 +1598,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 slot,
                 &cluster,
                 validator_partial_signature_batch_size,
-                data.hash(),
+                decided_hash,
                 &prepared,
             )
             .await?;

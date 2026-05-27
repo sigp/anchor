@@ -906,6 +906,38 @@ impl QbftData for BeaconVote {
     }
 }
 
+/// QBFT consensus value for committee attestation duties at Gloas-and-later forks.
+///
+/// Mirrors `BeaconVote` plus `attestation_data_index`, the BN-supplied
+/// `AttestationData.index` field. Under Gloas this field encodes the attester's
+/// fork-choice view of payload status (`0` = `EMPTY`, `1` = `FULL` for non-same-slot
+/// attestations), is part of the signed attestation root, and therefore must
+/// travel through QBFT rather than being reconstructed locally.
+///
+/// `GloasBeaconVote` and `BeaconVote` are kept as separate types so their SSZ
+/// wire bytes mutually reject on length mismatch across the fork boundary.
+#[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
+pub struct GloasBeaconVote {
+    pub block_root: Hash256,
+    pub source: Checkpoint,
+    pub target: Checkpoint,
+    pub attestation_data_index: u64,
+}
+
+impl QbftData for GloasBeaconVote {
+    type Hash = Hash256;
+
+    fn hash(&self) -> Self::Hash {
+        let bytes = self.as_ssz_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
+    }
+}
+
 /// QBFT consensus value for PTC (Payload Timeliness Committee) duties at Gloas.
 ///
 /// PTC operators run one QBFT instance per slot over this stripped shape; the
@@ -2248,5 +2280,142 @@ mod tests {
         let local_view = create_payload_attestation_vote(root, false, false);
 
         assert!(validator.validate(&proposed, &local_view));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // GloasBeaconVote Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    fn create_gloas_beacon_vote(
+        block_root: Hash256,
+        source_epoch: u64,
+        source_root: Hash256,
+        target_epoch: u64,
+        target_root: Hash256,
+        attestation_data_index: u64,
+    ) -> GloasBeaconVote {
+        GloasBeaconVote {
+            block_root,
+            source: Checkpoint {
+                epoch: Epoch::new(source_epoch),
+                root: source_root,
+            },
+            target: Checkpoint {
+                epoch: Epoch::new(target_epoch),
+                root: target_root,
+            },
+            attestation_data_index,
+        }
+    }
+
+    #[test]
+    fn test_gloas_beacon_vote_ssz_roundtrip() {
+        // Arrange: cover the `attestation_data_index` range boundaries (SSZ must round-trip any
+        // u64).
+        let block_root = Hash256::from_low_u64_be(0xabcd);
+        let source_root = Hash256::from_low_u64_be(0x1111);
+        let target_root = Hash256::from_low_u64_be(0x2222);
+
+        for attestation_data_index in [0u64, 1, u64::MAX] {
+            let vote = create_gloas_beacon_vote(
+                block_root,
+                3,
+                source_root,
+                4,
+                target_root,
+                attestation_data_index,
+            );
+
+            // Act
+            let encoded = vote.as_ssz_bytes();
+            let decoded = GloasBeaconVote::from_ssz_bytes(&encoded)
+                .expect("SSZ-encoded `GloasBeaconVote` must decode");
+
+            // Assert
+            assert_eq!(vote, decoded);
+        }
+    }
+
+    #[test]
+    fn test_gloas_beacon_vote_hash_deterministic() {
+        // Arrange: two independently-constructed votes with the same field values.
+        let block_root = Hash256::from_low_u64_be(0x1234);
+        let source_root = Hash256::from_low_u64_be(0x5555);
+        let target_root = Hash256::from_low_u64_be(0x7777);
+        let vote = create_gloas_beacon_vote(block_root, 3, source_root, 4, target_root, 0);
+        let same = create_gloas_beacon_vote(block_root, 3, source_root, 4, target_root, 0);
+
+        // Act + Assert: identical field values must hash identically (catches
+        // identity- or address-dependent hashing).
+        assert_eq!(vote.hash(), same.hash());
+
+        // hash() must literally be SHA-256 over the SSZ bytes — this is the
+        // cross-operator agreement contract: every operator independently
+        // SSZ-encodes their `GloasBeaconVote` and hashes the bytes.
+        let expected = {
+            let mut hasher = Sha256::new();
+            hasher.update(vote.as_ssz_bytes());
+            Hash256::from(<[u8; 32]>::from(hasher.finalize()))
+        };
+        assert_eq!(
+            vote.hash(),
+            expected,
+            "hash() must be SHA-256 over SSZ bytes"
+        );
+
+        // Flip block_root.
+        let flipped_block_root = create_gloas_beacon_vote(
+            Hash256::from_low_u64_be(0x9999),
+            3,
+            source_root,
+            4,
+            target_root,
+            0,
+        );
+        assert_ne!(vote.hash(), flipped_block_root.hash());
+
+        // Flip source.epoch.
+        let flipped_source_epoch =
+            create_gloas_beacon_vote(block_root, 99, source_root, 4, target_root, 0);
+        assert_ne!(vote.hash(), flipped_source_epoch.hash());
+
+        // Flip target.epoch.
+        let flipped_target_epoch =
+            create_gloas_beacon_vote(block_root, 3, source_root, 99, target_root, 0);
+        assert_ne!(vote.hash(), flipped_target_epoch.hash());
+
+        // Flip attestation_data_index: index=0 vs index=1 MUST differ — this is the
+        // cross-index equivocation protection #1025 unlocks.
+        let index_one = create_gloas_beacon_vote(block_root, 3, source_root, 4, target_root, 1);
+        assert_ne!(
+            vote.hash(),
+            index_one.hash(),
+            "index=0 and index=1 must produce distinct hashes (cross-index equivocation guard)"
+        );
+    }
+
+    #[test]
+    fn test_beacon_vote_rejects_gloas_bytes() {
+        // Arrange: encode a `GloasBeaconVote` (120 bytes).
+        let gloas_vote = create_gloas_beacon_vote(
+            Hash256::from_low_u64_be(0xdead),
+            1,
+            Hash256::from_low_u64_be(0xbeef),
+            2,
+            Hash256::from_low_u64_be(0xcafe),
+            7,
+        );
+        let bytes = gloas_vote.as_ssz_bytes();
+        assert_eq!(bytes.len(), 120);
+
+        // Act: try to decode those bytes as the pre-Gloas `BeaconVote`.
+        let result = BeaconVote::from_ssz_bytes(&bytes);
+
+        // Assert: SIP §2 length-mismatch mutual rejection — pre-Gloas binaries
+        // must not silently accept Gloas-shaped wire bytes.
+        assert!(
+            result.is_err(),
+            "BeaconVote (112-byte fixed) must reject 120-byte GloasBeaconVote encoding"
+        );
     }
 }

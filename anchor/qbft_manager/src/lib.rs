@@ -14,8 +14,8 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, OperatorId,
     consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, ProposerConsensusData, QbftData,
-        QbftDataValidator,
+        AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, ProposerConsensusData,
+        QbftData, QbftDataValidator,
     },
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -137,6 +137,9 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     proposer_consensus_data_instances: Map<ProposerInstanceId, ProposerConsensusData>,
     // All of the QBFT instances that are voting on beacon data
     beacon_vote_instances: Map<CommitteeInstanceId, BeaconVote>,
+    // All of the QBFT instances that are voting on Gloas-era beacon data
+    // (carries the BN-supplied `attestation_data_index`).
+    gloas_beacon_vote_instances: Map<CommitteeInstanceId, GloasBeaconVote>,
     // QBFT instances for AggregatorCommitteeConsensusData
     aggregator_committee_instances:
         Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
@@ -165,6 +168,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             operator_id,
             proposer_consensus_data_instances: DashMap::new(),
             beacon_vote_instances: DashMap::new(),
+            gloas_beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
             message_sender,
             slots_per_epoch,
@@ -294,18 +298,22 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             Some(DutyExecutor::Committee(committee)) => {
                 match msg_id.role() {
                     Some(Role::Committee) => {
-                        // Existing BeaconVote routing
+                        let slot = types::Slot::new(qbft_message.height);
+                        let epoch = slot.epoch(E::slots_per_epoch());
                         let id = CommitteeInstanceId {
                             committee,
                             instance_height,
                         };
-                        self.pass_to_instance::<BeaconVote>(
-                            id,
-                            WrappedQbftMessage {
-                                signed_message: full_message,
-                                qbft_message,
-                            },
-                        )
+                        let wrapped = WrappedQbftMessage {
+                            signed_message: full_message,
+                            qbft_message,
+                        };
+
+                        if self.fork_schedule.active_fork(epoch) >= Fork::CStar {
+                            self.pass_to_instance::<GloasBeaconVote>(id, wrapped)
+                        } else {
+                            self.pass_to_instance::<BeaconVote>(id, wrapped)
+                        }
                     }
                     Some(Role::AggregatorCommittee) => {
                         // Route to aggregator committee instances with fork gating
@@ -383,6 +391,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             };
             let cutoff = slot.saturating_sub(QBFT_RETAIN_SLOTS);
             self.beacon_vote_instances
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+            self.gloas_beacon_vote_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
             self.proposer_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
@@ -478,6 +488,26 @@ impl<E: EthSpec> QbftDecidable<E> for BeaconVote {
     type Id = CommitteeInstanceId;
     fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
         &manager.beacon_vote_instances
+    }
+
+    fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
+        id.instance_height
+    }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        MessageId::new(
+            domain,
+            Role::Committee,
+            &DutyExecutor::Committee(id.committee),
+        )
+    }
+}
+
+impl<E: EthSpec> QbftDecidable<E> for GloasBeaconVote {
+    type Id = CommitteeInstanceId;
+
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
+        &manager.gloas_beacon_vote_instances
     }
 
     fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
