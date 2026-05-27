@@ -3635,16 +3635,29 @@
     "list": [
       {
         "current": {
-          "text": [],
-          "value": []
+          "text": "All",
+          "value": "$__all"
         },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(libp2p_peers, instance)",
         "includeAll": true,
         "label": "Instances",
         "multi": true,
         "name": "anchor_instances",
         "options": [],
-        "query": "",
-        "type": "custom"
+        "query": {
+          "qryType": 1,
+          "query": "label_values(libp2p_peers, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
@@ -3656,6 +3669,6 @@
   "timezone": "browser",
   "title": "Anchor Dashboard",
   "uid": "0b1c33ef-7c9a-48ca-9321-51265035d023",
-  "version": 30,
+  "version": 31,
   "weekStart": ""
 }
