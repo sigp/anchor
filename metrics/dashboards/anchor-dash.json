@@ -3170,7 +3170,7 @@
       },
       "id": 100,
       "panels": [],
-      "title": "Eager Attesting (PR #1041)",
+      "title": "Beacon Head Events",
       "type": "row"
     },
     {
@@ -3444,7 +3444,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Distribution of offsets (seconds into slot) at which Phase 2 fell back to the spec-derived timer. This is the baseline behaviour from before PR #1041; mass concentrated here means head events aren't arriving in time and the optimisation isn't kicking in.",
+      "description": "Distribution of offsets (seconds into slot) at which Phase 2 fell back to the spec-derived timer. Mass concentrated here means head events aren't arriving in time and the eager path isn't kicking in.",
       "fieldConfig": {
         "defaults": {
           "custom": {
