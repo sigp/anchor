@@ -152,6 +152,41 @@ impl From<InstanceState> for u8 {
     }
 }
 
+/// A payload-free view of [`InstanceState`].
+///
+/// `InstanceState` carries a `proposal_root` payload on its `Prepare` and `Commit` variants.
+/// This kind identifies *which* state an instance is in without that instance-specific detail,
+/// supporting state-machine decision branching where only the variant matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InstanceStateKind {
+    /// Awaiting a proposal from a leader.
+    AwaitingProposal,
+    /// Awaiting consensus on PREPARE messages.
+    Prepare,
+    /// Awaiting consensus on COMMIT messages.
+    Commit,
+    /// We have sent a round change message.
+    SentRoundChange,
+    /// The consensus instance is complete.
+    Complete,
+    /// We have reached consensus on a round change.
+    RoundChangeConsensus,
+}
+
+impl InstanceState {
+    /// Returns the payload-free [`InstanceStateKind`] of this state.
+    pub fn kind(&self) -> InstanceStateKind {
+        match self {
+            InstanceState::AwaitingProposal => InstanceStateKind::AwaitingProposal,
+            InstanceState::Prepare { .. } => InstanceStateKind::Prepare,
+            InstanceState::Commit { .. } => InstanceStateKind::Commit,
+            InstanceState::SentRoundChange => InstanceStateKind::SentRoundChange,
+            InstanceState::Complete => InstanceStateKind::Complete,
+            InstanceState::RoundChangeConsensus => InstanceStateKind::RoundChangeConsensus,
+        }
+    }
+}
+
 /// Type definitions for the allowable messages
 /// This holds the consensus data for a given round.
 #[derive(Debug, Clone)]

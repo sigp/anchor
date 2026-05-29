@@ -4,9 +4,7 @@
     reason = "Expected to be implemented by proposer QBFT instrumentation"
 )]
 
-use std::mem::{Discriminant, discriminant};
-
-use qbft::InstanceState;
+use qbft::InstanceStateKind;
 use ssv_types::Round;
 
 pub mod checkpoints {
@@ -21,7 +19,7 @@ pub mod checkpoints {
 
 /// Reason why a QBFT round advanced, determined by the boundary layer
 /// through before/after state observation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RoundAdvanceReason {
     /// The local round timer expired without reaching consensus.
     Timeout,
@@ -31,6 +29,9 @@ pub enum RoundAdvanceReason {
     /// A full quorum of round-change messages was observed, achieving
     /// round-change consensus.
     RoundChangeQuorum,
+    /// A justified proposal for a higher round arrived, pulling the instance
+    /// forward to catch up with the leader's round (no round change occurred).
+    FutureRoundProposal,
 }
 
 impl RoundAdvanceReason {
@@ -39,6 +40,7 @@ impl RoundAdvanceReason {
             Self::Timeout => "timeout",
             Self::FPlusOneRoundChange => "f_plus_1_rc",
             Self::RoundChangeQuorum => "rc_quorum",
+            Self::FutureRoundProposal => "future_proposal",
         }
     }
 }
@@ -54,14 +56,20 @@ pub enum RecvArmTag {
 
 /// Classify a round advance observed at the boundary layer.
 ///
-/// This function uses `std::mem::Discriminant<InstanceState>` to avoid comparing the
-/// `proposal_root` payload of certain states or modifying internal API components. Only the state
-/// variant is relevant here.
+/// Consumes the payload-free [`InstanceStateKind`] of the after-state so the classifier depends
+/// only on the state variant without concern for state attributes.
+///
+/// `Message` match arm after-state kind captures how the round advanced:
+/// - `SentRoundChange`: f+1 peers at a higher round pulled us forward.
+/// - `Prepare`: a justified future-round proposal arrived (we caught up to the leader, no round
+///   change occurred).
+/// - anything else (e.g. `AwaitingProposal`, `RoundChangeConsensus`): a full round-change quorum
+///   was reached.
 ///
 /// Returns `None` if the round did not actually advance and `Some(reason)` when it did.
 pub fn classify_round_advance(
-    _before_state: Discriminant<InstanceState>,
-    after_state: Discriminant<InstanceState>,
+    _before_state: InstanceStateKind,
+    after_state: InstanceStateKind,
     recv_arm: RecvArmTag,
     before_round: Round,
     after_round: Round,
@@ -72,13 +80,11 @@ pub fn classify_round_advance(
 
     let reason = match recv_arm {
         RecvArmTag::RoundEnd => RoundAdvanceReason::Timeout,
-        RecvArmTag::Message => {
-            if after_state == discriminant(&InstanceState::SentRoundChange) {
-                RoundAdvanceReason::FPlusOneRoundChange
-            } else {
-                RoundAdvanceReason::RoundChangeQuorum
-            }
-        }
+        RecvArmTag::Message => match after_state {
+            InstanceStateKind::SentRoundChange => RoundAdvanceReason::FPlusOneRoundChange,
+            InstanceStateKind::Prepare => RoundAdvanceReason::FutureRoundProposal,
+            _ => RoundAdvanceReason::RoundChangeQuorum,
+        },
     };
 
     Some(reason)
@@ -88,15 +94,11 @@ pub fn classify_round_advance(
 mod tests {
     use super::*;
 
-    fn disc(state: InstanceState) -> Discriminant<InstanceState> {
-        discriminant(&state)
-    }
-
     #[test]
     fn no_advance_when_round_unchanged() {
         let result = classify_round_advance(
-            disc(InstanceState::AwaitingProposal),
-            disc(InstanceState::AwaitingProposal),
+            InstanceStateKind::AwaitingProposal,
+            InstanceStateKind::AwaitingProposal,
             RecvArmTag::Message,
             Round::from(1u64),
             Round::from(1u64),
@@ -110,8 +112,8 @@ mod tests {
     #[test]
     fn no_advance_when_round_decreased() {
         let result = classify_round_advance(
-            disc(InstanceState::AwaitingProposal),
-            disc(InstanceState::AwaitingProposal),
+            InstanceStateKind::AwaitingProposal,
+            InstanceStateKind::AwaitingProposal,
             RecvArmTag::Message,
             Round::from(3u64),
             Round::from(2u64),
@@ -125,8 +127,8 @@ mod tests {
     #[test]
     fn timeout_on_round_end() {
         let result = classify_round_advance(
-            disc(InstanceState::AwaitingProposal),
-            disc(InstanceState::AwaitingProposal),
+            InstanceStateKind::AwaitingProposal,
+            InstanceStateKind::AwaitingProposal,
             RecvArmTag::RoundEnd,
             Round::from(1u64),
             Round::from(2u64),
@@ -141,8 +143,8 @@ mod tests {
     #[test]
     fn f_plus_one_rc_when_after_state_is_sent_round_change() {
         let result = classify_round_advance(
-            disc(InstanceState::AwaitingProposal),
-            disc(InstanceState::SentRoundChange),
+            InstanceStateKind::AwaitingProposal,
+            InstanceStateKind::SentRoundChange,
             RecvArmTag::Message,
             Round::from(1u64),
             Round::from(3u64),
@@ -157,8 +159,8 @@ mod tests {
     #[test]
     fn rc_quorum_when_after_state_is_awaiting_proposal() {
         let result = classify_round_advance(
-            disc(InstanceState::SentRoundChange),
-            disc(InstanceState::AwaitingProposal),
+            InstanceStateKind::SentRoundChange,
+            InstanceStateKind::AwaitingProposal,
             RecvArmTag::Message,
             Round::from(2u64),
             Round::from(3u64),
@@ -166,15 +168,16 @@ mod tests {
         assert_eq!(
             result,
             Some(RoundAdvanceReason::RoundChangeQuorum),
-            "Message arm with after_state != SentRoundChange means full quorum was reached"
+            "Message arm landing in AwaitingProposal (neither SentRoundChange nor Prepare) means \
+             full quorum was reached"
         );
     }
 
     #[test]
     fn rc_quorum_when_after_state_is_round_change_consensus() {
         let result = classify_round_advance(
-            disc(InstanceState::SentRoundChange),
-            disc(InstanceState::RoundChangeConsensus),
+            InstanceStateKind::SentRoundChange,
+            InstanceStateKind::RoundChangeConsensus,
             RecvArmTag::Message,
             Round::from(2u64),
             Round::from(3u64),
@@ -187,16 +190,37 @@ mod tests {
     }
 
     #[test]
+    fn future_proposal_when_after_state_is_prepare() {
+        let result = classify_round_advance(
+            InstanceStateKind::AwaitingProposal,
+            InstanceStateKind::Prepare,
+            RecvArmTag::Message,
+            Round::from(1u64),
+            Round::from(3u64),
+        );
+        assert_eq!(
+            result,
+            Some(RoundAdvanceReason::FutureRoundProposal),
+            "Message arm landing in Prepare means a justified future-round proposal pulled the \
+             instance forward to catch up with the leader (no round change occurred), not a \
+             round-change quorum"
+        );
+    }
+
+    #[test]
     fn timeout_regardless_of_state() {
-        for state in [
-            InstanceState::AwaitingProposal,
-            InstanceState::SentRoundChange,
-            InstanceState::Complete,
-            InstanceState::RoundChangeConsensus,
-        ] {
+        let after_states = [
+            InstanceStateKind::AwaitingProposal,
+            InstanceStateKind::Prepare,
+            InstanceStateKind::SentRoundChange,
+            InstanceStateKind::Complete,
+            InstanceStateKind::RoundChangeConsensus,
+        ];
+
+        for after_state in after_states {
             let result = classify_round_advance(
-                disc(state),
-                disc(state),
+                InstanceStateKind::AwaitingProposal,
+                after_state,
                 RecvArmTag::RoundEnd,
                 Round::from(1u64),
                 Round::from(2u64),
@@ -204,8 +228,7 @@ mod tests {
             assert_eq!(
                 result,
                 Some(RoundAdvanceReason::Timeout),
-                "RoundEnd arm must always produce Timeout, but failed for state {:?}",
-                state
+                "RoundEnd arm must always produce Timeout, but failed for after_state {after_state:?}"
             );
         }
     }
