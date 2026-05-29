@@ -238,8 +238,8 @@ where
 
     /// Get the kind of the current instance state.
     ///
-    /// Returns a payload-free [`InstanceStateKind`] to provide callers with a clean object for state-machine
-    /// comparison.
+    /// Returns a payload-free `InstanceStateKind` to provide callers with a clean object for
+    /// state-machine comparison.
     pub fn state_kind(&self) -> InstanceStateKind {
         self.state.kind()
     }

@@ -56,7 +56,7 @@ pub enum RecvArmTag {
 
 /// Classify a round advance observed at the boundary layer.
 ///
-/// Consumes the payload-free [`InstanceStateKind`] of the after-state so the classifier depends
+/// Consumes the payload-free `InstanceStateKind` of the after-state so the classifier depends
 /// only on the state variant without concern for state attributes.
 ///
 /// `Message` match arm after-state kind captures how the round advanced:

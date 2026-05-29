@@ -174,7 +174,7 @@ pub enum InstanceStateKind {
 }
 
 impl InstanceState {
-    /// Returns the payload-free [`InstanceStateKind`] of this state.
+    /// Returns the payload-free `InstanceStateKind` of this state.
     pub fn kind(&self) -> InstanceStateKind {
         match self {
             InstanceState::AwaitingProposal => InstanceStateKind::AwaitingProposal,
