@@ -537,6 +537,15 @@ pub struct Node {
 
     #[clap(
         long,
+        help = "Disable the beacon head monitor which tries to attest as soon as any of the \
+                configured beacon nodes sends a head event. Leaving the service enabled is \
+                recommended, but disabling it can lead to reduced bandwidth and more predictable \
+                usage of the primary beacon node (rather than the fastest BN)."
+    )]
+    pub disable_beacon_head_monitor: bool,
+
+    #[clap(
+        long,
         help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
         hide = true,
         display_order = 0
@@ -610,7 +619,10 @@ pub struct Node {
         help = "Enable parallel querying and scoring of attestation data across multiple beacon \
                 nodes. When enabled, Anchor queries all configured beacon nodes simultaneously \
                 and selects the attestation data with the highest score based on checkpoint \
-                epochs and head block proximity. Only useful with multiple beacon nodes.",
+                epochs and head block proximity. Only useful with multiple beacon nodes. \
+                Note: WAD is bypassed when the beacon head monitor (enabled by default, see \
+                --disable-beacon-head-monitor) wins the eager-attest race for a slot; the \
+                firing BN is queried directly. WAD still runs on the fallback path.",
         display_order = 0
     )]
     pub with_weighted_attestation_data: bool,
