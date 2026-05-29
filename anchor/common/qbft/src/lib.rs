@@ -236,6 +236,11 @@ where
         self.instance_height
     }
 
+    /// Get the current instance state
+    pub fn state(&self) -> InstanceState {
+        self.state
+    }
+
     // Shifts this instance into a new round>
     fn set_round(&mut self, new_round: Round) {
         self.current_round.set(new_round);

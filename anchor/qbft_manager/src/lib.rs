@@ -36,6 +36,8 @@ use types::{Epoch, EthSpec, Hash256, Slot};
 use crate::instance::qbft_instance;
 
 mod instance;
+mod instrumentation;
+mod metrics;
 #[cfg(test)]
 mod tests;
 mod timeout;
