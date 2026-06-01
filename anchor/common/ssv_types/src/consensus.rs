@@ -919,9 +919,17 @@ impl QbftData for BeaconVote {
 #[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
 pub struct GloasBeaconVote {
+    /// LMD-GHOST vote: root of the beacon block being attested to.
     pub block_root: Hash256,
+    /// FFG source checkpoint, copied from the BN-supplied `AttestationData`.
     pub source: Checkpoint,
+    /// FFG target checkpoint, copied from the BN-supplied `AttestationData`.
     pub target: Checkpoint,
+    /// BN-supplied `AttestationData.index`. Under Gloas this encodes the
+    /// attester's fork-choice view of payload status (`0` = `EMPTY`,
+    /// `1` = `FULL` for non-same-slot attestations) and participates in the
+    /// signed attestation root, so it must travel through QBFT rather than
+    /// being reconstructed locally.
     pub attestation_data_index: u64,
 }
 

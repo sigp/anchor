@@ -154,3 +154,43 @@ async fn test_committee_message_routes_to_beacon_pre_cstar() {
         "Committee message pre-CStar must NOT spawn a GloasBeaconVote instance"
     );
 }
+
+/// Pin the slot-to-epoch + `active_fork(epoch)` + `>= Fork::CStar` composition
+/// at the activation boundary. Off-by-one in any of the three would flip
+/// exactly one of the assertions below.
+#[tokio::test]
+async fn test_committee_message_routes_at_cstar_activation_boundary() {
+    use std::collections::BTreeMap;
+
+    use types::Epoch;
+
+    const CSTAR_ACTIVATION_EPOCH: u64 = 5;
+    const SLOTS_PER_EPOCH: u64 = 32;
+
+    let setup = setup_test(1);
+
+    let mut configs = BTreeMap::new();
+    configs.insert(Fork::Alan, (Epoch::new(0), DomainType::default()));
+    configs.insert(
+        Fork::CStar,
+        (Epoch::new(CSTAR_ACTIVATION_EPOCH), DomainType::default()),
+    );
+    let schedule = ForkSchedule::from_fork_configs(configs, "test")
+        .expect("Alan@0 + CStar@5 is a valid schedule");
+    let manager = build_manager(&setup, schedule);
+
+    let last_pre_cstar = CSTAR_ACTIVATION_EPOCH * SLOTS_PER_EPOCH - 1;
+    let (signed, qbft) = build_committee_message(last_pre_cstar);
+    manager
+        .receive_data(signed, qbft)
+        .expect("pre-CStar dispatch");
+    assert_eq!(manager.beacon_vote_instances.len(), 1);
+    assert_eq!(manager.gloas_beacon_vote_instances.len(), 0);
+
+    let first_cstar = CSTAR_ACTIVATION_EPOCH * SLOTS_PER_EPOCH;
+    let (signed, qbft) = build_committee_message(first_cstar);
+    manager.receive_data(signed, qbft).expect("CStar dispatch");
+    assert_eq!(manager.gloas_beacon_vote_instances.len(), 1);
+    // BeaconVote map still holds the pre-CStar instance.
+    assert_eq!(manager.beacon_vote_instances.len(), 1);
+}
