@@ -2316,7 +2316,8 @@ mod tests {
     }
 
     #[test]
-    /// Tests Gloas (EIP-7732) implication that both decoders converge on the same header for Gloas input.
+    /// Tests Gloas (EIP-7732) implication that both decoders converge on the same header for Gloas
+    /// input.
     fn decode_gloas_block_header_matches_blinded_decode() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
@@ -2414,7 +2415,8 @@ mod tests {
     }
 
     #[test]
-    /// Tests that decoding failures when processing garbage SSZ block bytes are correctly propagated by the Gloas branch.
+    /// Tests that decoding failures when processing garbage SSZ block bytes are correctly
+    /// propagated by the Gloas branch.
     fn validate_block_proposal_gloas_rejects_invalid_bytes() {
         let consensus_data = ProposerConsensusData {
             duty: test_proposer_duty(),
@@ -2431,8 +2433,8 @@ mod tests {
     }
 
     #[test]
-    /// Tests that existing blinded-then-full pre-gloas behavior is intact with a `FullBlockContents`
-    /// shape via `decode_block_contents`.
+    /// Tests that existing blinded-then-full pre-gloas behavior is intact with a
+    /// `FullBlockContents` shape via `decode_block_contents`.
     fn validate_block_proposal_pre_gloas_unchanged() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Deneb(BeaconBlockDeneb::<MainnetEthSpec>::empty(&spec));
