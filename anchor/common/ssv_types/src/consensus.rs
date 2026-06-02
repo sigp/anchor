@@ -262,7 +262,8 @@ impl ProposerConsensusData {
 
     /// Decode the block data as a Gloas beacon block (block-only, no envelope/blobs/KZG).
     pub fn decode_gloas_block<E: EthSpec>(&self) -> Result<BeaconBlock<E>, DecodeError> {
-        BeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, ForkName::Gloas)
+        let fork = ForkName::from(self.version);
+        BeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 }
 
@@ -2317,7 +2318,7 @@ mod tests {
 
     #[test]
     /// Tests Gloas (EIP-7732) implication that both decoders converge on the same header for Gloas
-    /// input.
+    /// input. Passes because blinded == full for Gloas (EIP-7732 variant).
     fn decode_gloas_block_header_matches_blinded_decode() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
@@ -2393,7 +2394,7 @@ mod tests {
     }
 
     #[test]
-    /// Tests that
+    /// Tests `validate_block_proposal` Gloas block success case.
     fn validate_block_proposal_gloas_decodes_directly() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
