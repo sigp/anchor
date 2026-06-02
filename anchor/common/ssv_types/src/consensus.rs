@@ -260,8 +260,8 @@ impl ProposerConsensusData {
         FullBlockContents::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 
-    /// Decode the block data as a Gloas beacon block (block-only, no envelope/blobs/KZG).
-    pub fn decode_gloas_block<E: EthSpec>(&self) -> Result<BeaconBlock<E>, DecodeError> {
+    /// Decode as a full beacon block shape.
+    pub fn decode_block<E: EthSpec>(&self) -> Result<BeaconBlock<E>, DecodeError> {
         let fork = ForkName::from(self.version);
         BeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
