@@ -389,13 +389,13 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         // protection is disabled). Under Gloas (EIP-7732), DataSSZ is decoded directly as a plain
         // BeaconBlock. This behaviour is not behaviourally load-bearing as the execution
         // payload is decoupled from the block body. The outcome of `decode_blinded_block`
-        // and `decode_gloas_block` are identical for this variant. The Pre-Gloas branch
+        // and `decode_block` are identical for this variant. The Pre-Gloas branch
         // preserves the existing try-blinded-then-full fallback.
         let fork = ForkName::from(value.version);
 
         let header = if fork >= ForkName::Gloas {
             value
-                .decode_gloas_block::<E>()
+                .decode_block::<E>()
                 .map(|block| block.block_header())
                 .map_err(DataValidationError::DecodeError)?
         } else {
@@ -2295,7 +2295,7 @@ mod tests {
     #[test]
     /// Tests that BeaconBlock::from_ssz_bytes_for_fork round-trips successfully through the
     /// SSZ bytes for a Gloas block variant.
-    fn decode_gloas_block_round_trip() {
+    fn decode_block_round_trip() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
 
@@ -2307,7 +2307,7 @@ mod tests {
         };
 
         let decoded = consensus_data
-            .decode_gloas_block::<MainnetEthSpec>()
+            .decode_block::<MainnetEthSpec>()
             .expect("Gloas block should decode from DataSSZ");
 
         assert_eq!(
@@ -2319,7 +2319,7 @@ mod tests {
     #[test]
     /// Tests Gloas (EIP-7732) implication that both decoders converge on the same header for Gloas
     /// input. Passes because blinded == full for Gloas (EIP-7732 variant).
-    fn decode_gloas_block_header_matches_blinded_decode() {
+    fn decode_block_header_matches_blinded_decode() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
 
@@ -2331,8 +2331,8 @@ mod tests {
         };
 
         let gloas_header = consensus_data
-            .decode_gloas_block::<MainnetEthSpec>()
-            .expect("Gloas block should decode via decode_gloas_block")
+            .decode_block::<MainnetEthSpec>()
+            .expect("Gloas block should decode via decode_block")
             .block_header();
         let blinded_header = consensus_data
             .decode_blinded_block::<MainnetEthSpec>()
@@ -2341,7 +2341,7 @@ mod tests {
 
         assert_eq!(
             gloas_header, blinded_header,
-            "decode_gloas_block header should match the blinded-decode header for Gloas bytes"
+            "decode_block header should match the blinded-decode header for Gloas bytes"
         );
     }
 
