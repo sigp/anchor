@@ -7405,6 +7405,7 @@ dependencies = [
  "slashing_protection",
  "ssz_types",
  "strum",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tree_hash",

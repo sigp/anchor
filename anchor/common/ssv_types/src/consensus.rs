@@ -1191,6 +1191,182 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
     }
 }
 
+/// Gloas variant of [`BeaconVoteValidator`]. Carries over every pre-Gloas check and
+/// adds the two Gloas rules from [SIP-94][sip-94]: `attestation_data_index` is
+/// range-checked to `{0, 1}`, and the slashing-DB check reconstructs `AttestationData`
+/// with the decided index so cross-`index` double-votes trip protection. The index is
+/// trusted from the QBFT leader, never compared against the local BN view. Rationale
+/// for each rule is inline at its check.
+///
+/// [sip-94]: https://github.com/ssvlabs/SIPs/blob/7e8b5bd6d4007682d8bd75b06a2f2ac7b617e9e5/sips/epbs_support.md#2-modified-attestation-duty
+pub struct GloasBeaconVoteValidator<E: EthSpec> {
+    slot: Slot,
+    // `None` if slashing protection is disabled via CLI.
+    slashing_database: Option<Arc<SlashingDatabase>>,
+    spec: Arc<ChainSpec>,
+    validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+    genesis_validators_root: Hash256,
+    strict_mfp: bool,
+    _phantom: PhantomData<E>,
+}
+
+impl<E: EthSpec> QbftDataValidator<GloasBeaconVote> for GloasBeaconVoteValidator<E> {
+    fn validate(&self, value: &GloasBeaconVote, our_value: &GloasBeaconVote) -> bool {
+        match self.do_validation(value, our_value) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(%err, "Operator proposed invalid gloas beacon vote");
+                false
+            }
+        }
+    }
+}
+
+impl<E: EthSpec> GloasBeaconVoteValidator<E> {
+    pub fn new(
+        slot: Slot,
+        slashing_database: Option<Arc<SlashingDatabase>>,
+        spec: Arc<ChainSpec>,
+        validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+        genesis_validators_root: Hash256,
+        strict_mfp: bool,
+    ) -> Self {
+        Self {
+            slot,
+            slashing_database,
+            spec,
+            validator_attestation_committees,
+            genesis_validators_root,
+            strict_mfp,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn do_validation(
+        &self,
+        value: &GloasBeaconVote,
+        our_value: &GloasBeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        // Check target epoch is not too far in the future
+        let current_epoch = self.slot.epoch(E::slots_per_epoch());
+        if value.target.epoch > current_epoch + 1 {
+            return Err(BeaconVoteValidationError::FarFutureTargetEpoch(format!(
+                "current: {}, target: {}",
+                current_epoch.as_u64(),
+                value.target.epoch.as_u64()
+            )));
+        }
+
+        // Check source epoch < target epoch
+        // Exception: At genesis (epoch 0), both source and target are 0 since there's no prior
+        // justified checkpoint
+        if value.source.epoch >= value.target.epoch
+            && (value.source.epoch != 0 || value.target.epoch != 0)
+        {
+            return Err(BeaconVoteValidationError::TargetNotAfterSource(format!(
+                "source {} >= target {}",
+                value.source.epoch.as_u64(),
+                value.target.epoch.as_u64()
+            )));
+        }
+
+        // Gloas range-check (SIP-94): `index` encodes payload status, restricted to
+        // `0` (EMPTY) or `1` (FULL). The same-slot `index = 0` rule is BN/gossip-enforced,
+        // not checked here (it would need a BN lookup).
+        if value.attestation_data_index >= 2 {
+            return Err(BeaconVoteValidationError::IndexOutOfRange(
+                value.attestation_data_index,
+            ));
+        }
+
+        if self.strict_mfp {
+            Self::strict_majority_fork_protection(value, our_value)?;
+        } else {
+            Self::epoch_majority_fork_protection(value, our_value)?;
+        }
+
+        // Check slashing protection for all validator public keys
+        self.check_attestation_slashing(value)?;
+
+        Ok(())
+    }
+
+    fn epoch_majority_fork_protection(
+        value: &GloasBeaconVote,
+        our_value: &GloasBeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        if value.source.epoch != our_value.source.epoch
+            || value.target.epoch != our_value.target.epoch
+        {
+            Err(BeaconVoteValidationError::EpochMismatch(Box::new(
+                EpochMismatch {
+                    our_source_epoch: our_value.source.epoch,
+                    proposed_source_epoch: value.source.epoch,
+                    our_target_epoch: our_value.target.epoch,
+                    proposed_target_epoch: value.target.epoch,
+                },
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn strict_majority_fork_protection(
+        value: &GloasBeaconVote,
+        our_value: &GloasBeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        if value.source != our_value.source || value.target != our_value.target {
+            Err(BeaconVoteValidationError::CheckpointMismatch(Box::new(
+                CheckpointMismatch {
+                    our_source: our_value.source,
+                    proposed_source: value.source,
+                    our_target: our_value.target,
+                    proposed_target: value.target,
+                },
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Per-validator slashing-DB check. The reconstructed `AttestationData.index` is the
+    /// single QBFT-decided `attestation_data_index`, not a per-validator committee index,
+    /// so the same `AttestationData` (and signing root) is checked for every validator.
+    fn check_attestation_slashing(
+        &self,
+        value: &GloasBeaconVote,
+    ) -> Result<(), BeaconVoteValidationError> {
+        let Some(slashing_database) = &self.slashing_database else {
+            return Ok(());
+        };
+
+        let attestation_data = AttestationData {
+            slot: self.slot,
+            index: value.attestation_data_index,
+            beacon_block_root: value.block_root,
+            source: value.source,
+            target: value.target,
+        };
+
+        let epoch = self.slot.epoch(E::slots_per_epoch());
+
+        let domain_hash = self.spec.get_domain(
+            epoch,
+            Domain::BeaconAttester,
+            &self.spec.fork_at_epoch(epoch),
+            self.genesis_validators_root,
+        );
+
+        for validator_pubkey in self.validator_attestation_committees.keys() {
+            slashing_database
+                .preliminary_check_attestation(validator_pubkey, &attestation_data, domain_hash)
+                .map_err(BeaconVoteValidationError::SlashableAttestation)?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Details about epoch mismatches between our vote and a proposed vote.
 ///
 /// This struct is needed to avoid the linter complaining about the size of the error enum.
@@ -1250,6 +1426,10 @@ pub enum BeaconVoteValidationError {
     EpochMismatch(Box<EpochMismatch>),
     #[error("Attestation would be slashable: {0}")]
     SlashableAttestation(NotSafe),
+    /// Gloas-only: `GloasBeaconVote.attestation_data_index` was outside `{0, 1}`.
+    /// Pre-Gloas votes carry no index field and never produce this error.
+    #[error("Attestation data index out of range: {0}")]
+    IndexOutOfRange(u64),
 }
 
 /// Validation errors for `PayloadAttestationVote`.
@@ -1311,7 +1491,10 @@ mod tests {
 
     use bls::{AggregateSignature, FixedBytesExtended};
     use ssz_types::{BitList, BitVector};
-    use types::{Checkpoint, Epoch, MainnetEthSpec, SyncCommitteeContribution};
+    use types::{
+        Checkpoint, Epoch, MainnetEthSpec, SyncCommitteeContribution,
+        test_utils::generate_deterministic_keypair,
+    };
 
     use super::*;
 
@@ -2097,6 +2280,515 @@ mod tests {
                 assert_eq!(mismatch.proposed_target, proposed_target);
             }
             err => panic!("Expected DifferentCheckpoint error, got: {:?}", err),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // GloasBeaconVoteValidator Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Mirrors `create_test_validator`, slashing disabled. Slot 100 → current epoch 3.
+    fn create_gloas_test_validator(strict_mfp: bool) -> GloasBeaconVoteValidator<MainnetEthSpec> {
+        let spec = Arc::new(ChainSpec::mainnet());
+        let validator_attestation_committees = HashMap::new();
+        let genesis_validators_root = Hash256::zero();
+        let slot = Slot::new(100);
+
+        GloasBeaconVoteValidator::new(
+            slot,
+            None,
+            spec,
+            validator_attestation_committees,
+            genesis_validators_root,
+            strict_mfp,
+        )
+    }
+
+    // ---------------------------------------------------------------------------------
+    // A. Gloas range-check (`attestation_data_index` restricted to {0, 1})
+    // ---------------------------------------------------------------------------------
+
+    // Valid, matching source/target are used throughout section A so the only field
+    // under test is `attestation_data_index`.
+    #[test]
+    fn test_gloas_index_zero_accepted() {
+        let validator = create_gloas_test_validator(false);
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "index 0 must be accepted, got error: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_gloas_index_one_accepted() {
+        let validator = create_gloas_test_validator(false);
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 1,
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 1,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "index 1 must be accepted, got error: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_gloas_index_two_rejected() {
+        let validator = create_gloas_test_validator(false);
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 2,
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 2,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::IndexOutOfRange(index) => assert_eq!(index, 2),
+            err => panic!("Expected IndexOutOfRange(2), got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_gloas_index_large_rejected() {
+        let validator = create_gloas_test_validator(false);
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: u64::MAX,
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: u64::MAX,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::IndexOutOfRange(index) => assert_eq!(index, u64::MAX),
+            err => panic!("Expected IndexOutOfRange(u64::MAX), got: {:?}", err),
+        }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // B. Carry-over checks: behave identically to `BeaconVoteValidator`.
+    //    Each vote uses an in-range `attestation_data_index` so the new check is inert.
+    // ---------------------------------------------------------------------------------
+
+    #[test]
+    fn test_gloas_mismatched_source_different_epochs() {
+        // Port of `test_mismatched_source_different_epochs`.
+        let validator = create_gloas_test_validator(false);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+            attestation_data_index: 0,
+        };
+
+        // Proposed vote with a different source epoch.
+        let proposed_source = Checkpoint {
+            epoch: Epoch::new(1),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: proposed_source,
+            target: our_target,
+            attestation_data_index: 0,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::EpochMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source_epoch, our_source.epoch);
+                assert_eq!(mismatch.proposed_source_epoch, proposed_source.epoch);
+                assert_eq!(mismatch.our_target_epoch, our_target.epoch);
+                assert_eq!(mismatch.proposed_target_epoch, our_target.epoch);
+            }
+            err => panic!("Expected EpochMismatch error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_gloas_valid_source_equals_target_at_epoch_zero() {
+        // Port: genesis exception allows source.epoch == target.epoch == 0.
+        let validator = create_gloas_test_validator(false);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+            attestation_data_index: 0,
+        };
+
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+            attestation_data_index: 0,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_gloas_mismatched_target_different_epochs() {
+        // Port of `test_mismatched_target_different_epochs`.
+        let validator = create_gloas_test_validator(false);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+            attestation_data_index: 0,
+        };
+
+        // Proposed vote with a different (but still allowed: max is epoch 4) target epoch.
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(4),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+            attestation_data_index: 0,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::EpochMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source_epoch, our_source.epoch);
+                assert_eq!(mismatch.proposed_source_epoch, our_source.epoch);
+                assert_eq!(mismatch.our_target_epoch, our_target.epoch);
+                assert_eq!(mismatch.proposed_target_epoch, proposed_target.epoch);
+            }
+            err => panic!("Expected EpochMismatch error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_gloas_strict_mismatched_target_different_roots() {
+        // Port: strict MFP still compares full checkpoints (roots included).
+        let validator = create_gloas_test_validator(true);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+            attestation_data_index: 0,
+        };
+
+        // Same target epoch, different root.
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(999),
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: proposed_target,
+            attestation_data_index: 0,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::CheckpointMismatch(mismatch) => {
+                assert_eq!(mismatch.our_source, our_source);
+                assert_eq!(mismatch.proposed_source, our_source);
+                assert_eq!(mismatch.our_target, our_target);
+                assert_eq!(mismatch.proposed_target, proposed_target);
+            }
+            err => panic!("Expected CheckpointMismatch error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_gloas_far_future_target_rejected() {
+        // Current epoch is 3 (slot 100), so the max allowed target epoch is 4.
+        // Target epoch 5 must be rejected before any later check runs.
+        let validator = create_gloas_test_validator(false);
+
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(5),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BeaconVoteValidationError::FarFutureTargetEpoch(_) => {}
+            err => panic!("Expected FarFutureTargetEpoch error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_gloas_mfp_ignores_index() {
+        // SC-2: `attestation_data_index` must NOT be folded into majority-fork
+        // protection. Identical source/target with differing in-range indices must
+        // pass under both non-strict and strict MFP.
+        for strict_mfp in [false, true] {
+            let validator = create_gloas_test_validator(strict_mfp);
+
+            let source = Checkpoint {
+                epoch: Epoch::new(2),
+                root: Hash256::from_low_u64_be(1),
+            };
+            let target = Checkpoint {
+                epoch: Epoch::new(3),
+                root: Hash256::from_low_u64_be(2),
+            };
+            let our_vote = GloasBeaconVote {
+                block_root: Hash256::random(),
+                source,
+                target,
+                attestation_data_index: 0,
+            };
+            // Identical source/target, different index.
+            let proposed_vote = GloasBeaconVote {
+                block_root: Hash256::random(),
+                source,
+                target,
+                attestation_data_index: 1,
+            };
+
+            let result = validator.do_validation(&proposed_vote, &our_vote);
+            assert!(
+                result.is_ok(),
+                "MFP (strict_mfp={strict_mfp}) must ignore attestation_data_index, got error: {:?}",
+                result.unwrap_err()
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------------------
+    // C. Slashing-DB reconstruction: cross-`index` equivocation must trip protection.
+    //    Lighthouse's `SlashingDatabase` is file-only, so this uses a real temp-file DB.
+    // ---------------------------------------------------------------------------------
+
+    #[test]
+    fn test_gloas_slashing_trips_on_cross_index_equivocation() {
+        use slashing_protection::SlashingDatabase;
+
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        let db_path = tempdir.path().join("slashing.sqlite");
+        let db = SlashingDatabase::create(&db_path).expect("create slashing DB");
+
+        let pubkey = generate_deterministic_keypair(0).pk.compress();
+        db.register_validator(pubkey).expect("register validator");
+
+        let slot = Slot::new(100);
+        let block_root = Hash256::from_low_u64_be(0xbeef);
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+
+        // Domain must match the validator's own computation, else the trip would be
+        // caused by a domain mismatch instead of the index.
+        let spec = Arc::new(ChainSpec::mainnet());
+        let genesis_validators_root = Hash256::zero();
+        let epoch = slot.epoch(MainnetEthSpec::slots_per_epoch());
+        let domain = spec.get_domain(
+            epoch,
+            Domain::BeaconAttester,
+            &spec.fork_at_epoch(epoch),
+            genesis_validators_root,
+        );
+
+        // Seed a record at index 0.
+        let seed_attestation = AttestationData {
+            slot,
+            index: 0,
+            beacon_block_root: block_root,
+            source,
+            target,
+        };
+        db.with_transaction(|txn| {
+            db.check_and_insert_attestation(&pubkey, &seed_attestation, domain, txn)
+        })
+        .expect("seed attestation");
+
+        // Committee-index `7` (neither 0 nor 1): if the reconstruction wrongly used this
+        // instead of the decided index, the index-0 control below would fail.
+        let mut committees_map = HashMap::new();
+        committees_map.insert(pubkey, 7u64);
+        let validator = GloasBeaconVoteValidator::<MainnetEthSpec>::new(
+            slot,
+            Some(Arc::new(db)),
+            spec,
+            committees_map,
+            genesis_validators_root,
+            false,
+        );
+
+        let our_value = GloasBeaconVote {
+            block_root,
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+
+        // Control: index 0 matches the seed -> `Safe::SameData` -> Ok.
+        let control = GloasBeaconVote {
+            block_root,
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+        let control_result = validator.do_validation(&control, &our_value);
+        assert!(
+            control_result.is_ok(),
+            "index-0 control must be Ok (Safe::SameData), got error: {:?}",
+            control_result.unwrap_err()
+        );
+
+        // Trip: index 1 -> different signing root, same target epoch -> double vote.
+        let equivocation = GloasBeaconVote {
+            block_root,
+            source,
+            target,
+            attestation_data_index: 1,
+        };
+        let trip_result = validator.do_validation(&equivocation, &our_value);
+        assert!(trip_result.is_err());
+        match trip_result.unwrap_err() {
+            BeaconVoteValidationError::SlashableAttestation(_) => {}
+            err => panic!("Expected SlashableAttestation error, got: {:?}", err),
         }
     }
 
