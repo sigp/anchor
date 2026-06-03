@@ -29,6 +29,9 @@ pub enum RoundAdvanceReason {
     /// A justified proposal for a higher round arrived, pulling the instance
     /// forward to catch up with the leader's round (no round change occurred).
     FutureRoundProposal,
+    /// A full quorum of round-change messages was observed, achieving
+    /// round-change consensus.
+    RoundChangeQuorum,
 }
 
 impl RoundAdvanceReason {
@@ -37,6 +40,7 @@ impl RoundAdvanceReason {
             Self::Timeout => "timeout",
             Self::FPlusOneRoundChange => "f_plus_1_rc",
             Self::FutureRoundProposal => "future_proposal",
+            Self::RoundChangeQuorum => "rc_quorum",
         }
     }
 }
@@ -60,11 +64,7 @@ pub enum RecvArmTag {
 /// round advance:
 /// - `SentRoundChange`: f+1 peers at a higher round pulled us forward.
 /// - `Prepare`: a justified future-round proposal arrived.
-///
-/// `AwaitingProposal` and `RoundChangeConsensus` can appear on the `Message` arm when a
-/// round-change quorum completes, but the round has *already* advanced on the prior f+1
-/// message (`f+1 < 2f+1` for all canonical committees), so `after_round == before_round`.
-/// This variant is functionally unreachable.
+/// - `AwaitingProposal` or `RoundChangeConsensus`: a full round-change quorum was observed.
 pub fn classify_round_advance(
     _before_state: InstanceStateKind,
     after_state: InstanceStateKind,
@@ -81,10 +81,14 @@ pub fn classify_round_advance(
         RecvArmTag::Message => match after_state {
             InstanceStateKind::SentRoundChange => RoundAdvanceReason::FPlusOneRoundChange,
             InstanceStateKind::Prepare => RoundAdvanceReason::FutureRoundProposal,
-            InstanceStateKind::AwaitingProposal
-            | InstanceStateKind::RoundChangeConsensus
-            | InstanceStateKind::Commit
-            | InstanceStateKind::Complete => return None,
+            // A Message-arm round advance into AwaitingProposal is the round-change quorum path:
+            // received_round_change sets RoundChangeConsensus, then set_round() calls
+            // start_round(), which leaves both leader and non-leader instances in
+            // AwaitingProposal.
+            InstanceStateKind::AwaitingProposal | InstanceStateKind::RoundChangeConsensus => {
+                RoundAdvanceReason::RoundChangeQuorum
+            }
+            InstanceStateKind::Commit | InstanceStateKind::Complete => return None,
         },
     };
 
@@ -228,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn none_when_awaiting_proposal_on_message_arm() {
+    fn round_change_quorum_when_awaiting_proposal_on_message_arm() {
         let result = classify_round_advance(
             InstanceStateKind::SentRoundChange,
             InstanceStateKind::AwaitingProposal,
@@ -237,13 +241,14 @@ mod tests {
             Round::from(3u64),
         );
         assert_eq!(
-            result, None,
-            "AwaitingProposal on Message arm must return None."
+            result,
+            Some(RoundAdvanceReason::RoundChangeQuorum),
+            "AwaitingProposal on Message arm must return RoundChangeQuorum."
         );
     }
 
     #[test]
-    fn none_when_round_change_consensus_on_message_arm() {
+    fn round_change_quorum_when_round_change_consensus_on_message_arm() {
         let result = classify_round_advance(
             InstanceStateKind::SentRoundChange,
             InstanceStateKind::RoundChangeConsensus,
@@ -252,8 +257,9 @@ mod tests {
             Round::from(3u64),
         );
         assert_eq!(
-            result, None,
-            "RoundChangeConsensus on Message arm must return None."
+            result,
+            Some(RoundAdvanceReason::RoundChangeQuorum),
+            "RoundChangeConsensus on Message arm must return RoundChangeQuorum."
         );
     }
 
@@ -428,6 +434,67 @@ mod tests {
             ),
             None,
             "quorum message should classify as None since the round did not advance"
+        );
+    }
+
+    /// A round-change quorum completing at a round above the f+1-set round advances
+    /// `current_round` via the quorum branch and classifies as `RoundChangeQuorum`.
+    #[test]
+    fn round_change_quorum_above_f_plus_one_round_advances_and_classifies_as_quorum() {
+        // Position instance so that the f+1-set round results in current_round at round 2 (the
+        // lowest future round). Round 3 does not yet hold quorum.
+        let mut inst = fresh_instance();
+
+        for (round, signer) in [(2u64, 2u64), (3, 2), (3, 3)] {
+            let msg = build_wrapped_msg(
+                QbftMessageType::RoundChange,
+                round,
+                Hash256::zero(),
+                0,
+                signer,
+                vec![],
+                vec![],
+            );
+            inst.receive(msg).expect("rc msg should be accepted");
+        }
+
+        let before_kind = inst.state_kind();
+        let before_round = inst.get_round();
+
+        // Sends quorum-completing message so round 3 holds.
+        let msg = build_wrapped_msg(
+            QbftMessageType::RoundChange,
+            3,
+            Hash256::zero(),
+            0,
+            4,
+            vec![],
+            vec![],
+        );
+        inst.receive(msg).expect("quorum rc msg should be accepted");
+
+        let after_kind = inst.state_kind();
+        let after_round = inst.get_round();
+
+        assert!(
+            after_round > before_round,
+            "quorum at a round above the f+1-set round advances current_round via set_round"
+        );
+        assert_eq!(
+            after_kind,
+            InstanceStateKind::AwaitingProposal,
+            "the quorum path lands in AwaitingProposal after set_round -> start_round"
+        );
+        assert_eq!(
+            classify_round_advance(
+                before_kind,
+                after_kind,
+                RecvArmTag::Message,
+                before_round,
+                after_round
+            ),
+            Some(RoundAdvanceReason::RoundChangeQuorum),
+            "a Message-arm round advance into AwaitingProposal is the round-change quorum path"
         );
     }
 
