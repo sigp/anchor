@@ -251,6 +251,9 @@ impl ProposerConsensusData {
     /// Decode the block data as a blinded beacon block.
     pub fn decode_blinded_block<E: EthSpec>(&self) -> Result<BlindedBeaconBlock<E>, DecodeError> {
         let fork = ForkName::from(self.version);
+        if fork >= ForkName::Gloas {
+            return Err(DecodeError::NoMatchingVariant);
+        }
         BlindedBeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 
@@ -2494,9 +2497,8 @@ mod tests {
     }
 
     #[test]
-    /// Tests Gloas (EIP-7732) implication that both decoders converge on the same header for Gloas
-    /// input. Passes because blinded == full for Gloas (EIP-7732 variant).
-    fn decode_block_header_matches_blinded_decode() {
+    /// Tests that `decode_blinded_block` rejects Gloas input with `DecodeError::NoMatchingVariant`.
+    fn decode_blinded_block_rejects_gloas() {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
 
@@ -2507,18 +2509,11 @@ mod tests {
                 .expect("Gloas block bytes should fit in DataSSZ"),
         };
 
-        let gloas_header = consensus_data
-            .decode_block::<MainnetEthSpec>()
-            .expect("Gloas block should decode via decode_block")
-            .block_header();
-        let blinded_header = consensus_data
-            .decode_blinded_block::<MainnetEthSpec>()
-            .expect("Gloas block bytes also decode as a blinded block (identical SSZ)")
-            .block_header();
+        let result = consensus_data.decode_blinded_block::<MainnetEthSpec>();
 
-        assert_eq!(
-            gloas_header, blinded_header,
-            "decode_block header should match the blinded-decode header for Gloas bytes"
+        assert!(
+            matches!(result, Err(DecodeError::NoMatchingVariant)),
+            "decode_blinded_block must reject Gloas with DecodeError::NoMatchingVariant, got {result:?}"
         );
     }
 
