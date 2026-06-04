@@ -594,15 +594,24 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             Completed::Success(data) => data,
         };
 
-        completed_data
-            .decode_blinded_block()
-            .map(UnsignedBlock::Blinded)
-            .or_else(|_| {
-                completed_data
-                    .decode_block_contents()
-                    .map(UnsignedBlock::Full)
-            })
-            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
+        // Under the Gloas fork (EIP-7732), DataSSZ carries a plain BeaconBlock — decode directly.
+        // Pre-Gloas: try blinded first, fall back to full block contents.
+        if ForkName::from(completed_data.version) >= ForkName::Gloas {
+            completed_data
+                .decode_block()
+                .map(|block| UnsignedBlock::Full(FullBlockContents::Block(block)))
+                .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
+        } else {
+            completed_data
+                .decode_blinded_block()
+                .map(UnsignedBlock::Blinded)
+                .or_else(|_| {
+                    completed_data
+                        .decode_block_contents()
+                        .map(UnsignedBlock::Full)
+                })
+                .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
+        }
     }
 
     async fn sign_abstract_block(
@@ -3469,5 +3478,87 @@ mod tests {
         assert_ne!(pre, post);
         assert_eq!(pre, spec.unaggregated_attestation_due);
         assert_eq!(post, spec.unaggregated_attestation_due_gloas);
+    }
+}
+
+#[cfg(test)]
+mod gloas_decide_tests {
+    use eth2::types::FullBlockContents;
+    use ssv_types::{
+        ValidatorIndex,
+        consensus::{BEACON_ROLE_PROPOSER, DataVersion, ProposerConsensusData, ValidatorDuty},
+    };
+    use types::{
+        BeaconBlock, BeaconBlockGloas, ChainSpec, EmptyBlock, ForkName, MainnetEthSpec as E, Slot,
+    };
+
+    use super::*;
+
+    fn test_proposer_duty() -> ValidatorDuty {
+        ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: bls::PublicKeyBytes::empty(),
+            slot: Slot::new(100),
+            validator_index: ValidatorIndex(0),
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        }
+    }
+
+    #[test]
+    /// Test that a Gloas beacon block is decoded successfully to a full block under the Gloas fork.
+    fn gloas_decided_data_decodes_to_block_via_full_path() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<E>::empty(&spec));
+        let ssz_bytes = block.as_ssz_bytes();
+
+        let completed_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: ssz_types::VariableList::new(ssz_bytes).unwrap(),
+        };
+
+        let result = completed_data
+            .decode_block::<E>()
+            .map(|b| UnsignedBlock::Full(FullBlockContents::Block(b)));
+
+        match result.unwrap() {
+            UnsignedBlock::Full(FullBlockContents::Block(decoded_block)) => {
+                assert_eq!(
+                    decoded_block.to_ref().fork_name_unchecked(),
+                    ForkName::Gloas,
+                    "decoded block must report Gloas fork name"
+                );
+            }
+            other => panic!(
+                "Expected UnsignedBlock::Full(FullBlockContents::Block(_)), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    /// Tests that invalid bytes are correctly rejected by `decode_block`.
+    fn gloas_decided_data_rejects_invalid_bytes() {
+        let completed_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: ssz_types::VariableList::new(vec![0xff; 32]).unwrap(),
+        };
+
+        let fork = ForkName::from(completed_data.version);
+        assert!(
+            fork >= ForkName::Gloas,
+            "test precondition: version must be Gloas"
+        );
+
+        let result = completed_data.decode_block::<E>();
+        assert!(
+            result.is_err(),
+            "Gloas decode must fail on garbage bytes without falling through to blinded path"
+        );
     }
 }
