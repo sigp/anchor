@@ -6065,6 +6065,7 @@ dependencies = [
  "fork",
  "futures",
  "message_sender",
+ "metrics",
  "processor",
  "qbft",
  "slot_clock",
