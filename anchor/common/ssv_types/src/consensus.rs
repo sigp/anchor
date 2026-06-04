@@ -24,8 +24,8 @@ use typenum::{
 };
 use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
-    AttestationElectra, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
-    ForkName, Hash256, Slot, SyncCommitteeContribution,
+    AttestationElectra, BeaconBlock, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex,
+    Domain, EthSpec, ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
 use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
@@ -251,6 +251,9 @@ impl ProposerConsensusData {
     /// Decode the block data as a blinded beacon block.
     pub fn decode_blinded_block<E: EthSpec>(&self) -> Result<BlindedBeaconBlock<E>, DecodeError> {
         let fork = ForkName::from(self.version);
+        if fork >= ForkName::Gloas {
+            return Err(DecodeError::NoMatchingVariant);
+        }
         BlindedBeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 
@@ -258,6 +261,12 @@ impl ProposerConsensusData {
     pub fn decode_block_contents<E: EthSpec>(&self) -> Result<FullBlockContents<E>, DecodeError> {
         let fork = ForkName::from(self.version);
         FullBlockContents::from_ssz_bytes_for_fork(&self.data_ssz, fork)
+    }
+
+    /// Decode as a full beacon block shape.
+    pub fn decode_block<E: EthSpec>(&self) -> Result<BeaconBlock<E>, DecodeError> {
+        let fork = ForkName::from(self.version);
+        BeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 }
 
@@ -379,17 +388,30 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         &self,
         value: &ProposerConsensusData,
     ) -> Result<(), DataValidationError> {
-        // Always do this check, even if we're not validating slashing. This is to ensure that we
-        // have a decodable value.
-        let header = value
-            .decode_blinded_block::<E>()
-            .map(|block| block.block_header())
-            .or_else(|_| {
-                value
-                    .decode_block_contents::<E>()
-                    .map(|block| block.block().block_header())
-            })
-            .map_err(DataValidationError::DecodeError)?;
+        // Decode the block header to ensure the value is decodable (even when slashing
+        // protection is disabled). Under Gloas (EIP-7732), DataSSZ is decoded directly as a plain
+        // BeaconBlock. This behaviour is not behaviourally load-bearing as the execution
+        // payload is decoupled from the block body. The outcome of `decode_blinded_block`
+        // and `decode_block` are identical for this variant. The Pre-Gloas branch
+        // preserves the existing try-blinded-then-full fallback.
+        let fork = ForkName::from(value.version);
+
+        let header = if fork >= ForkName::Gloas {
+            value
+                .decode_block::<E>()
+                .map(|block| block.block_header())
+                .map_err(DataValidationError::DecodeError)?
+        } else {
+            value
+                .decode_blinded_block::<E>()
+                .map(|block| block.block_header())
+                .or_else(|_| {
+                    value
+                        .decode_block_contents::<E>()
+                        .map(|block| block.block().block_header())
+                })
+                .map_err(DataValidationError::DecodeError)?
+        };
 
         if !self.disable_slashing_protection {
             let epoch = header.slot.epoch(E::slots_per_epoch());
@@ -1310,8 +1332,12 @@ mod tests {
     use std::collections::HashMap;
 
     use bls::{AggregateSignature, FixedBytesExtended};
+    use eth2::types::FullBlockContents;
     use ssz_types::{BitList, BitVector};
-    use types::{Checkpoint, Epoch, MainnetEthSpec, SyncCommitteeContribution};
+    use types::{
+        BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, MainnetEthSpec,
+        SyncCommitteeContribution,
+    };
 
     use super::*;
 
@@ -2424,6 +2450,185 @@ mod tests {
         assert!(
             result.is_err(),
             "BeaconVote (112-byte fixed) must reject 120-byte GloasBeaconVote encoding"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ProposerConsensusData Gloas (EIP-7732) Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Creates a minimal proposer `ValidatorDuty` at slot 0 for Gloas block tests.
+    fn test_proposer_duty() -> ValidatorDuty {
+        ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: PublicKeyBytes::empty(),
+            slot: Slot::new(0),
+            validator_index: ValidatorIndex(0),
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        }
+    }
+
+    #[test]
+    /// Tests that BeaconBlock::from_ssz_bytes_for_fork round-trips successfully through the
+    /// SSZ bytes for a Gloas block variant.
+    fn decode_block_round_trip() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes())
+                .expect("Gloas block bytes should fit in DataSSZ"),
+        };
+
+        let decoded = consensus_data
+            .decode_block::<MainnetEthSpec>()
+            .expect("Gloas block should decode from DataSSZ");
+
+        assert_eq!(
+            decoded, block,
+            "decoded Gloas block should equal the original block"
+        );
+    }
+
+    #[test]
+    /// Tests that `decode_blinded_block` rejects Gloas input with `DecodeError::NoMatchingVariant`.
+    fn decode_blinded_block_rejects_gloas() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes())
+                .expect("Gloas block bytes should fit in DataSSZ"),
+        };
+
+        let result = consensus_data.decode_blinded_block::<MainnetEthSpec>();
+
+        assert!(
+            matches!(result, Err(DecodeError::NoMatchingVariant)),
+            "decode_blinded_block must reject Gloas with DecodeError::NoMatchingVariant, got {result:?}"
+        );
+    }
+
+    #[test]
+    /// Tests `DataVersion` and `ForkName` are deducible from Gloas encoded bytes.
+    fn data_version_gloas_ssz_round_trip() {
+        let version = DataVersion::from(ForkName::Gloas);
+
+        let encoded = version.as_ssz_bytes();
+        let decoded =
+            DataVersion::from_ssz_bytes(&encoded).expect("Gloas DataVersion should decode");
+
+        assert_eq!(
+            decoded, version,
+            "DataVersion should round-trip through SSZ for Gloas"
+        );
+        assert_eq!(
+            ForkName::from(decoded),
+            ForkName::Gloas,
+            "decoded DataVersion should map back to ForkName::Gloas"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // validate_block_proposal Fork-Branch Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Builds a `ProposerConsensusDataValidator` with slashing protection disabled.
+    ///
+    /// The `SlashingDatabase` is constructed (no path-less constructor exists) but never
+    /// exercised because `disable_slashing_protection` is `true`. The caller must keep the
+    /// returned `TempDir` alive for the lifetime of the validator.
+    fn test_block_proposal_validator() -> (
+        tempfile::TempDir,
+        ProposerConsensusDataValidator<MainnetEthSpec>,
+    ) {
+        let dir = tempfile::TempDir::new().expect("tempdir should succeed");
+        let slashing_db = Arc::new(
+            SlashingDatabase::open_or_create(&dir.path().join("slashing.sqlite"))
+                .expect("slashing DB should open"),
+        );
+        let validator = ProposerConsensusDataValidator::<MainnetEthSpec>::new(
+            slashing_db,
+            true,
+            Arc::new(ChainSpec::mainnet()),
+            PublicKeyBytes::empty(),
+            Hash256::zero(),
+        );
+        (dir, validator)
+    }
+
+    #[test]
+    /// Tests `validate_block_proposal` Gloas block success case.
+    fn validate_block_proposal_gloas_decodes_directly() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes())
+                .expect("Gloas block bytes should fit in DataSSZ"),
+        };
+
+        let (_dir, validator) = test_block_proposal_validator();
+        let result = validator.validate_block_proposal(&consensus_data);
+
+        assert!(
+            result.is_ok(),
+            "Gloas block proposal should validate via the Gloas decode branch, got {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    /// Tests that decoding failures when processing garbage SSZ block bytes are correctly
+    /// propagated by the Gloas branch.
+    fn validate_block_proposal_gloas_rejects_invalid_bytes() {
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(vec![0xff; 32]).expect("32 bytes should fit in DataSSZ"),
+        };
+
+        let (_dir, validator) = test_block_proposal_validator();
+
+        assert!(
+            validator.validate_block_proposal(&consensus_data).is_err(),
+            "Gloas branch should reject undecodable block bytes"
+        );
+    }
+
+    #[test]
+    /// Tests that existing blinded-then-full pre-gloas behavior is intact with a
+    /// `FullBlockContents` shape via `decode_block_contents`.
+    fn validate_block_proposal_pre_gloas_unchanged() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Deneb(BeaconBlockDeneb::<MainnetEthSpec>::empty(&spec));
+        let block_contents = FullBlockContents::<MainnetEthSpec>::new(
+            block,
+            Some((VariableList::empty(), VariableList::empty())),
+        );
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Deneb),
+            data_ssz: VariableList::new(block_contents.as_ssz_bytes())
+                .expect("Deneb block contents bytes should fit in DataSSZ"),
+        };
+
+        let (_dir, validator) = test_block_proposal_validator();
+        let result = validator.validate_block_proposal(&consensus_data);
+
+        assert!(
+            result.is_ok(),
+            "pre-Gloas (Deneb) block proposal should validate via the existing fallback, got {:?}",
+            result.err()
         );
     }
 }
