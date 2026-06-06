@@ -8,7 +8,6 @@ use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, Round, Slot, VariableList,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    msgid::Role,
     quorum_size,
 };
 use ssz::Decode;
@@ -118,10 +117,11 @@ pub(crate) fn validate_consensus_message_semantics(
         return Err(ValidationFailure::ZeroRound);
     }
 
-    // Rule: Duty role has consensus (true except for ValidatorRegistration and VoluntaryExit)
+    // Rule: only roles that run a QBFT consensus round may carry a consensus
+    // message; validator-scoped non-QBFT roles must not.
     if matches!(
         signed_ssv_message.ssv_message().msg_id().role(),
-        Some(Role::ValidatorRegistration) | Some(Role::VoluntaryExit)
+        Some(role) if role.is_non_qbft_role()
     ) {
         return Err(ValidationFailure::UnexpectedConsensusMessage);
     }
@@ -486,7 +486,7 @@ mod tests {
     use bls::{Hash256, PublicKeyBytes};
     use openssl::hash::MessageDigest;
     use ssv_types::{
-        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
+        OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
@@ -1718,7 +1718,7 @@ mod tests {
     }
 
     #[test]
-    fn test_duty_limit_ptc_committee() {
+    fn test_duty_limit_ptc_attester() {
         let now = SystemTime::now();
         let slot_clock = ManualSlotClock::new(
             Slot::new(100),
@@ -1728,8 +1728,8 @@ mod tests {
 
         let msg_id = MessageId::new(
             &DomainType([0, 0, 0, 1]),
-            Role::PTCCommittee,
-            &DutyExecutor::Committee(CommitteeId([0u8; 32])),
+            Role::PTCAttester,
+            &DutyExecutor::Validator(PublicKeyBytes::empty()),
         );
         let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
             .expect("SSVMessage should be created");
@@ -1750,7 +1750,7 @@ mod tests {
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
-            role: Role::PTCCommittee,
+            role: Role::PTCAttester,
             received_at: now,
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
@@ -1762,25 +1762,24 @@ mod tests {
 
         let slot = slot_clock.now().unwrap();
 
-        // V < slots_per_epoch: V is the binding constraint.
-        let small_cluster = vec![ValidatorIndex(0); 4];
+        // PTC is validator-scoped: the duty counter is keyed per-validator, and the
+        // limit is a flat 2 (one expected PTC duty per epoch + a one-duty margin),
+        // independent of how many indices are passed. In production the validator
+        // path always supplies exactly one index.
+        let one_validator = vec![ValidatorIndex(0)];
         let result = duty_limit(
             &validation_context,
             slot,
-            &small_cluster,
+            &one_validator,
             mock_duties_provider.clone(),
         );
-        assert_eq!(result, Ok(Some(4)));
+        assert_eq!(result, Ok(Some(2)));
 
-        // V > slots_per_epoch: slot count is the binding constraint.
-        let large_cluster = vec![ValidatorIndex(0); 100];
-        let result = duty_limit(
-            &validation_context,
-            slot,
-            &large_cluster,
-            mock_duties_provider,
-        );
-        assert_eq!(result, Ok(Some(32)));
+        // The cap does not scale with the slice length (guards against the old
+        // cluster-wide `min(slots_per_epoch, V)` formula reappearing).
+        let many = vec![ValidatorIndex(0); 100];
+        let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
+        assert_eq!(result, Ok(Some(2)));
     }
 
     /// Helper function for testing role validation against fork schedules.

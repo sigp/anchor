@@ -274,9 +274,11 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
                     // Committee roles use DutyExecutor::Committee, not Validator
-                    Some(Role::Committee | Role::AggregatorCommittee | Role::PTCCommittee)
+                    Some(Role::Committee | Role::AggregatorCommittee)
                     // These roles don't use QBFT consensus
-                    | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
+                    | Some(
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester,
+                    )
                     | None => {
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
                         return Err(QbftError::InconsistentMessageId);
@@ -338,15 +340,14 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                             },
                         )
                     }
-                    Some(Role::PTCCommittee) => {
-                        // TODO(cstar): wire PTC instance routing and add pre-CStar
-                        // fork gate (mirror `AggregatorCommittee` arm above).
-                        let slot = types::Slot::new(qbft_message.height);
-                        warn!(%slot, "Ignoring PTCCommittee message; routing not wired");
-                        Err(QbftError::RoleNotActive)
-                    }
-                    // Validator roles should use DutyExecutor::Validator, not Committee
-                    Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
+                    // Validator roles should use DutyExecutor::Validator, not
+                    // Committee
+                    Some(
+                        Role::Aggregator
+                        | Role::Proposer
+                        | Role::SyncCommittee
+                        | Role::PTCAttester,
+                    )
                     // These roles don't use QBFT consensus
                     | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
                     | None => Err(QbftError::InconsistentMessageId),

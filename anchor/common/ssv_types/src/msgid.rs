@@ -21,7 +21,7 @@ pub enum Role {
     ValidatorRegistration,
     VoluntaryExit,
     AggregatorCommittee,
-    PTCCommittee,
+    PTCAttester,
 }
 
 impl From<Role> for [u8; 4] {
@@ -34,7 +34,7 @@ impl From<Role> for [u8; 4] {
             Role::ValidatorRegistration => [4, 0, 0, 0],
             Role::VoluntaryExit => [5, 0, 0, 0],
             Role::AggregatorCommittee => [6, 0, 0, 0],
-            Role::PTCCommittee => [7, 0, 0, 0],
+            Role::PTCAttester => [7, 0, 0, 0],
         }
     }
 }
@@ -51,15 +51,14 @@ impl TryFrom<&[u8]> for Role {
             [4, 0, 0, 0] => Ok(Role::ValidatorRegistration),
             [5, 0, 0, 0] => Ok(Role::VoluntaryExit),
             [6, 0, 0, 0] => Ok(Role::AggregatorCommittee),
-            [7, 0, 0, 0] => Ok(Role::PTCCommittee),
+            [7, 0, 0, 0] => Ok(Role::PTCAttester),
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
 }
 
 impl Role {
-    /// Returns true if this role is a committee-based role (Committee, AggregatorCommittee, or
-    /// PTCCommittee).
+    /// Returns true if this role is a committee-based role (Committee or AggregatorCommittee).
     ///
     /// Committee roles handle multiple validators in batched operations and have relaxed
     /// validation rules compared to per-validator roles:
@@ -67,10 +66,7 @@ impl Role {
     /// - Skip slot advancement checks (allow processing "older" slots within 34-slot window)
     /// - Have different message count limits and validator index occurrence limits
     pub fn is_committee_role(self) -> bool {
-        matches!(
-            self,
-            Role::Committee | Role::AggregatorCommittee | Role::PTCCommittee
-        )
+        matches!(self, Role::Committee | Role::AggregatorCommittee)
     }
 
     pub fn max_round(self) -> Option<u64> {
@@ -78,15 +74,16 @@ impl Role {
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
-            // PTC is expected near 75% of a 12s slot, leaving about 3s.
-            // With 2s quick round timeouts, only round 1 is likely to finish
-            // before slot end. Allow up to 4 rounds as a small local grace
-            // window for delayed starts or message loss; this is not a
-            // consensus-spec requirement.
-            Role::PTCCommittee => Some(4),
             // These roles don't use QBFT consensus
-            Role::ValidatorRegistration | Role::VoluntaryExit => None,
+            Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester => None,
         }
+    }
+
+    /// Returns true if this role is validator-scoped and does not run a QBFT
+    /// consensus round (ValidatorRegistration, VoluntaryExit, PTCAttester),
+    /// i.e. it has no max QBFT round.
+    pub fn is_non_qbft_role(self) -> bool {
+        self.max_round().is_none()
     }
 }
 
@@ -156,14 +153,15 @@ impl MessageId {
     pub fn duty_executor(&self) -> Option<DutyExecutor> {
         // which kind of executor we need to get depends on the role
         match self.role()? {
-            Role::Committee | Role::AggregatorCommittee | Role::PTCCommittee => {
+            Role::Committee | Role::AggregatorCommittee => {
                 self.0[24..].try_into().ok().map(DutyExecutor::Committee)
             }
             Role::Aggregator
             | Role::Proposer
             | Role::SyncCommittee
             | Role::ValidatorRegistration
-            | Role::VoluntaryExit => PublicKeyBytes::deserialize(&self.0[8..])
+            | Role::VoluntaryExit
+            | Role::PTCAttester => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
         }
@@ -322,38 +320,23 @@ mod tests {
     }
 
     #[test]
-    fn ptc_uses_committee_duty_executor() {
-        // PTCCommittee must use Committee-style duty executor (CommitteeId),
-        // not Validator-style (PublicKeyBytes)
+    fn ptc_attester_uses_validator_duty_executor() {
+        // PTCAttester is validator-scoped: it must use Validator-style duty
+        // executor (PublicKeyBytes), not Committee-style (CommitteeId).
         let domain = DomainType([0, 0, 0, 0]);
-        let committee_id = CommitteeId::from(vec![OperatorId(100), OperatorId(200)]);
-        let duty_executor = DutyExecutor::Committee(committee_id);
+        let public_key = PublicKeyBytes::empty();
+        let duty_executor = DutyExecutor::Validator(public_key);
 
-        let msg_id = MessageId::new(&domain, Role::PTCCommittee, &duty_executor);
+        let msg_id = MessageId::new(&domain, Role::PTCAttester, &duty_executor);
 
-        assert_eq!(msg_id.role(), Some(Role::PTCCommittee));
+        assert_eq!(msg_id.role(), Some(Role::PTCAttester));
 
         match msg_id.duty_executor() {
-            Some(DutyExecutor::Committee(id)) => assert_eq!(id, committee_id),
-            Some(DutyExecutor::Validator(_)) => {
-                panic!("PTCCommittee should use Committee duty executor, not Validator")
+            Some(DutyExecutor::Validator(pk)) => assert_eq!(pk, public_key),
+            Some(DutyExecutor::Committee(_)) => {
+                panic!("PTCAttester should use Validator duty executor, not Committee")
             }
             None => panic!("Failed to extract duty executor"),
         }
-    }
-
-    #[test]
-    fn ptc_max_round_is_four() {
-        // PTC duty starts at 75% slot; Some(4) is the deliberate cap distinct
-        // from Committee's Some(12). Regressions copying the Committee value
-        // would compile silently — this guards against that.
-        assert_eq!(Role::PTCCommittee.max_round(), Some(4));
-    }
-
-    #[test]
-    fn ptc_is_committee_role() {
-        // is_committee_role drives the validator-index-mismatch skip and
-        // slot-advancement skip in message_validator. PTC must qualify.
-        assert!(Role::PTCCommittee.is_committee_role());
     }
 }
