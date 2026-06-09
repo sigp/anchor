@@ -339,4 +339,15 @@ mod tests {
             None => panic!("Failed to extract duty executor"),
         }
     }
+
+    #[test]
+    fn ptc_attester_is_validator_scoped_non_qbft() {
+        // Every behavior flip in the PTCAttester retarget rides on these three
+        // classifications (validation bucketing, consensus-message rejection,
+        // qbft_manager routing). Re-adding PTCAttester to the committee arm or
+        // giving it a max round would compile silently; this pins the values.
+        assert!(!Role::PTCAttester.is_committee_role());
+        assert_eq!(Role::PTCAttester.max_round(), None);
+        assert!(Role::PTCAttester.is_non_qbft_role());
+    }
 }

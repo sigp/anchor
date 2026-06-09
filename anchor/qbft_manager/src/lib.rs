@@ -342,14 +342,11 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     }
                     // Validator roles should use DutyExecutor::Validator, not
                     // Committee
-                    Some(
-                        Role::Aggregator
-                        | Role::Proposer
-                        | Role::SyncCommittee
-                        | Role::PTCAttester,
-                    )
+                    Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
                     // These roles don't use QBFT consensus
-                    | Some(Role::ValidatorRegistration | Role::VoluntaryExit)
+                    | Some(
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester,
+                    )
                     | None => Err(QbftError::InconsistentMessageId),
                 }
             }

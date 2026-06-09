@@ -974,34 +974,44 @@ mod tests {
     fn test_consensus_message_for_non_consensus_role() {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
-        // Create a consensus message for a non-consensus role (ValidatorRegistration)
-        let msg_id = create_message_id_for_test(Role::ValidatorRegistration);
-        let qbft_message =
-            QbftMessageBuilder::new(Role::ValidatorRegistration, QbftMessageType::Proposal)
+        // Every non-QBFT role must reject consensus messages, including
+        // PTCAttester (leaderless, no QBFT round since the SIP-94 rewrite).
+        for role in [
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+            Role::PTCAttester,
+        ] {
+            let msg_id = create_message_id_for_test(role);
+            let qbft_message = QbftMessageBuilder::new(role, QbftMessageType::Proposal)
                 .with_identifier(msg_id.clone())
                 .build();
 
-        let qbft_bytes = qbft_message.as_ssz_bytes();
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
-            .expect("SSVMessage should be created");
-        let signed_msg = SignedSSVMessage::new(
-            vec![[0xAA; RSA_SIGNATURE_SIZE]],
-            vec![OperatorId(1)],
-            ssv_msg,
-            vec![],
-        )
-        .expect("SignedSSVMessage should be created");
+            let qbft_bytes = qbft_message.as_ssz_bytes();
+            let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, qbft_bytes)
+                .expect("SSVMessage should be created");
+            let signed_msg = SignedSSVMessage::new(
+                vec![[0xAA; RSA_SIGNATURE_SIZE]],
+                vec![OperatorId(1)],
+                ssv_msg,
+                vec![],
+            )
+            .expect("SignedSSVMessage should be created");
 
-        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+            let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
-        let result =
-            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
+            let result = validate_consensus_message_semantics(
+                &signed_msg,
+                &qbft_message,
+                &committee_info,
+                &map,
+            );
 
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::UnexpectedConsensusMessage),
-            "UnexpectedConsensusMessage",
-        );
+            assert_validation_error(
+                result,
+                |failure| matches!(failure, ValidationFailure::UnexpectedConsensusMessage),
+                &format!("UnexpectedConsensusMessage ({role:?})"),
+            );
+        }
     }
 
     #[test]
