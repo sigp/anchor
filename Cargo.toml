@@ -119,7 +119,7 @@ futures = "0.3.30"
 hex = "0.4.3"
 hyper = "1.4"
 indexmap = "2.7.0"
-libp2p = { version = "0.56", default-features = false, features = [
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "197663d7cd23c121db30b4cbe2557eb28e454142", default-features = false, features = [
     "identify",
     "yamux",
     "noise",
@@ -179,12 +179,6 @@ zeroize = "1.8.1"
 
 [patch.crates-io]
 quick-protobuf = { git = "https://github.com/sigp/quick-protobuf.git", rev = "87c4ccb9bb2af494de375f5f6c62850badd26304" }
-libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
-libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
-libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
-libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
-libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
-quick-protobuf-codec = { git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
 
 [profile.maxperf]
 inherits = "release"

@@ -16,7 +16,7 @@ libp2p = { workspace = true }
 message_receiver = { workspace = true }
 metrics = { workspace = true }
 network_utils = { workspace = true }
-peer-store = { package = "libp2p-peer-store", git = "https://github.com/sigp/rust-libp2p.git", rev = "defcaf1a78cf5b70a723b3fee0e0be051c1dbd88" }
+peer-store = { package = "libp2p-peer-store", git = "https://github.com/libp2p/rust-libp2p.git", rev = "197663d7cd23c121db30b4cbe2557eb28e454142" }
 prometheus-client = { workspace = true }
 quick-protobuf = "0.8.1"
 rand = { workspace = true }
@@ -35,7 +35,7 @@ types = { workspace = true }
 version = { workspace = true }
 
 [dev-dependencies]
-libp2p-swarm-test = "0.6.0"
+libp2p-swarm-test = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "197663d7cd23c121db30b4cbe2557eb28e454142" }
 message_receiver = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 tracing-subscriber = { workspace = true }

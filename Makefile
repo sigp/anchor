@@ -163,11 +163,8 @@ audit: install-audit audit-CI
 install-audit:
 	cargo install --force cargo-audit
 
-# Tracked in sigp/anchor#989. Drop the hickory-proto ignores once libp2p ships
-# a release with hickory >= 0.26.1 (libp2p/rust-libp2p#6395) and we bump our
-# libp2p dep. See the tracking issue for the reachability analysis.
 audit-CI:
-	cargo audit --ignore RUSTSEC-2026-0118 --ignore RUSTSEC-2026-0119
+	cargo audit
 
 # Runs `cargo vendor` to make sure dependencies can be vendored for packaging, reproducibility and archival purpose.
 vendor:
