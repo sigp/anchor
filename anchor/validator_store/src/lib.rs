@@ -594,24 +594,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             Completed::Success(data) => data,
         };
 
-        // Under the Gloas fork (EIP-7732), DataSSZ carries a plain BeaconBlock — decode directly.
-        // Pre-Gloas: try blinded first, fall back to full block contents.
-        if ForkName::from(completed_data.version) >= ForkName::Gloas {
-            completed_data
-                .decode_block()
-                .map(|block| UnsignedBlock::Full(FullBlockContents::Block(block)))
-                .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
-        } else {
-            completed_data
-                .decode_blinded_block()
-                .map(UnsignedBlock::Blinded)
-                .or_else(|_| {
-                    completed_data
-                        .decode_block_contents()
-                        .map(UnsignedBlock::Full)
-                })
-                .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
-        }
+        // Decode the decided data into a block we can sign
+        decode_decided_block(&completed_data)
+            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
     }
 
     async fn sign_abstract_block(
@@ -1887,6 +1872,174 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         }
 
         Ok(safe_attestations)
+    }
+}
+
+/// Helper function to decode a decided block from consensus data that includes fork-specific
+/// decoding logic.
+fn decode_decided_block<E: EthSpec>(
+    completed_data: &ProposerConsensusData,
+) -> Result<UnsignedBlock<E>, DecodeError> {
+    // Under the Gloas fork (EIP-7732), DataSSZ carries a plain BeaconBlock — decode directly.
+    // Pre-Gloas: try blinded first, fall back to full block contents.
+    if ForkName::from(completed_data.version) >= ForkName::Gloas {
+        completed_data
+            .decode_block()
+            .map(|block| UnsignedBlock::Full(FullBlockContents::Block(block)))
+    } else {
+        completed_data
+            .decode_blinded_block()
+            .map(UnsignedBlock::Blinded)
+            .or_else(|_| {
+                completed_data
+                    .decode_block_contents()
+                    .map(UnsignedBlock::Full)
+            })
+    }
+}
+
+#[cfg(test)]
+mod decode_decided_block_tests {
+    use ssv_types::{
+        ValidatorIndex,
+        consensus::{BEACON_ROLE_PROPOSER, DataVersion, ProposerConsensusData, ValidatorDuty},
+    };
+    use ssz_types::VariableList;
+    use types::{
+        BeaconBlockDeneb, BeaconBlockGloas, BlindedPayload, ChainSpec, EmptyBlock, MainnetEthSpec,
+    };
+
+    use super::*;
+
+    fn test_duty() -> ValidatorDuty {
+        ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: PublicKeyBytes::empty(),
+            slot: Slot::new(1),
+            validator_index: ValidatorIndex(0),
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        }
+    }
+
+    #[test]
+    fn gloas_full_block_decodes_via_full_path() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+        let data = ProposerConsensusData {
+            duty: test_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes()).unwrap(),
+        };
+
+        match decode_decided_block::<MainnetEthSpec>(&data) {
+            Ok(UnsignedBlock::Full(FullBlockContents::Block(decoded_block))) => {
+                assert_eq!(decoded_block, block);
+            }
+            other => panic!(
+                "Expected Ok(UnsignedBlock::Full(FullBlockContents::Block(_))), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn gloas_blinded_projection_decodes_via_full_path() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+        let blinded: BeaconBlock<MainnetEthSpec, BlindedPayload<MainnetEthSpec>> =
+            block.to_ref().into();
+
+        // Pin the byte-identity invariant where full and blinded projections are identical.
+        assert_eq!(
+            block.as_ssz_bytes(),
+            blinded.as_ssz_bytes(),
+            "Gloas full and blinded projections must be byte-identical"
+        );
+
+        let data = ProposerConsensusData {
+            duty: test_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(blinded.as_ssz_bytes()).unwrap(),
+        };
+
+        match decode_decided_block::<MainnetEthSpec>(&data) {
+            Ok(UnsignedBlock::Full(FullBlockContents::Block(decoded_block))) => {
+                assert_eq!(decoded_block, block);
+            }
+            other => panic!(
+                "Expected Ok(UnsignedBlock::Full(FullBlockContents::Block(_))), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn gloas_invalid_bytes_rejected() {
+        let data = ProposerConsensusData {
+            duty: test_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(vec![0xDE, 0xAD, 0xBE, 0xEF]).unwrap(),
+        };
+
+        assert!(decode_decided_block::<MainnetEthSpec>(&data).is_err());
+    }
+
+    #[test]
+    fn pre_gloas_blinded_block_decodes_directly() {
+        let spec = ChainSpec::mainnet();
+        let full_block = BeaconBlock::Deneb(BeaconBlockDeneb::<MainnetEthSpec>::empty(&spec));
+        let blinded: BeaconBlock<MainnetEthSpec, BlindedPayload<MainnetEthSpec>> =
+            full_block.to_ref().into();
+        let data = ProposerConsensusData {
+            duty: test_duty(),
+            version: DataVersion::from(ForkName::Deneb),
+            data_ssz: VariableList::new(blinded.as_ssz_bytes()).unwrap(),
+        };
+
+        match decode_decided_block::<MainnetEthSpec>(&data) {
+            Ok(UnsignedBlock::Blinded(decoded_blinded)) => {
+                assert_eq!(decoded_blinded, blinded);
+            }
+            other => panic!("Expected Ok(UnsignedBlock::Blinded(_)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pre_gloas_full_block_contents_decodes_via_fallback() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Deneb(BeaconBlockDeneb::<MainnetEthSpec>::empty(&spec));
+        let full_contents = FullBlockContents::<MainnetEthSpec>::new(
+            block,
+            Some((VariableList::empty(), VariableList::empty())),
+        );
+        let data = ProposerConsensusData {
+            duty: test_duty(),
+            version: DataVersion::from(ForkName::Deneb),
+            data_ssz: VariableList::new(full_contents.as_ssz_bytes()).unwrap(),
+        };
+
+        match decode_decided_block::<MainnetEthSpec>(&data) {
+            Ok(UnsignedBlock::Full(_)) => {}
+            other => panic!("Expected Ok(UnsignedBlock::Full(_)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pre_gloas_invalid_bytes_rejected() {
+        let data = ProposerConsensusData {
+            duty: test_duty(),
+            version: DataVersion::from(ForkName::Deneb),
+            data_ssz: VariableList::new(vec![0xDE, 0xAD, 0xBE, 0xEF]).unwrap(),
+        };
+
+        assert!(
+            decode_decided_block::<MainnetEthSpec>(&data).is_err(),
+            "Expected Err when both decoders fail on garbage bytes"
+        );
     }
 }
 
