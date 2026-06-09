@@ -930,13 +930,12 @@ fn message_lateness(
     validation_context: &ValidationContext<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
-        Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
+        Role::Proposer | Role::SyncCommittee | Role::PTCAttester => 1 + LATE_SLOT_ALLOWANCE,
         Role::Committee
         | Role::Aggregator
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
-        | Role::AggregatorCommittee
-        | Role::PTCAttester => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
+        | Role::AggregatorCommittee => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())

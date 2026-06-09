@@ -1208,9 +1208,9 @@ mod tests {
     const LATE_SLOT_ALLOWANCE_TEST: u64 = 2;
     const TTL_SLOTS: u64 = SLOTS_PER_EPOCH_TEST + LATE_SLOT_ALLOWANCE_TEST; // 34 slots
     const BEYOND_TTL_SLOTS: u64 = 40;
-    // Past the proposer/sync TTL (1 + LATE_SLOT_ALLOWANCE_TEST = 3 slots), well
-    // within the committee TTL (TTL_SLOTS = 34). Lets a test prove a role is in
-    // the committee TTL bucket rather than just inside the long-TTL boundary.
+    // Past the short slot-bound TTL (1 + LATE_SLOT_ALLOWANCE_TEST = 3 slots),
+    // well within the committee TTL (TTL_SLOTS = 34). Lets a test prove which
+    // TTL bucket a role is in, rather than just probing a boundary.
     const COMMITTEE_TTL_BUCKET_SLOTS: u64 = 20;
 
     // Helper to create validation context for TTL tests
@@ -1779,10 +1779,45 @@ mod tests {
             &private_key,
         );
 
-        // PTC is validator-scoped but keeps the long TTL (slots_per_epoch +
-        // LATE_SLOT_ALLOWANCE = 34). A message 20 slots late is past the
-        // proposer/sync TTL (3) yet still inside PTC's long TTL, so it is
-        // accepted.
+        // PTC output is only useful for its own slot (the aggregated payload
+        // attestation is gossip-valid for that slot and includable only at
+        // slot + 1), so PTCAttester uses the short TTL
+        // (1 + LATE_SLOT_ALLOWANCE = 3 slots). Two slots late is inside it.
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::PTCAttester,
+            &map,
+            LATE_SLOT_ALLOWANCE_TEST,
+            generate_fork_schedule(Fork::CStar),
+        );
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_ptc_attester_beyond_short_ttl_rejected() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::PTCAttester,
+            PartialSignatureKind::PTCAttester,
+            OperatorId(1),
+            &private_key,
+        );
+
+        // 20 slots late would still be inside the long (committee) TTL of 34
+        // slots; rejecting it pins PTCAttester to the short slot-bound bucket.
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
@@ -1800,7 +1835,11 @@ mod tests {
             }),
         );
 
-        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+            "LateSlotMessage (PTCAttester past short TTL)",
+        );
     }
 
     #[test]
