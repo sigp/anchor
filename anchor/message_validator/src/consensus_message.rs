@@ -121,20 +121,21 @@ pub(crate) fn validate_consensus_message_semantics(
     // message; validator-scoped non-QBFT roles must not.
     if matches!(
         signed_ssv_message.ssv_message().msg_id().role(),
-        Some(role) if role.is_non_qbft_role()
+        Some(role) if !role.is_qbft_role()
     ) {
         return Err(ValidationFailure::UnexpectedConsensusMessage);
     }
 
-    let max_round = match signed_ssv_message
+    let Some(max_round) = signed_ssv_message
         .ssv_message()
         .msg_id()
         .role()
         .unwrap()
         .max_round()
-    {
-        Some(max_round) => max_round,
-        None => return Err(ValidationFailure::FailedToGetMaxRound),
+    else {
+        // Defensive fallback: the guard above already rejected every role
+        // without a max round.
+        return Err(ValidationFailure::UnexpectedConsensusMessage);
     };
 
     if consensus_message.round > max_round {

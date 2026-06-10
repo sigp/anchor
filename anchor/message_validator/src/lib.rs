@@ -196,7 +196,6 @@ pub enum ValidationFailure {
         limit: usize,
     },
     EncodeOperators,
-    FailedToGetMaxRound,
     SlotStartTimeNotFound {
         slot: Slot,
     },

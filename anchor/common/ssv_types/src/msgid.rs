@@ -79,11 +79,11 @@ impl Role {
         }
     }
 
-    /// Returns true if this role is validator-scoped and does not run a QBFT
-    /// consensus round (ValidatorRegistration, VoluntaryExit, PTCAttester),
-    /// i.e. it has no max QBFT round.
-    pub fn is_non_qbft_role(self) -> bool {
-        self.max_round().is_none()
+    /// Returns true if this role runs a QBFT consensus round, i.e. it has a
+    /// max QBFT round. The validator-scoped roles that do not
+    /// (ValidatorRegistration, VoluntaryExit, PTCAttester) return false.
+    pub fn is_qbft_role(self) -> bool {
+        self.max_round().is_some()
     }
 }
 
@@ -348,6 +348,35 @@ mod tests {
         // giving it a max round would compile silently; this pins the values.
         assert!(!Role::PTCAttester.is_committee_role());
         assert_eq!(Role::PTCAttester.max_round(), None);
-        assert!(Role::PTCAttester.is_non_qbft_role());
+        assert!(!Role::PTCAttester.is_qbft_role());
+    }
+
+    #[test]
+    fn role_qbft_classification_is_pinned() {
+        // Adding a new Role forces a decision in max_round()'s exhaustive
+        // match, but nothing checks the decision is right: a role landing in
+        // the wrong arm silently flips its consensus-message and routing
+        // behavior. Pin every existing role on both sides of the partition.
+        for role in [
+            Role::Committee,
+            Role::Aggregator,
+            Role::AggregatorCommittee,
+            Role::Proposer,
+            Role::SyncCommittee,
+        ] {
+            assert!(role.is_qbft_role(), "{role:?} runs QBFT");
+            assert!(role.max_round().is_some(), "{role:?} must have a max round");
+        }
+        for role in [
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+            Role::PTCAttester,
+        ] {
+            assert!(!role.is_qbft_role(), "{role:?} must not run QBFT");
+            assert!(
+                role.max_round().is_none(),
+                "{role:?} must not have a max round"
+            );
+        }
     }
 }
