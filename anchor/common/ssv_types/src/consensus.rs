@@ -24,8 +24,8 @@ use typenum::{
 };
 use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
-    AttestationElectra, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
-    ForkName, Hash256, Slot, SyncCommitteeContribution,
+    AttestationElectra, BeaconBlock, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex,
+    Domain, EthSpec, ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
 use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
@@ -251,6 +251,9 @@ impl ProposerConsensusData {
     /// Decode the block data as a blinded beacon block.
     pub fn decode_blinded_block<E: EthSpec>(&self) -> Result<BlindedBeaconBlock<E>, DecodeError> {
         let fork = ForkName::from(self.version);
+        if fork >= ForkName::Gloas {
+            return Err(DecodeError::NoMatchingVariant);
+        }
         BlindedBeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 
@@ -258,6 +261,12 @@ impl ProposerConsensusData {
     pub fn decode_block_contents<E: EthSpec>(&self) -> Result<FullBlockContents<E>, DecodeError> {
         let fork = ForkName::from(self.version);
         FullBlockContents::from_ssz_bytes_for_fork(&self.data_ssz, fork)
+    }
+
+    /// Decode as a full beacon block shape.
+    pub fn decode_block<E: EthSpec>(&self) -> Result<BeaconBlock<E>, DecodeError> {
+        let fork = ForkName::from(self.version);
+        BeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 }
 
@@ -379,17 +388,30 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         &self,
         value: &ProposerConsensusData,
     ) -> Result<(), DataValidationError> {
-        // Always do this check, even if we're not validating slashing. This is to ensure that we
-        // have a decodable value.
-        let header = value
-            .decode_blinded_block::<E>()
-            .map(|block| block.block_header())
-            .or_else(|_| {
-                value
-                    .decode_block_contents::<E>()
-                    .map(|block| block.block().block_header())
-            })
-            .map_err(DataValidationError::DecodeError)?;
+        // Decode the block header to ensure the value is decodable (even when slashing
+        // protection is disabled). Under Gloas (EIP-7732), DataSSZ is decoded directly as a plain
+        // BeaconBlock. This behaviour is not behaviourally load-bearing as the execution
+        // payload is decoupled from the block body. The outcome of `decode_blinded_block`
+        // and `decode_block` are identical for this variant. The Pre-Gloas branch
+        // preserves the existing try-blinded-then-full fallback.
+        let fork = ForkName::from(value.version);
+
+        let header = if fork >= ForkName::Gloas {
+            value
+                .decode_block::<E>()
+                .map(|block| block.block_header())
+                .map_err(DataValidationError::DecodeError)?
+        } else {
+            value
+                .decode_blinded_block::<E>()
+                .map(|block| block.block_header())
+                .or_else(|_| {
+                    value
+                        .decode_block_contents::<E>()
+                        .map(|block| block.block().block_header())
+                })
+                .map_err(DataValidationError::DecodeError)?
+        };
 
         if !self.disable_slashing_protection {
             let epoch = header.slot.epoch(E::slots_per_epoch());
@@ -946,37 +968,6 @@ impl QbftData for GloasBeaconVote {
     }
 }
 
-/// QBFT consensus value for PTC (Payload Timeliness Committee) duties at Gloas.
-///
-/// PTC operators run one QBFT instance per slot over this stripped shape; the
-/// slot is pinned by the QBFT instance and reconstructed from the duty when
-/// signing the full `PayloadAttestationData` under `DOMAIN_PTC_ATTESTER` after
-/// consensus decides.
-#[derive(Clone, Debug, TreeHash, PartialEq, Eq, Encode, Decode)]
-#[cfg_attr(feature = "arbitrary-fuzz", derive(arbitrary::Arbitrary))]
-pub struct PayloadAttestationVote {
-    /// Root of the beacon block whose payload-timeliness this vote describes.
-    pub beacon_block_root: Hash256,
-    /// Whether the operator observed the execution payload envelope by the
-    /// PTC cutoff.
-    pub payload_present: bool,
-    /// Whether the operator observed blob data availability by the PTC cutoff.
-    pub blob_data_available: bool,
-}
-
-impl QbftData for PayloadAttestationVote {
-    type Hash = Hash256;
-
-    fn hash(&self) -> Self::Hash {
-        let bytes = self.as_ssz_bytes();
-
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        let hash: [u8; 32] = hasher.finalize().into();
-        Hash256::from(hash)
-    }
-}
-
 /// Identifies a batch of pre-consensus selection proofs for a committee.
 /// All operators compute the same hash for a given `(slot, committee_id)` pair, ensuring
 /// consistent batching across the network.
@@ -1357,6 +1348,8 @@ impl<E: EthSpec> GloasBeaconVoteValidator<E> {
             self.genesis_validators_root,
         );
 
+        // Only the validator keys are read here; the committee-index values are intentionally
+        // unused because the reconstruction above uses the single QBFT-decided index.
         for validator_pubkey in self.validator_attestation_committees.keys() {
             slashing_database
                 .preliminary_check_attestation(validator_pubkey, &attestation_data, domain_hash)
@@ -1432,68 +1425,16 @@ pub enum BeaconVoteValidationError {
     IndexOutOfRange(u64),
 }
 
-/// Validation errors for `PayloadAttestationVote`.
-#[derive(Error, Debug)]
-pub enum PayloadAttestationVoteValidationError {
-    /// The proposed `beacon_block_root` is the zero hash, which can never be a
-    /// real block root and signals an empty or corrupt leader proposal.
-    #[error("Beacon block root is zero")]
-    ZeroBeaconBlockRoot,
-}
-
-/// Validator for `PayloadAttestationVote` during QBFT consensus.
-///
-/// Reflects [SIP-94 §3][sip-94]: the cluster contributes one shared PTC
-/// observation per slot, sourced from the QBFT leader. `payload_present` and
-/// `blob_data_available` are intentionally not compared against the local
-/// operator's view (SC-2: trust-leader for payload-status fields). The only
-/// required check here is that `beacon_block_root` is non-zero.
-///
-/// If SIP-94 is later amended to require local-view equality on the
-/// payload-status booleans, extend `do_validation` with the additional rule;
-/// the `do_validation -> Result` shape is the extension point.
-///
-/// [sip-94]: https://github.com/ssvlabs/SIPs/blob/7e8b5bd6d4007682d8bd75b06a2f2ac7b617e9e5/sips/epbs_support.md#3-new-duty-payload-timeliness-committee-ptc-attestation
-#[derive(Debug, Default)]
-pub struct PayloadAttestationVoteValidator;
-
-impl QbftDataValidator<PayloadAttestationVote> for PayloadAttestationVoteValidator {
-    fn validate(
-        &self,
-        value: &PayloadAttestationVote,
-        _our_value: &PayloadAttestationVote,
-    ) -> bool {
-        match self.do_validation(value) {
-            Ok(_) => true,
-            Err(err) => {
-                warn!(%err, "Operator proposed invalid payload attestation vote");
-                false
-            }
-        }
-    }
-}
-
-impl PayloadAttestationVoteValidator {
-    pub fn do_validation(
-        &self,
-        value: &PayloadAttestationVote,
-    ) -> Result<(), PayloadAttestationVoteValidationError> {
-        if value.beacon_block_root.is_zero() {
-            return Err(PayloadAttestationVoteValidationError::ZeroBeaconBlockRoot);
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use bls::{AggregateSignature, FixedBytesExtended};
+    use eth2::types::FullBlockContents;
     use ssz_types::{BitList, BitVector};
     use types::{
-        Checkpoint, Epoch, MainnetEthSpec, SyncCommitteeContribution,
-        test_utils::generate_deterministic_keypair,
+        BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, MainnetEthSpec,
+        SyncCommitteeContribution, test_utils::generate_deterministic_keypair,
     };
 
     use super::*;
@@ -2691,6 +2632,55 @@ mod tests {
         }
     }
 
+    /// Ports the non-strict root-mismatch sibling (`test_valid_matching_epochs_different_roots`)
+    /// for Gloas. Non-strict `epoch_majority_fork_protection` keys on source/target EPOCHS
+    /// only, so a proposed vote with matching epochs but different roots (reorg) must be
+    /// accepted. `attestation_data_index` is held at 0 on both votes to isolate the root
+    /// difference from the index.
+    #[test]
+    fn test_gloas_valid_matching_epochs_different_roots() {
+        let validator = create_gloas_test_validator(false);
+
+        let our_source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let our_target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: our_source,
+            target: our_target,
+            attestation_data_index: 0,
+        };
+
+        // Proposed vote has same epochs but different roots (simulating reorg).
+        let proposed_source = Checkpoint {
+            epoch: Epoch::new(2),                // Same epoch
+            root: Hash256::from_low_u64_be(999), // Different root
+        };
+        let proposed_target = Checkpoint {
+            epoch: Epoch::new(3),                // Same epoch
+            root: Hash256::from_low_u64_be(888), // Different root
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root: Hash256::random(),
+            source: proposed_source,
+            target: proposed_target,
+            attestation_data_index: 0,
+        };
+
+        // This should succeed since epochs match (roots don't need to match).
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "Expected validation to succeed for matching epochs with different roots, got error: {:?}",
+            result.unwrap_err()
+        );
+    }
+
     // ---------------------------------------------------------------------------------
     // C. Slashing-DB reconstruction: cross-`index` equivocation must trip protection.
     //    Lighthouse's `SlashingDatabase` is file-only, so this uses a real temp-file DB.
@@ -2864,125 +2854,6 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    // PayloadAttestationVote Tests
-    // ═══════════════════════════════════════════════════════════════════════════════
-
-    fn create_payload_attestation_vote(
-        root: Hash256,
-        payload_present: bool,
-        blob_data_available: bool,
-    ) -> PayloadAttestationVote {
-        PayloadAttestationVote {
-            beacon_block_root: root,
-            payload_present,
-            blob_data_available,
-        }
-    }
-
-    #[test]
-    fn test_payload_attestation_vote_ssz_roundtrip() {
-        for (payload_present, blob_data_available) in
-            [(false, false), (false, true), (true, false), (true, true)]
-        {
-            let vote = create_payload_attestation_vote(
-                Hash256::from_low_u64_be(0xabcd),
-                payload_present,
-                blob_data_available,
-            );
-
-            let encoded = vote.as_ssz_bytes();
-            let decoded = PayloadAttestationVote::from_ssz_bytes(&encoded).unwrap();
-
-            assert_eq!(vote, decoded);
-        }
-    }
-
-    #[test]
-    fn test_payload_attestation_vote_ssz_byte_layout() {
-        // Fixed-length container: 32-byte root + 1-byte bool + 1-byte bool = 34 bytes.
-        let root_bytes = [0xAA; 32];
-        let vote = create_payload_attestation_vote(Hash256::from(root_bytes), true, false);
-
-        let encoded = vote.as_ssz_bytes();
-
-        assert_eq!(
-            encoded.len(),
-            34,
-            "PayloadAttestationVote should encode to 34 bytes"
-        );
-        assert_eq!(&encoded[0..32], &root_bytes);
-        assert_eq!(encoded[32], 1, "payload_present byte");
-        assert_eq!(encoded[33], 0, "blob_data_available byte");
-    }
-
-    #[test]
-    fn test_payload_attestation_vote_hash_deterministic() {
-        let root = Hash256::from_low_u64_be(0x1234);
-        let vote = create_payload_attestation_vote(root, true, false);
-
-        // Hashing two independently-constructed values with the same inputs
-        // must produce the same hash (catches identity- or address-dependent hashing).
-        let same = create_payload_attestation_vote(root, true, false);
-        assert_eq!(vote.hash(), same.hash());
-
-        let different_root =
-            create_payload_attestation_vote(Hash256::from_low_u64_be(0x5678), true, false);
-        assert_ne!(vote.hash(), different_root.hash());
-
-        let flipped_payload = create_payload_attestation_vote(root, false, false);
-        assert_ne!(vote.hash(), flipped_payload.hash());
-
-        let flipped_blob = create_payload_attestation_vote(root, true, true);
-        assert_ne!(vote.hash(), flipped_blob.hash());
-    }
-
-    #[test]
-    fn test_payload_attestation_vote_validator_rejects_zero_root() {
-        let validator = PayloadAttestationVoteValidator;
-        let zero_vote = create_payload_attestation_vote(Hash256::zero(), true, true);
-
-        let result = validator.do_validation(&zero_vote);
-        assert!(matches!(
-            result,
-            Err(PayloadAttestationVoteValidationError::ZeroBeaconBlockRoot)
-        ));
-    }
-
-    #[test]
-    fn test_payload_attestation_vote_validator_accepts_nonzero_root() {
-        let validator = PayloadAttestationVoteValidator;
-        let root = Hash256::from_low_u64_be(0xdead);
-
-        for (payload_present, blob_data_available) in
-            [(false, false), (false, true), (true, false), (true, true)]
-        {
-            let vote = create_payload_attestation_vote(root, payload_present, blob_data_available);
-            assert!(
-                validator.do_validation(&vote).is_ok(),
-                "validator should accept non-zero root regardless of payload-status flags \
-                 (payload_present={payload_present}, blob_data_available={blob_data_available})"
-            );
-        }
-    }
-
-    #[test]
-    fn test_payload_attestation_vote_validator_accepts_status_flag_disagreement() {
-        // SIP-94 SC-2: `payload_present` and `blob_data_available` are trusted
-        // from the QBFT leader and must NOT be compared against the local
-        // operator's observation. Tested by holding `beacon_block_root` constant
-        // between proposed and local values and flipping only the payload-status
-        // flags, asserting acceptance. Root-mismatch behavior is intentionally
-        // not pinned here; the trait surface (`do_validation` taking only `value`)
-        // and the zero-root rejection test cover the root contract.
-        let validator = PayloadAttestationVoteValidator;
-        let root = Hash256::from_low_u64_be(0x1111);
-        let proposed = create_payload_attestation_vote(root, true, true);
-        let local_view = create_payload_attestation_vote(root, false, false);
-
-        assert!(validator.validate(&proposed, &local_view));
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════
     // GloasBeaconVote Tests
     // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -3116,6 +2987,185 @@ mod tests {
         assert!(
             result.is_err(),
             "BeaconVote (112-byte fixed) must reject 120-byte GloasBeaconVote encoding"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ProposerConsensusData Gloas (EIP-7732) Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Creates a minimal proposer `ValidatorDuty` at slot 0 for Gloas block tests.
+    fn test_proposer_duty() -> ValidatorDuty {
+        ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: PublicKeyBytes::empty(),
+            slot: Slot::new(0),
+            validator_index: ValidatorIndex(0),
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        }
+    }
+
+    #[test]
+    /// Tests that BeaconBlock::from_ssz_bytes_for_fork round-trips successfully through the
+    /// SSZ bytes for a Gloas block variant.
+    fn decode_block_round_trip() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes())
+                .expect("Gloas block bytes should fit in DataSSZ"),
+        };
+
+        let decoded = consensus_data
+            .decode_block::<MainnetEthSpec>()
+            .expect("Gloas block should decode from DataSSZ");
+
+        assert_eq!(
+            decoded, block,
+            "decoded Gloas block should equal the original block"
+        );
+    }
+
+    #[test]
+    /// Tests that `decode_blinded_block` rejects Gloas input with `DecodeError::NoMatchingVariant`.
+    fn decode_blinded_block_rejects_gloas() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes())
+                .expect("Gloas block bytes should fit in DataSSZ"),
+        };
+
+        let result = consensus_data.decode_blinded_block::<MainnetEthSpec>();
+
+        assert!(
+            matches!(result, Err(DecodeError::NoMatchingVariant)),
+            "decode_blinded_block must reject Gloas with DecodeError::NoMatchingVariant, got {result:?}"
+        );
+    }
+
+    #[test]
+    /// Tests `DataVersion` and `ForkName` are deducible from Gloas encoded bytes.
+    fn data_version_gloas_ssz_round_trip() {
+        let version = DataVersion::from(ForkName::Gloas);
+
+        let encoded = version.as_ssz_bytes();
+        let decoded =
+            DataVersion::from_ssz_bytes(&encoded).expect("Gloas DataVersion should decode");
+
+        assert_eq!(
+            decoded, version,
+            "DataVersion should round-trip through SSZ for Gloas"
+        );
+        assert_eq!(
+            ForkName::from(decoded),
+            ForkName::Gloas,
+            "decoded DataVersion should map back to ForkName::Gloas"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // validate_block_proposal Fork-Branch Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Builds a `ProposerConsensusDataValidator` with slashing protection disabled.
+    ///
+    /// The `SlashingDatabase` is constructed (no path-less constructor exists) but never
+    /// exercised because `disable_slashing_protection` is `true`. The caller must keep the
+    /// returned `TempDir` alive for the lifetime of the validator.
+    fn test_block_proposal_validator() -> (
+        tempfile::TempDir,
+        ProposerConsensusDataValidator<MainnetEthSpec>,
+    ) {
+        let dir = tempfile::TempDir::new().expect("tempdir should succeed");
+        let slashing_db = Arc::new(
+            SlashingDatabase::open_or_create(&dir.path().join("slashing.sqlite"))
+                .expect("slashing DB should open"),
+        );
+        let validator = ProposerConsensusDataValidator::<MainnetEthSpec>::new(
+            slashing_db,
+            true,
+            Arc::new(ChainSpec::mainnet()),
+            PublicKeyBytes::empty(),
+            Hash256::zero(),
+        );
+        (dir, validator)
+    }
+
+    #[test]
+    /// Tests `validate_block_proposal` Gloas block success case.
+    fn validate_block_proposal_gloas_decodes_directly() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(block.as_ssz_bytes())
+                .expect("Gloas block bytes should fit in DataSSZ"),
+        };
+
+        let (_dir, validator) = test_block_proposal_validator();
+        let result = validator.validate_block_proposal(&consensus_data);
+
+        assert!(
+            result.is_ok(),
+            "Gloas block proposal should validate via the Gloas decode branch, got {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    /// Tests that decoding failures when processing garbage SSZ block bytes are correctly
+    /// propagated by the Gloas branch.
+    fn validate_block_proposal_gloas_rejects_invalid_bytes() {
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(vec![0xff; 32]).expect("32 bytes should fit in DataSSZ"),
+        };
+
+        let (_dir, validator) = test_block_proposal_validator();
+
+        assert!(
+            validator.validate_block_proposal(&consensus_data).is_err(),
+            "Gloas branch should reject undecodable block bytes"
+        );
+    }
+
+    #[test]
+    /// Tests that existing blinded-then-full pre-gloas behavior is intact with a
+    /// `FullBlockContents` shape via `decode_block_contents`.
+    fn validate_block_proposal_pre_gloas_unchanged() {
+        let spec = ChainSpec::mainnet();
+        let block = BeaconBlock::Deneb(BeaconBlockDeneb::<MainnetEthSpec>::empty(&spec));
+        let block_contents = FullBlockContents::<MainnetEthSpec>::new(
+            block,
+            Some((VariableList::empty(), VariableList::empty())),
+        );
+        let consensus_data = ProposerConsensusData {
+            duty: test_proposer_duty(),
+            version: DataVersion::from(ForkName::Deneb),
+            data_ssz: VariableList::new(block_contents.as_ssz_bytes())
+                .expect("Deneb block contents bytes should fit in DataSSZ"),
+        };
+
+        let (_dir, validator) = test_block_proposal_validator();
+        let result = validator.validate_block_proposal(&consensus_data);
+
+        assert!(
+            result.is_ok(),
+            "pre-Gloas (Deneb) block proposal should validate via the existing fallback, got {:?}",
+            result.err()
         );
     }
 }
