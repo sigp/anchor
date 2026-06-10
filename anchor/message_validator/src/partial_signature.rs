@@ -5,10 +5,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
     msgid::Role,
-    partial_sig::{
-        PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages,
-        PartialSignatureMessagesError,
-    },
+    partial_sig::{PartialSignatureKind, PartialSignatureMessages, PartialSignatureMessagesError},
 };
 use ssz::Decode;
 use types::consts::altair::SYNC_COMMITTEE_SUBNET_COUNT;
@@ -147,7 +144,8 @@ fn validate_partial_signature_message_semantics(
 
 fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -> bool {
     match role {
-        Role::Committee | Role::PTCCommittee => kind == PartialSignatureKind::PostConsensus,
+        Role::Committee => kind == PartialSignatureKind::PostConsensus,
+        Role::PTCAttester => kind == PartialSignatureKind::PTCAttester,
         Role::Aggregator => {
             kind == PartialSignatureKind::PostConsensus
                 || kind == PartialSignatureKind::SelectionProofPartialSig
@@ -317,14 +315,12 @@ fn validate_partial_sig_messages_by_duty_logic(
                 }
             }
         }
-        Role::PTCCommittee => {
-            // PTC produces exactly one partial signature per locally-assigned
-            // validator per slot.
-            validate_ptc_committee_message_count(message_count, validator_count)?;
-            validate_validator_index_occurrence_limit(&partial_signature_messages.messages, 1)?;
-        }
         // Per-validator roles only allow one signature
-        Role::Aggregator | Role::Proposer | Role::ValidatorRegistration | Role::VoluntaryExit => {
+        Role::Aggregator
+        | Role::Proposer
+        | Role::ValidatorRegistration
+        | Role::VoluntaryExit
+        | Role::PTCAttester => {
             if message_count > 1 {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
                     got: message_count,
@@ -334,40 +330,6 @@ fn validate_partial_sig_messages_by_duty_logic(
         }
     }
 
-    Ok(())
-}
-
-fn validate_validator_index_occurrence_limit(
-    messages: &[PartialSignatureMessage],
-    limit: usize,
-) -> Result<(), ValidationFailure> {
-    let mut validator_index_count = HashMap::new();
-    for message in messages {
-        let count = validator_index_count
-            .entry(message.validator_index)
-            .or_insert(0usize);
-        *count += 1;
-        if *count > limit {
-            return Err(ValidationFailure::TooManyValidatorIndexOccurrences {
-                validator_index: message.validator_index,
-                got: *count,
-                limit,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_ptc_committee_message_count(
-    message_count: usize,
-    validator_count: usize,
-) -> Result<(), ValidationFailure> {
-    if message_count > validator_count {
-        return Err(ValidationFailure::TooManyPartialSignatureMessages {
-            got: message_count,
-            limit: validator_count,
-        });
-    }
     Ok(())
 }
 
@@ -1246,9 +1208,9 @@ mod tests {
     const LATE_SLOT_ALLOWANCE_TEST: u64 = 2;
     const TTL_SLOTS: u64 = SLOTS_PER_EPOCH_TEST + LATE_SLOT_ALLOWANCE_TEST; // 34 slots
     const BEYOND_TTL_SLOTS: u64 = 40;
-    // Past the proposer/sync TTL (1 + LATE_SLOT_ALLOWANCE_TEST = 3 slots), well
-    // within the committee TTL (TTL_SLOTS = 34). Lets a test prove a role is in
-    // the committee TTL bucket rather than just inside the long-TTL boundary.
+    // Past the short slot-bound TTL (1 + LATE_SLOT_ALLOWANCE_TEST = 3 slots),
+    // well within the committee TTL (TTL_SLOTS = 34). Lets a test prove which
+    // TTL bucket a role is in, rather than just probing a boundary.
     const COMMITTEE_TTL_BUCKET_SLOTS: u64 = 20;
 
     // Helper to create validation context for TTL tests
@@ -1679,56 +1641,93 @@ mod tests {
         );
     }
 
-    fn create_partial_sig_message(validator_index: ValidatorIndex) -> PartialSignatureMessage {
-        PartialSignatureMessage {
-            partial_signature: Signature::empty(),
-            signing_root: Hash256::from([0u8; 32]),
-            signer: OperatorId(1),
-            validator_index,
-        }
-    }
-
     #[test]
-    fn test_ptc_committee_validator_index_occurrence_limit() {
-        // PTC allows exactly 1 occurrence per validator index per partial-sig packet.
-        let one = vec![create_partial_sig_message(ValidatorIndex(100))];
-        assert!(validate_validator_index_occurrence_limit(&one, 1).is_ok());
+    fn test_ptc_attester_rejects_multiple_messages_per_packet() {
+        // PTC is validator-scoped: exactly one PayloadAttestationMessage per
+        // packet. The per-validator `> 1` bound rejects a second message, which
+        // also subsumes the validator-index occurrence cap (two messages for the
+        // same index would already trip `> 1`).
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
 
-        let two = vec![
-            create_partial_sig_message(ValidatorIndex(100)),
-            create_partial_sig_message(ValidatorIndex(100)),
-        ];
+        // ValidatorIndex(123) is in the test committee's validator_indices, so
+        // each message passes the per-validator index check; the second message
+        // then trips the `> 1` packet bound.
+        let messages: Vec<_> = (0..2)
+            .map(|_| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(123),
+            })
+            .collect();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::PTCAttester,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::PTCAttester);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(1),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::PTCAttester,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(Fork::CStar),
+        };
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
         assert_validation_error(
-            validate_validator_index_occurrence_limit(&two, 1),
-            |f| {
+            result,
+            |failure| {
                 matches!(
-                    f,
-                    ValidationFailure::TooManyValidatorIndexOccurrences { limit: 1, .. }
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { limit: 1, .. }
                 )
             },
-            "TooManyValidatorIndexOccurrences (PTC limit)",
+            "TooManyPartialSignatureMessages (PTC cap 1 per packet)",
         );
     }
 
     #[test]
-    fn test_ptc_committee_message_count_exceeds_validator_count() {
-        // V+1 messages trip the structural message-count cap (V).
-        let v = FOUR_NODE_COMMITTEE;
-        assert!(validate_ptc_committee_message_count(v, v).is_ok());
-        assert_validation_error(
-            validate_ptc_committee_message_count(v + 1, v),
-            |f| {
-                matches!(
-                    f,
-                    ValidationFailure::TooManyPartialSignatureMessages { limit, .. } if *limit == v
-                )
-            },
-            "TooManyPartialSignatureMessages (PTC count > V)",
-        );
-    }
-
-    #[test]
-    fn test_ptc_committee_rejected_before_cstar() {
+    fn test_ptc_attester_rejected_before_cstar() {
         use crate::validate_role_for_fork;
 
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -1736,8 +1735,8 @@ mod tests {
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
         let signed_msg = create_signed_partial_sig_message(
-            Role::PTCCommittee,
-            PartialSignatureKind::PostConsensus,
+            Role::PTCAttester,
+            PartialSignatureKind::PTCAttester,
             OperatorId(1),
             &private_key,
         );
@@ -1746,7 +1745,7 @@ mod tests {
         let validation_context = create_test_validation_context_with_fork(
             &signed_msg,
             &committee_info,
-            Role::PTCCommittee,
+            Role::PTCAttester,
             &map,
             Some(fork_schedule),
         );
@@ -1763,32 +1762,33 @@ mod tests {
                     }
                 )
             },
-            "RoleNotActiveBeforeFork (PTCCommittee pre-CStar)",
+            "RoleNotActiveBeforeFork (PTCAttester pre-CStar)",
         );
     }
 
     #[test]
-    fn test_ptc_committee_within_ttl_accepted() {
+    fn test_ptc_attester_within_ttl_accepted() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
         let map =
             create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
         let signed_msg = create_signed_partial_sig_message(
-            Role::PTCCommittee,
-            PartialSignatureKind::PostConsensus,
+            Role::PTCAttester,
+            PartialSignatureKind::PTCAttester,
             OperatorId(1),
             &private_key,
         );
 
-        // COMMITTEE_TTL_BUCKET_SLOTS = 20 is past the proposer/sync TTL (3) but
-        // well inside the committee TTL (34). Accepting here proves PTC is
-        // bucketed as committee, not just inside a long TTL.
+        // PTC output is only useful for its own slot (the aggregated payload
+        // attestation is gossip-valid for that slot and includable only at
+        // slot + 1), so PTCAttester uses the short TTL
+        // (1 + LATE_SLOT_ALLOWANCE = 3 slots). Two slots late is inside it.
         let validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
-            Role::PTCCommittee,
+            Role::PTCAttester,
             &map,
-            COMMITTEE_TTL_BUCKET_SLOTS,
+            LATE_SLOT_ALLOWANCE_TEST,
             generate_fork_schedule(Fork::CStar),
         );
 
@@ -1804,17 +1804,56 @@ mod tests {
     }
 
     #[test]
-    fn test_ptc_committee_binds_post_consensus_only() {
-        // PTC binds to PartialSignatureKind::PostConsensus.
-        // Mapping to ValidationFailure::PartialSignatureTypeRoleMismatch is covered
-        // end-to-end by test_partial_signature_message_with_invalid_type_for_role.
+    fn test_ptc_attester_beyond_short_ttl_rejected() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::PTCAttester,
+            PartialSignatureKind::PTCAttester,
+            OperatorId(1),
+            &private_key,
+        );
+
+        // 20 slots late would still be inside the long (committee) TTL of 34
+        // slots; rejecting it pins PTCAttester to the short slot-bound bucket.
+        let validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::PTCAttester,
+            &map,
+            COMMITTEE_TTL_BUCKET_SLOTS,
+            generate_fork_schedule(Fork::CStar),
+        );
+
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+            "LateSlotMessage (PTCAttester past short TTL)",
+        );
+    }
+
+    #[test]
+    fn test_ptc_attester_binds_ptc_attester_kind() {
+        // PTC binds to its own PartialSignatureKind::PTCAttester (no longer
+        // PostConsensus). Mapping to ValidationFailure::PartialSignatureTypeRoleMismatch
+        // is covered end-to-end by test_partial_signature_message_with_invalid_type_for_role.
         assert!(partial_signature_type_matches_role(
-            PartialSignatureKind::PostConsensus,
-            Role::PTCCommittee,
+            PartialSignatureKind::PTCAttester,
+            Role::PTCAttester,
         ));
         assert!(!partial_signature_type_matches_role(
-            PartialSignatureKind::RandaoPartialSig,
-            Role::PTCCommittee,
+            PartialSignatureKind::PostConsensus,
+            Role::PTCAttester,
         ));
     }
 
