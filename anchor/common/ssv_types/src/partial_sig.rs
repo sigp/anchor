@@ -37,6 +37,9 @@ pub enum PartialSignatureKind {
     // AggregatorCommitteePartialSig is a partial signature for combined aggregator and sync
     // committee selection proofs (committee-based batching)
     AggregatorCommitteePartialSig = 6,
+    // PTCAttester is a standalone single-validator partial signature over PayloadAttestationData
+    // (validator-scoped, leaderless; not a QBFT consensus value)
+    PTCAttester = 7,
 }
 
 impl TryFrom<u64> for PartialSignatureKind {
@@ -51,6 +54,7 @@ impl TryFrom<u64> for PartialSignatureKind {
             4 => Ok(PartialSignatureKind::ValidatorRegistration),
             5 => Ok(PartialSignatureKind::VoluntaryExit),
             6 => Ok(PartialSignatureKind::AggregatorCommitteePartialSig),
+            7 => Ok(PartialSignatureKind::PTCAttester),
             _ => Err(()),
         }
     }
@@ -187,6 +191,7 @@ mod tests {
             PartialSignatureKind::ValidatorRegistration,
             PartialSignatureKind::VoluntaryExit,
             PartialSignatureKind::AggregatorCommitteePartialSig,
+            PartialSignatureKind::PTCAttester,
         ];
 
         for variant in variants {
@@ -219,6 +224,7 @@ mod tests {
             (PartialSignatureKind::ValidatorRegistration, 4u64),
             (PartialSignatureKind::VoluntaryExit, 5u64),
             (PartialSignatureKind::AggregatorCommitteePartialSig, 6u64),
+            (PartialSignatureKind::PTCAttester, 7u64),
         ];
 
         for (variant, expected_value) in test_cases {
@@ -236,7 +242,7 @@ mod tests {
 
     #[test]
     fn partial_signature_kind_ssz_decode_invalid_variant() {
-        let invalid_value = 7u64.to_le_bytes();
+        let invalid_value = 8u64.to_le_bytes();
         let result = PartialSignatureKind::from_ssz_bytes(&invalid_value);
         assert!(matches!(result, Err(DecodeError::NoMatchingVariant)));
     }
@@ -300,11 +306,15 @@ mod tests {
             PartialSignatureKind::try_from(6u64).unwrap(),
             PartialSignatureKind::AggregatorCommitteePartialSig
         );
+        assert_eq!(
+            PartialSignatureKind::try_from(7u64).unwrap(),
+            PartialSignatureKind::PTCAttester
+        );
     }
 
     #[test]
     fn partial_signature_kind_try_from_u64_invalid_values() {
-        assert!(PartialSignatureKind::try_from(7u64).is_err());
+        assert!(PartialSignatureKind::try_from(8u64).is_err());
         assert!(PartialSignatureKind::try_from(100u64).is_err());
         assert!(PartialSignatureKind::try_from(u64::MAX).is_err());
     }
@@ -331,6 +341,7 @@ mod tests {
             PartialSignatureKind::ValidatorRegistration,
             PartialSignatureKind::VoluntaryExit,
             PartialSignatureKind::AggregatorCommitteePartialSig,
+            PartialSignatureKind::PTCAttester,
         ];
 
         let hashes: Vec<_> = variants.iter().map(|v| v.tree_hash_root()).collect();

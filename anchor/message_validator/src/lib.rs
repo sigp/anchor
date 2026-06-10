@@ -196,7 +196,6 @@ pub enum ValidationFailure {
         limit: usize,
     },
     EncodeOperators,
-    FailedToGetMaxRound,
     SlotStartTimeNotFound {
         slot: Slot,
     },
@@ -450,7 +449,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         // Get committee info based on role and duty executor
         let network_state = self.network_state_rx.borrow();
         let committee_info = match role {
-            Role::Committee | Role::AggregatorCommittee | Role::PTCCommittee => {
+            Role::Committee | Role::AggregatorCommittee => {
                 let committee_id = committee_id.ok_or(ValidationFailure::NonExistentCommitteeID)?;
                 network_state
                     .get_committee_info_by_committee_id(&committee_id)
@@ -461,7 +460,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             | Role::Proposer
             | Role::SyncCommittee
             | Role::ValidatorRegistration
-            | Role::VoluntaryExit => {
+            | Role::VoluntaryExit
+            | Role::PTCAttester => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -859,8 +859,8 @@ pub(crate) fn validate_role_for_fork(
         });
     }
 
-    // Reject PTCCommittee before CStar fork (safety net)
-    if role == Role::PTCCommittee && active_fork < Fork::CStar {
+    // Reject PTCAttester before CStar fork (safety net)
+    if role == Role::PTCAttester && active_fork < Fork::CStar {
         return Err(ValidationFailure::RoleNotActiveBeforeFork {
             role,
             current_fork: active_fork,
@@ -929,13 +929,12 @@ fn message_lateness(
     validation_context: &ValidationContext<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
-        Role::Proposer | Role::SyncCommittee => 1 + LATE_SLOT_ALLOWANCE,
+        Role::Proposer | Role::SyncCommittee | Role::PTCAttester => 1 + LATE_SLOT_ALLOWANCE,
         Role::Committee
         | Role::Aggregator
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
-        | Role::AggregatorCommittee
-        | Role::PTCCommittee => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
+        | Role::AggregatorCommittee => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
@@ -1013,7 +1012,10 @@ fn duty_limit(
                 duty_provider.get_voluntary_exit_duty_count(slot, &pubkey),
             ))
         }
-        Role::Aggregator | Role::ValidatorRegistration => Ok(Some(2)),
+        // Validator-scoped roles with at most ~1 duty per validator per epoch
+        // (the duty counter is keyed per-validator); the limit of 2 leaves a
+        // one-duty margin for epoch-boundary/reorg edge cases.
+        Role::Aggregator | Role::ValidatorRegistration | Role::PTCAttester => Ok(Some(2)),
         // Committee roles (Committee and AggregatorCommittee) use the same duty limit formula:
         // min(slots_per_epoch, 2*validator_count), or slots_per_epoch if any validator is in sync
         // committee
@@ -1043,16 +1045,6 @@ fn duty_limit(
         }
         // Proposer and SyncCommittee have no duty limit
         Role::Proposer | Role::SyncCommittee => Ok(None),
-        // PTC: each validator is eligible for the PTC only in the one slot of the
-        // epoch where it has its attestation duty (PTC pool = union of beacon
-        // committees for that slot; see `compute_ptc` at
-        // https://github.com/ethereum/consensus-specs/blob/4a4937bea332d72a55a76aaebcb97fbcdc189f69/specs/gloas/beacon-chain.md#new-compute_ptc).
-        // So per-epoch max duties = min(slots_per_epoch, V) where V is the
-        // cluster's local validator count.
-        Role::PTCCommittee => Ok(Some(std::cmp::min(
-            validation_context.slots_per_epoch,
-            validator_indices.len() as u64,
-        ))),
     }
 }
 
@@ -1298,14 +1290,15 @@ mod tests {
     pub(crate) fn create_message_id_for_test(role: Role) -> MessageId {
         let domain = DomainType([0, 0, 0, 1]);
         let duty_executor = match role {
-            Role::Committee | Role::AggregatorCommittee | Role::PTCCommittee => {
+            Role::Committee | Role::AggregatorCommittee => {
                 DutyExecutor::Committee(CommitteeId([0u8; 32]))
             }
             Role::Aggregator
             | Role::Proposer
             | Role::SyncCommittee
             | Role::ValidatorRegistration
-            | Role::VoluntaryExit => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            | Role::VoluntaryExit
+            | Role::PTCAttester => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }
