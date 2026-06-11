@@ -104,3 +104,22 @@ pub static WAD_SOFT_TIMEOUT_TOTAL: LazyLock<Result<IntCounter>> = LazyLock::new(
         "Number of WAD fetches that returned at soft timeout with partial responses",
     )
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PTC (Payload Timeliness Committee) metrics
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// The committee never reached the partial signature threshold. At the current collector
+/// granularity this also covers genuine channel closes, so it is an upper bound on the true
+/// observation-divergence rate.
+pub const PTC_FAILURE_NO_SIGNATURE: &str = "no_signature";
+/// Local collection or reconstruction infrastructure fault.
+pub const PTC_FAILURE_INFRA: &str = "infra";
+
+pub static PTC_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
+    try_create_int_counter_vec(
+        "anchor_ptc_reconstruction_failures_total",
+        "Payload attestation signature collection failures by reason",
+        &["reason"],
+    )
+});

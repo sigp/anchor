@@ -66,33 +66,48 @@ pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 
 pub(super) struct CapturedSignatureCall {
     pub(super) requester: SignatureRequester,
+    pub(super) metadata: SignatureMetadata,
+    /// Only the root is captured, not the full `ValidatorSigningData`, so the capture never
+    /// holds key share material.
+    pub(super) signing_root: Hash256,
 }
 
-/// Mock that captures calls and returns a canned infinity signature.
+/// Mock that captures calls and returns a canned infinity signature, or a configured failure.
 struct MockSignatureCollector {
     captured: CapturedCalls,
+    failure: Option<CollectionError>,
 }
 
 impl SignatureCollecting for MockSignatureCollector {
     fn sign_and_collect(
         &self,
-        _metadata: SignatureMetadata,
+        metadata: SignatureMetadata,
         requester: SignatureRequester,
-        _signing_data: ValidatorSigningData,
+        signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
-        self.captured
-            .lock()
-            .push(CapturedSignatureCall { requester });
+        // Capture before failing so tests can assert that the collection attempt happened even
+        // when the configured outcome is an error.
+        self.captured.lock().push(CapturedSignatureCall {
+            requester,
+            metadata,
+            signing_root: signing_data.root,
+        });
+        if let Some(failure) = self.failure.clone() {
+            return Box::pin(async move { Err(failure) });
+        }
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
     }
 }
 
 /// Creates a mock signature collector and returns the shared captured calls handle.
-fn create_mock_collector() -> (Box<dyn SignatureCollecting>, CapturedCalls) {
+fn create_mock_collector(
+    failure: Option<CollectionError>,
+) -> (Box<dyn SignatureCollecting>, CapturedCalls) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
+        failure,
     };
     (Box::new(mock), captured)
 }
@@ -166,6 +181,24 @@ pub(super) fn create_committee_setup(
 
 // ==================== Test harness ====================
 
+/// Construction knobs that only some tests need to vary.
+pub(super) struct HarnessOptions {
+    /// When set, every `sign_and_collect` call fails with this error after being captured.
+    pub(super) collector_failure: Option<CollectionError>,
+    pub(super) disable_slashing_protection: bool,
+}
+
+impl Default for HarnessOptions {
+    fn default() -> Self {
+        Self {
+            collector_failure: None,
+            // Slashing protection is disabled by default because the harness never registers
+            // validators in the slashing DB, which would fail block/attestation signing paths.
+            disable_slashing_protection: true,
+        }
+    }
+}
+
 pub(super) struct ValidatorStoreTestHarness {
     pub(super) validator_store:
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
@@ -178,6 +211,14 @@ pub(super) struct ValidatorStoreTestHarness {
 
 impl ValidatorStoreTestHarness {
     pub(super) fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
+        Self::new_with_options(committee_setups, our_operator_id, HarnessOptions::default())
+    }
+
+    pub(super) fn new_with_options(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        options: HarnessOptions,
+    ) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = database::test_utils::generators::pubkey::random_rsa();
 
@@ -198,7 +239,7 @@ impl ValidatorStoreTestHarness {
             "test",
         ));
 
-        let (mock_collector, captured_calls) = create_mock_collector();
+        let (mock_collector, captured_calls) = create_mock_collector(options.collector_failure);
 
         // Database
         let database = Arc::new(
@@ -268,7 +309,7 @@ impl ValidatorStoreTestHarness {
             mock_collector,
             Arc::new(MockConsensusDecider),
             slashing_protection,
-            true, // disable slashing protection for simpler testing
+            options.disable_slashing_protection,
             slot_clock.clone(),
             Arc::new(ChainSpec::mainnet()),
             Hash256::zero(),

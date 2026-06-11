@@ -1,3 +1,5 @@
+use signature_collector::CollectionError;
+
 use crate::{Error, SpecificError};
 
 /// Outcome of a block signing attempt, used for metrics labeling.
@@ -19,6 +21,43 @@ pub mod checkpoints {
     pub const PUBLISH_BLOCK: &str = "publish_block";
     pub const DUTY_COMPLETED: &str = "duty_completed";
     pub const DUTY_FAILED: &str = "duty_failed";
+}
+
+/// Telemetry classification of `collect_signature` failures during PTC duties.
+///
+/// Returned as an enum rather than a label string because the class drives two independent
+/// effects in the caller: the log level and whether a reconstruction-failure metric is
+/// incremented at all.
+pub enum PtcFailureClass {
+    /// The committee never reached the partial signature threshold. This surfaces as
+    /// `QueueClosedError` because the collector is evicted after
+    /// `SIGNATURE_COLLECTOR_RETAIN_SLOTS`, dropping the result channel while we await it, so it
+    /// cannot be distinguished from a genuine channel close.
+    NoSignature,
+    /// Local infrastructure failed while collecting or reconstructing the signature.
+    Infra,
+    /// The failure happened before signature collection started (unknown pubkey, threshold
+    /// arithmetic, key share decryption, missing index).
+    NonCollection,
+}
+
+pub fn classify_ptc_collection_failure(error: &Error) -> PtcFailureClass {
+    match error {
+        // The inner match is deliberately wildcard-free so a future `CollectionError` variant
+        // forces a conscious classification decision here at compile time.
+        Error::SpecificError(SpecificError::SignatureCollectionFailed(collection_error)) => {
+            match collection_error {
+                CollectionError::QueueClosedError | CollectionError::CollectionTimeout => {
+                    PtcFailureClass::NoSignature
+                }
+                CollectionError::QueueFullError
+                | CollectionError::OwnOperatorIdUnknown
+                | CollectionError::EmptySignature
+                | CollectionError::RecoverError(_) => PtcFailureClass::Infra,
+            }
+        }
+        _ => PtcFailureClass::NonCollection,
+    }
 }
 
 /// Common reasons for block signing failures.
