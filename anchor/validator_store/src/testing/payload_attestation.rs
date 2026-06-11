@@ -1,4 +1,6 @@
 //! Integration tests for the PTC payload attestation path in `sign_payload_attestation()`.
+use std::sync::LazyLock;
+
 use bls::FixedBytesExtended;
 use signature_collector::{CollectionError, SignatureRequester};
 use ssv_types::{OperatorId, msgid::Role, partial_sig::PartialSignatureKind};
@@ -12,6 +14,13 @@ use crate::{Error, SpecificError};
 
 /// Non-zero so a correctly echoed beacon index is distinguishable from an accidental default 0.
 const STARTING_VALIDATOR_INDEX: usize = 5;
+
+/// Serializes the two metric tests against each other. Both read the same labels of the global
+/// prometheus `PTC_RECONSTRUCTION_FAILURES` counter, so concurrent execution would make their
+/// cross-label delta assertions racy. A tokio mutex rather than std because the guard is held
+/// across awaits on a multi-thread runtime.
+static METRIC_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 fn test_operator_ids() -> [OperatorId; 4] {
     [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)]
@@ -142,6 +151,10 @@ async fn sign_payload_attestation_missing_index_errors() {
 /// `no_signature` reconstruction-failure metric exactly once.
 #[tokio::test(flavor = "multi_thread")]
 async fn sign_payload_attestation_collection_failure_increments_no_signature_metric() {
+    // The global prometheus registry makes cross-label delta assertions racy between the two
+    // metric tests, so they serialize against each other.
+    let _guard = METRIC_TEST_LOCK.lock().await;
+
     // Arrange
     let our_operator_id = OperatorId(1);
     let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
@@ -156,9 +169,9 @@ async fn sign_payload_attestation_collection_failure_increments_no_signature_met
     );
     let data = create_payload_attestation_data();
     // The metric lives in the global prometheus registry shared by every test in the process,
-    // so we assert on the delta. The delta assertion is only safe while this is the sole test
-    // incrementing the `no_signature` label; future failure tests should use distinct labels or
-    // compute their own deltas.
+    // so we assert on the delta. The infra metric test also touches this label (asserting a
+    // zero delta), so the delta is only reliable because both tests hold `METRIC_TEST_LOCK`;
+    // future failure tests must join that serialization or use distinct labels.
     let no_signature_counter = crate::metrics::PTC_RECONSTRUCTION_FAILURES
         .as_ref()
         .expect("metric should be created")
@@ -185,6 +198,72 @@ async fn sign_payload_attestation_collection_failure_increments_no_signature_met
         no_signature_counter.get() - count_before,
         1,
         "QueueClosedError should increment the no_signature reconstruction-failure metric once"
+    );
+}
+
+/// An infrastructure failure surfaces as `SignatureCollectionFailed` and increments the `infra`
+/// reconstruction-failure metric, leaving the `no_signature` metric untouched.
+#[tokio::test(flavor = "multi_thread")]
+async fn sign_payload_attestation_infra_failure_increments_infra_metric() {
+    // The global prometheus registry makes cross-label delta assertions racy between the two
+    // metric tests, so they serialize against each other.
+    let _guard = METRIC_TEST_LOCK.lock().await;
+
+    // Arrange
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+    let pubkey = committee.validators[0].public_key;
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            collector_failure: Some(CollectionError::EmptySignature),
+            disable_slashing_protection: true,
+        },
+    );
+    let data = create_payload_attestation_data();
+    // The metric lives in the global prometheus registry shared by every test in the process,
+    // so we assert on deltas. The `no_signature` zero-delta read races with the QueueClosedError
+    // test's increment, so the deltas are only reliable because both tests hold
+    // `METRIC_TEST_LOCK`; future failure tests must join that serialization or use distinct
+    // labels.
+    let metric = crate::metrics::PTC_RECONSTRUCTION_FAILURES
+        .as_ref()
+        .expect("metric should be created");
+    let infra_counter = metric.with_label_values(&[crate::metrics::PTC_FAILURE_INFRA]);
+    let no_signature_counter =
+        metric.with_label_values(&[crate::metrics::PTC_FAILURE_NO_SIGNATURE]);
+    let infra_before = infra_counter.get();
+    let no_signature_before = no_signature_counter.get();
+
+    // Act
+    let result = harness
+        .validator_store
+        .sign_payload_attestation(pubkey, data)
+        .await;
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(
+                SpecificError::SignatureCollectionFailed(CollectionError::EmptySignature)
+            ))
+        ),
+        "expected EmptySignature surfaced as SignatureCollectionFailed, got: {result:?}"
+    );
+    assert_eq!(
+        infra_counter.get() - infra_before,
+        1,
+        "EmptySignature should increment the infra reconstruction-failure metric once"
+    );
+    // The zero delta pins the classification boundary: `no_signature` is the SIP-94
+    // observation-divergence upper bound, so an infra variant drifting into that bucket would
+    // silently inflate the divergence estimate.
+    assert_eq!(
+        no_signature_counter.get() - no_signature_before,
+        0,
+        "infra failures must not leak into the no_signature divergence metric"
     );
 }
 
