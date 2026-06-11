@@ -46,8 +46,8 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        GloasBeaconVote, ProposerConsensusData, ProposerConsensusDataValidator, QbftData,
-        QbftDataValidator, SelectionProofBatchId, ValidatorDuty,
+        GloasBeaconVote, GloasBeaconVoteValidator, ProposerConsensusData,
+        ProposerConsensusDataValidator, QbftData, SelectionProofBatchId, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -880,14 +880,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     }
 
     /// Constructs the QBFT data validator for Gloas-era committee attestation duties.
-    /// Body lands in #1026 (`GloasBeaconVoteValidator`); the helper is wired into the
-    /// fork branch of `sign_committee_attestations` now so #1026 is a body-only change.
     fn create_gloas_beacon_vote_validator(
         &self,
-        _slot: Slot,
-        _validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
-    ) -> Box<dyn QbftDataValidator<GloasBeaconVote>> {
-        todo!("#1026: implement GloasBeaconVoteValidator")
+        slot: Slot,
+        validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+    ) -> Box<GloasBeaconVoteValidator<E>> {
+        let slashing_protection =
+            (!self.disable_slashing_protection).then(|| Arc::clone(&self.slashing_protection));
+
+        Box::new(GloasBeaconVoteValidator::new(
+            slot,
+            slashing_protection,
+            self.spec.clone(),
+            validator_attestation_committees,
+            self.genesis_validators_root,
+            self.strict_mfp,
+        ))
     }
 
     fn get_attesting_validators_in_committee(
