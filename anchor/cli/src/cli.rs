@@ -16,9 +16,8 @@ use global_config::defaults::{
 };
 use logging::FileLoggingFlags;
 
-pub const FLAG_HEADER: &str = "Flags";
-
 #[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "Security Options")]
 pub struct SecurityOptions {
     #[clap(
         long,
@@ -44,6 +43,7 @@ pub struct SecurityOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "External APIs")]
 pub struct ExternalApis {
     #[clap(
         long,
@@ -78,7 +78,7 @@ pub struct ExternalApis {
 
     #[clap(
         long,
-        value_name = "CERTIFICATE-FILES",
+        value_name = "CERTIFICATE_FILES",
         value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to a beacon node (and/or proposer node). These certificates must be in PEM format and are used \
@@ -90,7 +90,7 @@ pub struct ExternalApis {
 
     #[clap(
         long,
-        value_name = "CERTIFICATE-FILES",
+        value_name = "CERTIFICATE_FILES",
         value_delimiter = ',',
         help = "Comma-separated paths to custom TLS certificates to use when connecting \
                 to an execution node. These certificates must be in PEM format and are used \
@@ -126,19 +126,18 @@ pub struct ExternalApis {
                 Any sync distance larger than the `Medium` range is considered `Large`. \
                 For example, a value of '8,8,48' would mean: \
                 Synced: 0..=8, Small: 9..=16, Medium: 17..=64, Large: 65..",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub beacon_nodes_sync_tolerances: Vec<u64>,
 }
 
 #[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "HTTP API Options")]
 pub struct HttpApiOptions {
     #[clap(
         long,
         help = "Enable the RESTful HTTP API server. Disabled by default.",
-        help_heading = FLAG_HEADER,
-        display_order = 0,
+        display_order = 0
     )]
     pub http: bool,
 
@@ -167,8 +166,7 @@ pub struct HttpApiOptions {
         help = "This is a safety flag to ensure that the user is aware that the http \
                 transport is unencrypted and using a custom HTTP address is unsafe.",
         display_order = 0,
-        requires = "http_address",
-        help_heading = FLAG_HEADER,
+        requires = "http_address"
     )]
     pub unencrypted_http_transport: bool,
 
@@ -196,12 +194,12 @@ pub struct HttpApiOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "Metrics Options")]
 pub struct MetricsOptions {
     #[clap(
         long,
         help = "Enable the Prometheus metrics HTTP server. Disabled by default.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        display_order = 0
     )]
     pub metrics: bool,
 
@@ -231,8 +229,7 @@ pub struct MetricsOptions {
                 Note: This flag is automatically enabled for < 65 validators. \
                 Enabling this metric for higher validator counts will lead to higher volume \
                 of prometheus metrics being collected.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub enable_high_validator_count_metrics: bool,
 
@@ -250,6 +247,7 @@ pub struct MetricsOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "Network Options")]
 pub struct NetworkOptions {
     #[clap(
         long,
@@ -444,8 +442,8 @@ pub struct NetworkOptions {
     #[clap(
         long,
         global = true,
-        help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards.\
-                It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks.\
+        help = "Discovery can automatically discover external addresses if the node has correctly set up port forwards. \
+                It will automatically update this nodes ENR with values it finds. This can have undesired effects for complicated networks. \
                 Setting this flag will disable discovery from updating the ENR from CLI set values.",
         display_order = 0
     )]
@@ -454,17 +452,11 @@ pub struct NetworkOptions {
     #[clap(
         long,
         help = "Subscribe to all subnets, regardless of committee membership.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        display_order = 0
     )]
     pub subscribe_all_subnets: bool,
 
-    #[clap(
-        long,
-        help = "Disables gossipsub peer scoring.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
-    )]
+    #[clap(long, help = "Disables gossipsub peer scoring.", display_order = 0)]
     pub disable_gossipsub_peer_scoring: bool,
 
     #[clap(long, help = "Disables gossipsub topic scoring.", hide = true)]
@@ -472,6 +464,7 @@ pub struct NetworkOptions {
 }
 
 #[derive(Parser, Clone, Debug)]
+#[clap(next_help_heading = "Payload Building Options")]
 pub struct PayloadBuildingOptions {
     #[clap(
         long,
@@ -489,7 +482,6 @@ pub struct PayloadBuildingOptions {
         alias = "private-tx-proposals",
         help = "Deprecated and ignored. Validator registrations are now always created.",
         display_order = 0,
-        help_heading = FLAG_HEADER,
         hide = true
     )]
     pub builder_proposals: bool,
@@ -510,8 +502,7 @@ pub struct PayloadBuildingOptions {
         long,
         help = "If this flag is set, Anchor will always prefer blocks \
                 constructed by builders, regardless of payload value.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub prefer_builder_proposals: bool,
 }
@@ -540,10 +531,18 @@ pub struct Node {
     #[clap(
         long,
         help = "Disable the latency measurement service.",
-        display_order = 0,
-        help_heading = FLAG_HEADER
+        display_order = 0
     )]
     pub disable_latency_measurement_service: bool,
+
+    #[clap(
+        long,
+        help = "Disable the beacon head monitor which tries to attest as soon as any of the \
+                configured beacon nodes sends a head event. Leaving the service enabled is \
+                recommended, but disabling it can lead to reduced bandwidth and more predictable \
+                usage of the primary beacon node (rather than the fastest BN)."
+    )]
+    pub disable_beacon_head_monitor: bool,
 
     #[clap(
         long,
@@ -588,7 +587,6 @@ pub struct Node {
                 to prevent QBFT protocol violations.",
         display_order = 0,
         default_value_t = false,
-        help_heading = FLAG_HEADER,
         action = ArgAction::Set
     )]
     pub operator_dg: bool,
@@ -612,8 +610,7 @@ pub struct Node {
                 participate in attestation production if the checkpoint roots mismatch. \
                 Using this flag might reduce validator performance if cluster operators have \
                 struggling nodes, but can help to avoid finalization of a faulty majority fork.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+        display_order = 0
     )]
     pub strict_mfp: bool,
 
@@ -622,9 +619,11 @@ pub struct Node {
         help = "Enable parallel querying and scoring of attestation data across multiple beacon \
                 nodes. When enabled, Anchor queries all configured beacon nodes simultaneously \
                 and selects the attestation data with the highest score based on checkpoint \
-                epochs and head block proximity. Only useful with multiple beacon nodes.",
-        display_order = 0,
-        help_heading = FLAG_HEADER,
+                epochs and head block proximity. Only useful with multiple beacon nodes. \
+                Note: WAD is bypassed when the beacon head monitor (enabled by default, see \
+                --disable-beacon-head-monitor) wins the eager-attest race for a slot; the \
+                firing BN is queried directly. WAD still runs on the fallback path.",
+        display_order = 0
     )]
     pub with_weighted_attestation_data: bool,
 

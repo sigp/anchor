@@ -153,10 +153,10 @@ async fn run_committee_signing<T>(
     }
 }
 
-fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Option<u128> {
+fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Option<u64> {
     slot_clock
         .millis_from_current_slot_start()
-        .map(|d| d.as_millis())
+        .map(|d| d.as_millis() as u64)
 }
 
 pub struct AnchorValidatorStore<
@@ -2514,13 +2514,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
-            match determine_slot_elapsed_ms(&self.slot_clock) {
-                Some(ms) => {
-                    Span::current().record("slot_elapsed_ms", ms);
-                }
-                None => trace!("slot_elapsed_ms unavailable: clock returned None"),
-            }
-
+            Span::current().record(
+                "slot_elapsed_ms",
+                determine_slot_elapsed_ms(&self.slot_clock),
+            );
             let outcome = instrumentation::outcome_from_result(&result);
             Span::current().record("outcome", outcome);
             match &result {
@@ -2608,15 +2605,19 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             failure_reason = field::Empty,
             proposal_matched = field::Empty,
             outcome = field::Empty,
+            slot_elapsed_ms = field::Empty,
             block_slot = block_slot.as_u64(),
             validator_pubkey = %validator_pubkey,
             validator_index = field::Empty,
         );
+
         let future = async {
             trace!(
                 checkpoint = instrumentation::checkpoints::DUTY_ENTRY,
+                slot_elapsed_ms = determine_slot_elapsed_ms(&self.slot_clock),
                 "Proposer block signing duty entered"
             );
+
             let result = async {
                 if !*self.is_synced.borrow() {
                     return Err(Error::SpecificError(SpecificError::NotSynced));
@@ -2643,6 +2644,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
                 trace!(
                     checkpoint = instrumentation::checkpoints::PRE_CONSENSUS_HANDOFF,
+                    slot_elapsed_ms = determine_slot_elapsed_ms(&self.slot_clock),
                     "Handing block to consensus process"
                 );
 
@@ -2690,6 +2692,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
             .await;
 
+            Span::current().record(
+                "slot_elapsed_ms",
+                determine_slot_elapsed_ms(&self.slot_clock),
+            );
             let outcome = instrumentation::outcome_from_result(&result);
             Span::current().record("outcome", outcome);
             match &result {

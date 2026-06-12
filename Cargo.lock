@@ -2495,6 +2495,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "docgen"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cli",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5557,6 +5567,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "unicode-normalization",
  "zeroize",
 ]
 
@@ -6062,6 +6073,7 @@ dependencies = [
  "fork",
  "futures",
  "message_sender",
+ "metrics",
  "processor",
  "qbft",
  "slot_clock",

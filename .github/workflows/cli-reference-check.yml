@@ -1,0 +1,50 @@
+name: CLI Reference Check
+
+on:
+  push:
+    branches:
+      - stable
+      - 'pr/*'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUSTFLAGS: "-C debuginfo=0"
+  CARGO_INCREMENTAL: 0
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  cli-reference-check:
+    name: cli-reference-check
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'skip-ci')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest version of stable Rust
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: stable
+          cache: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check CLI reference is up to date
+        run: |
+          if ! make cli-reference-check; then
+            echo ""
+            echo "::error::CLI reference documentation is out of date."
+            echo ""
+            echo "To fix this locally, run:"
+            echo ""
+            echo "    make cli-reference-update"
+            echo ""
+            echo "Then commit the updated files in docs/docs/generated/."
+            exit 1
+          fi

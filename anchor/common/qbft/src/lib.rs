@@ -7,8 +7,8 @@ use std::{
 pub use config::{Config, ConfigBuilder};
 pub use error::ConfigBuilderError;
 pub use qbft_types::{
-    Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState, LeaderFunction,
-    UnsignedWrappedQbftMessage, WrappedQbftMessage,
+    Completed, ConsensusData, DefaultLeaderFunction, InstanceHeight, InstanceState,
+    InstanceStateKind, LeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage,
 };
 use ssv_types::{
     OperatorId, Round, VariableList,
@@ -234,6 +234,14 @@ where
     /// Get the current instance height
     pub fn get_instance_height(&self) -> InstanceHeight {
         self.instance_height
+    }
+
+    /// Get the kind of the current instance state.
+    ///
+    /// Returns a payload-free `InstanceStateKind` to provide callers with a clean object for
+    /// state-machine comparison.
+    pub fn state_kind(&self) -> InstanceStateKind {
+        self.state.kind()
     }
 
     // Shifts this instance into a new round>
