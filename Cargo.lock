@@ -7483,6 +7483,7 @@ dependencies = [
  "ethereum_serde_utils 0.7.0",
  "fork",
  "libp2p",
+ "rusqlite",
  "serde",
  "sha2",
  "slot_clock",
