@@ -140,6 +140,21 @@ mod tests {
     }
 
     #[test]
+    fn test_all_forks_sorted_by_ord() {
+        // The fork machinery relies on `Fork::all()` being ordered identically to
+        // the derived `Ord` (activation order): `ForkSchedule::new` uses
+        // `take_while(|f| f <= &fork)` over `all()`, and `from_fork_configs`
+        // validates monotonic epochs by iterating a `BTreeMap<Fork, _>` (which
+        // orders by `Ord`). Assert that invariant directly so a future fork added
+        // in the wrong enum position, or an out-of-order edit to `all()`, fails
+        // here rather than silently mis-seeding or mis-validating schedules.
+        assert!(
+            Fork::all().windows(2).all(|pair| pair[0] < pair[1]),
+            "Fork::all() must be strictly increasing by Ord (activation order)"
+        );
+    }
+
+    #[test]
     fn test_cstar_topic_prefix() {
         let prefix = Fork::CStar.topic_prefix("mainnet");
         assert_eq!(prefix, "/ssv/mainnet/cstar/");
