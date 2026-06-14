@@ -27,33 +27,41 @@ pub enum Fork {
     /// - Topic format: `ssv.v2.<subnet>`
     Alan,
 
+    /// The CStar fork, the SSV-side rollout of Ethereum's Gloas (ePBS) features.
+    ///
+    /// Activates directly on top of Alan behavior: Boole is unscheduled and
+    /// none of its features (MinHash subnets, AggregatorCommittee roles,
+    /// epoch shift) are enabled by CStar.
+    ///
+    /// Characteristics:
+    /// - Subnet topology: inherits Alan behavior (no subnet change at this fork).
+    /// - Topic format: `/ssv/<network>/cstar/<subnet>`
+    CStar,
+
     /// The Boole fork introducing MinHash subnet topology.
+    ///
+    /// Deprioritized indefinitely by SSV core and unscheduled on all networks.
+    /// If it ever activates, it must do so after CStar; this variant ordering
+    /// makes schedule validation reject a boole epoch at or before cstar's.
     ///
     /// Characteristics:
     /// - Subnet topology: `min(SHA256(operator_id)) % 128`
     /// - Topic format: `/ssv/<network>/boole/<subnet>`
     Boole,
-
-    /// The CStar fork, the SSV-side rollout of Ethereum's Gloas (ePBS) features.
-    ///
-    /// Characteristics:
-    /// - Subnet topology: inherits Boole behavior (no subnet change at this fork).
-    /// - Topic format: `/ssv/<network>/cstar/<subnet>`
-    CStar,
 }
 
 impl Fork {
     /// Returns all known forks in chronological order.
     pub const fn all() -> &'static [Fork] {
-        &[Fork::Alan, Fork::Boole, Fork::CStar]
+        &[Fork::Alan, Fork::CStar, Fork::Boole]
     }
 
     /// Returns the name of this fork as a string.
     pub const fn name(&self) -> &'static str {
         match self {
             Fork::Alan => "alan",
-            Fork::Boole => "boole",
             Fork::CStar => "cstar",
+            Fork::Boole => "boole",
         }
     }
 
@@ -81,8 +89,8 @@ impl std::str::FromStr for Fork {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "alan" => Ok(Fork::Alan),
-            "boole" => Ok(Fork::Boole),
             "cstar" => Ok(Fork::CStar),
+            "boole" => Ok(Fork::Boole),
             _ => Err(format!("Unknown fork: {s}")),
         }
     }
@@ -94,8 +102,8 @@ mod tests {
 
     #[test]
     fn test_fork_ordering() {
-        assert!(Fork::Alan < Fork::Boole);
-        assert!(Fork::Boole < Fork::CStar);
+        assert!(Fork::Alan < Fork::CStar);
+        assert!(Fork::CStar < Fork::Boole);
     }
 
     #[test]
@@ -127,8 +135,8 @@ mod tests {
         let all = Fork::all();
         assert_eq!(all.len(), 3);
         assert_eq!(all[0], Fork::Alan);
-        assert_eq!(all[1], Fork::Boole);
-        assert_eq!(all[2], Fork::CStar);
+        assert_eq!(all[1], Fork::CStar);
+        assert_eq!(all[2], Fork::Boole);
     }
 
     #[test]

@@ -114,13 +114,11 @@ impl SubnetId {
     ) -> Result<SubnetId, SubnetCalculationError> {
         let committee_id = CommitteeId::from(operator_ids);
         match fork {
-            Fork::Alan => Ok(SubnetId::from_committee_alan(
+            Fork::Alan | Fork::CStar => Ok(SubnetId::from_committee_alan(
                 committee_id,
                 crate::SUBNET_COUNT,
             )),
-            Fork::Boole | Fork::CStar => {
-                SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
-            }
+            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ),
         }
     }
 }
@@ -286,6 +284,32 @@ mod tests {
             let subnet = SubnetId::from_committee_alan(committee_id, 128);
             assert!((*subnet) < 128);
         }
+    }
+
+    #[test]
+    fn test_from_operators_for_fork_cstar_inherits_committee_topology() {
+        // Operator set where the two topologies map to different subnets:
+        // committee-based gives SHA256(op ids as u32 LE) % 128 = 114, while
+        // MinHash gives 11 (see test_from_operators_minhash).
+        let operators = vec![OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+
+        let alan_subnet =
+            SubnetId::from_operators_for_fork(&operators, Fork::Alan).expect("valid operators");
+        let cstar_subnet =
+            SubnetId::from_operators_for_fork(&operators, Fork::CStar).expect("valid operators");
+        let boole_subnet =
+            SubnetId::from_operators_for_fork(&operators, Fork::Boole).expect("valid operators");
+
+        assert_eq!(
+            cstar_subnet, alan_subnet,
+            "CStar must inherit the Alan committee-based subnet topology"
+        );
+        assert_ne!(
+            cstar_subnet, boole_subnet,
+            "CStar must not use the Boole MinHash subnet topology"
+        );
+        assert_eq!(*cstar_subnet, 114, "committee-based subnet for [1,2,3,4]");
+        assert_eq!(*boole_subnet, 11, "MinHash subnet for [1,2,3,4]");
     }
 
     #[test]

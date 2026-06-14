@@ -101,11 +101,11 @@ impl<S: SlotClock> SubnetService<S> {
         let fork = self.router.active_fork_at_slot(slot);
 
         match fork {
-            Fork::Alan => Ok(SubnetId::from_committee_alan(committee_id, SUBNET_COUNT)),
-            Fork::Boole | Fork::CStar => {
-                SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
-                    .map_err(SubnetServiceError::SubnetCalculation)
+            Fork::Alan | Fork::CStar => {
+                Ok(SubnetId::from_committee_alan(committee_id, SUBNET_COUNT))
             }
+            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
+                .map_err(SubnetServiceError::SubnetCalculation),
         }
     }
 

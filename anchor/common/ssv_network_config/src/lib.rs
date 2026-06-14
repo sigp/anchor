@@ -220,14 +220,15 @@ mod tests {
     const TEST_CONTRACT_BLOCK: &str = "123456";
     const TEST_DOMAIN_TYPE_STR: &str = "00000001";
     const TEST_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 1]);
-    const BOOLE_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 2]);
-    const CSTAR_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 3]);
+    const CSTAR_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 2]);
+    const BOOLE_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 3]);
 
-    // Fork activation epochs for tests. Scenario epochs (just before / just after
-    // activation) are derived inline at the use site.
+    // Fork activation epochs for tests, in chronological order (Alan < CStar
+    // < Boole). Scenario epochs (just before / just after activation) are
+    // derived inline at the use site.
     const ALAN_FORK_EPOCH: u64 = 0;
-    const BOOLE_FORK_EPOCH: u64 = 100;
-    const CSTAR_FORK_EPOCH: u64 = 200;
+    const CSTAR_FORK_EPOCH: u64 = 100;
+    const BOOLE_FORK_EPOCH: u64 = 200;
 
     /// Construct expected Boole topic prefix for a network.
     fn expected_boole_prefix(network: &str) -> String {
@@ -328,14 +329,14 @@ mod tests {
         // Arrange
         let yaml = format!(
             r#"
-boole:
+cstar:
   epoch: {}
   domain_type: "00000002"
-cstar:
+boole:
   epoch: {}
   domain_type: "00000003"
 "#,
-            BOOLE_FORK_EPOCH, CSTAR_FORK_EPOCH
+            CSTAR_FORK_EPOCH, BOOLE_FORK_EPOCH
         );
         let dir = create_test_config_dir(Some(&yaml));
 
@@ -496,20 +497,20 @@ cstar:
         // Arrange
         let yaml = format!(
             r#"
-boole:
+cstar:
   epoch: {}
   domain_type: "00000002"
-cstar:
+boole:
   epoch: {}
   domain_type: "00000003"
 "#,
-            BOOLE_FORK_EPOCH, CSTAR_FORK_EPOCH
+            CSTAR_FORK_EPOCH, BOOLE_FORK_EPOCH
         );
         let dir = create_test_config_dir(Some(&yaml));
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
         let network_name = config.network_name.as_str();
 
-        // Act & Assert: Before Boole activation - should use Alan prefix
+        // Act & Assert: Before CStar activation - should use Alan prefix
         let active_fork = config
             .fork_schedule
             .active_fork(Epoch::new(ALAN_FORK_EPOCH));
@@ -517,27 +518,10 @@ cstar:
 
         let active_fork = config
             .fork_schedule
-            .active_fork(Epoch::new(BOOLE_FORK_EPOCH - 1));
+            .active_fork(Epoch::new(CSTAR_FORK_EPOCH - 1));
         assert_eq!(active_fork.topic_prefix(network_name), ALAN_TOPIC_PREFIX);
 
-        // Act & Assert: Between Boole and CStar activation - should use Boole prefix
-        let active_fork = config
-            .fork_schedule
-            .active_fork(Epoch::new(BOOLE_FORK_EPOCH));
-        assert_eq!(
-            active_fork.topic_prefix(network_name),
-            expected_boole_prefix(TEST_NETWORK_NAME)
-        );
-
-        let active_fork = config
-            .fork_schedule
-            .active_fork(Epoch::new(CSTAR_FORK_EPOCH - 1));
-        assert_eq!(
-            active_fork.topic_prefix(network_name),
-            expected_boole_prefix(TEST_NETWORK_NAME)
-        );
-
-        // Act & Assert: At and after CStar activation - should use CStar prefix
+        // Act & Assert: Between CStar and Boole activation - should use CStar prefix
         let active_fork = config
             .fork_schedule
             .active_fork(Epoch::new(CSTAR_FORK_EPOCH));
@@ -548,10 +532,27 @@ cstar:
 
         let active_fork = config
             .fork_schedule
-            .active_fork(Epoch::new(CSTAR_FORK_EPOCH + 1));
+            .active_fork(Epoch::new(BOOLE_FORK_EPOCH - 1));
         assert_eq!(
             active_fork.topic_prefix(network_name),
             expected_cstar_prefix(TEST_NETWORK_NAME)
+        );
+
+        // Act & Assert: At and after Boole activation - should use Boole prefix
+        let active_fork = config
+            .fork_schedule
+            .active_fork(Epoch::new(BOOLE_FORK_EPOCH));
+        assert_eq!(
+            active_fork.topic_prefix(network_name),
+            expected_boole_prefix(TEST_NETWORK_NAME)
+        );
+
+        let active_fork = config
+            .fork_schedule
+            .active_fork(Epoch::new(BOOLE_FORK_EPOCH + 1));
+        assert_eq!(
+            active_fork.topic_prefix(network_name),
+            expected_boole_prefix(TEST_NETWORK_NAME)
         );
     }
 

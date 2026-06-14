@@ -2,10 +2,10 @@
 # Maps fork names directly to their configuration.
 # Note: Alan fork (genesis) is always at epoch 0 and should not be specified here.
 #
-# Example:
-# boole:
+# Example (cstar precedes boole; boole is unscheduled and may only follow cstar):
+# cstar:
 #   epoch: 12500
 #   domain_type: "00000002"
-# cstar:
+# boole:
 #   epoch: 13000
 #   domain_type: "00000003"

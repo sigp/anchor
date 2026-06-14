@@ -97,6 +97,11 @@ pub struct ForkSchedule {
 
 impl ForkSchedule {
     /// Create a new fork schedule with the given fork active from epoch 0.
+    ///
+    /// Seeds every fork up to and including `fork` in chronological (enum)
+    /// order, all at epoch 0. Note the chronology is `Alan < CStar < Boole`:
+    /// `new(Fork::CStar)` seeds Alan and CStar without Boole, while
+    /// `new(Fork::Boole)` seeds all three forks.
     pub fn new(fork: Fork, baseline_domain_type: DomainType, network_name: &str) -> Self {
         let mut configs = BTreeMap::new();
         for fork in Fork::all().iter().take_while(|&f| f <= &fork) {
@@ -224,11 +229,12 @@ mod tests {
     use super::*;
     use crate::fork::ALAN_TOPIC_PREFIX;
 
-    // Test constants
+    // Test constants. Domain values follow the wire-constants convention:
+    // CStar takes 0x00000002 and Boole (if ever scheduled) takes 0x00000003.
     const TEST_NETWORK: &str = "mainnet";
     const BASELINE_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
-    const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
-    const CSTAR_DOMAIN: DomainType = DomainType([0, 0, 0, 3]);
+    const CSTAR_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
+    const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 3]);
 
     fn schedule_with_boole(epoch: u64) -> ForkSchedule {
         let mut configs = BTreeMap::new();
@@ -323,17 +329,57 @@ mod tests {
     fn test_with_three_forks() {
         let mut configs = BTreeMap::new();
         configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
-        configs.insert(Fork::Boole, (Epoch::new(100), BOOLE_DOMAIN));
-        configs.insert(Fork::CStar, (Epoch::new(200), CSTAR_DOMAIN));
+        configs.insert(Fork::CStar, (Epoch::new(100), CSTAR_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(200), BOOLE_DOMAIN));
 
         let schedule = ForkSchedule::from_fork_configs(configs, TEST_NETWORK).unwrap();
 
-        assert_eq!(schedule.active_fork(Epoch::new(199)), Fork::Boole);
-        assert_eq!(schedule.active_fork(Epoch::new(200)), Fork::CStar);
-        assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::CStar);
+        assert_eq!(schedule.active_fork(Epoch::new(99)), Fork::Alan);
+        assert_eq!(schedule.active_fork(Epoch::new(100)), Fork::CStar);
+        assert_eq!(schedule.active_fork(Epoch::new(199)), Fork::CStar);
+        assert_eq!(schedule.active_fork(Epoch::new(200)), Fork::Boole);
+        assert_eq!(schedule.active_fork(Epoch::new(1000)), Fork::Boole);
 
-        assert_eq!(schedule.fork_epoch(Fork::CStar), Some(Epoch::new(200)));
+        assert_eq!(schedule.fork_epoch(Fork::CStar), Some(Epoch::new(100)));
+        assert_eq!(schedule.fork_epoch(Fork::Boole), Some(Epoch::new(200)));
         assert_eq!(schedule.domain_type(Fork::CStar), Some(CSTAR_DOMAIN));
+        assert_eq!(schedule.domain_type(Fork::Boole), Some(BOOLE_DOMAIN));
+    }
+
+    #[test]
+    fn test_from_fork_configs_cstar_without_boole() {
+        const CSTAR_EPOCH: u64 = 100;
+
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::CStar, (Epoch::new(CSTAR_EPOCH), CSTAR_DOMAIN));
+
+        let schedule = ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+            .expect("alan + cstar without boole must be a valid schedule");
+
+        assert_eq!(
+            schedule.active_fork(Epoch::new(CSTAR_EPOCH - 1)),
+            Fork::Alan
+        );
+        assert_eq!(schedule.active_fork(Epoch::new(CSTAR_EPOCH)), Fork::CStar);
+        assert_eq!(
+            schedule.next_fork_after(Epoch::new(0)),
+            Some((Fork::CStar, Epoch::new(CSTAR_EPOCH)))
+        );
+        assert_eq!(schedule.fork_epoch(Fork::Boole), None);
+    }
+
+    #[test]
+    fn test_from_fork_configs_boole_before_cstar_rejected() {
+        // Boole must activate after CStar; scheduling it earlier is invalid.
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::CStar, (Epoch::new(200), CSTAR_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(100), BOOLE_DOMAIN));
+
+        let result = ForkSchedule::from_fork_configs(configs, TEST_NETWORK);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("scheduled before"));
     }
 
     #[test]

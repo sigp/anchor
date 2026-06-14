@@ -1741,7 +1741,9 @@ mod tests {
             &private_key,
         );
 
-        let fork_schedule = generate_fork_schedule(Fork::Boole);
+        // Alan-only schedule: CStar (and Boole) unscheduled, so PTCAttester is
+        // not yet active.
+        let fork_schedule = generate_fork_schedule(Fork::Alan);
         let validation_context = create_test_validation_context_with_fork(
             &signed_msg,
             &committee_info,

@@ -1341,6 +1341,59 @@ mod tests {
     }
 
     #[test]
+    fn test_round_robin_proposer_cstar_fork() {
+        let mut committee: IndexSet<OperatorId> = vec![OperatorId(1), OperatorId(2), OperatorId(3)]
+            .into_iter()
+            .collect();
+        let slots_per_epoch = 32;
+        // CStar fork precedes Boole, so eth_epoch is NOT included in the calculation
+        let fork_schedule = ForkSchedule::new(Fork::CStar, DomainType::default(), "testing"); // CStar active from epoch 0, Boole unscheduled
+
+        // Test basic round robin at height 0, epoch 0
+        // index = (0 + 1 - 1) % 3 = 0 -> OperatorId(1)
+        assert_eq!(
+            round_robin_proposer(
+                0,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(1)
+        );
+
+        // Test epoch boundaries WITHOUT epoch shift under CStar.
+        // Slot 32, epoch 1: index = (32 + 1 - 1) % 3 = 32 % 3 = 2 -> OperatorId(3)
+        // (with the Boole epoch shift this would be 33 % 3 = 0 -> OperatorId(1))
+        assert_eq!(
+            round_robin_proposer(
+                32,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(3)
+        );
+
+        // Slot 64, epoch 2: index = (64 + 1 - 1) % 3 = 64 % 3 = 1 -> OperatorId(2)
+        // (with the Boole epoch shift this would be 66 % 3 = 0 -> OperatorId(1))
+        assert_eq!(
+            round_robin_proposer(
+                64,
+                FIRST_ROUND.into(),
+                &mut committee,
+                slots_per_epoch,
+                &fork_schedule
+            )
+            .unwrap(),
+            OperatorId(2)
+        );
+    }
+
+    #[test]
     fn test_current_estimated_round() {
         // Test early rounds (quick timeout)
         assert_eq!(current_estimated_round(Duration::from_secs(0)), 1.into());
@@ -1793,12 +1846,13 @@ mod tests {
         assert_eq!(result, Ok(Some(2)));
     }
 
-    /// Helper function for testing role validation against fork schedules.
-    ///
-    /// Tests whether a consensus message for a given role is properly accepted or rejected
-    /// based on the fork schedule. Used to verify that deprecated roles (Aggregator and
-    /// SyncCommittee) are rejected after the Boole fork but accepted before it.
-    fn test_role_fork_validation(role: Role, is_after_boole: bool, should_be_rejected: bool) {
+    /// Runs full consensus-message validation for a role against a fork
+    /// schedule with `schedule_fork` (and all earlier forks) active from
+    /// epoch 0, returning the validation result.
+    fn run_role_fork_validation(
+        role: Role,
+        schedule_fork: Fork,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
         // Arrange: Set up test data and validation context
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
@@ -1823,15 +1877,11 @@ mod tests {
         slot_clock.advance_slot();
         slot_clock.advance_time(slot_duration);
 
-        let fork_schedule = if is_after_boole {
-            Arc::new(ForkSchedule::new(
-                Fork::Boole,
-                DomainType::default(),
-                "testing",
-            ))
-        } else {
-            generate_fork_schedule()
-        };
+        let fork_schedule = Arc::new(ForkSchedule::new(
+            schedule_fork,
+            DomainType::default(),
+            "testing",
+        ));
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
@@ -1847,13 +1897,23 @@ mod tests {
         };
 
         // Act: Validate the message
-        let result = validate_ssv_message(
+        validate_ssv_message(
             validation_context,
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
-        );
+        )
+    }
+
+    /// Helper function for testing role validation against fork schedules.
+    ///
+    /// Tests whether a consensus message for a given role is properly accepted or rejected
+    /// based on the fork schedule. Used to verify that deprecated roles (Aggregator and
+    /// SyncCommittee) are rejected once Boole is active but accepted before it (including
+    /// under CStar, which precedes Boole in the chronology).
+    fn test_role_fork_validation(role: Role, schedule_fork: Fork, should_be_rejected: bool) {
+        let result = run_role_fork_validation(role, schedule_fork);
 
         // Assert: Verify the expected outcome
         if should_be_rejected {
@@ -1874,28 +1934,62 @@ mod tests {
         } else {
             assert_qbft_message_accepted(
                 result,
-                &format!("Expected {role:?} to be accepted before Boole fork"),
+                &format!("Expected {role:?} to be accepted with {schedule_fork:?} active"),
             );
         }
     }
 
     #[test]
     fn test_aggregator_consensus_message_rejected_after_boole() {
-        test_role_fork_validation(Role::Aggregator, true, true);
+        test_role_fork_validation(Role::Aggregator, Fork::Boole, true);
     }
 
     #[test]
     fn test_aggregator_consensus_message_accepted_before_boole() {
-        test_role_fork_validation(Role::Aggregator, false, false);
+        test_role_fork_validation(Role::Aggregator, Fork::Alan, false);
+    }
+
+    #[test]
+    fn test_aggregator_consensus_message_accepted_at_cstar() {
+        // CStar precedes Boole, so the legacy per-validator role is still active.
+        test_role_fork_validation(Role::Aggregator, Fork::CStar, false);
     }
 
     #[test]
     fn test_sync_committee_consensus_message_accepted_before_boole() {
-        test_role_fork_validation(Role::SyncCommittee, false, false);
+        test_role_fork_validation(Role::SyncCommittee, Fork::Alan, false);
+    }
+
+    #[test]
+    fn test_sync_committee_consensus_message_accepted_at_cstar() {
+        // CStar precedes Boole, so the legacy per-validator role is still active.
+        test_role_fork_validation(Role::SyncCommittee, Fork::CStar, false);
     }
 
     #[test]
     fn test_sync_committee_consensus_message_rejected_after_boole() {
-        test_role_fork_validation(Role::SyncCommittee, true, true);
+        test_role_fork_validation(Role::SyncCommittee, Fork::Boole, true);
+    }
+
+    #[test]
+    fn test_aggregator_committee_consensus_message_rejected_at_cstar() {
+        // CStar activates without Boole, so the Boole-only AggregatorCommittee
+        // role must be rejected as not yet active.
+        let result = run_role_fork_validation(Role::AggregatorCommittee, Fork::CStar);
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeFork {
+                        role: Role::AggregatorCommittee,
+                        current_fork: Fork::CStar,
+                        minimum_fork: Fork::Boole,
+                    }
+                )
+            },
+            "RoleNotActiveBeforeFork for AggregatorCommittee",
+        );
     }
 }
