@@ -225,6 +225,7 @@ pub enum ValidationFailure {
     /// activated.
     RoleNotActiveBeforeEthFork {
         role: Role,
+        current_fork: ForkName,
         minimum_fork: ForkName,
     },
 }
@@ -844,6 +845,7 @@ pub(crate) fn validate_beacon_duty(
 /// Rejects:
 /// - AggregatorCommittee before Boole fork (not yet active)
 /// - Aggregator and SyncCommittee after Boole fork (deprecated)
+/// - PTCAttester before the Ethereum Gloas (ePBS) fork (not yet active)
 pub(crate) fn validate_role_for_fork(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
@@ -871,16 +873,15 @@ pub(crate) fn validate_role_for_fork(
     }
 
     // Reject PTCAttester before the Ethereum Gloas (ePBS) fork, read from the consensus spec.
-    if role == Role::PTCAttester
-        && !validation_context
-            .spec
-            .fork_name_at_epoch(epoch)
-            .gloas_enabled()
-    {
-        return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
-            role,
-            minimum_fork: ForkName::Gloas,
-        });
+    if role == Role::PTCAttester {
+        let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
+        if !current_fork.gloas_enabled() {
+            return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
+                role,
+                current_fork,
+                minimum_fork: ForkName::Gloas,
+            });
+        }
     }
 
     Ok(())
