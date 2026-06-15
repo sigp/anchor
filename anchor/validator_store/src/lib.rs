@@ -80,6 +80,8 @@ use validator_store::{
     ValidatorStore,
 };
 
+use crate::instrumentation::PtcFailureClass;
+
 /// Number of epochs of slashing protection history to keep.
 ///
 /// This acts as a maximum safe-guard against clock drift.
@@ -846,6 +848,50 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         };
 
         Ok(signed_exit)
+    }
+
+    /// LH's payload attestation service only crit-logs whatever error we return, so emit
+    /// operator-grade telemetry before surfacing collection failures.
+    fn report_ptc_collection_failure(
+        &self,
+        error: &Error,
+        validator_pubkey: &PublicKeyBytes,
+        slot: Slot,
+    ) {
+        match instrumentation::classify_ptc_collection_failure(error) {
+            PtcFailureClass::NoSignature => {
+                warn!(
+                    ?validator_pubkey,
+                    %slot,
+                    ?error,
+                    "Insufficient partial signatures for payload attestation"
+                );
+                metrics::inc_counter_vec(
+                    &metrics::PTC_RECONSTRUCTION_FAILURES,
+                    &[metrics::PTC_FAILURE_NO_SIGNATURE],
+                );
+            }
+            PtcFailureClass::Infra => {
+                error!(
+                    ?validator_pubkey,
+                    %slot,
+                    ?error,
+                    "Signature collection infrastructure failure for payload attestation"
+                );
+                metrics::inc_counter_vec(
+                    &metrics::PTC_RECONSTRUCTION_FAILURES,
+                    &[metrics::PTC_FAILURE_INFRA],
+                );
+            }
+            PtcFailureClass::NonCollection => {
+                error!(
+                    ?validator_pubkey,
+                    %slot,
+                    ?error,
+                    "Failed to sign payload attestation"
+                );
+            }
+        }
     }
 
     fn create_proposer_consensus_data_validator(
@@ -3277,11 +3323,45 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
     async fn sign_payload_attestation(
         &self,
-        _validator_pubkey: PublicKeyBytes,
-        _data: PayloadAttestationData,
+        validator_pubkey: PublicKeyBytes,
+        data: PayloadAttestationData,
     ) -> Result<PayloadAttestationMessage, Error> {
-        // TODO(cstar)
-        Err(Error::SpecificError(SpecificError::Unsupported))
+        // LH fetched `data` at the 75% slot cutoff and abstained on no-block already, so this
+        // method only signs what it is handed: no beacon node fetch and no slashing protection.
+        let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+        // Resolve the beacon index up front: the message needs it anyway, and a missing index
+        // must surface as a pre-collection error rather than routing through the
+        // collection-failure reporter.
+        let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
+
+        let epoch = data.slot.epoch(E::slots_per_epoch());
+        let domain_hash = self.get_domain(epoch, Domain::PTCAttester);
+        let signing_root = data.signing_root(domain_hash);
+
+        let signature = match self
+            .collect_signature(
+                PartialSignatureKind::PTCAttester,
+                Role::PTCAttester,
+                CollectionMode::SingleValidator,
+                &validator,
+                &cluster,
+                signing_root,
+                data.slot,
+            )
+            .await
+        {
+            Ok(signature) => signature,
+            Err(err) => {
+                self.report_ptc_collection_failure(&err, &validator_pubkey, data.slot);
+                return Err(err);
+            }
+        };
+
+        Ok(PayloadAttestationMessage {
+            validator_index: validator_index.into(),
+            data,
+            signature,
+        })
     }
 
     async fn sign_proposer_preferences(
