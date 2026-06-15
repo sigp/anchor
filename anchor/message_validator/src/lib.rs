@@ -35,7 +35,7 @@ use subnet_service::topic::ParsedTopic;
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
 use tracing::{debug, trace};
-use types::{Epoch, Slot};
+use types::{ChainSpec, Epoch, ForkName, Slot};
 
 use crate::{
     consensus_message::validate_consensus_message,
@@ -221,6 +221,12 @@ pub enum ValidationFailure {
         current_fork: fork::Fork,
         deprecated_since_fork: fork::Fork,
     },
+    /// A role that only exists at/after an Ethereum hard fork was seen before that fork
+    /// activated.
+    RoleNotActiveBeforeEthFork {
+        role: Role,
+        minimum_fork: ForkName,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -357,6 +363,7 @@ struct ValidationContext<'a, S> {
     pub slot_clock: S,
     pub operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
     pub fork_schedule: Arc<ForkSchedule>,
+    pub spec: Arc<ChainSpec>,
 }
 
 pub struct Validator<S: SlotClock, D: DutiesProvider> {
@@ -369,6 +376,7 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     slot_clock: S,
     subnet_service: Arc<subnet_service::SubnetService<S>>,
     fork_schedule: Arc<ForkSchedule>,
+    spec: Arc<ChainSpec>,
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
@@ -382,6 +390,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         slot_clock: S,
         subnet_service: Arc<subnet_service::SubnetService<S>>,
         fork_schedule: Arc<ForkSchedule>,
+        spec: Arc<ChainSpec>,
         task_executor: &TaskExecutor,
     ) -> Arc<Self> {
         let validator = Arc::new(Self {
@@ -394,6 +403,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             slot_clock,
             subnet_service,
             fork_schedule,
+            spec,
         });
 
         task_executor.spawn(Arc::clone(&validator).cleaner(), VALIDATOR_CLEANER_NAME);
@@ -501,6 +511,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             slot_clock: self.slot_clock.clone(),
             operator_pub_keys,
             fork_schedule: Arc::clone(&self.fork_schedule),
+            spec: Arc::clone(&self.spec),
         };
 
         validate_ssv_message(
@@ -859,12 +870,16 @@ pub(crate) fn validate_role_for_fork(
         });
     }
 
-    // Reject PTCAttester before CStar fork (safety net)
-    if role == Role::PTCAttester && active_fork < Fork::CStar {
-        return Err(ValidationFailure::RoleNotActiveBeforeFork {
+    // Reject PTCAttester before the Ethereum Gloas (ePBS) fork, read from the consensus spec.
+    if role == Role::PTCAttester
+        && !validation_context
+            .spec
+            .fork_name_at_epoch(epoch)
+            .gloas_enabled()
+    {
+        return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
             role,
-            current_fork: active_fork,
-            minimum_fork: Fork::CStar,
+            minimum_fork: ForkName::Gloas,
         });
     }
 

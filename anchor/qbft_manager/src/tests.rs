@@ -294,6 +294,8 @@ where
 
         // Create a test fork schedule with a default domain type
         let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
+        // Gloas not scheduled: committee consensus uses the legacy BeaconVote path.
+        let spec = Arc::new(types::ChainSpec::mainnet());
 
         // Construct and save a manager for each operator in the committee. By having access to all
         // the managers in the committee, we can direct messages to the proper place and
@@ -309,6 +311,7 @@ where
                 Arc::new(MockMessageSender::new(network_tx.clone(), operator_id)),
                 NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
                 fork_schedule.clone(),
+                spec.clone(),
             )
             .expect("Creation should not fail");
 
@@ -877,6 +880,7 @@ mod manager_tests {
             Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
             NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
             Arc::new(fork_schedule),
+            Arc::new(types::ChainSpec::mainnet()),
         )
         .expect("Manager creation should succeed");
 

@@ -599,6 +599,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &map,
             fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         let expected_duty_count = 5;
@@ -648,6 +649,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &HashMap::new(),
             fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         let result = validate_ssv_message(
@@ -703,6 +705,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &HashMap::new(),
             fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         let result = validate_ssv_message(
@@ -755,6 +758,7 @@ mod tests {
             ),
             operator_pub_keys: &map,
             fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         let result = validate_ssv_message(
@@ -1599,6 +1603,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &map,
             fork_schedule,
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         // Create a duty state where the operator has already advanced to slot 10
@@ -1644,6 +1649,7 @@ mod tests {
             slot_clock: validation_context.slot_clock.clone(),
             operator_pub_keys: &map,
             fork_schedule: validation_context.fork_schedule.clone(),
+            spec: validation_context.spec.clone(),
         };
 
         let result = validate_qbft_message_by_duty_logic(
@@ -1719,6 +1725,7 @@ mod tests {
             slot_clock: slot_clock.clone(),
             operator_pub_keys: &map,
             fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         let slot = slot_clock.now().unwrap();
@@ -1769,6 +1776,7 @@ mod tests {
             slot_clock: slot_clock.clone(),
             operator_pub_keys: &map,
             fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         let slot = slot_clock.now().unwrap();
@@ -1844,6 +1852,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &map,
             fork_schedule,
+            spec: Arc::new(types::ChainSpec::mainnet()),
         };
 
         // Act: Validate the message

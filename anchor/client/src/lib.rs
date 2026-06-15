@@ -549,6 +549,7 @@ impl Client {
             slot_clock.clone(),
             subnet_service.clone(),
             fork_schedule.clone(),
+            spec.clone(),
             &executor,
         );
 
@@ -590,6 +591,7 @@ impl Client {
             message_sender,
             NonZeroU64::new(E::slots_per_epoch()).expect("slots_per_epoch is non-zero"),
             fork_schedule.clone(),
+            spec.clone(),
         )
         .map_err(|e| format!("Unable to initialize qbft manager: {e:?}"))?;
 

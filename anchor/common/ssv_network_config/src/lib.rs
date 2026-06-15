@@ -221,22 +221,15 @@ mod tests {
     const TEST_DOMAIN_TYPE_STR: &str = "00000001";
     const TEST_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 1]);
     const BOOLE_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 2]);
-    const CSTAR_DOMAIN_TYPE: DomainType = DomainType([0, 0, 0, 3]);
 
     // Fork activation epochs for tests. Scenario epochs (just before / just after
     // activation) are derived inline at the use site.
     const ALAN_FORK_EPOCH: u64 = 0;
     const BOOLE_FORK_EPOCH: u64 = 100;
-    const CSTAR_FORK_EPOCH: u64 = 200;
 
     /// Construct expected Boole topic prefix for a network.
     fn expected_boole_prefix(network: &str) -> String {
         format!("/ssv/{}/boole/", network)
-    }
-
-    /// Construct expected CStar topic prefix for a network.
-    fn expected_cstar_prefix(network: &str) -> String {
-        format!("/ssv/{}/cstar/", network)
     }
 
     /// Asserts that a config has a valid fork schedule with Alan at epoch 0.
@@ -331,11 +324,8 @@ mod tests {
 boole:
   epoch: {}
   domain_type: "00000002"
-cstar:
-  epoch: {}
-  domain_type: "00000003"
 "#,
-            BOOLE_FORK_EPOCH, CSTAR_FORK_EPOCH
+            BOOLE_FORK_EPOCH
         );
         let dir = create_test_config_dir(Some(&yaml));
 
@@ -352,20 +342,12 @@ cstar:
             Some(Epoch::new(BOOLE_FORK_EPOCH))
         );
         assert_eq!(
-            config.fork_schedule.fork_epoch(Fork::CStar),
-            Some(Epoch::new(CSTAR_FORK_EPOCH))
-        );
-        assert_eq!(
             config.fork_schedule.domain_type(Fork::Alan),
             Some(TEST_DOMAIN_TYPE)
         );
         assert_eq!(
             config.fork_schedule.domain_type(Fork::Boole),
             Some(BOOLE_DOMAIN_TYPE)
-        );
-        assert_eq!(
-            config.fork_schedule.domain_type(Fork::CStar),
-            Some(CSTAR_DOMAIN_TYPE)
         );
     }
 
@@ -499,11 +481,8 @@ cstar:
 boole:
   epoch: {}
   domain_type: "00000002"
-cstar:
-  epoch: {}
-  domain_type: "00000003"
 "#,
-            BOOLE_FORK_EPOCH, CSTAR_FORK_EPOCH
+            BOOLE_FORK_EPOCH
         );
         let dir = create_test_config_dir(Some(&yaml));
         let config = SsvNetworkConfig::load(dir.path().to_path_buf()).unwrap();
@@ -520,7 +499,7 @@ cstar:
             .active_fork(Epoch::new(BOOLE_FORK_EPOCH - 1));
         assert_eq!(active_fork.topic_prefix(network_name), ALAN_TOPIC_PREFIX);
 
-        // Act & Assert: Between Boole and CStar activation - should use Boole prefix
+        // Act & Assert: At and after Boole activation - should use Boole prefix
         let active_fork = config
             .fork_schedule
             .active_fork(Epoch::new(BOOLE_FORK_EPOCH));
@@ -531,27 +510,10 @@ cstar:
 
         let active_fork = config
             .fork_schedule
-            .active_fork(Epoch::new(CSTAR_FORK_EPOCH - 1));
+            .active_fork(Epoch::new(BOOLE_FORK_EPOCH + 1));
         assert_eq!(
             active_fork.topic_prefix(network_name),
             expected_boole_prefix(TEST_NETWORK_NAME)
-        );
-
-        // Act & Assert: At and after CStar activation - should use CStar prefix
-        let active_fork = config
-            .fork_schedule
-            .active_fork(Epoch::new(CSTAR_FORK_EPOCH));
-        assert_eq!(
-            active_fork.topic_prefix(network_name),
-            expected_cstar_prefix(TEST_NETWORK_NAME)
-        );
-
-        let active_fork = config
-            .fork_schedule
-            .active_fork(Epoch::new(CSTAR_FORK_EPOCH + 1));
-        assert_eq!(
-            active_fork.topic_prefix(network_name),
-            expected_cstar_prefix(TEST_NETWORK_NAME)
         );
     }
 

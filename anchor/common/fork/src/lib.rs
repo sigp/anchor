@@ -2,7 +2,7 @@
 //!
 //! This crate provides types and utilities for managing SSV protocol forks:
 //!
-//! - [`Fork`]: Enum representing SSV protocol versions (Alan, Boole, CStar)
+//! - [`Fork`]: Enum representing SSV protocol versions (Alan, Boole)
 //! - [`ForkSchedule`]: Manages fork activation epochs and transition timing
 //! - [`ForkConfig`]: Complete configuration for a fork including topic prefix
 //! - [`ForkLifecycle`]: Fork lifecycle state distributed via `tokio::sync::watch`

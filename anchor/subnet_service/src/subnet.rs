@@ -118,9 +118,7 @@ impl SubnetId {
                 committee_id,
                 crate::SUBNET_COUNT,
             )),
-            Fork::Boole | Fork::CStar => {
-                SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ)
-            }
+            Fork::Boole => SubnetId::from_operators(operator_ids, crate::SUBNET_COUNT_NZ),
         }
     }
 }
