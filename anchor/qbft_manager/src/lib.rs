@@ -31,7 +31,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, debug_span, error, warn};
-use types::{Epoch, EthSpec, Hash256, Slot};
+use types::{ChainSpec, Epoch, EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
 
@@ -151,6 +151,8 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     slots_per_epoch: NonZeroU64,
     // Fork schedule for looking up the active fork's domain type
     fork_schedule: Arc<ForkSchedule>,
+    // Ethereum consensus spec, used to gate behavior on Ethereum hard forks (e.g. Gloas/ePBS)
+    spec: Arc<ChainSpec>,
     // Slot clock for determining the current epoch
     slot_clock: S,
 }
@@ -164,6 +166,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         message_sender: Arc<dyn MessageSender>,
         slots_per_epoch: NonZeroU64,
         fork_schedule: Arc<ForkSchedule>,
+        spec: Arc<ChainSpec>,
     ) -> Result<Arc<Self>, QbftError> {
         let manager = Arc::new(QbftManager {
             processor,
@@ -175,6 +178,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             message_sender,
             slots_per_epoch,
             fork_schedule,
+            spec,
             slot_clock: slot_clock.clone(),
         });
 
@@ -303,7 +307,6 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                 match msg_id.role() {
                     Some(Role::Committee) => {
                         let slot = types::Slot::new(qbft_message.height);
-                        let epoch = slot.epoch(E::slots_per_epoch());
                         let id = CommitteeInstanceId {
                             committee,
                             instance_height,
@@ -313,7 +316,9 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                             qbft_message,
                         };
 
-                        if self.fork_schedule.active_fork(epoch) >= Fork::CStar {
+                        // Gate the Gloas beacon-vote shape on Ethereum's Gloas (ePBS) fork,
+                        // read from the consensus spec, rather than an SSV-internal fork.
+                        if self.spec.fork_name_at_slot::<E>(slot).gloas_enabled() {
                             self.pass_to_instance::<GloasBeaconVote>(id, wrapped)
                         } else {
                             self.pass_to_instance::<BeaconVote>(id, wrapped)

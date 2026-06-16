@@ -30,6 +30,7 @@ async fn test_aggregator_committee_rejected_before_boole() {
         Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
         NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
         Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test")), // No Boole fork
+        Arc::new(types::ChainSpec::mainnet()), // Gloas not scheduled
     )
     .expect("Manager creation should succeed");
 

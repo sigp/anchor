@@ -481,11 +481,21 @@ mod tests {
             ),
             operator_pub_keys,
             fork_schedule,
+            spec: spec_with_gloas(None),
         }
     }
 
     fn generate_fork_schedule(fork: Fork) -> Arc<ForkSchedule> {
         Arc::new(ForkSchedule::new(fork, DomainType::default(), "testing"))
+    }
+
+    /// Build a `ChainSpec` whose Ethereum Gloas (ePBS) fork activates at
+    /// `gloas_fork_epoch` (`None` = "Gloas never happens"). Used to gate
+    /// post-Gloas roles such as `PTCAttester`.
+    fn spec_with_gloas(gloas_fork_epoch: Option<u64>) -> Arc<types::ChainSpec> {
+        let mut spec = types::ChainSpec::mainnet();
+        spec.gloas_fork_epoch = gloas_fork_epoch.map(types::Epoch::new);
+        Arc::new(spec)
     }
 
     #[test]
@@ -1241,6 +1251,7 @@ mod tests {
             slot_clock,
             operator_pub_keys,
             fork_schedule,
+            spec: spec_with_gloas(None),
         }
     }
 
@@ -1449,6 +1460,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &map,
             fork_schedule,
+            spec: spec_with_gloas(None),
         };
 
         // Create a duty state where the operator has already advanced to slot 10
@@ -1551,6 +1563,7 @@ mod tests {
             slot_clock,
             operator_pub_keys: &map,
             fork_schedule: fork_schedule.clone(),
+            spec: spec_with_gloas(None),
         };
 
         // Should succeed with 5 occurrences
@@ -1618,6 +1631,7 @@ mod tests {
             slot_clock: slot_clock2,
             operator_pub_keys: &map,
             fork_schedule,
+            spec: spec_with_gloas(None),
         };
 
         // Should fail with 6 occurrences
@@ -1703,7 +1717,8 @@ mod tests {
             sync_committee_size: 512,
             slot_clock,
             operator_pub_keys: &map,
-            fork_schedule: generate_fork_schedule(Fork::CStar),
+            fork_schedule: generate_fork_schedule(Fork::Boole),
+            spec: spec_with_gloas(Some(0)),
         };
 
         let result = validate_partial_signature_message(
@@ -1727,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ptc_attester_rejected_before_cstar() {
+    fn test_ptc_attester_rejected_before_gloas() {
         use crate::validate_role_for_fork;
 
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -1756,13 +1771,13 @@ mod tests {
             |failure| {
                 matches!(
                     failure,
-                    ValidationFailure::RoleNotActiveBeforeFork {
-                        minimum_fork: Fork::CStar,
+                    ValidationFailure::RoleNotActiveBeforeEthFork {
+                        minimum_fork: types::ForkName::Gloas,
                         ..
                     }
                 )
             },
-            "RoleNotActiveBeforeFork (PTCAttester pre-CStar)",
+            "RoleNotActiveBeforeEthFork (PTCAttester pre-Gloas)",
         );
     }
 
@@ -1783,14 +1798,16 @@ mod tests {
         // attestation is gossip-valid for that slot and includable only at
         // slot + 1), so PTCAttester uses the short TTL
         // (1 + LATE_SLOT_ALLOWANCE = 3 slots). Two slots late is inside it.
-        let validation_context = create_ttl_validation_context(
+        let mut validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
             Role::PTCAttester,
             &map,
             LATE_SLOT_ALLOWANCE_TEST,
-            generate_fork_schedule(Fork::CStar),
+            generate_fork_schedule(Fork::Boole),
         );
+        // PTCAttester only exists post-Gloas; the role gate reads the Ethereum fork from the spec.
+        validation_context.spec = spec_with_gloas(Some(0));
 
         let result = validate_partial_signature_message(
             validation_context,
@@ -1818,14 +1835,16 @@ mod tests {
 
         // 20 slots late would still be inside the long (committee) TTL of 34
         // slots; rejecting it pins PTCAttester to the short slot-bound bucket.
-        let validation_context = create_ttl_validation_context(
+        let mut validation_context = create_ttl_validation_context(
             &signed_msg,
             &committee_info,
             Role::PTCAttester,
             &map,
             COMMITTEE_TTL_BUCKET_SLOTS,
-            generate_fork_schedule(Fork::CStar),
+            generate_fork_schedule(Fork::Boole),
         );
+        // PTCAttester only exists post-Gloas; the role gate reads the Ethereum fork from the spec.
+        validation_context.spec = spec_with_gloas(Some(0));
 
         let result = validate_partial_signature_message(
             validation_context,

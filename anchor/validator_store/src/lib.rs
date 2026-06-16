@@ -1548,9 +1548,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         };
 
         let (block_root, source, target, decided_hash) = if self
-            .fork_schedule
-            .active_fork(slot.epoch(E::slots_per_epoch()))
-            >= Fork::CStar
+            .spec
+            .fork_name_at_slot::<E>(slot)
+            .gloas_enabled()
         {
             let completed = self
                 .consensus
@@ -3317,7 +3317,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         _validator_pubkey: PublicKeyBytes,
         _envelope: ExecutionPayloadEnvelope<E>,
     ) -> Result<SignedExecutionPayloadEnvelope<E>, Error> {
-        // TODO(cstar)
+        // TODO(gloas)
         Err(Error::SpecificError(SpecificError::Unsupported))
     }
 
@@ -3369,7 +3369,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         _validator_pubkey: PublicKeyBytes,
         _preferences: ProposerPreferences,
     ) -> Result<SignedProposerPreferences, Error> {
-        // TODO(cstar)
+        // TODO(gloas)
         Err(Error::SpecificError(SpecificError::Unsupported))
     }
 }
