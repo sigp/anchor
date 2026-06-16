@@ -61,6 +61,7 @@ use validator_services::{
     duties_service,
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
     latency_service::start_latency_service,
+    payload_attestation_service::PayloadAttestationService,
     preparation_service::PreparationServiceBuilder,
     sync_committee_service::SyncCommitteeService,
 };
@@ -815,6 +816,24 @@ impl Client {
         registration_service
             .start_validator_registration_service(&spec)
             .map_err(|e| format!("Unable to start validator registration service: {e}"))?;
+
+        // PTC payload-attestation duty (Gloas / ePBS). Start only when Gloas is scheduled,
+        // mirroring LH's VC (validator_client/src/lib.rs:657). The service also self-gates per
+        // slot on `gloas_enabled()`, but gating the start avoids spawning a perpetual idle task
+        // on networks where Gloas is not scheduled.
+        // TODO(gloas, #1064): `ProposerPreferences` joins this block once implemented
+        if spec.is_gloas_scheduled() {
+            PayloadAttestationService::new(
+                duties_service.clone(),
+                validator_store.clone(),
+                slot_clock.clone(),
+                beacon_nodes.clone(),
+                executor.clone(),
+                spec.clone(),
+            )
+            .start_update_service()
+            .map_err(|e| format!("Unable to start payload attestation service: {e}"))?;
+        }
 
         http_api_shared_state.write().database_state = Some(database.watch());
 
