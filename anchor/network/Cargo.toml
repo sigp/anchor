@@ -17,7 +17,7 @@ metrics = { workspace = true }
 network_utils = { workspace = true }
 peer-store = { package = "libp2p-peer-store", git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
 prometheus-client = { workspace = true }
-quick-protobuf = "0.8.1"
+prost = "0.14.4"
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
