@@ -17,8 +17,8 @@ pub const VERSION: &str = git_version!(
         // NOTE: using --match instead of --exclude for compatibility with old Git
         "--match=thiswillnevermatchlol"
     ],
-    prefix = "Anchor/v1.2.3-",
-    fallback = "Anchor/v1.2.3"
+    prefix = "Anchor/v1.2.4-",
+    fallback = "Anchor/v1.2.4"
 );
 
 /// Returns the first eight characters of the latest commit hash for this build.
