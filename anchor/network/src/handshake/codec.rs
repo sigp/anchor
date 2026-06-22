@@ -7,6 +7,7 @@ use libp2p::{
     identity::Keypair,
     request_response,
 };
+use prost::Message;
 use tracing::trace;
 
 use crate::handshake::{envelope, envelope::Envelope, node_info, node_info::NodeInfo};
@@ -53,7 +54,7 @@ impl Codec {
         T: AsyncWrite + Unpin + Send,
     {
         let envelope = node_info.seal(&self.keypair)?;
-        let raw = envelope.encode_to_vec()?;
+        let raw = envelope.encode_to_vec();
         io.write_all(&raw).await?;
         io.flush().await?;
         io.close().await?;

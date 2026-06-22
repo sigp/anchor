@@ -123,8 +123,9 @@ impl AnchorBehaviour {
             .heartbeat_interval(Duration::from_millis(GOSSIPSUB_HEARTBEAT_INTERVAL_MILLIS))
             .history_length(GOSSIPSUB_HISTORY_LENGTH)
             .history_gossip(4)
-            .max_ihave_length(1500)
-            .max_ihave_messages(32)
+            .max_publish_messages(500)
+            .max_control_messages_sent(500)
+            .max_ihave_messages_heartbeat(32)
             // `SignedSSVMessage` has a full data field with max 4,194,532 bytes, so 5M bytes seems
             // like a reasonable upper bound for that and the rest of the message.
             .max_transmit_size(MAX_TRANSMIT_SIZE_BYTES)
