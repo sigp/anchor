@@ -144,6 +144,7 @@ impl NodeMetadata {
 #[cfg(test)]
 mod tests {
     use libp2p::identity::Keypair;
+    use prost::Message;
 
     use crate::handshake::{
         envelope::Envelope,
@@ -171,7 +172,7 @@ mod tests {
             .seal(&Keypair::generate_secp256k1())
             .expect("Seal failed");
 
-        let data = envelope.encode_to_vec().unwrap();
+        let data = envelope.encode_to_vec();
 
         let parsed_env = Envelope::parse_and_verify(&data).expect("Consume failed");
         let parsed_node_info = NodeInfo::unmarshal(&parsed_env.payload).expect("Unmarshal failed");

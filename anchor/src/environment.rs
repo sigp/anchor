@@ -132,7 +132,7 @@ impl Environment {
                 Err(e) => error!(error = ?e, "Could not register SIGHUP handler"),
             }
 
-            future::select(inner_shutdown, future::select_all(handles.into_iter())).await
+            future::select(inner_shutdown, future::select_all(handles)).await
         };
 
         match self.runtime().block_on(register_handlers) {
