@@ -322,12 +322,20 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         debug!(msg_id = ?initialization.message_id, "Received initialization message");
                         instance = instance.initialize(initialization, &message_sender).await;
 
-                        // Start proposer observability if instance is running a proposer duty and initialized.
+                        // Start proposer observability if instance is running a proposer duty and
+                        // initialized. NOTE: the observer is created only after `initialize()`
+                        // returns, so any round advances that occur while replaying buffered
+                        // messages during initialization are not observed. The terminal outcome is
+                        // still captured by the post-loop `completed()` check below.
                         if let QbftInstance::Initialized(initialized) = &instance
                             && initialized.is_proposer()
                             && observer.is_none()
                         {
-                            let instance_height = *initialized.qbft.get_instance_height() as u64;
+                            // Checked `usize` -> `u64`; saturates rather than panicking on the
+                            // (unreachable on 64-bit targets) overflow.
+                            let instance_height =
+                                u64::try_from(*initialized.qbft.get_instance_height())
+                                    .unwrap_or(u64::MAX);
                             observer =
                                 Some(ProposerObserver::start(instance_height, handoff_budget_ms));
                         }
@@ -367,7 +375,8 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                                     *current_round_start_time = Instant::now();
                                 }
 
-                                // Proposer duty instrumentation — classify and emit the round advance.
+                                // Proposer duty instrumentation — classify and emit the round
+                                // advance.
                                 if let Some(observer) = &observer
                                     && let Some((before_kind, before_round)) = before_snapshot
                                 {

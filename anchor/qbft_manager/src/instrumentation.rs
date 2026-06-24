@@ -35,7 +35,7 @@ pub enum RoundAdvanceReason {
 }
 
 impl RoundAdvanceReason {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Timeout => "timeout",
             Self::FPlusOneRoundChange => "f_plus_1_rc",
@@ -126,8 +126,8 @@ impl ProposerOutcome {
 
 /// Boundary-layer observer for a single proposer QBFT instance.
 ///
-/// Owns a proposer duty instrumentation span and a QBFT instance start time. Serves as a single place
-/// where proposer lifecycle tracing events and metrics are emitted.
+/// Owns a proposer duty instrumentation span and a QBFT instance start time. Serves as a single
+/// place where proposer lifecycle tracing events and metrics are emitted.
 pub struct ProposerObserver {
     span: Span,
     started: Instant,

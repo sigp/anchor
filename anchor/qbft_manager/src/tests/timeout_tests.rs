@@ -1,3 +1,5 @@
+use bls::PublicKeyBytes;
+
 use super::*;
 
 // very important: set paused to true for deterministic timer
@@ -6,6 +8,113 @@ async fn test_timeouts() {
     for i in 1..=10 {
         test_timeout(i).await;
     }
+}
+
+// ==================== Proposer-path instrumentation tests ====================
+
+/// Drive a `Role::Proposer` instance through `qbft_instance()` to a max-round timeout, exercising
+/// the `ProposerObserver` lifecycle (`start` -> `finish`) that only activates when
+/// `Initialized::is_proposer()` is true.
+///
+/// Why this matters: every other `qbft_manager` test uses `Role::Committee`, so the observer wiring
+/// in the `qbft_instance()` loop (observer construction on `Initialize`, and the `finish` call in
+/// the terminal-outcome branch) is otherwise never exercised end-to-end. The pure
+/// `classify_round_advance` classifier is covered by unit tests in `instrumentation.rs`; this test
+/// covers the boundary wiring.
+///
+/// `is_proposer()` checks only the `MessageId` role, so keeping the data type as `BeaconVote` and
+/// only swapping the role to `Role::Proposer` (with a `Validator` duty executor) is sufficient to
+/// activate the proposer path; no `ProposerConsensusData` scaffolding is needed.
+///
+/// Assertion strategy: the `PROPOSER_QBFT_OUTCOME_TOTAL{outcome="max_round_timeout"}` counter is a
+/// process-global static, so we assert a strict monotonic increase between a before- and
+/// after-snapshot (a delta) rather than an absolute value, which would be flaky under parallel test
+/// execution. A committee instance never touches this counter, so a positive delta proves the
+/// proposer observer's `finish()` specifically ran. We also assert the instance reaches
+/// `Completed::TimedOut`, proving the proposer path ran start -> finish without panic.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_max_round_timeout_runs_observer() {
+    // The outcome label the observer records for a max-round timeout (mirrors
+    // `ProposerOutcome::MaxRoundTimeout.as_str()`).
+    const MAX_ROUND_TIMEOUT_OUTCOME: &str = "max_round_timeout";
+    // Number of rounds to run before the instance times out. Kept small for a fast deterministic
+    // run; the observer activates regardless of round count.
+    const MAX_ROUNDS: usize = 2;
+    // Handoff budget so the `PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS` path and the `handoff_budget_ms`
+    // span field are also exercised (not just the `None` path the committee tests use).
+    const HANDOFF_BUDGET_MS: u64 = 4_000;
+
+    // Arrange: read the global outcome counter before the instance runs.
+    let outcome_before = crate::metrics::get_int_counter(
+        &crate::metrics::PROPOSER_QBFT_OUTCOME_TOTAL,
+        &[MAX_ROUND_TIMEOUT_OUTCOME],
+    )
+    .map(|c| c.get())
+    .unwrap_or(0);
+
+    let (sender_tx, _sender_rx) = unbounded_channel();
+    let (message_tx, message_rx) = unbounded_channel();
+    let (result_tx, result_rx) = oneshot::channel();
+    let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
+    let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
+        message_rx,
+        Arc::new(message_sender),
+    ));
+
+    let qbft_start_time = Instant::now();
+
+    // Act: initialize a proposer-role instance and let it run to a max-round timeout.
+    message_tx
+        .send(crate::QbftMessage {
+            kind: QbftMessageKind::Initialize(QbftInitialization {
+                initial: setup::generate_test_data(0).0,
+                validator: Box::new(NoDataValidation),
+                // The proposer role is what flips `is_proposer()` to true and attaches the
+                // observer.
+                message_id: MessageId::new(
+                    &DomainType::default(),
+                    Role::Proposer,
+                    &DutyExecutor::Validator(PublicKeyBytes::empty()),
+                ),
+                timeout_mode: TimeoutMode::SlotTime {
+                    instance_start_time: qbft_start_time,
+                },
+                config: qbft::ConfigBuilder::new(
+                    OperatorId(1),
+                    InstanceHeight::from(0),
+                    IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+                )
+                .with_max_rounds(MAX_ROUNDS)
+                .build()
+                .unwrap(),
+                on_completed: result_tx,
+                handoff_budget_ms: Some(HANDOFF_BUDGET_MS),
+            }),
+            drop_on_finish: None,
+        })
+        .unwrap();
+
+    // Assert: the proposer instance times out (proves the proposer path ran start -> finish without
+    // panic and follows the same lifecycle as the committee path).
+    assert!(
+        matches!(result_rx.await, Ok(Completed::TimedOut)),
+        "proposer instance should reach Completed::TimedOut after exhausting its rounds"
+    );
+
+    // Assert: the observer's `finish()` bumped the max-round-timeout outcome counter. Using a
+    // strict monotonic delta keeps this robust under parallel test execution.
+    let outcome_after = crate::metrics::get_int_counter(
+        &crate::metrics::PROPOSER_QBFT_OUTCOME_TOTAL,
+        &[MAX_ROUND_TIMEOUT_OUTCOME],
+    )
+    .map(|c| c.get())
+    .unwrap_or(0);
+    assert!(
+        outcome_after > outcome_before,
+        "ProposerObserver::finish should increment \
+         PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{MAX_ROUND_TIMEOUT_OUTCOME}\"}} \
+         (before={outcome_before}, after={outcome_after})"
+    );
 }
 
 async fn test_timeout(round_timeout_to_test: usize) {
