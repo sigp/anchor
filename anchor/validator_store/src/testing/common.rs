@@ -54,6 +54,7 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
         _validator: Box<dyn QbftDataValidator<D>>,
         _timeout_mode: TimeoutMode,
         _committee_members: &IndexSet<OperatorId>,
+        _handoff_budget_ms: Option<u64>,
     ) -> Result<Completed<D>, QbftError> {
         Ok(Completed::Success(initial))
     }

@@ -1,8 +1,4 @@
 //! Metrics for proposer QBFT.
-#![expect(
-    dead_code,
-    reason = "Expected to be implemented by proposer QBFT instrumentation"
-)]
 
 use std::sync::LazyLock;
 

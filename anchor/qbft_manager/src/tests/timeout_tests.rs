@@ -54,6 +54,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
                 .build()
                 .unwrap(),
                 on_completed: result_tx,
+                handoff_budget_ms: None,
             }),
             drop_on_finish: None,
         })
@@ -121,6 +122,7 @@ async fn test_relative_mode_timeout() {
                 .build()
                 .unwrap(),
                 on_completed: result_tx,
+                handoff_budget_ms: None,
             }),
             drop_on_finish: None,
         })
@@ -198,6 +200,7 @@ async fn test_relative_vs_slottime_timing_difference() {
                     .build()
                     .unwrap(),
                     on_completed: result_tx,
+                    handoff_budget_ms: None,
                 }),
                 drop_on_finish: None,
             })

@@ -124,6 +124,9 @@ pub struct QbftInitialization<D: QbftData> {
     config: qbft::Config<DefaultLeaderFunction>,
     /// The channel to send the final result to.
     on_completed: oneshot::Sender<Completed<D>>,
+    /// Pre-computed handoff budget in milliseconds (slot_duration_ms - slot_elapsed_ms).
+    /// Set by the proposer caller; `None` for non-proposer instances.
+    handoff_budget_ms: Option<u64>,
 }
 
 // Map from an identifier to a sender for the instance
@@ -198,6 +201,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         validator: Box<dyn QbftDataValidator<D>>,
         timeout_mode: TimeoutMode,
         committee_members: &IndexSet<OperatorId>,
+        handoff_budget_ms: Option<u64>,
     ) -> Result<Completed<D>, QbftError> {
         let Some(operator_id) = self.operator_id.get() else {
             return Err(QbftError::OwnOperatorIdUnknown);
@@ -245,6 +249,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                         timeout_mode,
                         config,
                         on_completed: result_sender,
+                        handoff_budget_ms,
                     }),
                     drop_on_finish: Some(drop_on_finish),
                 });
@@ -400,6 +405,7 @@ pub trait ConsensusDecider<E: EthSpec>: Send + Sync {
         validator: Box<dyn QbftDataValidator<D>>,
         timeout_mode: TimeoutMode,
         committee_members: &IndexSet<OperatorId>,
+        handoff_budget_ms: Option<u64>,
     ) -> impl Future<Output = Result<Completed<D>, QbftError>> + Send;
 }
 
@@ -411,8 +417,16 @@ impl<E: EthSpec, S: SlotClock + 'static> ConsensusDecider<E> for QbftManager<E, 
         validator: Box<dyn QbftDataValidator<D>>,
         timeout_mode: TimeoutMode,
         committee_members: &IndexSet<OperatorId>,
+        handoff_budget_ms: Option<u64>,
     ) -> impl Future<Output = Result<Completed<D>, QbftError>> + Send {
-        self.decide_instance(id, initial, validator, timeout_mode, committee_members)
+        self.decide_instance(
+            id,
+            initial,
+            validator,
+            timeout_mode,
+            committee_members,
+            handoff_budget_ms,
+        )
     }
 }
 

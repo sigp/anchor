@@ -420,6 +420,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Box::new(AggregatorCommitteeDataValidator::new()),
                 timeout_mode,
                 &cluster.cluster_members,
+                // Non-proposer instance; handoff budget metric does not apply.
+                None,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -576,6 +578,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let data_validator = self.create_proposer_consensus_data_validator(validator.public_key);
 
+        // Compute the handoff budget: how much slot time remains when QBFT starts. This measures
+        // the time pressure the proposer instance is under, since a block proposal must be handed
+        // off well within the slot.
+        let handoff_budget_ms = determine_slot_elapsed_ms(&self.slot_clock).map(|elapsed| {
+            let slot_duration_ms = self.slot_clock.slot_duration().as_millis() as u64;
+            slot_duration_ms.saturating_sub(elapsed)
+        });
+
         // Initiate QBFT consensus for this block proposal
         let completed = self
             .consensus
@@ -585,6 +595,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 data_validator,
                 timeout_mode,
                 &cluster.cluster_members,
+                handoff_budget_ms,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -975,6 +986,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     self.create_proposer_consensus_data_validator(aggregate.pubkey),
                     timeout_mode,
                     &cluster.cluster_members,
+                    // Non-proposer instance; handoff budget metric does not apply.
+                    None,
                 )
                 .await
                 .map_err(SpecificError::from)?;
@@ -1125,6 +1138,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     self.create_proposer_consensus_data_validator(aggregator_pubkey),
                     timeout_mode,
                     &cluster.cluster_members,
+                    // Non-proposer instance; handoff budget metric does not apply.
+                    None,
                 )
                 .await;
             drop(timer);
@@ -1386,6 +1401,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 self.create_beacon_vote_validator(slot, validator_attestation_committees),
                 timeout_mode,
                 &cluster.cluster_members,
+                // Non-proposer instance; handoff budget metric does not apply.
+                None,
             )
             .await
             .map_err(SpecificError::from)?;
@@ -1501,6 +1518,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 self.create_beacon_vote_validator(slot, validator_attestation_committees),
                 timeout_mode,
                 &cluster.cluster_members,
+                // Non-proposer instance; handoff budget metric does not apply.
+                None,
             )
             .await
             .map_err(SpecificError::from)?;
