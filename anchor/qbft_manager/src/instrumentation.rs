@@ -124,10 +124,10 @@ impl ProposerOutcome {
     }
 }
 
-/// Boundary-layer observer for a single proposer QBFT instance.
+/// QBFT-manager boundary-layer observer for a single proposer duty QBFT instance.
 ///
-/// Owns a proposer duty instrumentation span and a QBFT instance start time. Serves as a single
-/// place where proposer lifecycle tracing events and metrics are emitted.
+/// Defined by a proposer duty instrumentation span and a QBFT instance start time. Serves as a
+/// single place where proposer lifecycle tracing events and metrics are emitted.
 pub struct ProposerObserver {
     span: Span,
     started: Instant,
@@ -192,10 +192,10 @@ impl ProposerObserver {
         }
     }
 
-    /// Emit a stage-transition event when the instance changes state into `Prepare` or `Commit`
-    /// within the same round. A no-op when the state is unchanged or transitions into a variant
-    /// that is not interesting at this layer.
-    pub fn observe_stage_transition(&self, before: InstanceStateKind, after: InstanceStateKind) {
+    /// Emit a Qbft state-transition event when the instance changes state into `Prepare` or
+    /// `Commit` within the same round. A no-op when the state is unchanged or transitions into
+    /// a variant that is not relevant to this layer.
+    pub fn observe_state_transition(&self, before: InstanceStateKind, after: InstanceStateKind) {
         if before == after {
             return;
         }

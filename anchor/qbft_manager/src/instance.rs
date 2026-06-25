@@ -291,8 +291,8 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized(Uninitialized::default());
 
-    // Observability state — function-local, not on `Initialized`. Set to `Some` once the
-    // `Initialize` message arrives and the role is `Proposer`.
+    // Observability state only set to `Some` if the `Initialize` message arrives and role is
+    // `Proposer`.
     let mut observer: Option<ProposerObserver> = None;
 
     loop {
@@ -302,8 +302,8 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             QbftInstance::Initialized(initialized) => initialized.recv(&mut rx).await,
         };
 
-        // Snapshot the state-machine before-state at the boundary. Only proposer instances are
-        // observed, so skip the snapshot entirely when no observer is attached.
+        // Snapshot state-machine before-state at the boundary.
+        // Only implemented for proposer duty instrumentation.
         let before_snapshot = match &instance {
             QbftInstance::Initialized(initialized) if observer.is_some() => {
                 Some((initialized.qbft.state_kind(), initialized.qbft.get_round()))
@@ -316,23 +316,24 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             RecvResult::Message(msg) => {
                 match msg.kind {
                     QbftMessageKind::Initialize(initialization) => {
-                        // Capture handoff budget for proposer observability.
+                        // Capture handoff budget (proposer observability).
                         let handoff_budget_ms = initialization.handoff_budget_ms;
 
                         debug!(msg_id = ?initialization.message_id, "Received initialization message");
                         instance = instance.initialize(initialization, &message_sender).await;
 
-                        // Start proposer observability if instance is running a proposer duty and
-                        // initialized. NOTE: the observer is created only after `initialize()`
-                        // returns, so any round advances that occur while replaying buffered
-                        // messages during initialization are not observed. The terminal outcome is
-                        // still captured by the post-loop `completed()` check below.
+                        // If Qbft instance is running a proposer duty and initialized, start
+                        // proposer observability. NOTE: the observer is
+                        // created only after `initialize()` returns, so any round advances that
+                        // occur while replaying buffered messages during initialization are not
+                        // observed. The terminal outcome is still captured
+                        // by the post-loop `completed()` check below.
                         if let QbftInstance::Initialized(initialized) = &instance
                             && initialized.is_proposer()
                             && observer.is_none()
                         {
-                            // Checked `usize` -> `u64`; saturates rather than panicking on the
-                            // (unreachable on 64-bit targets) overflow.
+                            // Checked usize -> u64 saturates rather than panicking on overflow.
+                            // Unreachable on 64-bit targets.
                             let instance_height =
                                 u64::try_from(*initialized.qbft.get_instance_height())
                                     .unwrap_or(u64::MAX);
@@ -375,8 +376,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                                     *current_round_start_time = Instant::now();
                                 }
 
-                                // Proposer duty instrumentation — classify and emit the round
-                                // advance.
+                                // If proposer duty: classify and emit the round advance.
                                 if let Some(observer) = &observer
                                     && let Some((before_kind, before_round)) = before_snapshot
                                 {
@@ -390,12 +390,12 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                                 }
                             }
 
-                            // Proposer duty instrumentation — emit stage transitions (same round,
-                            // variant changed).
+                            // If proposer duty: emit state transition (same round, variant
+                            // changed).
                             if let Some(observer) = &observer
                                 && let Some((before_kind, _)) = before_snapshot
                             {
-                                observer.observe_stage_transition(
+                                observer.observe_state_transition(
                                     before_kind,
                                     initialized.qbft.state_kind(),
                                 );
@@ -409,6 +409,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 // There is nothing to do on round end if the instance is not ongoing.
                 if let QbftInstance::Initialized(initialized) = &mut instance {
                     warn!("Round timer elapsed");
+                    // Capture round change.
                     let old_round = initialized.qbft.get_round();
                     initialized.qbft.end_round();
                     let new_round = initialized.qbft.get_round();
@@ -421,8 +422,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                         *current_round_start_time = Instant::now();
                     }
 
-                    // Proposer duty instrumentation — classify and emit the timeout-driven round
-                    // advance.
+                    // If proposer duty: classify and emit the timeout-driven round advance.
                     if let Some(observer) = &observer
                         && let Some((before_kind, _)) = before_snapshot
                     {
@@ -441,7 +441,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 // If the instance can receive no more messages, we no longer need it. Signal
                 // time out to listeners, as this instance was likely cleaned up.
                 if let QbftInstance::Initialized(initialized) = instance {
-                    // Proposer duty instrumentation — record the `channel_closed` outcome.
+                    // If proposer duty: record the `channel_closed` outcome.
                     if let Some(observer) = &observer {
                         observer.finish(
                             ProposerOutcome::ChannelClosed,
@@ -457,8 +457,8 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
 
         // If the instance is ongoing, check whether it is done.
         if let QbftInstance::Initialized(initialized) = instance {
-            // Proposer instrumentation — record the outcome before `complete_if_done` consumes
-            // `self`.
+            // If proposer duty and there is finished data: record the outcome before instance is
+            // overwritten.
             if let Some(observer) = &observer
                 && let Some(completed) = initialized.qbft.completed()
             {

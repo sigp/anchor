@@ -1,6 +1,7 @@
 use bls::PublicKeyBytes;
 
 use super::*;
+use crate::{QbftMessage, metrics};
 
 // very important: set paused to true for deterministic timer
 #[tokio::test(start_paused = true)]
@@ -10,109 +11,226 @@ async fn test_timeouts() {
     }
 }
 
-// ==================== Proposer-path instrumentation tests ====================
+// Proposer-path instrumentation tests: drive a `Role::Proposer` instance to each terminal outcome,
+// exercising the `ProposerObserver` lifecycle that only activates when `is_proposer()` is true.
+// Timeout mode mirrors production proposer block duties (`TimeoutMode::Relative`).
+//
+// `PROPOSER_QBFT_OUTCOME_TOTAL` is a process-global static, so tests assert a monotonic delta on
+// its outcome label rather than an absolute value, which would be flaky under parallel execution.
 
-/// Drive a `Role::Proposer` instance through `qbft_instance()` to a max-round timeout, exercising
-/// the `ProposerObserver` lifecycle (`start` -> `finish`) that only activates when
-/// `Initialized::is_proposer()` is true.
-///
-/// Why this matters: every other `qbft_manager` test uses `Role::Committee`, so the observer wiring
-/// in the `qbft_instance()` loop (observer construction on `Initialize`, and the `finish` call in
-/// the terminal-outcome branch) is otherwise never exercised end-to-end. The pure
-/// `classify_round_advance` classifier is covered by unit tests in `instrumentation.rs`; this test
-/// covers the boundary wiring.
-///
-/// `is_proposer()` checks only the `MessageId` role, so keeping the data type as `BeaconVote` and
-/// only swapping the role to `Role::Proposer` (with a `Validator` duty executor) is sufficient to
-/// activate the proposer path; no `ProposerConsensusData` scaffolding is needed.
-///
-/// Assertion strategy: the `PROPOSER_QBFT_OUTCOME_TOTAL{outcome="max_round_timeout"}` counter is a
-/// process-global static, so we assert a strict monotonic increase between a before- and
-/// after-snapshot (a delta) rather than an absolute value, which would be flaky under parallel test
-/// execution. A committee instance never touches this counter, so a positive delta proves the
-/// proposer observer's `finish()` specifically ran. We also assert the instance reaches
-/// `Completed::TimedOut`, proving the proposer path ran start -> finish without panic.
-#[tokio::test(start_paused = true)]
-async fn test_proposer_instance_max_round_timeout_runs_observer() {
-    // The outcome label the observer records for a max-round timeout (mirrors
-    // `ProposerOutcome::MaxRoundTimeout.as_str()`).
-    const MAX_ROUND_TIMEOUT_OUTCOME: &str = "max_round_timeout";
-    // Number of rounds to run before the instance times out. Kept small for a fast deterministic
-    // run; the observer activates regardless of round count.
-    const MAX_ROUNDS: usize = 2;
-    // Handoff budget so the `PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS` path and the `handoff_budget_ms`
-    // span field are also exercised (not just the `None` path the committee tests use).
-    const HANDOFF_BUDGET_MS: u64 = 4_000;
+/// Read `PROPOSER_QBFT_OUTCOME_TOTAL` for `outcome` (0 if unset).
+fn proposer_outcome_count(outcome: &str) -> u64 {
+    metrics::get_int_counter(&metrics::PROPOSER_QBFT_OUTCOME_TOTAL, &[outcome])
+        .map(|c| c.get())
+        .unwrap_or(0)
+}
 
-    // Arrange: read the global outcome counter before the instance runs.
-    let outcome_before = crate::metrics::get_int_counter(
-        &crate::metrics::PROPOSER_QBFT_OUTCOME_TOTAL,
-        &[MAX_ROUND_TIMEOUT_OUTCOME],
+/// The proposer `MessageId` shared by the instance and its peers. `Role::Proposer` attaches the
+/// observer; peers must reuse it so commit aggregation (which compares the full `SSVMessage`)
+/// accepts the quorum.
+fn proposer_message_id() -> MessageId {
+    MessageId::new(
+        &DomainType::default(),
+        Role::Proposer,
+        &DutyExecutor::Validator(PublicKeyBytes::empty()),
     )
-    .map(|c| c.get())
-    .unwrap_or(0);
+}
 
+/// Spawn `qbft_instance()` for operator 1 (the round-1 leader of committee `[1, 2, 3, 4]`, so it
+/// emits its own PROPOSAL on init) and initialize a `Role::Proposer` instance with `config`.
+fn spawn_proposer_instance(
+    config: qbft::Config<qbft::DefaultLeaderFunction>,
+    handoff_budget_ms: Option<u64>,
+) -> (
+    UnboundedSender<QbftMessage<BeaconVote>>,
+    oneshot::Receiver<Completed<BeaconVote>>,
+    BeaconVote,
+) {
     let (sender_tx, _sender_rx) = unbounded_channel();
     let (message_tx, message_rx) = unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
     let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-    let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
+    tokio::spawn(qbft_instance::<BeaconVote>(
         message_rx,
         Arc::new(message_sender),
     ));
 
-    let qbft_start_time = Instant::now();
-
-    // Act: initialize a proposer-role instance and let it run to a max-round timeout.
+    let start_data = setup::generate_test_data(0).0;
     message_tx
-        .send(crate::QbftMessage {
+        .send(QbftMessage {
             kind: QbftMessageKind::Initialize(QbftInitialization {
-                initial: setup::generate_test_data(0).0,
+                initial: start_data.clone(),
                 validator: Box::new(NoDataValidation),
-                // The proposer role is what flips `is_proposer()` to true and attaches the
-                // observer.
-                message_id: MessageId::new(
-                    &DomainType::default(),
-                    Role::Proposer,
-                    &DutyExecutor::Validator(PublicKeyBytes::empty()),
-                ),
-                timeout_mode: TimeoutMode::SlotTime {
-                    instance_start_time: qbft_start_time,
+                message_id: proposer_message_id(),
+                timeout_mode: TimeoutMode::Relative {
+                    current_round_start_time: Instant::now(),
                 },
-                config: qbft::ConfigBuilder::new(
-                    OperatorId(1),
-                    InstanceHeight::from(0),
-                    IndexSet::from([1, 2, 3, 4].map(OperatorId)),
-                )
-                .with_max_rounds(MAX_ROUNDS)
-                .build()
-                .unwrap(),
+                config,
                 on_completed: result_tx,
-                handoff_budget_ms: Some(HANDOFF_BUDGET_MS),
+                handoff_budget_ms,
             }),
             drop_on_finish: None,
         })
         .unwrap();
 
-    // Assert: the proposer instance times out (proves the proposer path ran start -> finish without
-    // panic and follows the same lifecycle as the committee path).
+    (message_tx, result_rx, start_data)
+}
+
+/// Build a single-signer PREPARE or COMMIT network message for `root` at `round` from `signer`.
+/// The placeholder RSA signature is fine (content is not checked at this layer); the `MessageId`
+/// matches the instance's so commit aggregation accepts the quorum.
+fn build_peer_consensus_msg(
+    msg_type: ssv_types::consensus::QbftMessageType,
+    round: u64,
+    root: Hash256,
+    signer: u64,
+) -> WrappedQbftMessage {
+    use ssv_types::{
+        RSA_SIGNATURE_SIZE, VariableList,
+        consensus::QbftMessage as SsvQbftMessage,
+        message::{MsgType, SSVMessage, SignedSSVMessage},
+    };
+    use ssz::Encode;
+
+    let msg_id = proposer_message_id();
+    let qbft_message = SsvQbftMessage {
+        qbft_message_type: msg_type,
+        height: 0,
+        round,
+        identifier: (&msg_id).into(),
+        root,
+        // PREPARE/COMMIT never claim a prepared value, so `data_round` is 0 and no justifications
+        // are required on the round-1 path.
+        data_round: 0,
+        round_change_justification: VariableList::empty(),
+        prepare_justification: VariableList::empty(),
+    };
+
+    let ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        msg_id,
+        qbft_message.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    let signed_message = SignedSSVMessage::new(
+        vec![[0; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId::from(signer)],
+        ssv_message,
+        // Only the PROPOSAL carries `full_data`.
+        vec![],
+    )
+    .expect("should create SignedSSVMessage");
+
+    WrappedQbftMessage {
+        signed_message,
+        qbft_message,
+    }
+}
+
+/// The proposer instance exhausts its rounds and the observer records the `max_round_timeout`
+/// outcome. `with_max_rounds(2)` keeps the run short. A non-`None` `handoff_budget_ms` also
+/// exercises the `PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS` path and `handoff_budget_ms` span field.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_max_round_timeout_runs_observer() {
+    // Mirrors `ProposerOutcome::MaxRoundTimeout.as_str()`.
+    const MAX_ROUND_TIMEOUT_OUTCOME: &str = "max_round_timeout";
+    const MAX_ROUNDS: usize = 2;
+    const HANDOFF_BUDGET_MS: u64 = 4_000;
+
+    // Arrange.
+    let outcome_before = proposer_outcome_count(MAX_ROUND_TIMEOUT_OUTCOME);
+    let config = qbft::ConfigBuilder::new(
+        OperatorId(1),
+        InstanceHeight::from(0),
+        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+    )
+    .with_max_rounds(MAX_ROUNDS)
+    .build()
+    .unwrap();
+
+    // Act: initialize the instance and let it run out of rounds (no peer messages are fed).
+    let (_message_tx, result_rx, _start_data) =
+        spawn_proposer_instance(config, Some(HANDOFF_BUDGET_MS));
+
+    // Assert: the instance times out and the observer recorded the timeout outcome.
     assert!(
         matches!(result_rx.await, Ok(Completed::TimedOut)),
         "proposer instance should reach Completed::TimedOut after exhausting its rounds"
     );
-
-    // Assert: the observer's `finish()` bumped the max-round-timeout outcome counter. Using a
-    // strict monotonic delta keeps this robust under parallel test execution.
-    let outcome_after = crate::metrics::get_int_counter(
-        &crate::metrics::PROPOSER_QBFT_OUTCOME_TOTAL,
-        &[MAX_ROUND_TIMEOUT_OUTCOME],
-    )
-    .map(|c| c.get())
-    .unwrap_or(0);
+    let outcome_after = proposer_outcome_count(MAX_ROUND_TIMEOUT_OUTCOME);
     assert!(
         outcome_after > outcome_before,
         "ProposerObserver::finish should increment \
          PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{MAX_ROUND_TIMEOUT_OUTCOME}\"}} \
+         (before={outcome_before}, after={outcome_after})"
+    );
+}
+
+/// The proposer instance decides in round 1 and the observer records the `decided` outcome - the
+/// production hot-path. As round-1 leader it proposes, then commits as quorums form (quorum is 3
+/// with f = 1, so two peer PREPAREs and two peer COMMITs complete each quorum alongside its own).
+///
+/// Ordering note: `received_commit` drops COMMITs that arrive before the proposal is accepted
+/// (unlike `received_prepare`, which buffers them), so peer COMMITs are sent only after a
+/// `yield_now()` lets the instance drain its own looped-back PROPOSAL/PREPARE and the peer
+/// PREPAREs.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_decided_runs_observer() {
+    use ssv_types::consensus::QbftData;
+
+    // Mirrors `ProposerOutcome::Decided.as_str()`.
+    const DECIDED_OUTCOME: &str = "decided";
+    // Operator 1 leads round 1, so the instance decides there with no round change.
+    const DECIDE_ROUND: u64 = 1;
+    // Peers that complete the prepare and commit quorums alongside the instance's own messages.
+    const PEER_SIGNERS: [u64; 2] = [2, 3];
+
+    // Arrange.
+    let outcome_before = proposer_outcome_count(DECIDED_OUTCOME);
+    let config = qbft::ConfigBuilder::new(
+        OperatorId(1),
+        InstanceHeight::from(0),
+        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+    )
+    .build()
+    .unwrap();
+    let (message_tx, result_rx, start_data) = spawn_proposer_instance(config, None);
+    let proposal_root = start_data.hash();
+
+    let send_peer = |msg_type| {
+        for signer in PEER_SIGNERS {
+            message_tx
+                .send(QbftMessage {
+                    kind: QbftMessageKind::NetworkMessage(build_peer_consensus_msg(
+                        msg_type,
+                        DECIDE_ROUND,
+                        proposal_root,
+                        signer,
+                    )),
+                    drop_on_finish: None,
+                })
+                .unwrap();
+        }
+    };
+
+    // Act: peer PREPAREs form the prepare quorum (driving the instance to COMMIT); after it drains
+    // its own messages, peer COMMITs form the commit quorum and decide the instance.
+    send_peer(ssv_types::consensus::QbftMessageType::Prepare);
+    tokio::task::yield_now().await;
+    send_peer(ssv_types::consensus::QbftMessageType::Commit);
+
+    // Assert: the instance decides on the proposed root and the observer recorded the decided
+    // outcome.
+    assert!(
+        matches!(result_rx.await, Ok(Completed::Success(data)) if data == start_data),
+        "proposer instance should reach Completed::Success on the proposed data"
+    );
+    let outcome_after = proposer_outcome_count(DECIDED_OUTCOME);
+    assert!(
+        outcome_after > outcome_before,
+        "ProposerObserver::finish should increment \
+         PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{DECIDED_OUTCOME}\"}} \
          (before={outcome_before}, after={outcome_after})"
     );
 }
@@ -140,7 +258,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
     let qbft_start_time = slot_start_time + slot_clock.slot_duration() / 3;
 
     message_tx
-        .send(crate::QbftMessage {
+        .send(QbftMessage {
             kind: QbftMessageKind::Initialize(QbftInitialization {
                 initial: setup::generate_test_data(0).0,
                 validator: Box::new(NoDataValidation),
