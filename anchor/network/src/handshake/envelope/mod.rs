@@ -3,9 +3,9 @@ mod generated {
 }
 
 use discv5::libp2p_identity::PublicKey;
-pub use generated::message::pb::Envelope;
+pub use generated::message::Envelope;
 use libp2p::identity::DecodingError;
-use quick_protobuf::{BytesReader, Error as ProtoError, MessageRead, MessageWrite, Writer};
+use prost::{DecodeError, EncodeError, Message};
 use thiserror::Error;
 
 use crate::handshake::{
@@ -15,8 +15,11 @@ use crate::handshake::{
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Coding error: {0}")]
-    Coding(#[from] ProtoError), // Automatically implements `From<ProtoError> for Error`
+    #[error("Decoding error: {0}")]
+    Decoding(#[from] DecodeError),
+
+    #[error("Encoding error: {0}")]
+    Encoding(#[from] EncodeError),
 
     #[error("Public Key Decoding error: {0}")]
     PublicKeyDecoding(#[from] DecodingError),
@@ -29,24 +32,9 @@ pub enum Error {
 }
 
 impl Envelope {
-    /// Encode the Envelope to a Protobuf byte array (like `proto.Marshal` in Go).
-    pub fn encode_to_vec(&self) -> Result<Vec<u8>, Error> {
-        let mut buf = Vec::new();
-        let mut writer = Writer::new(&mut buf);
-        self.write_message(&mut writer)?;
-        Ok(buf)
-    }
-
-    /// Decode an Envelope from a Protobuf byte array (like `proto.Unmarshal` in Go).
-    fn decode_from_slice(data: &[u8]) -> Result<Self, Error> {
-        let mut reader = BytesReader::from_bytes(data);
-        let env = Envelope::from_reader(&mut reader, data).map_err(Error::Coding)?;
-        Ok(env)
-    }
-
     /// Decodes an Envelope and verify signature.
     pub fn parse_and_verify(bytes: &[u8]) -> Result<Envelope, Error> {
-        let env = Envelope::decode_from_slice(bytes)?;
+        let env = Envelope::decode(bytes)?;
 
         let domain = NodeInfo::DOMAIN;
         let payload_type = NodeInfo::CODEC;
@@ -73,13 +61,13 @@ pub fn make_unsigned(
     domain: &[u8],
     payload_type: &[u8],
     payload: &[u8],
-) -> Result<Vec<u8>, ProtoError> {
+) -> Result<Vec<u8>, EncodeError> {
     let mut buf = Vec::new();
-    {
-        let mut writer = Writer::new(&mut buf);
-        writer.write_bytes(domain)?;
-        writer.write_bytes(payload_type)?;
-        writer.write_bytes(payload)?;
-    }
+    prost::encode_length_delimiter(domain.len(), &mut buf)?;
+    buf.extend_from_slice(domain);
+    prost::encode_length_delimiter(payload_type.len(), &mut buf)?;
+    buf.extend_from_slice(payload_type);
+    prost::encode_length_delimiter(payload.len(), &mut buf)?;
+    buf.extend_from_slice(payload);
     Ok(buf)
 }

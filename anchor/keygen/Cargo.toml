@@ -1,6 +1,6 @@
 [package]
 name = "keygen"
-version = "1.2.3"
+version = "1.2.4"
 edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
