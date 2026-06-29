@@ -160,7 +160,6 @@ async fn test_proposer_instance_max_round_timeout_runs_observer() {
 
 /// Objective: Drive proposer instance to decide in QBFT round 1. Observer records the `decided`
 /// outcome.
-
 /// Proposer instance is round-1 leader. It proposes and commits as quorums form.
 /// f = 1, so two peer PREPAREs and two peer COMMITs complete each quorum alongside its own.
 #[tokio::test(start_paused = true)]
