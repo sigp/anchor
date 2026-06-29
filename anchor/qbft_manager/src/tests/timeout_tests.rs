@@ -11,13 +11,6 @@ async fn test_timeouts() {
     }
 }
 
-// Proposer-path instrumentation tests: drive a `Role::Proposer` instance to each terminal outcome,
-// exercising the `ProposerObserver` lifecycle that only activates when `is_proposer()` is true.
-// Timeout mode mirrors production proposer block duties (`TimeoutMode::Relative`).
-//
-// `PROPOSER_QBFT_OUTCOME_TOTAL` is a process-global static, so tests assert a monotonic delta on
-// its outcome label rather than an absolute value, which would be flaky under parallel execution.
-
 /// Read `PROPOSER_QBFT_OUTCOME_TOTAL` for `outcome` (0 if unset).
 fn proposer_outcome_count(outcome: &str) -> u64 {
     metrics::get_int_counter(&metrics::PROPOSER_QBFT_OUTCOME_TOTAL, &[outcome])
@@ -77,7 +70,7 @@ fn spawn_proposer_instance(
 }
 
 /// Build a single-signer PREPARE or COMMIT network message for `root` at `round` from `signer`.
-/// The placeholder RSA signature is fine (content is not checked at this layer); the `MessageId`
+/// The placeholder RSA signature is valid as content is not checked at this layer. `MessageId`
 /// matches the instance's so commit aggregation accepts the quorum.
 fn build_peer_consensus_msg(
     msg_type: ssv_types::consensus::QbftMessageType,
@@ -128,9 +121,8 @@ fn build_peer_consensus_msg(
     }
 }
 
-/// The proposer instance exhausts its rounds and the observer records the `max_round_timeout`
-/// outcome. `with_max_rounds(2)` keeps the run short. A non-`None` `handoff_budget_ms` also
-/// exercises the `PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS` path and `handoff_budget_ms` span field.
+/// Objective: Drive proposer instance to max round timeout with a non-`None` `handoff_budget_ms`.
+/// Proposer instance exhausts its rounds and the observer records the `max_round_timeout` outcome.
 #[tokio::test(start_paused = true)]
 async fn test_proposer_instance_max_round_timeout_runs_observer() {
     // Mirrors `ProposerOutcome::MaxRoundTimeout.as_str()`.
@@ -138,7 +130,6 @@ async fn test_proposer_instance_max_round_timeout_runs_observer() {
     const MAX_ROUNDS: usize = 2;
     const HANDOFF_BUDGET_MS: u64 = 4_000;
 
-    // Arrange.
     let outcome_before = proposer_outcome_count(MAX_ROUND_TIMEOUT_OUTCOME);
     let config = qbft::ConfigBuilder::new(
         OperatorId(1),
@@ -149,11 +140,11 @@ async fn test_proposer_instance_max_round_timeout_runs_observer() {
     .build()
     .unwrap();
 
-    // Act: initialize the instance and let it run out of rounds (no peer messages are fed).
+    // Initialize the instance and let it run out of rounds (no peer messages are fed).
     let (_message_tx, result_rx, _start_data) =
         spawn_proposer_instance(config, Some(HANDOFF_BUDGET_MS));
 
-    // Assert: the instance times out and the observer recorded the timeout outcome.
+    // Instance times out, observer recorded timeout outcome.
     assert!(
         matches!(result_rx.await, Ok(Completed::TimedOut)),
         "proposer instance should reach Completed::TimedOut after exhausting its rounds"
@@ -167,14 +158,11 @@ async fn test_proposer_instance_max_round_timeout_runs_observer() {
     );
 }
 
-/// The proposer instance decides in round 1 and the observer records the `decided` outcome - the
-/// production hot-path. As round-1 leader it proposes, then commits as quorums form (quorum is 3
-/// with f = 1, so two peer PREPAREs and two peer COMMITs complete each quorum alongside its own).
-///
-/// Ordering note: `received_commit` drops COMMITs that arrive before the proposal is accepted
-/// (unlike `received_prepare`, which buffers them), so peer COMMITs are sent only after a
-/// `yield_now()` lets the instance drain its own looped-back PROPOSAL/PREPARE and the peer
-/// PREPAREs.
+/// Objective: Drive proposer instance to decide in QBFT round 1. Observer records the `decided`
+/// outcome.
+
+/// Proposer instance is round-1 leader. It proposes and commits as quorums form.
+/// f = 1, so two peer PREPAREs and two peer COMMITs complete each quorum alongside its own.
 #[tokio::test(start_paused = true)]
 async fn test_proposer_instance_decided_runs_observer() {
     use ssv_types::consensus::QbftData;
@@ -186,7 +174,6 @@ async fn test_proposer_instance_decided_runs_observer() {
     // Peers that complete the prepare and commit quorums alongside the instance's own messages.
     const PEER_SIGNERS: [u64; 2] = [2, 3];
 
-    // Arrange.
     let outcome_before = proposer_outcome_count(DECIDED_OUTCOME);
     let config = qbft::ConfigBuilder::new(
         OperatorId(1),
@@ -214,13 +201,18 @@ async fn test_proposer_instance_decided_runs_observer() {
         }
     };
 
-    // Act: peer PREPAREs form the prepare quorum (driving the instance to COMMIT); after it drains
+    // Peer PREPAREs form the prepare quorum (driving the instance to COMMIT); after it drains
     // its own messages, peer COMMITs form the commit quorum and decide the instance.
+
+    // COMMITs that arrive before the proposal is accepted are dropped by the instance.
+    // PREPARE messages are buffered. `yield_now()` placed ahead of sending peer COMMITs.
+    // Lets the instance drain its PROPOSAL/PREPARE messages and the peer PREPAREs to reach COMMIT
+    // state.
     send_peer(ssv_types::consensus::QbftMessageType::Prepare);
     tokio::task::yield_now().await;
     send_peer(ssv_types::consensus::QbftMessageType::Commit);
 
-    // Assert: the instance decides on the proposed root and the observer recorded the decided
+    // Instance decides on the proposed root and the observer recorded the decided
     // outcome.
     assert!(
         matches!(result_rx.await, Ok(Completed::Success(data)) if data == start_data),
