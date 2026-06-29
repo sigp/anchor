@@ -165,6 +165,7 @@ async fn sign_payload_attestation_collection_failure_increments_no_signature_met
         HarnessOptions {
             collector_failure: Some(CollectionError::QueueClosedError),
             disable_slashing_protection: true,
+            ..Default::default()
         },
     );
     let data = create_payload_attestation_data();
@@ -219,6 +220,7 @@ async fn sign_payload_attestation_infra_failure_increments_infra_metric() {
         HarnessOptions {
             collector_failure: Some(CollectionError::EmptySignature),
             disable_slashing_protection: true,
+            ..Default::default()
         },
     );
     let data = create_payload_attestation_data();
@@ -286,6 +288,7 @@ async fn sign_payload_attestation_does_not_touch_slashing_db() {
         HarnessOptions {
             collector_failure: None,
             disable_slashing_protection: false,
+            ..Default::default()
         },
     );
     let data = create_payload_attestation_data();

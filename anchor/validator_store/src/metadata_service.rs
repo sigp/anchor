@@ -15,7 +15,10 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, ValidatorIndex, VariableList,
-    consensus::{AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion},
+    consensus::{
+        AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion,
+        GloasBeaconVote,
+    },
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
@@ -32,7 +35,7 @@ use types::{
 use validator_services::duties_service::{DutiesService, DutyAndProof};
 
 use crate::{
-    AggregationAssignments, AnchorValidatorStore, ContributionWaiter, VotingAssignments,
+    AggregationAssignments, AnchorValidatorStore, ContributionWaiter, SlotVote, VotingAssignments,
     VotingContext, metrics,
 };
 
@@ -430,15 +433,24 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             None => self.fetch_attestation_data(slot).await?,
         };
 
-        let beacon_vote = BeaconVote {
-            block_root: attestation_data.beacon_block_root,
-            source: attestation_data.source,
-            target: attestation_data.target,
+        let vote = if self.spec.fork_name_at_slot::<E>(slot).gloas_enabled() {
+            SlotVote::Gloas(GloasBeaconVote {
+                block_root: attestation_data.beacon_block_root,
+                source: attestation_data.source,
+                target: attestation_data.target,
+                attestation_data_index: attestation_data.index,
+            })
+        } else {
+            SlotVote::Base(BeaconVote {
+                block_root: attestation_data.beacon_block_root,
+                source: attestation_data.source,
+                target: attestation_data.target,
+            })
         };
 
         let voting_context = VotingContext {
             voting_assignments,
-            beacon_vote,
+            vote,
         };
 
         self.validator_store.update_voting_context(voting_context);
@@ -649,7 +661,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         attestation_committee_indexes: HashSet<u64>,
         all_subnet_ids: HashSet<SyncSubnetId>,
     ) -> Result<HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>, String> {
-        // Get `VotingContext` for `beacon_vote` (cached at 1/3 slot)
+        // Get `VotingContext` for the slot's `vote` (cached at 1/3 slot)
         let voting_context = self
             .validator_store
             .get_voting_context(slot)
@@ -663,13 +675,13 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let (aggregated_attestations, sync_contributions) = tokio::join!(
             self.fetch_aggregated_attestations(
                 slot,
-                &voting_context.beacon_vote,
+                &voting_context.vote,
                 &attestation_committee_indexes,
                 BEACON_API_FETCH_TIMEOUT,
             ),
             self.fetch_sync_contributions(
                 slot,
-                voting_context.beacon_vote.block_root,
+                voting_context.vote.block_root(),
                 &all_subnet_ids,
                 BEACON_API_FETCH_TIMEOUT,
             ),
@@ -880,7 +892,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     async fn fetch_aggregated_attestations(
         &self,
         slot: Slot,
-        beacon_vote: &BeaconVote,
+        vote: &SlotVote,
         attestation_committee_indexes: &HashSet<u64>,
         timeout: Duration,
     ) -> HashMap<u64, Attestation<E>> {
@@ -908,10 +920,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                 // Electra+: index = 0 (committee info moved to Attestation.committee_bits)
                 let attestation_data = AttestationData {
                     slot,
-                    index: if fork_name < ForkName::Electra { committee_index } else { 0 },
-                    beacon_block_root: beacon_vote.block_root,
-                    source: beacon_vote.source,
-                    target: beacon_vote.target,
+                    index: if fork_name < ForkName::Electra { committee_index } else { vote.index() },
+                    beacon_block_root: vote.block_root(),
+                    source: vote.source(),
+                    target: vote.target(),
                 };
                 let attestation_data_root = attestation_data.tree_hash_root();
 
