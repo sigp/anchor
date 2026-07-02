@@ -22,6 +22,7 @@ pub enum Role {
     VoluntaryExit,
     AggregatorCommittee,
     PTCAttester,
+    ProposerPreferences,
 }
 
 impl From<Role> for [u8; 4] {
@@ -35,6 +36,7 @@ impl From<Role> for [u8; 4] {
             Role::VoluntaryExit => [5, 0, 0, 0],
             Role::AggregatorCommittee => [6, 0, 0, 0],
             Role::PTCAttester => [7, 0, 0, 0],
+            Role::ProposerPreferences => [8, 0, 0, 0],
         }
     }
 }
@@ -52,6 +54,7 @@ impl TryFrom<&[u8]> for Role {
             [5, 0, 0, 0] => Ok(Role::VoluntaryExit),
             [6, 0, 0, 0] => Ok(Role::AggregatorCommittee),
             [7, 0, 0, 0] => Ok(Role::PTCAttester),
+            [8, 0, 0, 0] => Ok(Role::ProposerPreferences),
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -75,7 +78,10 @@ impl Role {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
             // These roles don't use QBFT consensus
-            Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester => None,
+            Role::ValidatorRegistration
+            | Role::VoluntaryExit
+            | Role::PTCAttester
+            | Role::ProposerPreferences => None,
         }
     }
 
@@ -161,7 +167,8 @@ impl MessageId {
             | Role::SyncCommittee
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
-            | Role::PTCAttester => PublicKeyBytes::deserialize(&self.0[8..])
+            | Role::PTCAttester
+            | Role::ProposerPreferences => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
         }
@@ -351,6 +358,42 @@ mod tests {
         assert!(!Role::PTCAttester.is_qbft_role());
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ProposerPreferences Specific Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn proposer_preferences_uses_validator_duty_executor() {
+        // ProposerPreferences is validator-scoped: it must use Validator-style duty
+        // executor (PublicKeyBytes), not Committee-style (CommitteeId).
+        let domain = DomainType([0, 0, 0, 0]);
+        let public_key = PublicKeyBytes::empty();
+        let duty_executor = DutyExecutor::Validator(public_key);
+
+        let msg_id = MessageId::new(&domain, Role::ProposerPreferences, &duty_executor);
+
+        assert_eq!(msg_id.role(), Some(Role::ProposerPreferences));
+
+        match msg_id.duty_executor() {
+            Some(DutyExecutor::Validator(pk)) => assert_eq!(pk, public_key),
+            Some(DutyExecutor::Committee(_)) => {
+                panic!("ProposerPreferences should use Validator duty executor, not Committee")
+            }
+            None => panic!("Failed to extract duty executor"),
+        }
+    }
+
+    #[test]
+    fn proposer_preferences_is_validator_scoped_non_qbft() {
+        // Every behavior flip in the ProposerPreferences retarget rides on these
+        // three classifications (validation bucketing, consensus-message rejection,
+        // qbft_manager routing). Re-adding ProposerPreferences to the committee arm
+        // or giving it a max round would compile silently; this pins the values.
+        assert!(!Role::ProposerPreferences.is_committee_role());
+        assert_eq!(Role::ProposerPreferences.max_round(), None);
+        assert!(!Role::ProposerPreferences.is_qbft_role());
+    }
+
     #[test]
     fn role_qbft_classification_is_pinned() {
         // Adding a new Role forces a decision in max_round()'s exhaustive
@@ -371,6 +414,7 @@ mod tests {
             Role::ValidatorRegistration,
             Role::VoluntaryExit,
             Role::PTCAttester,
+            Role::ProposerPreferences,
         ] {
             assert!(!role.is_qbft_role(), "{role:?} must not run QBFT");
             assert!(

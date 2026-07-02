@@ -40,6 +40,10 @@ pub enum PartialSignatureKind {
     // PTCAttester is a standalone single-validator partial signature over PayloadAttestationData
     // (validator-scoped, leaderless; not a QBFT consensus value)
     PTCAttester = 7,
+    // ProposerPreferences is a standalone single-validator partial signature over a
+    // ProposerPreferences object (validator-scoped, non-QBFT; the reconstructed
+    // SignedProposerPreferences is gossiped on the proposer_preferences topic)
+    ProposerPreferences = 8,
 }
 
 impl TryFrom<u64> for PartialSignatureKind {
@@ -55,6 +59,7 @@ impl TryFrom<u64> for PartialSignatureKind {
             5 => Ok(PartialSignatureKind::VoluntaryExit),
             6 => Ok(PartialSignatureKind::AggregatorCommitteePartialSig),
             7 => Ok(PartialSignatureKind::PTCAttester),
+            8 => Ok(PartialSignatureKind::ProposerPreferences),
             _ => Err(()),
         }
     }
@@ -192,6 +197,7 @@ mod tests {
             PartialSignatureKind::VoluntaryExit,
             PartialSignatureKind::AggregatorCommitteePartialSig,
             PartialSignatureKind::PTCAttester,
+            PartialSignatureKind::ProposerPreferences,
         ];
 
         for variant in variants {
@@ -225,6 +231,7 @@ mod tests {
             (PartialSignatureKind::VoluntaryExit, 5u64),
             (PartialSignatureKind::AggregatorCommitteePartialSig, 6u64),
             (PartialSignatureKind::PTCAttester, 7u64),
+            (PartialSignatureKind::ProposerPreferences, 8u64),
         ];
 
         for (variant, expected_value) in test_cases {
@@ -242,7 +249,7 @@ mod tests {
 
     #[test]
     fn partial_signature_kind_ssz_decode_invalid_variant() {
-        let invalid_value = 8u64.to_le_bytes();
+        let invalid_value = 9u64.to_le_bytes();
         let result = PartialSignatureKind::from_ssz_bytes(&invalid_value);
         assert!(matches!(result, Err(DecodeError::NoMatchingVariant)));
     }
@@ -310,11 +317,15 @@ mod tests {
             PartialSignatureKind::try_from(7u64).unwrap(),
             PartialSignatureKind::PTCAttester
         );
+        assert_eq!(
+            PartialSignatureKind::try_from(8u64).unwrap(),
+            PartialSignatureKind::ProposerPreferences
+        );
     }
 
     #[test]
     fn partial_signature_kind_try_from_u64_invalid_values() {
-        assert!(PartialSignatureKind::try_from(8u64).is_err());
+        assert!(PartialSignatureKind::try_from(9u64).is_err());
         assert!(PartialSignatureKind::try_from(100u64).is_err());
         assert!(PartialSignatureKind::try_from(u64::MAX).is_err());
     }
@@ -342,6 +353,7 @@ mod tests {
             PartialSignatureKind::VoluntaryExit,
             PartialSignatureKind::AggregatorCommitteePartialSig,
             PartialSignatureKind::PTCAttester,
+            PartialSignatureKind::ProposerPreferences,
         ];
 
         let hashes: Vec<_> = variants.iter().map(|v| v.tree_hash_root()).collect();
@@ -386,5 +398,35 @@ mod tests {
         // Should decode back to the same variant
         let decoded = PartialSignatureKind::from_ssz_bytes(&encoded).unwrap();
         assert_eq!(decoded, PartialSignatureKind::AggregatorCommitteePartialSig);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ProposerPreferences Specific Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn proposer_preferences_partial_sig_variant_value() {
+        assert_eq!(
+            PartialSignatureKind::ProposerPreferences as u64,
+            8,
+            "ProposerPreferences should have discriminant value 8"
+        );
+    }
+
+    #[test]
+    fn proposer_preferences_partial_sig_ssz_encoding() {
+        let variant = PartialSignatureKind::ProposerPreferences;
+        let encoded = variant.as_ssz_bytes();
+
+        // Should encode as 8 in little-endian format
+        assert_eq!(
+            encoded,
+            vec![8, 0, 0, 0, 0, 0, 0, 0],
+            "ProposerPreferences should encode as [8, 0, 0, 0, 0, 0, 0, 0]"
+        );
+
+        // Should decode back to the same variant
+        let decoded = PartialSignatureKind::from_ssz_bytes(&encoded).unwrap();
+        assert_eq!(decoded, PartialSignatureKind::ProposerPreferences);
     }
 }
