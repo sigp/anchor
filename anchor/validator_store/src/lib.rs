@@ -158,6 +158,15 @@ fn determine_slot_elapsed_ms(slot_clock: &impl SlotClock) -> Option<u64> {
         .map(|d| d.as_millis() as u64)
 }
 
+/// Compute how much slot time remains when QBFT starts (`slot_duration − elapsed`).
+/// Returns `None` when the slot clock cannot determine the current position within the slot.
+fn compute_handoff_budget_ms(slot_clock: &impl SlotClock) -> Option<u64> {
+    determine_slot_elapsed_ms(slot_clock).map(|elapsed| {
+        let slot_duration_ms = slot_clock.slot_duration().as_millis() as u64;
+        slot_duration_ms.saturating_sub(elapsed)
+    })
+}
+
 pub struct AnchorValidatorStore<
     T: SlotClock + 'static,
     E: EthSpec,
@@ -578,13 +587,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let data_validator = self.create_proposer_consensus_data_validator(validator.public_key);
 
-        // Compute the handoff budget: how much slot time remains when QBFT starts. This measures
-        // the time pressure the proposer instance is under, since a block proposal must be handed
-        // off well within the slot.
-        let handoff_budget_ms = determine_slot_elapsed_ms(&self.slot_clock).map(|elapsed| {
-            let slot_duration_ms = self.slot_clock.slot_duration().as_millis() as u64;
-            slot_duration_ms.saturating_sub(elapsed)
-        });
+        let handoff_budget_ms = compute_handoff_budget_ms(&self.slot_clock);
 
         // Initiate QBFT consensus for this block proposal
         let completed = self
@@ -3400,6 +3403,75 @@ mod tests {
             }
         } else {
             panic!("Should have voting assignments cached");
+        }
+    }
+
+    mod handoff_budget {
+        use slot_clock::ManualSlotClock;
+
+        use super::*;
+
+        const SLOT_DURATION: Duration = Duration::from_millis(12_000);
+        const GENESIS_DURATION: Duration = Duration::from_secs(0);
+
+        /// Creates a `ManualSlotClock` with genesis at time zero and a 12s slot duration,
+        /// then positions the clock at the given offset within a slot.
+        fn clock_at_elapsed(elapsed: Duration) -> ManualSlotClock {
+            let clock = ManualSlotClock::new(Slot::new(0), GENESIS_DURATION, SLOT_DURATION);
+            clock.set_current_time(elapsed);
+            clock
+        }
+
+        #[test]
+        fn test_compute_handoff_budget_ms_full_slot_remains_at_clock_start() {
+            // Clock positioned exactly at slot start (0ms elapsed).
+            let clock = clock_at_elapsed(Duration::from_millis(0));
+            let budget = compute_handoff_budget_ms(&clock);
+            assert_eq!(
+                budget,
+                Some(12_000),
+                "budget must equal full slot duration when no time has elapsed"
+            );
+        }
+
+        #[test]
+        fn test_compute_handoff_budget_ms_partial_elapsed() {
+            // Clock set 3s into the slot.
+            let clock = clock_at_elapsed(Duration::from_millis(3_000));
+            let budget = compute_handoff_budget_ms(&clock);
+            assert_eq!(
+                budget,
+                Some(9_000),
+                "budget must be slot_duration minus elapsed time"
+            );
+        }
+
+        #[test]
+        fn test_compute_handoff_budget_ms_near_end_of_slot() {
+            // Clock set with 1ms remaining in slot.
+            let clock = clock_at_elapsed(Duration::from_millis(11_999));
+            let budget = compute_handoff_budget_ms(&clock);
+            assert_eq!(
+                budget,
+                Some(1),
+                "budget must determine exact time remaining when nearly at slot boundary"
+            );
+        }
+
+        #[test]
+        fn test_compute_handoff_budget_ms_returns_none_when_pre_genesis() {
+            // Genesis is at 10s, but current time is before genesis.
+            let genesis = Duration::from_secs(10);
+            let clock = ManualSlotClock::new(Slot::new(0), genesis, SLOT_DURATION);
+            clock.set_current_time(Duration::from_secs(5));
+
+            // Lighthouse function `millis_from_current_slot_start` returns
+            // None when the clock is pre-genesis.
+            let budget = compute_handoff_budget_ms(&clock);
+            assert_eq!(
+                budget, None,
+                "budget must be None when slot clock cannot determine elapsed time"
+            );
         }
     }
 }

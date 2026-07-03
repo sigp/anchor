@@ -192,9 +192,11 @@ impl ProposerObserver {
         }
     }
 
-    /// Emit a Qbft state-transition event when the instance changes state into `Prepare` or
-    /// `Commit` within the same round. A no-op when the state is unchanged or transitions into
-    /// a variant that is not relevant to this layer.
+    /// Emit a state-transition event when the instance enters `Prepare` or `Commit`.
+    ///
+    /// Fires independently of round advances as a future-round proposal that both advances the
+    /// round *and* enters `Prepare` legitimately triggers this event disjoint to round advance
+    /// metric recording.
     pub fn observe_state_transition(&self, before: InstanceStateKind, after: InstanceStateKind) {
         if before == after {
             return;
@@ -231,12 +233,18 @@ impl ProposerObserver {
             );
         });
 
-        metrics::observe(&metrics::PROPOSER_QBFT_DECIDED_ROUND, decided_round as f64);
-        metrics::observe(
-            &metrics::PROPOSER_QBFT_DURATION_SECONDS,
-            duration.as_secs_f64(),
-        );
         metrics::inc_counter_vec(&metrics::PROPOSER_QBFT_OUTCOME_TOTAL, &[outcome.as_str()]);
+
+        // A `ChannelClosed` instance is torn down externally (cleanup/shutdown). Its round and
+        // wall-clock time are teardown artifacts and pollute meaningful consensus measurements.
+        // Decided round and QBFT duration gated for non-ChannelClosed outcomes.
+        if outcome != ProposerOutcome::ChannelClosed {
+            metrics::observe(&metrics::PROPOSER_QBFT_DECIDED_ROUND, decided_round as f64);
+            metrics::observe(
+                &metrics::PROPOSER_QBFT_DURATION_SECONDS,
+                duration.as_secs_f64(),
+            );
+        }
     }
 }
 

@@ -332,11 +332,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             && initialized.is_proposer()
                             && observer.is_none()
                         {
-                            // Checked usize -> u64 saturates rather than panicking on overflow.
-                            // Unreachable on 64-bit targets.
-                            let instance_height =
-                                u64::try_from(*initialized.qbft.get_instance_height())
-                                    .unwrap_or(u64::MAX);
+                            let instance_height = *initialized.qbft.get_instance_height() as u64;
                             observer =
                                 Some(ProposerObserver::start(instance_height, handoff_budget_ms));
                         }
