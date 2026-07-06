@@ -92,6 +92,8 @@ impl<S: SlotClock> SubnetService<S> {
         network_state
             .clusters()
             .values()
+            // Liquidated clusters generate no traffic, so they must not inflate expected rates.
+            .filter(|cluster| !cluster.liquidated)
             .filter(|cluster| {
                 let operator_ids: Vec<OperatorId> =
                     cluster.cluster_members.iter().copied().collect();

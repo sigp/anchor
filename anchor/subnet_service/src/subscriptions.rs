@@ -61,6 +61,8 @@ impl SubnetGenerator {
             .get_own_clusters()
             .iter()
             .flat_map(|cluster| state.clusters().get_by(cluster))
+            // Liquidated clusters perform no duties, so their subnets need no subscription.
+            .filter(|cluster| !cluster.liquidated)
             .map(|cluster| cluster.cluster_members.iter().copied().collect::<Vec<_>>())
             .collect();
         SubnetGenerator::Committees(all_committee_members)
@@ -302,19 +304,25 @@ mod tests {
         time::Duration,
     };
 
-    use database::NetworkDatabase;
+    use database::{
+        NetworkDatabase, PendingStateUpdates,
+        test_utils::{DEFAULT_NUM_OPERATORS, commit_and_publish, generators},
+    };
     use fork::{ALAN_TOPIC_PREFIX, Fork, ForkConfig, ForkLifecycle, ForkSchedule};
+    use rusqlite::Transaction;
     use slot_clock::{ManualSlotClock, SlotClock};
-    use ssv_types::{OperatorId, domain_type::DomainType};
+    use ssv_types::{Cluster, ClusterId, Operator, OperatorId, domain_type::DomainType};
     use task_executor::test_utils::TestRuntime;
     use tempfile::TempDir;
     use tokio::{
         sync::{mpsc, watch},
         time::timeout,
     };
-    use types::{ChainSpec, Epoch, MinimalEthSpec, Slot};
+    use types::{
+        ChainSpec, Epoch, MinimalEthSpec, Slot, test_utils::generate_deterministic_keypair,
+    };
 
-    use crate::{SUBNET_COUNT, TopicEvent, start_subnet_service};
+    use crate::{SUBNET_COUNT, SubnetId, TopicEvent, start_subnet_service};
 
     const TEST_NETWORK: &str = "test";
     const ALAN_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
@@ -322,15 +330,18 @@ mod tests {
     const BOOLE_FORK_EPOCH: u64 = 100;
     const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
     const NO_EXTRA_EVENTS_TIMEOUT: Duration = Duration::from_millis(50);
+    /// Operator id the test database impersonates; clusters whose shares include it become own
+    /// clusters.
+    const OWN_OPERATOR_ID: OperatorId = OperatorId(1);
 
     /// Test harness that spins up a live `SubnetService` and captures emitted topic events.
     ///
     /// The harness uses real watch/mpsc channels so tests exercise the `run()` loop end-to-end
     /// for lifecycle transitions.
     struct TestHarness {
-        _db: NetworkDatabase,
+        db: NetworkDatabase,
         _runtime: TestRuntime,
-        _service: Arc<crate::SubnetService<ManualSlotClock>>,
+        service: Arc<crate::SubnetService<ManualSlotClock>>,
         lifecycle_tx: watch::Sender<ForkLifecycle>,
         topic_event_rx: mpsc::Receiver<TopicEvent>,
         alan_config: ForkConfig,
@@ -352,13 +363,43 @@ mod tests {
             Self::new_with_initial_lifecycle(grace_period_current_boole_previous_alan)
         }
 
+        /// Committee-driven subscriptions: subnets come from the own clusters in the database,
+        /// so cluster changes (insert/liquidate/reactivate) are observable as topic events.
+        fn new_normal_on_alan_committee_subscriptions() -> Self {
+            Self::new_with_flags(normal_on_alan, false, true)
+        }
+
+        /// Committee-driven subscriptions with gossipsub topic scoring enabled, because
+        /// `subnet_message_rate` returns `None` when scoring is disabled.
+        fn new_normal_on_alan_with_scoring() -> Self {
+            Self::new_with_flags(normal_on_alan, false, false)
+        }
+
         /// Build a service with an initial lifecycle and ready-to-assert event receiver.
         fn new_with_initial_lifecycle(
             initial_lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
         ) -> Self {
+            Self::new_with_flags(
+                initial_lifecycle,
+                // Keep lifecycle tests deterministic: always subscribe to all subnets so each
+                // lifecycle phase emits a stable `SUBNET_COUNT` per tracked fork, independent of
+                // DB committee fixture contents.
+                true,
+                // Lifecycle tests only validate subscribe/unsubscribe transitions, so disable
+                // periodic scoring updates to avoid unrelated topic-event traffic.
+                true,
+            )
+        }
+
+        /// Build a service with an initial lifecycle and explicit subscription/scoring flags.
+        fn new_with_flags(
+            initial_lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+            subscribe_all_subnets: bool,
+            disable_gossipsub_topic_scoring: bool,
+        ) -> Self {
             let temp_dir = TempDir::new().expect("should create temp directory for test database");
             let db_path = temp_dir.path().join("subnet_service_lifecycle.db");
-            let db = NetworkDatabase::new_as_impostor(&db_path, &OperatorId(1), TEST_NETWORK)
+            let db = NetworkDatabase::new_as_impostor(&db_path, &OWN_OPERATOR_ID, TEST_NETWORK)
                 .expect("should build test database");
 
             let (fork_schedule, alan_config, boole_config) = test_fork_schedule();
@@ -374,13 +415,8 @@ mod tests {
             let runtime = TestRuntime::default();
             let (service, topic_event_rx) = start_subnet_service::<_, MinimalEthSpec>(
                 db.watch(),
-                // Keep tests deterministic: always subscribe to all subnets so each lifecycle
-                // phase emits a stable `SUBNET_COUNT` per tracked fork, independent of DB
-                // committee fixture contents.
-                true,
-                // These tests only validate subscribe/unsubscribe transitions, so disable periodic
-                // scoring updates to avoid unrelated topic-event traffic.
-                true,
+                subscribe_all_subnets,
+                disable_gossipsub_topic_scoring,
                 &runtime.task_executor,
                 slot_clock,
                 Arc::new(ChainSpec::minimal()),
@@ -389,9 +425,9 @@ mod tests {
             );
 
             Self {
-                _db: db,
+                db,
                 _runtime: runtime,
-                _service: service,
+                service,
                 lifecycle_tx,
                 topic_event_rx,
                 alan_config,
@@ -451,6 +487,68 @@ mod tests {
                 Ok(None) => panic!("topic event channel closed unexpectedly"),
                 Err(_) => {}
             }
+        }
+
+        /// Run database mutations inside one transaction, then commit and publish the queued
+        /// state updates to the running service.
+        fn mutate_db(
+            &self,
+            mutate: impl FnOnce(&NetworkDatabase, &Transaction<'_>, &mut PendingStateUpdates),
+        ) {
+            let mut conn = self
+                .db
+                .connection()
+                .expect("should get database connection");
+            let tx = conn.transaction().expect("should begin transaction");
+            let mut pending = PendingStateUpdates::default();
+            mutate(&self.db, &tx, &mut pending);
+            commit_and_publish(&self.db, tx, pending);
+        }
+
+        /// Insert network operators and publish the state update to the running service.
+        fn insert_operators(&self, operators: &[Operator]) {
+            self.mutate_db(|db, tx, pending| {
+                for operator in operators {
+                    db.insert_operator_tx(operator, tx, pending)
+                        .expect("should insert operator");
+                }
+            });
+        }
+
+        /// Insert a cluster of `operators` with one validator and publish the state update.
+        ///
+        /// The shares cover every operator, so the share for `OWN_OPERATOR_ID` makes this an
+        /// own cluster. `pubkey_seed` must be unique per inserted validator because the pubkey
+        /// generator in `database::test_utils` is deterministically seeded and reusing a pubkey
+        /// collides on the validators table.
+        fn insert_own_cluster(&self, operators: &[Operator], pubkey_seed: usize) -> Cluster {
+            let cluster = generators::cluster::with_operators(operators);
+            let mut validator = generators::validator::random_metadata(cluster.cluster_id);
+            validator.public_key = generate_deterministic_keypair(pubkey_seed).pk.compress();
+            let shares = operators
+                .iter()
+                .map(|operator| {
+                    generators::share::random(
+                        cluster.cluster_id,
+                        operator.id,
+                        &validator.public_key,
+                    )
+                })
+                .collect();
+
+            self.mutate_db(|db, tx, pending| {
+                db.insert_validator_tx(cluster.clone(), &validator, shares, tx, pending)
+                    .expect("should insert validator");
+            });
+            cluster
+        }
+
+        /// Flip a cluster's liquidation status and publish the state update.
+        fn set_cluster_liquidated(&self, cluster_id: ClusterId, liquidated: bool) {
+            self.mutate_db(|db, tx, pending| {
+                db.update_status_tx(cluster_id, liquidated, tx, pending)
+                    .expect("should update cluster status");
+            });
         }
     }
 
@@ -525,6 +623,142 @@ mod tests {
         assert_eq!(alan_subscribes, SUBNET_COUNT);
         assert_eq!(boole_subscribes, SUBNET_COUNT);
         harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn liquidating_cluster_unsubscribes_its_subnet() {
+        // Arrange
+        let mut harness = TestHarness::new_normal_on_alan_committee_subscriptions();
+        // An empty database means startup emits no subscriptions.
+        harness.assert_no_additional_events().await;
+
+        let operators = test_operators();
+        harness.insert_operators(&operators);
+        let cluster = harness.insert_own_cluster(&operators, 1);
+        let expected_subnet = alan_subnet_for(&operators);
+
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_subscribe_for_subnet(&events[0], expected_subnet);
+        harness.assert_no_additional_events().await;
+
+        // Act
+        harness.set_cluster_liquidated(cluster.cluster_id, true);
+
+        // Assert
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_unsubscribe_for_subnet(&events[0], expected_subnet);
+        harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn reactivating_cluster_resubscribes_its_subnet() {
+        // Arrange: reach the liquidated state with the cluster's subnet unsubscribed. Waiting
+        // for each event before the next mutation prevents the watch channel from coalescing
+        // consecutive updates into one no-op diff.
+        let mut harness = TestHarness::new_normal_on_alan_committee_subscriptions();
+        let operators = test_operators();
+        harness.insert_operators(&operators);
+        let cluster = harness.insert_own_cluster(&operators, 1);
+        let expected_subnet = alan_subnet_for(&operators);
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_subscribe_for_subnet(&events[0], expected_subnet);
+        harness.set_cluster_liquidated(cluster.cluster_id, true);
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_unsubscribe_for_subnet(&events[0], expected_subnet);
+
+        // Act
+        harness.set_cluster_liquidated(cluster.cluster_id, false);
+
+        // Assert
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_subscribe_for_subnet(&events[0], expected_subnet);
+        harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn liquidating_one_of_two_clusters_sharing_subnet_keeps_subscription() {
+        // Arrange
+        let mut harness = TestHarness::new_normal_on_alan_committee_subscriptions();
+        let operators = test_operators();
+        harness.insert_operators(&operators);
+        // Identical operator membership maps both clusters onto the same subnet, so the two
+        // clusters produce a single subscribe event.
+        let first_cluster = harness.insert_own_cluster(&operators, 1);
+        let second_cluster = harness.insert_own_cluster(&operators, 2);
+        let shared_subnet = alan_subnet_for(&operators);
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_subscribe_for_subnet(&events[0], shared_subnet);
+        harness.assert_no_additional_events().await;
+
+        // Act
+        harness.set_cluster_liquidated(first_cluster.cluster_id, true);
+
+        // Assert: the remaining active cluster keeps the shared subnet subscribed. The quiet
+        // window alone only proves no event arrived within the timeout, so flush the event
+        // pipeline with a probe: insert a third own cluster on a different subnet and wait for
+        // its subscribe. Events are delivered in order, so receiving it without a preceding
+        // unsubscribe proves the first liquidation left the shared subnet untouched.
+        harness.assert_no_additional_events().await;
+
+        let probe_operators = probe_committee_operators(&operators[0]);
+        let probe_subnet = alan_subnet_for(&probe_operators);
+        assert_ne!(
+            probe_subnet, shared_subnet,
+            "probe committee must map to a different subnet for the ordering proof to hold"
+        );
+        // Our own operator already exists, so insert only the fresh ones.
+        harness.insert_operators(&probe_operators[1..]);
+        harness.insert_own_cluster(&probe_operators, 3);
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_subscribe_for_subnet(&events[0], probe_subnet);
+
+        // Liquidating the last active cluster on the shared subnet finally releases it.
+        harness.set_cluster_liquidated(second_cluster.cluster_id, true);
+        let events = harness.recv_transition_events(1).await;
+        assert_alan_unsubscribe_for_subnet(&events[0], shared_subnet);
+        harness.assert_no_additional_events().await;
+    }
+
+    #[tokio::test]
+    async fn liquidated_cluster_excluded_from_subnet_message_rate() {
+        // Arrange
+        let harness = TestHarness::new_normal_on_alan_with_scoring();
+        let operators = test_operators();
+        harness.insert_operators(&operators);
+        let cluster = harness.insert_own_cluster(&operators, 1);
+        let subnet = alan_subnet_for(&operators);
+
+        // The fixture validator carries a validator index, so the active cluster drives a
+        // nonzero expected rate.
+        let rate_before = harness
+            .service
+            .subnet_message_rate::<MinimalEthSpec>(
+                &subnet,
+                &harness.alan_config,
+                &harness.db.state(),
+            )
+            .expect("scoring is enabled, so a rate should be produced");
+        assert!(
+            rate_before > 0.0,
+            "active cluster should contribute a positive message rate, got {rate_before}"
+        );
+
+        // Act
+        harness.set_cluster_liquidated(cluster.cluster_id, true);
+
+        // Assert
+        let rate_after = harness
+            .service
+            .subnet_message_rate::<MinimalEthSpec>(
+                &subnet,
+                &harness.alan_config,
+                &harness.db.state(),
+            )
+            .expect("scoring is enabled, so a rate should be produced");
+        assert_eq!(
+            rate_after, 0.0,
+            "liquidated cluster must not contribute to the expected message rate"
+        );
     }
 
     fn normal_on_alan(alan_config: &ForkConfig, _boole_config: &ForkConfig) -> ForkLifecycle {
@@ -628,5 +862,58 @@ mod tests {
             event,
             TopicEvent::Unsubscribe { topic, .. } if topic.starts_with(ALAN_TOPIC_PREFIX)
         )
+    }
+
+    /// Operators with consecutive ids starting at `OWN_OPERATOR_ID`, so clusters generated from
+    /// them become own clusters.
+    fn test_operators() -> Vec<Operator> {
+        (OWN_OPERATOR_ID.0..OWN_OPERATOR_ID.0 + DEFAULT_NUM_OPERATORS)
+            .map(generators::operator::with_id)
+            .collect()
+    }
+
+    /// A committee that reuses our own operator (so its cluster is still an own cluster) but is
+    /// otherwise made of fresh operators with ids disjoint from `test_operators`, mapping it to
+    /// a different subnet. Callers must insert the fresh operators (all but the first) before
+    /// inserting a cluster of these operators.
+    fn probe_committee_operators(own_operator: &Operator) -> Vec<Operator> {
+        let fresh_id_start = OWN_OPERATOR_ID.0 + DEFAULT_NUM_OPERATORS;
+        let mut operators = vec![own_operator.clone()];
+        operators.extend(
+            (fresh_id_start..fresh_id_start + DEFAULT_NUM_OPERATORS - 1)
+                .map(generators::operator::with_id),
+        );
+        operators
+    }
+
+    /// Subnet that an Alan-fork committee of these operators maps to.
+    fn alan_subnet_for(operators: &[Operator]) -> SubnetId {
+        let members: Vec<OperatorId> = operators.iter().map(|operator| operator.id).collect();
+        SubnetId::from_operators_for_fork(&members, Fork::Alan)
+            .expect("should calculate subnet for committee")
+    }
+
+    fn assert_alan_subscribe_for_subnet(event: &TopicEvent, expected_subnet: SubnetId) {
+        match event {
+            TopicEvent::Subscribe { topic, subnet, .. }
+                if topic.starts_with(ALAN_TOPIC_PREFIX) && *subnet == expected_subnet => {}
+            other => panic!(
+                "expected Alan subscribe for subnet {}, got {}",
+                *expected_subnet,
+                describe_topic_event(other)
+            ),
+        }
+    }
+
+    fn assert_alan_unsubscribe_for_subnet(event: &TopicEvent, expected_subnet: SubnetId) {
+        match event {
+            TopicEvent::Unsubscribe { topic, subnet }
+                if topic.starts_with(ALAN_TOPIC_PREFIX) && *subnet == expected_subnet => {}
+            other => panic!(
+                "expected Alan unsubscribe for subnet {}, got {}",
+                *expected_subnet,
+                describe_topic_event(other)
+            ),
+        }
     }
 }

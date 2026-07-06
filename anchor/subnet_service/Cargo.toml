@@ -23,4 +23,6 @@ typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+database = { workspace = true, features = ["test-utils"] }
+rusqlite = { workspace = true }
 tempfile = "3.14.0"
