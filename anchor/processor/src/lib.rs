@@ -75,7 +75,13 @@ impl QueueKind {
     fn default_size(self) -> usize {
         match self {
             QueueKind::Permitless => 1000,
-            QueueKind::UrgentConsensus => 1000,
+            // `urgent_consensus` is primarily inbound gossip validation
+            // (`message_receiver`). On high-footprint nodes, slot-boundary
+            // bursts overflow the old 1000 cap and drop messages, sometimes our
+            // own. 4096 is sized from measured mainnet load (#1088) to absorb
+            // those bursts; deeper sizing, work-item expiry, and a queue split
+            // are tracked in #254.
+            QueueKind::UrgentConsensus => 4096,
         }
     }
 
