@@ -4,7 +4,7 @@ network:
     el_image: ethereum/client-go:v1.16.8
     cl_type: lighthouse
     cl_image: sigp/lighthouse:v8.0.1
-    validator_count: 10
+    validator_count: 32
     count: 2
     supernode: true
 
@@ -19,9 +19,11 @@ network:
     fulu_fork_epoch: 0
     perfect_peerdas_enabled: false
 
-    # ssv-mini main.star asserts preregistered_validator_count >= 74: VCs run
-    # [0, validator_count*count) = [0, 20); genesis deposits [0, 74). Indices 64-73 are
-    # reserved for the ssv-mini/aetheria seed (deposited but VC-idle), so keep this >= 74.
+    # ssv-mini main.star asserts preregistered_validator_count >= 74: lighthouse VCs run
+    # [0, validator_count*count) = [0, 64); genesis deposits [0, 74). Indices 64-73 are the
+    # anchor validators (deposited but lighthouse-VC-idle; anchor runs them via the
+    # pre-registered static keyshares), so keep this >= 74. Running 64 VC + 10 anchor = 74/74
+    # gives the >2/3 participation the assertoor finality + 95% attestation checks require.
     preregistered_validator_count: 74
     # NOTE: changes the number of slots in the epoch and potentially some other network settings.
     # docs: https://github.com/ethpandaops/ethereum-package/blob/main/README.md#configuration
