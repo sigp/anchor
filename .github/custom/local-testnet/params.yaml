@@ -19,9 +19,10 @@ network:
     fulu_fork_epoch: 0
     perfect_peerdas_enabled: false
 
-    # 40 = 10 validators * 2(number of el/cl nodes) + 20 (running on SSV/Anchor nodes)
-    # aligns with validator_count configuration under participants section
-    preregistered_validator_count: 40
+    # ssv-mini main.star asserts preregistered_validator_count >= 74: VCs run
+    # [0, validator_count*count) = [0, 20); genesis deposits [0, 74). Indices 64-73 are
+    # reserved for the ssv-mini/aetheria seed (deposited but VC-idle), so keep this >= 74.
+    preregistered_validator_count: 74
     # NOTE: changes the number of slots in the epoch and potentially some other network settings.
     # docs: https://github.com/ethpandaops/ethereum-package/blob/main/README.md#configuration
     # Supported by Anchor.
@@ -37,6 +38,9 @@ network:
     tests:
       - https://raw.githubusercontent.com/sigp/anchor/<<COMMIT>>/.github/custom/local-testnet/test_anchor_proposal.yaml
 
+
+# Static (deterministic) validator keys, required by the newer ssv-mini key-generation flow.
+use_static_keys: true
 
 monitor:
   enabled: false
@@ -56,5 +60,7 @@ images:
   monitor: "monitor"
   redis: "redis:7.4.2"
   postgres: "postgres:15"
-  foundry: "localssv/ssv-network"
+  # ssv-mini renamed this image key from `foundry` to `deployer` (contract deployer now builds
+  # the official ssvlabs/ssv-network@v2.0.0 via hardhat).
+  deployer: "localssv/ssv-network"
 

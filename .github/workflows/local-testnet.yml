@@ -35,7 +35,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: ssvlabs/ssv-mini
-          ref: ae910a2da2aec8c3151bec0a7e5ea3be4c479a30
+          # ssv-mini HEAD (2026-07-06). Bumped from ae910a2d; this rev builds official ssvlabs/ssv-network@v2.0.0.
+          ref: e0c037a07c25fdef0e90f4315157480f0dfab41b
           path: ssv-mini
 
       - uses: actions/checkout@v6
