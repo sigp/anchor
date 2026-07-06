@@ -42,6 +42,10 @@ network:
 # Static (deterministic) validator keys, required by the newer ssv-mini key-generation flow.
 use_static_keys: true
 
+# Pre-register the static keyshares on-chain (ssv-mini main.star Step 4). Anchor CI runs ssv-mini
+# without the aetheria executor, so operators only run validators if we register them ourselves.
+pre_register_validators: true
+
 monitor:
   enabled: false
 

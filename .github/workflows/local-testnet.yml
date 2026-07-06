@@ -34,9 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          repository: ssvlabs/ssv-mini
-          # ssv-mini HEAD (2026-07-06). Bumped from ae910a2d; this rev builds official ssvlabs/ssv-network@v2.0.0.
-          ref: e0c037a07c25fdef0e90f4315157480f0dfab41b
+          # TEMPORARY: pinned to the fork branch behind ssvlabs/ssv-mini#37, which adds the
+          # pre_register_validators flag (main.star Step 4) + the v2.0.0 payable registration fix.
+          # Swap back to ssvlabs/ssv-mini at the merged SHA once #37 lands.
+          repository: shane-moore/ssv-mini
+          ref: 2cad10314799f4c49369b9e76b72b7e72c68f4a2
           path: ssv-mini
 
       - uses: actions/checkout@v6
