@@ -7,8 +7,9 @@ use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    partial_sig::PartialSignatureMessages,
+    partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
+use types::Hash256;
 
 use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 // duty_state.rs
@@ -96,6 +97,30 @@ impl DutyState {
                 )
             }
         };
+
+        // ProposerPreferences-specific per-slot signing-root dedup (not the shared pre_consensus
+        // counter): a validator legitimately signs multiple distinct preference roots at one send
+        // slot (the current + next-epoch lookahead batch), so we track the distinct roots.
+        if partial_signature_messages.kind == PartialSignatureKind::ProposerPreferences {
+            let root = partial_signature_messages
+                .messages
+                .first()
+                .ok_or(ValidationFailure::NoPartialSignatureMessages)?
+                .signing_root;
+            if signer_state.seen_preferences.len() as u64 >= 2 * slots_per_epoch {
+                return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
+                    got: format!(
+                        "proposer-preferences distinct roots exceed cap {}",
+                        2 * slots_per_epoch
+                    ),
+                });
+            }
+            if !signer_state.seen_preferences.insert(root) {
+                return Err(ValidationFailure::DuplicatedMessage {
+                    got: format!("proposer-preferences root {root:?}"),
+                });
+            }
+        }
 
         // Record the partial signature (only once)
         signer_state
@@ -277,6 +302,9 @@ pub(crate) struct SignerState {
     pub(crate) proposal_hash: Option<[u8; 32]>,
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
+    /// Distinct ProposerPreferences signing roots already seen for this
+    /// (MessageId, operator, slot), used to reject exact-duplicate resends.
+    seen_preferences: HashSet<Hash256>,
 }
 
 impl SignerState {
@@ -288,6 +316,7 @@ impl SignerState {
             message_counts: MessageCounts::default(),
             proposal_hash: None,
             seen_signers: HashSet::new(),
+            seen_preferences: HashSet::new(),
         }
     }
 

@@ -146,6 +146,7 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
     match role {
         Role::Committee => kind == PartialSignatureKind::PostConsensus,
         Role::PTCAttester => kind == PartialSignatureKind::PTCAttester,
+        Role::ProposerPreferences => kind == PartialSignatureKind::ProposerPreferences,
         Role::Aggregator => {
             kind == PartialSignatureKind::PostConsensus
                 || kind == PartialSignatureKind::SelectionProofPartialSig
@@ -320,7 +321,8 @@ fn validate_partial_sig_messages_by_duty_logic(
         | Role::Proposer
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
-        | Role::PTCAttester => {
+        | Role::PTCAttester
+        | Role::ProposerPreferences => {
             if message_count > 1 {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
                     got: message_count,
@@ -1874,6 +1876,617 @@ mod tests {
             PartialSignatureKind::PostConsensus,
             Role::PTCAttester,
         ));
+    }
+
+    // ==================== ProposerPreferences tests ====================
+    //
+    // ProposerPreferences (wire byte [8,0,0,0]) is validator-scoped and non-QBFT.
+    // It mirrors PTCAttester's fork gate (post-Gloas only) and per-packet cap (1),
+    // but sits in the LONG TTL bucket (like ValidatorRegistration) and carries a
+    // novel per-slot signing-root dedup: a proposer legitimately signs multiple
+    // distinct preference roots at one send slot (the current + next-epoch batch).
+
+    /// Epoch at which the Ethereum Gloas fork activates in the ProposerPreferences
+    /// fork-gate tests. Message slots below `GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH_TEST`
+    /// are pre-Gloas and must be rejected.
+    const GLOAS_ACTIVATION_EPOCH: u64 = 1;
+
+    /// Builds a signed ProposerPreferences partial-signature packet with a caller-chosen
+    /// `signing_root` and envelope `slot`. The envelope slot is the CURRENT SEND SLOT;
+    /// the future `proposal_slot` a real body would carry is never on the wire, so only
+    /// the send-slot governs timing and per-slot dedup. Signed with `private_key` so it
+    /// passes signature verification end-to-end.
+    fn create_signed_proposer_preferences_message(
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+        slot: Slot,
+        signing_root: Hash256,
+    ) -> SignedSSVMessage {
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::ProposerPreferences,
+            slot,
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root,
+                signer: signer_id,
+                // ValidatorIndex(0) is in the test committee's validator_indices.
+                validator_index: ValidatorIndex(0),
+            }])
+            .unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::ProposerPreferences);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
+    }
+
+    /// Builds a ProposerPreferences validation context whose send slot matches
+    /// the packet's envelope slot, so `validate_slot_time` sees an on-time message.
+    /// The Ethereum Gloas fork is active from epoch 0 unless overridden by the caller.
+    fn create_proposer_preferences_context<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+        send_slot: Slot,
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            send_slot,
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        ValidationContext {
+            signed_ssv_message: signed_msg,
+            committee_info,
+            role: Role::ProposerPreferences,
+            received_at: now,
+            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys,
+            fork_schedule: generate_fork_schedule(Fork::Boole),
+            // ProposerPreferences only exists post-Gloas; activate from epoch 0.
+            spec: spec_with_gloas(Some(0)),
+        }
+    }
+
+    #[test]
+    fn test_proposer_preferences_rejected_before_gloas() {
+        use crate::validate_role_for_fork;
+
+        // Arrange: a ProposerPreferences packet plus a spec whose Gloas fork
+        // activates at GLOAS_ACTIVATION_EPOCH. Slots before that epoch are pre-Gloas.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ProposerPreferences,
+            PartialSignatureKind::ProposerPreferences,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let mut validation_context = create_test_validation_context_with_fork(
+            &signed_msg,
+            &committee_info,
+            Role::ProposerPreferences,
+            &map,
+            Some(generate_fork_schedule(Fork::Boole)),
+        );
+        validation_context.spec = spec_with_gloas(Some(GLOAS_ACTIVATION_EPOCH));
+
+        // Act + Assert: slot 0 (epoch 0) is before Gloas activation → rejected.
+        let pre_gloas_slot = Slot::new(0);
+        let result = validate_role_for_fork(pre_gloas_slot, &validation_context);
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeEthFork {
+                        minimum_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveBeforeEthFork (ProposerPreferences pre-Gloas)",
+        );
+
+        // Boundary: the last slot of the epoch immediately before activation is
+        // still pre-Gloas → rejected.
+        let boundary_slot = Slot::new(GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH_TEST - 1);
+        let result = validate_role_for_fork(boundary_slot, &validation_context);
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeEthFork {
+                        minimum_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveBeforeEthFork (ProposerPreferences at activation boundary)",
+        );
+
+        // Post-Gloas: the first slot of the activation epoch passes the fork gate.
+        let post_gloas_slot = Slot::new(GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH_TEST);
+        let result = validate_role_for_fork(post_gloas_slot, &validation_context);
+        assert!(
+            result.is_ok(),
+            "Expected ProposerPreferences to pass the fork gate at Gloas activation, got: {result:?}"
+        );
+
+        // A spec where Gloas never activates rejects at every slot.
+        validation_context.spec = spec_with_gloas(None);
+        let result = validate_role_for_fork(post_gloas_slot, &validation_context);
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeEthFork {
+                        minimum_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveBeforeEthFork (ProposerPreferences, Gloas never activates)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_accepted_at_gloas() {
+        // Arrange: at/after Gloas activation the role passes the full pipeline.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ProposerPreferences,
+            PartialSignatureKind::ProposerPreferences,
+            OperatorId(1),
+            &private_key,
+        );
+
+        // The signed packet's envelope slot is 1; send from slot 1 so timing is on-time.
+        let validation_context =
+            create_proposer_preferences_context(&signed_msg, &committee_info, &map, Slot::new(1));
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_proposer_preferences_invalid_partial_sig_kind_rejected() {
+        // Arrange: a packet declaring Role::ProposerPreferences but carrying a
+        // non-ProposerPreferences kind must be rejected by the role/kind binding.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ProposerPreferences,
+            PartialSignatureKind::PostConsensus, // Invalid for ProposerPreferences
+            OperatorId(1),
+            &private_key,
+        );
+
+        let validation_context =
+            create_proposer_preferences_context(&signed_msg, &committee_info, &map, Slot::new(1));
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::PartialSignatureTypeRoleMismatch),
+            "PartialSignatureTypeRoleMismatch (ProposerPreferences kind mismatch)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_within_ttl_accepted() {
+        // Arrange: ProposerPreferences sits in the LONG (committee-style) TTL bucket
+        // of slots_per_epoch + LATE_SLOT_ALLOWANCE = 34 slots, unlike PTCAttester's
+        // short 3-slot window. A message exactly TTL_SLOTS late is still inside it.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ProposerPreferences,
+            PartialSignatureKind::ProposerPreferences,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let mut validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::ProposerPreferences,
+            &map,
+            TTL_SLOTS,
+            generate_fork_schedule(Fork::Boole),
+        );
+        // ProposerPreferences only exists post-Gloas; the role gate reads the Ethereum fork.
+        validation_context.spec = spec_with_gloas(Some(0));
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_proposer_preferences_beyond_ttl_rejected() {
+        // Arrange: a message BEYOND_TTL_SLOTS (40) late is past the long 34-slot
+        // window, so it is rejected as late. This pins ProposerPreferences to the
+        // long bucket rather than the short slot-bound one.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ProposerPreferences,
+            PartialSignatureKind::ProposerPreferences,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let mut validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::ProposerPreferences,
+            &map,
+            BEYOND_TTL_SLOTS,
+            generate_fork_schedule(Fork::Boole),
+        );
+        validation_context.spec = spec_with_gloas(Some(0));
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+            "LateSlotMessage (ProposerPreferences past long TTL)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_message_count_at_most_one() {
+        // Arrange: ProposerPreferences is per-validator; a packet with two
+        // PartialSignatureMessages trips the `> 1` per-packet bound.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        let messages: Vec<_> = (0..2)
+            .map(|_| PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(0),
+            })
+            .collect();
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::ProposerPreferences,
+            slot: Slot::new(1),
+            messages: VariableList::new(messages).unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::ProposerPreferences);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        let signed_msg =
+            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
+
+        let validation_context =
+            create_proposer_preferences_context(&signed_msg, &committee_info, &map, Slot::new(1));
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { limit: 1, .. }
+                )
+            },
+            "TooManyPartialSignatureMessages (ProposerPreferences cap 1 per packet)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_future_proposal_slot_in_body_not_early() {
+        // A ProposerPreferences body describes a FUTURE proposal_slot, but that
+        // field is not on the wire: only the envelope (send) slot is. As long as
+        // the envelope slot equals the current send slot, validate_slot_time must
+        // accept it (no EarlySlotMessage), even though the intended proposal is
+        // for a later slot.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+
+        // Envelope slot is the current send slot (100); a real body would carry a
+        // far-future proposal_slot, but that never reaches the validator.
+        let send_slot = Slot::new(100);
+        let signed_msg = create_signed_proposer_preferences_message(
+            OperatorId(1),
+            &private_key,
+            send_slot,
+            Hash256::from([1u8; 32]),
+        );
+
+        let validation_context =
+            create_proposer_preferences_context(&signed_msg, &committee_info, &map, send_slot);
+
+        // Act
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(256),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert: accepted; specifically NOT rejected as early.
+        assert!(
+            result.is_ok(),
+            "Expected on-time ProposerPreferences (envelope==send slot) to be accepted, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_distinct_roots_same_send_slot_accepted() {
+        // A proposer legitimately signs multiple distinct preference roots at one
+        // send slot (current + next-epoch lookahead batch). Two packets from the
+        // same (validator, operator, envelope slot) with DIFFERENT signing roots
+        // must BOTH be accepted through a shared DutyState.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signer_id = OperatorId(1);
+        let send_slot = Slot::new(1);
+        let mut duty_state = DutyState::new(64);
+
+        // First packet: root A.
+        let signed_a = create_signed_proposer_preferences_message(
+            signer_id,
+            &private_key,
+            send_slot,
+            Hash256::from([0xAA; 32]),
+        );
+        let context_a =
+            create_proposer_preferences_context(&signed_a, &committee_info, &map, send_slot);
+        let result_a = validate_partial_signature_message(
+            context_a,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+        assert!(
+            result_a.is_ok(),
+            "Expected first distinct-root packet to be accepted, got: {result_a:?}"
+        );
+
+        // Second packet: DIFFERENT root B at the SAME send slot.
+        let signed_b = create_signed_proposer_preferences_message(
+            signer_id,
+            &private_key,
+            send_slot,
+            Hash256::from([0xBB; 32]),
+        );
+        let context_b =
+            create_proposer_preferences_context(&signed_b, &committee_info, &map, send_slot);
+        let result_b = validate_partial_signature_message(
+            context_b,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert: the second distinct root is also accepted (NOT falsely rejected
+        // as a pre-consensus duplicate).
+        assert!(
+            result_b.is_ok(),
+            "Expected second distinct-root packet at same send slot to be accepted, got: {result_b:?}"
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_duplicate_root_same_slot_rejected() {
+        // An exact-duplicate signing_root at the same send slot is a resend and
+        // must be rejected as a duplicate, via the per-slot seen_preferences set.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signer_id = OperatorId(1);
+        let send_slot = Slot::new(1);
+        let root = Hash256::from([0xCC; 32]);
+        let mut duty_state = DutyState::new(64);
+
+        // First packet with root R is accepted.
+        let signed_first =
+            create_signed_proposer_preferences_message(signer_id, &private_key, send_slot, root);
+        let context_first =
+            create_proposer_preferences_context(&signed_first, &committee_info, &map, send_slot);
+        let result_first = validate_partial_signature_message(
+            context_first,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+        assert!(
+            result_first.is_ok(),
+            "Expected first packet to be accepted, got: {result_first:?}"
+        );
+
+        // Second packet: EXACT-DUPLICATE root R at the SAME send slot.
+        let signed_dup =
+            create_signed_proposer_preferences_message(signer_id, &private_key, send_slot, root);
+        let context_dup =
+            create_proposer_preferences_context(&signed_dup, &committee_info, &map, send_slot);
+        let result_dup = validate_partial_signature_message(
+            context_dup,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result_dup,
+            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
+            "DuplicatedMessage (ProposerPreferences exact-duplicate root)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_root_cap_enforced() {
+        // The distinct-root set for one (validator, operator, send slot) is capped
+        // at 2 * slots_per_epoch. Feeding exactly that many distinct roots all pass;
+        // one more distinct root is rejected as an invalid type count.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signer_id = OperatorId(1);
+        let send_slot = Slot::new(1);
+        let mut duty_state = DutyState::new(64);
+
+        // Use the harness slots_per_epoch so the loop stays small (2 * 32 = 64).
+        let cap = 2 * SLOTS_PER_EPOCH_TEST;
+
+        // Feed `cap` distinct roots; all must be accepted.
+        for i in 0..cap {
+            let mut root_bytes = [0u8; 32];
+            root_bytes[0..8].copy_from_slice(&i.to_le_bytes());
+            let signed = create_signed_proposer_preferences_message(
+                signer_id,
+                &private_key,
+                send_slot,
+                Hash256::from(root_bytes),
+            );
+            let context =
+                create_proposer_preferences_context(&signed, &committee_info, &map, send_slot);
+            let result = validate_partial_signature_message(
+                context,
+                &mut duty_state,
+                Arc::new(MockDutiesProvider {
+                    voluntary_exit_duty_count: 0,
+                }),
+            );
+            assert!(
+                result.is_ok(),
+                "Expected distinct root #{i} (within cap {cap}) to be accepted, got: {result:?}"
+            );
+        }
+
+        // One more distinct root exceeds the cap and is rejected.
+        let mut over_cap_bytes = [0u8; 32];
+        over_cap_bytes[0..8].copy_from_slice(&cap.to_le_bytes());
+        let signed_over = create_signed_proposer_preferences_message(
+            signer_id,
+            &private_key,
+            send_slot,
+            Hash256::from(over_cap_bytes),
+        );
+        let context_over =
+            create_proposer_preferences_context(&signed_over, &committee_info, &map, send_slot);
+        let result_over = validate_partial_signature_message(
+            context_over,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result_over,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::InvalidPartialSignatureTypeCount { .. }
+                )
+            },
+            "InvalidPartialSignatureTypeCount (ProposerPreferences distinct-root cap)",
+        );
     }
 
     #[test]

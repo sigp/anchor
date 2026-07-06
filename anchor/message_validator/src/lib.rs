@@ -472,7 +472,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             | Role::SyncCommittee
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
-            | Role::PTCAttester => {
+            | Role::PTCAttester
+            | Role::ProposerPreferences => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -846,6 +847,7 @@ pub(crate) fn validate_beacon_duty(
 /// - AggregatorCommittee before Boole fork (not yet active)
 /// - Aggregator and SyncCommittee after Boole fork (deprecated)
 /// - PTCAttester before the Ethereum Gloas (ePBS) fork (not yet active)
+/// - ProposerPreferences before the Ethereum Gloas (ePBS) fork (not yet active)
 pub(crate) fn validate_role_for_fork(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
@@ -874,6 +876,19 @@ pub(crate) fn validate_role_for_fork(
 
     // Reject PTCAttester before the Ethereum Gloas (ePBS) fork, read from the consensus spec.
     if role == Role::PTCAttester {
+        let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
+        if !current_fork.gloas_enabled() {
+            return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
+                role,
+                current_fork,
+                minimum_fork: ForkName::Gloas,
+            });
+        }
+    }
+
+    // Reject ProposerPreferences before the Ethereum Gloas (ePBS) fork, read from the consensus
+    // spec.
+    if role == Role::ProposerPreferences {
         let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
         if !current_fork.gloas_enabled() {
             return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
@@ -950,7 +965,8 @@ fn message_lateness(
         | Role::Aggregator
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
-        | Role::AggregatorCommittee => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
+        | Role::AggregatorCommittee
+        | Role::ProposerPreferences => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
@@ -1061,6 +1077,7 @@ fn duty_limit(
         }
         // Proposer and SyncCommittee have no duty limit
         Role::Proposer | Role::SyncCommittee => Ok(None),
+        Role::ProposerPreferences => Ok(Some(validation_context.slots_per_epoch)),
     }
 }
 
@@ -1314,7 +1331,8 @@ mod tests {
             | Role::SyncCommittee
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
-            | Role::PTCAttester => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            | Role::PTCAttester
+            | Role::ProposerPreferences => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }
