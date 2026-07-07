@@ -69,20 +69,21 @@ jobs:
             - name: Generate GitHub App token
               if: steps.check.outputs.is_member == 'true'
               id: app-token
-              uses: actions/create-github-app-token@v2
+              uses: actions/create-github-app-token@v3
               with:
                   app-id: ${{ vars.APP_ID }}
                   private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
             - name: Checkout repository
               if: steps.check.outputs.is_member == 'true'
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   token: ${{ steps.app-token.outputs.token }}
+                  ref: ${{ github.event.pull_request.head.sha }}
 
             - name: Configure AWS Credentials (OIDC)
               if: steps.check.outputs.is_member == 'true'
-              uses: aws-actions/configure-aws-credentials@v4
+              uses: aws-actions/configure-aws-credentials@v6
               with:
                   role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
                   aws-region: us-west-2
@@ -106,7 +107,7 @@ jobs:
               timeout-minutes: 15
               env:
                   ACTIONS_STEP_DEBUG: true
-              uses: anthropics/claude-code-action@v1.0.52
+              uses: anthropics/claude-code-action@v1.0.127
               with:
                   github_token: ${{ steps.app-token.outputs.token }}
                   use_bedrock: "true"
@@ -125,8 +126,8 @@ jobs:
                       ${{ steps.review-prompt.outputs.content }}
                   claude_args: |
                       --max-turns 50
-                      --model us.anthropic.claude-opus-4-6-v1
-                      --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep"
+                      --model us.anthropic.claude-opus-4-7
+                      --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Bash(git status:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git grep:*)"
 
             - name: Remove claude-recheck label if present
               if: steps.check.outputs.is_member == 'true' && github.event.action == 'labeled' && github.event.label.name == 'claude-recheck'
