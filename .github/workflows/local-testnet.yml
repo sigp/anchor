@@ -38,7 +38,7 @@ jobs:
           # pre_register_validators flag (main.star Step 4) + the v2.0.0 payable registration fix.
           # Swap back to ssvlabs/ssv-mini at the merged SHA once #37 lands.
           repository: shane-moore/ssv-mini
-          ref: 2cad10314799f4c49369b9e76b72b7e72c68f4a2
+          ref: a940244a1627257ecf2c6043fd87b594eb0faa8c
           path: ssv-mini
 
       - uses: actions/checkout@v6

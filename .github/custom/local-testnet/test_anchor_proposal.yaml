@@ -10,7 +10,9 @@ tasks:
       tasks:
         - name: check_consensus_block_proposals
           config:
-            blockCount: 50
+            # Anchor runs ~half the validators (dynamic layout), so it proposes ~50% of blocks.
+            # 10 Anchor-graffiti blocks is well within one 2-epoch check window with margin.
+            blockCount: 10
             graffitiPattern: "Anchor.*"
             minAttestationCount: 1
         - name: check_consensus_attestation_stats

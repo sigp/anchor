@@ -19,12 +19,11 @@ network:
     fulu_fork_epoch: 0
     perfect_peerdas_enabled: false
 
-    # ssv-mini main.star asserts preregistered_validator_count >= 74: lighthouse VCs run
-    # [0, validator_count*count) = [0, 64); genesis deposits [0, 74). Indices 64-73 are the
-    # anchor validators (deposited but lighthouse-VC-idle; anchor runs them via the
-    # pre-registered static keyshares), so keep this >= 74. Running 64 VC + 10 anchor = 74/74
-    # gives the >2/3 participation the assertoor finality + 95% attestation checks require.
-    preregistered_validator_count: 74
+    # Dynamic keygen layout: lighthouse VCs run [0, validator_count*count) = [0, 64); anchor runs
+    # [64, preregistered) = [64, 128) via freshly generated keyshares. 64 VC + 64 anchor = 128/128
+    # participation (well over 2/3 for finality + 95% attestation), and anchor is a ~50% proposer.
+    # ssv-mini main.star asserts VCs <= 64 and preregistered_validator_count >= 74.
+    preregistered_validator_count: 128
     # NOTE: changes the number of slots in the epoch and potentially some other network settings.
     # docs: https://github.com/ethpandaops/ethereum-package/blob/main/README.md#configuration
     # Supported by Anchor.
@@ -41,10 +40,11 @@ network:
       - https://raw.githubusercontent.com/sigp/anchor/<<COMMIT>>/.github/custom/local-testnet/test_anchor_proposal.yaml
 
 
-# Static (deterministic) validator keys, required by the newer ssv-mini key-generation flow.
-use_static_keys: true
+# Dynamic keygen: anchor generates its own operators + keyshares for (preregistered - VC) = 64
+# validators, making anchor a co-equal (~50%) proposer instead of a 10-validator minority.
+use_static_keys: false
 
-# Pre-register the static keyshares on-chain (ssv-mini main.star Step 4). Anchor CI runs ssv-mini
+# Pre-register the generated keyshares on-chain (ssv-mini main.star Step 4). Anchor CI runs ssv-mini
 # without the aetheria executor, so operators only run validators if we register them ourselves.
 pre_register_validators: true
 
