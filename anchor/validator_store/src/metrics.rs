@@ -27,6 +27,15 @@ pub static SIGNED_RANDAO_REVEALS_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLo
     )
 });
 
+pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "signed_proposer_preferences_total",
+            "Total count of ProposerPreferences signings",
+            &["status"],
+        )
+    });
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MetadataService metrics
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -147,3 +156,19 @@ pub static PTC_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> = LazyLo
         &["reason"],
     )
 });
+
+/// Threshold-not-reached for a ProposerPreferences signing. An upper bound on true signing-root
+/// divergence: at the current collector granularity it also covers channel close / not-enough
+/// operators, which are indistinguishable from a root split at the partial-signature wire.
+pub const PROPOSER_PREFERENCES_FAILURE_SIGNING_ROOT_DIVERGENCE: &str = "signing_root_divergence";
+/// Local collection or reconstruction infrastructure fault.
+pub const PROPOSER_PREFERENCES_FAILURE_INFRA: &str = "infra";
+
+pub static PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_proposer_preferences_reconstruction_failures_total",
+            "ProposerPreferences signature collection failures by reason",
+            &["reason"],
+        )
+    });

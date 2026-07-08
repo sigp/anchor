@@ -81,7 +81,7 @@ use validator_store::{
     ValidatorStore,
 };
 
-use crate::instrumentation::PtcFailureClass;
+use crate::instrumentation::CollectionFailureClass;
 
 /// Number of epochs of slashing protection history to keep.
 ///
@@ -98,6 +98,7 @@ const AGGREGATE_LOG_NAME: &str = "aggregate";
 const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
 const SYNC_SELECTION_PROOF_LOG_NAME: &str = "sync selection proof";
 const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
+const PROPOSER_PREFERENCES_LOG_NAME: &str = "proposer preferences";
 
 /// A request to collect a committee signature for a single validator.
 ///
@@ -871,8 +872,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         validator_pubkey: &PublicKeyBytes,
         slot: Slot,
     ) {
-        match instrumentation::classify_ptc_collection_failure(error) {
-            PtcFailureClass::NoSignature => {
+        match instrumentation::classify_collection_failure(error) {
+            CollectionFailureClass::NoSignature => {
                 warn!(
                     ?validator_pubkey,
                     %slot,
@@ -884,7 +885,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     &[metrics::PTC_FAILURE_NO_SIGNATURE],
                 );
             }
-            PtcFailureClass::Infra => {
+            CollectionFailureClass::Infra => {
                 error!(
                     ?validator_pubkey,
                     %slot,
@@ -896,12 +897,59 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     &[metrics::PTC_FAILURE_INFRA],
                 );
             }
-            PtcFailureClass::NonCollection => {
+            CollectionFailureClass::NonCollection => {
                 error!(
                     ?validator_pubkey,
                     %slot,
                     ?error,
                     "Failed to sign payload attestation"
+                );
+            }
+        }
+    }
+
+    /// Classify and report a ProposerPreferences signature-collection failure.
+    fn report_proposer_preferences_collection_failure(
+        &self,
+        error: &Error,
+        preferences: &ProposerPreferences,
+        signing_root: Hash256,
+    ) {
+        match instrumentation::classify_collection_failure(error) {
+            CollectionFailureClass::NoSignature => {
+                warn!(
+                    validator_index = preferences.validator_index,
+                    proposal_slot = %preferences.proposal_slot,
+                    target_gas_limit = preferences.target_gas_limit,
+                    dependent_root = ?preferences.dependent_root,
+                    ?signing_root,
+                    ?error,
+                    "ProposerPreferences reconstruction failed; operators likely diverged on the \
+                     signing root (target_gas_limit or dependent_root)"
+                );
+                metrics::inc_counter_vec(
+                    &metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES,
+                    &[metrics::PROPOSER_PREFERENCES_FAILURE_SIGNING_ROOT_DIVERGENCE],
+                );
+            }
+            CollectionFailureClass::Infra => {
+                error!(
+                    validator_index = preferences.validator_index,
+                    proposal_slot = %preferences.proposal_slot,
+                    ?error,
+                    "ProposerPreferences signature collection infrastructure failure"
+                );
+                metrics::inc_counter_vec(
+                    &metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES,
+                    &[metrics::PROPOSER_PREFERENCES_FAILURE_INFRA],
+                );
+            }
+            CollectionFailureClass::NonCollection => {
+                error!(
+                    validator_index = preferences.validator_index,
+                    proposal_slot = %preferences.proposal_slot,
+                    ?error,
+                    "Failed to sign ProposerPreferences"
                 );
             }
         }
@@ -3487,11 +3535,57 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
     async fn sign_proposer_preferences(
         &self,
-        _validator_pubkey: PublicKeyBytes,
-        _preferences: ProposerPreferences,
+        validator_pubkey: PublicKeyBytes,
+        preferences: ProposerPreferences,
     ) -> Result<SignedProposerPreferences, Error> {
-        // TODO(gloas)
-        Err(Error::SpecificError(SpecificError::Unsupported))
+        let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+
+        let epoch = preferences.proposal_slot.epoch(E::slots_per_epoch());
+        let domain = self.get_domain(epoch, Domain::ProposerPreferences);
+        let signing_root = preferences.signing_root(domain);
+
+        // Envelope slot = the duty's proposal_slot (SIP-94 §5/§7), NOT slot_clock.now() and NOT
+        // epoch-start. It becomes PartialSignatureMessages.slot on the wire, which peers accept via
+        // the ProposerPreferences earliness allowance and validate proposer-assignment against
+        // (#1062). A future proposal_slot also keeps the collector alive until that slot passes.
+        let proposal_slot = preferences.proposal_slot;
+
+        let future = async {
+            let signature = match self
+                .collect_signature(
+                    PartialSignatureKind::ProposerPreferences,
+                    Role::ProposerPreferences,
+                    CollectionMode::SingleValidator,
+                    &validator,
+                    &cluster,
+                    signing_root,
+                    proposal_slot,
+                )
+                .await
+            {
+                Ok(signature) => signature,
+                Err(err) => {
+                    self.report_proposer_preferences_collection_failure(
+                        &err,
+                        &preferences,
+                        signing_root,
+                    );
+                    return Err(err);
+                }
+            };
+
+            Ok(SignedProposerPreferences {
+                message: preferences,
+                signature,
+            })
+        };
+
+        run_and_update_metrics(
+            PROPOSER_PREFERENCES_LOG_NAME,
+            &metrics::SIGNED_PROPOSER_PREFERENCES_TOTAL,
+            future,
+        )
+        .await
     }
 }
 
