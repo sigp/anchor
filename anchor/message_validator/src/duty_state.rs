@@ -21,6 +21,29 @@ use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 //  - SignerState: The state of a signer at a particular slot, including message counts and proposal
 //    data.
 
+/// Maximum distinct `ProposerPreferences` signing roots accepted per
+/// (`MessageId`, operator, `proposal_slot`).
+///
+/// A validator can legitimately sign several distinct roots for one `proposal_slot` when its
+/// preference inputs change between emissions — chiefly a `dependent_root` shift under reorg (the
+/// SIP-94 §5 re-emission trigger), and also `target_gas_limit` / `fee_recipient` config changes
+/// across operator restarts. Per SIP-94 §7 the cap is policy headroom for a few realistic
+/// reorg-driven corrections while bounding spam — not a safety/consensus bound. That is why
+/// exceeding it is an Ignore (`TooManyDistinctSigningRoots`), whereas a repeat of an already-seen
+/// root stays a Reject-class duplicate.
+const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS: usize = 4;
+
+/// Test-only, crate-visible mirror of the private cap so pipeline tests in sibling modules
+/// (e.g. `partial_signature`) can reference the real value instead of hardcoding `4`. The
+/// compile-time assertion below makes the mirror impossible to drift from production.
+#[cfg(test)]
+pub(crate) const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST: usize =
+    MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS;
+#[cfg(test)]
+const _: () = assert!(
+    MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST == MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS
+);
+
 /// DutyState manages the state for duty validation across operators and slots
 pub(crate) struct DutyState {
     /// Tracks the duty state for an operator
@@ -99,19 +122,21 @@ impl DutyState {
         };
 
         // ProposerPreferences-specific per-slot signing-root dedup (not the shared pre_consensus
-        // counter): a validator legitimately signs multiple distinct preference roots at one send
-        // slot (the current + next-epoch lookahead batch), so we track the distinct roots.
+        // counter): the envelope slot is the duty's proposal_slot, and a validator may sign several
+        // distinct roots for one proposal_slot as its preference inputs change between emissions
+        // (chiefly a dependent_root shift under reorg). Track the distinct roots per
+        // (MessageId, operator, proposal_slot), capped at MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS.
         if partial_signature_messages.kind == PartialSignatureKind::ProposerPreferences {
             let root = partial_signature_messages
                 .messages
                 .first()
                 .ok_or(ValidationFailure::NoPartialSignatureMessages)?
                 .signing_root;
-            if signer_state.seen_preferences.len() as u64 >= 2 * slots_per_epoch {
-                return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
+            if signer_state.seen_preferences.len() >= MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS {
+                return Err(ValidationFailure::TooManyDistinctSigningRoots {
                     got: format!(
-                        "proposer-preferences distinct roots exceed cap {}",
-                        2 * slots_per_epoch
+                        "proposer-preferences distinct roots exceed cap \
+                         {MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS}"
                     ),
                 });
             }

@@ -608,6 +608,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: expected_duty_count,
+                ..Default::default()
             }),
         );
 
@@ -657,6 +658,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -713,6 +715,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -766,6 +769,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -1628,6 +1632,7 @@ mod tests {
             &mut duty_state,
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -1659,6 +1664,7 @@ mod tests {
             &mut duty_state,
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -1710,6 +1716,7 @@ mod tests {
         let expected_duty_count = 5;
         let mock_duties_provider = Arc::new(MockDutiesProvider {
             voluntary_exit_duty_count: expected_duty_count,
+            ..Default::default()
         });
 
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
@@ -1763,6 +1770,7 @@ mod tests {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
         let mock_duties_provider = Arc::new(MockDutiesProvider {
             voluntary_exit_duty_count: 0,
+            ..Default::default()
         });
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
@@ -1835,6 +1843,7 @@ mod tests {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
         let mock_duties_provider = Arc::new(MockDutiesProvider {
             voluntary_exit_duty_count: 0,
+            ..Default::default()
         });
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
@@ -1933,6 +1942,7 @@ mod tests {
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 

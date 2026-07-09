@@ -91,6 +91,16 @@ impl Role {
     pub fn is_qbft_role(self) -> bool {
         self.max_round().is_some()
     }
+
+    /// monotonicSlotRole reports whether a role's signer advances through slots one at a time, so a
+    /// message for a slot below the signer's max is stale and must be rejected. False for
+    /// committee roles (state is slot-keyed across many validators) and for proposer
+    /// preferences (a signer holds its whole lookahead of proposal slots at once, so a lower
+    /// slot is a concurrent duty, not a stale one — its replay bound is the earliness/lateness
+    /// window instead)
+    pub fn monotonic_slot_role(self) -> bool {
+        !self.is_committee_role() && self != Role::ProposerPreferences
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -420,6 +430,39 @@ mod tests {
             assert!(
                 role.max_round().is_none(),
                 "{role:?} must not have a max round"
+            );
+        }
+    }
+
+    #[test]
+    fn role_monotonic_slot_classification_is_pinned() {
+        // `monotonic_slot_role()` gates the stale-slot rejection in partial-signature
+        // validation. A role landing in the wrong partition silently flips whether an
+        // earlier-slot message is rejected as advanced or accepted as concurrent, so pin
+        // every role on both sides. Non-monotonic: committee roles (state is slot-keyed
+        // across many validators) and ProposerPreferences (a signer holds its whole
+        // lookahead of proposal slots at once). Monotonic: the remaining six.
+        for role in [
+            Role::Committee,
+            Role::AggregatorCommittee,
+            Role::ProposerPreferences,
+        ] {
+            assert!(
+                !role.monotonic_slot_role(),
+                "{role:?} must NOT be a monotonic-slot role"
+            );
+        }
+        for role in [
+            Role::Aggregator,
+            Role::Proposer,
+            Role::SyncCommittee,
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+            Role::PTCAttester,
+        ] {
+            assert!(
+                role.monotonic_slot_role(),
+                "{role:?} must be a monotonic-slot role"
             );
         }
     }
