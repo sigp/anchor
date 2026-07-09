@@ -4,13 +4,16 @@ timeout: 20m
 tasks:
   - name: sleep
     config:
-      duration: 5m # wait for the anchor nodes to startup
+      duration: 8m # wait for anchor to sync the SSV registry and pick up its pre-registered validators
   - name: run_tasks_concurrent
     config:
       tasks:
         - name: check_consensus_block_proposals
           config:
-            blockCount: 50
+            # Anchor runs 10 of 74 validators (~13.5% proposer share), so require just a few
+            # Anchor-graffiti blocks. 3 is reached well within the check window (a prior CI run
+            # produced 4 before the concurrent deadline); 50 was unreachable at this share.
+            blockCount: 3
             graffitiPattern: "Anchor.*"
             minAttestationCount: 1
         - name: check_consensus_attestation_stats
