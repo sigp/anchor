@@ -125,6 +125,49 @@ fn calculate_attestation_score(
     }
 }
 
+/// Build the fork-typed committee vote from one coherent beacon-node response.
+fn slot_vote_from_attestation_data<E: EthSpec>(
+    spec: &ChainSpec,
+    slot: Slot,
+    attestation_data: AttestationData,
+) -> SlotVote {
+    if spec.fork_name_at_slot::<E>(slot).gloas_enabled() {
+        SlotVote::Gloas(GloasBeaconVote {
+            block_root: attestation_data.beacon_block_root,
+            source: attestation_data.source,
+            target: attestation_data.target,
+            attestation_data_index: attestation_data.index,
+        })
+    } else {
+        SlotVote::Base(BeaconVote {
+            block_root: attestation_data.beacon_block_root,
+            source: attestation_data.source,
+            target: attestation_data.target,
+        })
+    }
+}
+
+/// Reconstruct the attestation data whose tree root is used for aggregate fetching.
+fn aggregate_fetch_attestation_data<E: EthSpec>(
+    spec: &ChainSpec,
+    slot: Slot,
+    vote: &SlotVote,
+    committee_index: u64,
+) -> AttestationData {
+    let fork_name = spec.fork_name_at_slot::<E>(slot);
+    AttestationData {
+        slot,
+        index: if fork_name < ForkName::Electra {
+            committee_index
+        } else {
+            vote.index()
+        },
+        beacon_block_root: vote.block_root(),
+        source: vote.source(),
+        target: vote.target(),
+    }
+}
+
 #[derive(Clone)]
 pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
@@ -433,20 +476,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             None => self.fetch_attestation_data(slot).await?,
         };
 
-        let vote = if self.spec.fork_name_at_slot::<E>(slot).gloas_enabled() {
-            SlotVote::Gloas(GloasBeaconVote {
-                block_root: attestation_data.beacon_block_root,
-                source: attestation_data.source,
-                target: attestation_data.target,
-                attestation_data_index: attestation_data.index,
-            })
-        } else {
-            SlotVote::Base(BeaconVote {
-                block_root: attestation_data.beacon_block_root,
-                source: attestation_data.source,
-                target: attestation_data.target,
-            })
-        };
+        let vote = slot_vote_from_attestation_data::<E>(&self.spec, slot, attestation_data);
 
         let voting_context = VotingContext {
             voting_assignments,
@@ -901,30 +931,20 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             &["aggregated_attestations"],
         );
 
-        // Determine fork version to handle pre-Electra vs Electra+ attestation data format.
-        // In Electra+ (EIP-7549), AttestationData.index is always 0 because the committee
-        // index moved to Attestation.committee_bits.
-        // In pre-Electra, AttestationData.index must equal the committee_index.
-        // Use slot as the canonical source for epoch since it's the authoritative parameter.
-        let fork_name = self
-            .spec
-            .fork_name_at_epoch(slot.epoch(E::slots_per_epoch()));
-
         // Create `FuturesUnordered` for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;
         let mut futures: FuturesUnordered<_> = attestation_committee_indexes
             .iter()
             .map(|&committee_index| {
                 // Reconstruct the attestation data to compute its tree hash root.
-                // Pre-Electra: index = committee_index
-                // Electra+: index = 0 (committee info moved to Attestation.committee_bits)
-                let attestation_data = AttestationData {
+                // Pre-Electra uses the committee index, Electra through pre-Gloas uses zero,
+                // and Gloas uses the BN-supplied index carried by the slot vote.
+                let attestation_data = aggregate_fetch_attestation_data::<E>(
+                    &self.spec,
                     slot,
-                    index: if fork_name < ForkName::Electra { committee_index } else { vote.index() },
-                    beacon_block_root: vote.block_root(),
-                    source: vote.source(),
-                    target: vote.target(),
-                };
+                    vote,
+                    committee_index,
+                );
                 let attestation_data_root = attestation_data.tree_hash_root();
 
                 async move {
@@ -1484,6 +1504,138 @@ mod tests {
             aggregation_bits: Default::default(),
             signature: AggregateSignature::infinity(),
         }
+    }
+
+    fn distinct_vote_fields() -> (Hash256, Checkpoint, Checkpoint) {
+        (
+            Hash256::repeat_byte(0xB1),
+            Checkpoint {
+                epoch: Epoch::new(5),
+                root: Hash256::repeat_byte(0x51),
+            },
+            Checkpoint {
+                epoch: Epoch::new(6),
+                root: Hash256::repeat_byte(0x71),
+            },
+        )
+    }
+
+    #[test]
+    fn slot_vote_preserves_the_fork_specific_attestation_shape() {
+        let slot = Slot::new(1);
+        let (block_root, source, target) = distinct_vote_fields();
+        let attestation_data = AttestationData {
+            slot,
+            index: 1,
+            beacon_block_root: block_root,
+            source,
+            target,
+        };
+
+        let mut pre_gloas_spec = ChainSpec::mainnet();
+        pre_gloas_spec.gloas_fork_epoch = None;
+        let base = slot_vote_from_attestation_data::<MainnetEthSpec>(
+            &pre_gloas_spec,
+            slot,
+            attestation_data.clone(),
+        );
+        match base {
+            SlotVote::Base(vote) => {
+                assert_eq!(vote.block_root, block_root);
+                assert_eq!(vote.source, source);
+                assert_eq!(vote.target, target);
+            }
+            SlotVote::Gloas(_) => panic!("pre-Gloas data must produce a Base vote"),
+        }
+
+        let mut gloas_spec = ChainSpec::mainnet();
+        gloas_spec.electra_fork_epoch = Some(Epoch::new(0));
+        gloas_spec.gloas_fork_epoch = Some(Epoch::new(0));
+        let gloas =
+            slot_vote_from_attestation_data::<MainnetEthSpec>(&gloas_spec, slot, attestation_data);
+        match gloas {
+            SlotVote::Gloas(vote) => {
+                assert_eq!(vote.block_root, block_root);
+                assert_eq!(vote.source, source);
+                assert_eq!(vote.target, target);
+                assert_eq!(vote.attestation_data_index, 1);
+            }
+            SlotVote::Base(_) => panic!("Gloas data must produce a Gloas vote"),
+        }
+    }
+
+    #[test]
+    fn aggregate_fetch_attestation_data_uses_the_fork_specific_index() {
+        let slot = Slot::new(1);
+        let committee_index = 7;
+        let (block_root, source, target) = distinct_vote_fields();
+        let base_vote = SlotVote::Base(BeaconVote {
+            block_root,
+            source,
+            target,
+        });
+
+        let mut pre_electra_spec = ChainSpec::mainnet();
+        pre_electra_spec.electra_fork_epoch = Some(Epoch::new(1));
+        pre_electra_spec.gloas_fork_epoch = None;
+        let pre_electra = aggregate_fetch_attestation_data::<MainnetEthSpec>(
+            &pre_electra_spec,
+            slot,
+            &base_vote,
+            committee_index,
+        );
+        assert_eq!(pre_electra.index, committee_index);
+        assert_eq!(pre_electra.slot, slot);
+        assert_eq!(pre_electra.beacon_block_root, block_root);
+        assert_eq!(pre_electra.source, source);
+        assert_eq!(pre_electra.target, target);
+
+        let mut electra_spec = ChainSpec::mainnet();
+        electra_spec.electra_fork_epoch = Some(Epoch::new(0));
+        electra_spec.gloas_fork_epoch = None;
+        let electra = aggregate_fetch_attestation_data::<MainnetEthSpec>(
+            &electra_spec,
+            slot,
+            &base_vote,
+            committee_index,
+        );
+        assert_eq!(electra.index, 0);
+        assert_eq!(electra.slot, slot);
+        assert_eq!(electra.beacon_block_root, block_root);
+        assert_eq!(electra.source, source);
+        assert_eq!(electra.target, target);
+
+        let mut gloas_spec = ChainSpec::mainnet();
+        gloas_spec.electra_fork_epoch = Some(Epoch::new(0));
+        gloas_spec.gloas_fork_epoch = Some(Epoch::new(0));
+        let gloas_vote = SlotVote::Gloas(GloasBeaconVote {
+            block_root,
+            source,
+            target,
+            attestation_data_index: 1,
+        });
+        let gloas = aggregate_fetch_attestation_data::<MainnetEthSpec>(
+            &gloas_spec,
+            slot,
+            &gloas_vote,
+            committee_index,
+        );
+        assert_eq!(gloas.index, 1);
+        assert_ne!(gloas.index, committee_index);
+        assert_eq!(gloas.slot, slot);
+        assert_eq!(gloas.beacon_block_root, block_root);
+        assert_eq!(gloas.source, source);
+        assert_eq!(gloas.target, target);
+
+        let gloas_with_zero_index = AttestationData {
+            index: 0,
+            ..gloas.clone()
+        };
+        assert_ne!(
+            gloas.tree_hash_root(),
+            gloas_with_zero_index.tree_hash_root(),
+            "the aggregate-fetch root must bind the Gloas attestation index"
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════

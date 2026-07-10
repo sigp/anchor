@@ -419,8 +419,7 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     assert_ne!(duty.attestation.data().source, voting_source);
     assert_ne!(duty.attestation.data().target, voting_target);
     let attestation_signed = run_sign_attestations(&harness, vec![duty]).await;
-    let (attestation_base_hash, attestation_committee_id) =
-        committee_call_base_hash_and_id(&harness);
+    let (attestation_base_hash, attestation_committee_id, _) = committee_call_data(&harness);
 
     // Assert: the attestation path applies all decided voting-context fields, not the incoming
     // duty's fields. The mock changes only the index, preserving the remaining seed fields.
@@ -434,18 +433,36 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     // Reset captures so the sync path's calls are isolated.
     harness.captured_calls.lock().clear();
 
-    // Act: drive the sync path over the same committee/slot.
+    // Act: drive the sync path over the same committee/slot. Its incoming root deliberately
+    // differs from the voting-context root so the output assertions are non-vacuous.
+    let sync_duty = harness.create_sync_message(0, 0);
+    let duty_block_root = sync_duty.beacon_block_root;
+    assert_ne!(duty_block_root, voting_block_root);
     let sync_results: Vec<_> = harness
         .validator_store
-        .sign_sync_committee_signatures(vec![harness.create_sync_message(0, 0)])
+        .sign_sync_committee_signatures(vec![sync_duty])
         .collect()
         .await;
-    for result in &sync_results {
-        result
-            .as_ref()
-            .expect("sync committee batch should succeed");
-    }
-    let (sync_base_hash, sync_committee_id) = committee_call_base_hash_and_id(&harness);
+    assert_eq!(sync_results.len(), 1);
+    let sync_messages = sync_results[0]
+        .as_ref()
+        .expect("sync committee batch should succeed");
+    assert_eq!(sync_messages.len(), 1);
+    assert_eq!(sync_messages[0].beacon_block_root, voting_block_root);
+    let (sync_base_hash, sync_committee_id, sync_signing_root) = committee_call_data(&harness);
+
+    let slot = Slot::new(TEST_SLOT);
+    let epoch = slot.epoch(MainnetEthSpec::slots_per_epoch());
+    let sync_domain = harness.spec.get_domain(
+        epoch,
+        Domain::SyncCommittee,
+        &harness.spec.fork_at_epoch(epoch),
+        harness.genesis_validators_root,
+    );
+    let expected_sync_signing_root = voting_block_root.signing_root(sync_domain);
+    let duty_sync_signing_root = duty_block_root.signing_root(sync_domain);
+    assert_ne!(expected_sync_signing_root, duty_sync_signing_root);
+    assert_eq!(sync_signing_root, expected_sync_signing_root);
 
     // Assert: both paths feed the same decided hash as the partial-signature base.
     assert_eq!(
@@ -471,17 +488,17 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
 }
 
 /// Reads the single committee `sign_and_collect` call captured so far, returning its
-/// partial-signature base hash and committee id. Panics if there is not exactly one committee
-/// call, so a test that captured nothing fails loudly instead of silently passing.
-fn committee_call_base_hash_and_id(
+/// partial-signature base hash, committee id, and signing root. Panics if there is not exactly one
+/// committee call, so a test that captured nothing fails loudly instead of silently passing.
+fn committee_call_data(
     harness: &ValidatorStoreTestHarness,
-) -> (Hash256, ssv_types::CommitteeId) {
+) -> (Hash256, ssv_types::CommitteeId, Hash256) {
     let captured = harness.captured_calls.lock();
     let committee_calls: Vec<_> = captured
         .iter()
         .filter_map(|call| match &call.requester {
             SignatureRequester::Committee { base_hash, .. } => {
-                Some((*base_hash, call.metadata.committee_id))
+                Some((*base_hash, call.metadata.committee_id, call.signing_root))
             }
             _ => None,
         })
