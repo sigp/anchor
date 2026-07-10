@@ -135,11 +135,23 @@ pub struct ProposerObserver {
 
 impl ProposerObserver {
     /// Open the instance span, record the handoff budget (if known), and emit the start checkpoint.
-    pub fn start(instance_height: u64, handoff_budget_ms: Option<u64>) -> Self {
+    ///
+    /// `start_round` and `start_state` are provided to record the instance's post-replay position.
+    /// Any round advance or state change caused by replaying buffered messages during
+    /// `initialize()` has already happened by the time the observer opens. The starting state
+    /// is recorded, not the path taken to reach it.
+    pub fn start(
+        instance_height: u64,
+        handoff_budget_ms: Option<u64>,
+        start_round: u64,
+        start_state: InstanceStateKind,
+    ) -> Self {
         let span = info_span!(
             "proposer_qbft_instance",
             role = "proposer",
             instance_height,
+            start_round,
+            start_state = ?start_state,
             handoff_budget_ms = field::Empty,
             decided_round = field::Empty,
             outcome = field::Empty,
@@ -157,6 +169,8 @@ impl ProposerObserver {
         span.in_scope(|| {
             info!(
                 checkpoint = checkpoints::QBFT_INSTANCE_STARTED,
+                start_round,
+                start_state = ?start_state,
                 "Proposer QBFT instance started"
             );
         });

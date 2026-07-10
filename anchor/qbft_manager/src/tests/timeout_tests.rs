@@ -3,6 +3,23 @@ use bls::PublicKeyBytes;
 use super::*;
 use crate::{QbftMessage, metrics};
 
+/// Serializes the proposer-observer e2e tests. Each asserts before/after deltas on
+/// process-global Prometheus counters and histograms, so concurrent runs would race on shared
+/// state and produce flaky deltas. A `tokio::sync::Mutex` is used (not `std::sync::Mutex`) because
+/// the guard is held across `.await` points within the tests.
+static PROPOSER_METRIC_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Current bucketed observation count of `metric` (0 if the metric failed to register).
+fn histogram_sample_count(metric: &metrics::Result<metrics::Histogram>) -> u64 {
+    metric.as_ref().map(|h| h.get_sample_count()).unwrap_or(0)
+}
+
+/// Current summed observation value of `metric` (0.0 if the metric failed to register).
+fn histogram_sample_sum(metric: &metrics::Result<metrics::Histogram>) -> f64 {
+    metric.as_ref().map(|h| h.get_sample_sum()).unwrap_or(0.0)
+}
+
 // very important: set paused to true for deterministic timer
 #[tokio::test(start_paused = true)]
 async fn test_timeouts() {
@@ -125,12 +142,19 @@ fn build_peer_consensus_msg(
 /// Proposer instance exhausts its rounds and the observer records the `max_round_timeout` outcome.
 #[tokio::test(start_paused = true)]
 async fn test_proposer_instance_max_round_timeout_runs_observer() {
+    let _guard = PROPOSER_METRIC_LOCK.lock().await;
+
     // Mirrors `ProposerOutcome::MaxRoundTimeout.as_str()`.
     const MAX_ROUND_TIMEOUT_OUTCOME: &str = "max_round_timeout";
     const MAX_ROUNDS: usize = 2;
     const HANDOFF_BUDGET_MS: u64 = 4_000;
 
     let outcome_before = proposer_outcome_count(MAX_ROUND_TIMEOUT_OUTCOME);
+    // Snapshot the handoff-budget histogram before the run so we can assert `start()` wired the
+    // budget through with a correct ms->s conversion (delta must be exactly one sample of 4.0s).
+    let budget_count_before =
+        histogram_sample_count(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    let budget_sum_before = histogram_sample_sum(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
     let config = qbft::ConfigBuilder::new(
         OperatorId(1),
         InstanceHeight::from(0),
@@ -156,6 +180,26 @@ async fn test_proposer_instance_max_round_timeout_runs_observer() {
          PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{MAX_ROUND_TIMEOUT_OUTCOME}\"}} \
          (before={outcome_before}, after={outcome_after})"
     );
+
+    // `ProposerObserver::start` records the handoff budget once at instance start, converting
+    // ms->s. Asserting +1 sample and a sum delta of exactly `HANDOFF_BUDGET_MS / 1000` catches any
+    // regression in that conversion.
+    let budget_count_after = histogram_sample_count(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    let budget_sum_after = histogram_sample_sum(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    assert_eq!(
+        budget_count_after,
+        budget_count_before + 1,
+        "handoff budget histogram should record exactly one sample"
+    );
+    // Exact for a single lossless observation; a small tolerance guards intent
+    // against future non-power-of-two budgets or accumulated samples.
+    const BUDGET_SUM_TOLERANCE: f64 = 1e-9;
+    let expected_budget_secs = HANDOFF_BUDGET_MS as f64 / 1000.0;
+    assert!(
+        (budget_sum_after - budget_sum_before - expected_budget_secs).abs() < BUDGET_SUM_TOLERANCE,
+        "handoff budget histogram sum should increase by {expected_budget_secs}s \
+         (before={budget_sum_before}, after={budget_sum_after})"
+    );
 }
 
 /// Objective: Drive proposer instance to decide in QBFT round 1. Observer records the `decided`
@@ -164,6 +208,8 @@ async fn test_proposer_instance_max_round_timeout_runs_observer() {
 /// f = 1, so two peer PREPAREs and two peer COMMITs complete each quorum alongside its own.
 #[tokio::test(start_paused = true)]
 async fn test_proposer_instance_decided_runs_observer() {
+    let _guard = PROPOSER_METRIC_LOCK.lock().await;
+
     use ssv_types::consensus::QbftData;
 
     // Mirrors `ProposerOutcome::Decided.as_str()`.
@@ -223,6 +269,69 @@ async fn test_proposer_instance_decided_runs_observer() {
         "ProposerObserver::finish should increment \
          PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{DECIDED_OUTCOME}\"}} \
          (before={outcome_before}, after={outcome_after})"
+    );
+}
+
+/// Objective: Verify the ChannelClosed outcome path and its histogram gate.
+/// Dropping `message_tx` closes the channel; the observer should record
+/// `outcome="channel_closed"` but must NOT record decided-round or duration histograms.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_channel_closed_runs_observer() {
+    let _guard = PROPOSER_METRIC_LOCK.lock().await;
+
+    // Mirrors `ProposerOutcome::ChannelClosed.as_str()`.
+    const CHANNEL_CLOSED_OUTCOME: &str = "channel_closed";
+    const HANDOFF_BUDGET_MS: u64 = 2_000;
+
+    // Snapshot the outcome counter and both gated histograms before the run.
+    let outcome_before = proposer_outcome_count(CHANNEL_CLOSED_OUTCOME);
+    let decided_round_count_before = histogram_sample_count(&metrics::PROPOSER_QBFT_DECIDED_ROUND);
+    let duration_count_before = histogram_sample_count(&metrics::PROPOSER_QBFT_DURATION_SECONDS);
+
+    let config = qbft::ConfigBuilder::new(
+        OperatorId(1),
+        InstanceHeight::from(0),
+        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+    )
+    .build()
+    .unwrap();
+
+    let (message_tx, result_rx, _start_data) =
+        spawn_proposer_instance(config, Some(HANDOFF_BUDGET_MS));
+
+    // Observer-before-close ordering is guaranteed by tokio mpsc FIFO drain-before-close: the
+    // `Initialize` message is enqueued (inside `spawn_proposer_instance`) before `message_tx` is
+    // dropped, so the instance always drains and processes `Initialize` (creating the observer)
+    // before it observes the channel `Closed`. `yield_now()` is not load-bearing for correctness;
+    // it merely lets the instance task make progress promptly.
+    tokio::task::yield_now().await;
+
+    // Drop the only external sender to close the message channel.
+    drop(message_tx);
+
+    // Closing the channel signals a timeout to listeners.
+    assert!(
+        matches!(result_rx.await, Ok(Completed::TimedOut)),
+        "ChannelClosed should signal TimedOut to listeners"
+    );
+
+    let outcome_after = proposer_outcome_count(CHANNEL_CLOSED_OUTCOME);
+    assert!(
+        outcome_after > outcome_before,
+        "ProposerObserver::finish should increment outcome counter for channel_closed \
+         (before={outcome_before}, after={outcome_after})"
+    );
+
+    // Histogram gate: decided-round and duration must NOT be recorded for ChannelClosed.
+    let decided_round_count_after = histogram_sample_count(&metrics::PROPOSER_QBFT_DECIDED_ROUND);
+    let duration_count_after = histogram_sample_count(&metrics::PROPOSER_QBFT_DURATION_SECONDS);
+    assert_eq!(
+        decided_round_count_before, decided_round_count_after,
+        "decided-round histogram must not record on ChannelClosed"
+    );
+    assert_eq!(
+        duration_count_before, duration_count_after,
+        "duration histogram must not record on ChannelClosed"
     );
 }
 

@@ -333,8 +333,16 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             && observer.is_none()
                         {
                             let instance_height = *initialized.qbft.get_instance_height() as u64;
-                            observer =
-                                Some(ProposerObserver::start(instance_height, handoff_budget_ms));
+                            // Post-replay position. Buffered messages may have advanced the
+                            // round/state before the observer opened. Include in instrumentation.
+                            let start_round = u64::from(initialized.qbft.get_round());
+                            let start_state = initialized.qbft.state_kind();
+                            observer = Some(ProposerObserver::start(
+                                instance_height,
+                                handoff_budget_ms,
+                                start_round,
+                                start_state,
+                            ));
                         }
                     }
                     // We got a new network message, this should be passed onto the instance
@@ -439,10 +447,14 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 if let QbftInstance::Initialized(initialized) = instance {
                     // If proposer duty: record the `channel_closed` outcome.
                     if let Some(observer) = &observer {
-                        observer.finish(
-                            ProposerOutcome::ChannelClosed,
-                            u64::from(initialized.qbft.get_round()),
-                        );
+                        // `decided_round()` is always `None` here (the fallback to the local round
+                        // is what applies). This branch only runs for
+                        // non-completed instances.
+                        let terminal_round = initialized
+                            .qbft
+                            .decided_round()
+                            .unwrap_or_else(|| initialized.qbft.get_round());
+                        observer.finish(ProposerOutcome::ChannelClosed, u64::from(terminal_round));
                     }
 
                     initialized.complete(Completed::TimedOut);
@@ -462,7 +474,13 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     Completed::Success(_) => ProposerOutcome::Decided,
                     Completed::TimedOut => ProposerOutcome::MaxRoundTimeout,
                 };
-                observer.finish(outcome, u64::from(initialized.qbft.get_round()));
+                // Prefer the round from the decided certificate; on timeout there is no
+                // certificate, so fall back to the local round reached at teardown.
+                let terminal_round = initialized
+                    .qbft
+                    .decided_round()
+                    .unwrap_or_else(|| initialized.qbft.get_round());
+                observer.finish(outcome, u64::from(terminal_round));
             }
 
             instance = initialized.complete_if_done(&message_sender);
