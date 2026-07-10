@@ -41,7 +41,8 @@ use signature_collector::{
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, ValidatorIndex,
+    ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
@@ -64,12 +65,12 @@ use tracing::{Instrument, Span, debug, error, field, info, info_span, trace, war
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
-    BeaconBlockRef, BlindedPayload, ChainSpec, ContributionAndProof, Domain, Epoch, EthSpec,
-    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData,
-    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
-    SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
-    SignedExecutionPayloadEnvelope, SignedProposerPreferences, SignedRoot,
-    SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
+    BeaconBlockRef, BlindedPayload, ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch,
+    EthSpec, ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256,
+    PayloadAttestationData, PayloadAttestationMessage, ProposerPreferences, SelectionProof,
+    SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
+    SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
+    SignedRoot, SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
     SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
     SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
 };
@@ -106,6 +107,18 @@ struct SigningRequest<T> {
     validator: ValidatorMetadata,
     signing_root: Hash256,
     duty_data: T,
+}
+
+/// Fork-normalized result of a committee beacon-vote decision.
+///
+/// `decided_index` is present only for Gloas votes. Keeping it optional preserves the pre-Gloas
+/// contract that the beacon-node-supplied attestation index is not overwritten after consensus.
+struct DecidedVote {
+    block_root: Hash256,
+    source: Checkpoint,
+    target: Checkpoint,
+    decided_hash: Hash256,
+    decided_index: Option<u64>,
 }
 
 impl<T> SigningRequest<T> {
@@ -1404,6 +1417,86 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Ok(results)
     }
 
+    /// Run the shared committee beacon-vote consensus with fork-correct data and timing.
+    ///
+    /// Attestation and sync-message callers for the same `(committee, slot)` attach to one typed
+    /// QBFT instance. The first initialization owns the timeout configuration, so constructing the
+    /// instance ID and start time here prevents the two callers from drifting independently.
+    async fn decide_committee_vote(
+        &self,
+        committee_id: CommitteeId,
+        slot: Slot,
+        vote: SlotVote,
+        validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
+        cluster_members: &IndexSet<OperatorId>,
+    ) -> Result<DecidedVote, Error> {
+        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
+        let timeout_mode = TimeoutMode::SlotTime {
+            instance_start_time: self
+                .get_instant_in_slot(slot, self.spec.get_attestation_due::<E>(slot))?,
+        };
+        let instance_id = CommitteeInstanceId {
+            committee: committee_id,
+            instance_height: slot.as_usize().into(),
+        };
+
+        let result = match vote {
+            SlotVote::Gloas(seed) => {
+                let completed = self
+                    .consensus
+                    .decide_instance(
+                        instance_id,
+                        seed,
+                        self.create_gloas_beacon_vote_validator(
+                            slot,
+                            validator_attestation_committees,
+                        ),
+                        timeout_mode,
+                        cluster_members,
+                    )
+                    .await
+                    .map_err(SpecificError::from)?;
+
+                match completed {
+                    Completed::TimedOut => Err(Error::SpecificError(SpecificError::Timeout)),
+                    Completed::Success(decided) => Ok(DecidedVote {
+                        block_root: decided.block_root,
+                        source: decided.source,
+                        target: decided.target,
+                        decided_hash: decided.hash(),
+                        decided_index: Some(decided.attestation_data_index),
+                    }),
+                }
+            }
+            SlotVote::Base(seed) => {
+                let completed = self
+                    .consensus
+                    .decide_instance(
+                        instance_id,
+                        seed,
+                        self.create_beacon_vote_validator(slot, validator_attestation_committees),
+                        timeout_mode,
+                        cluster_members,
+                    )
+                    .await
+                    .map_err(SpecificError::from)?;
+
+                match completed {
+                    Completed::TimedOut => Err(Error::SpecificError(SpecificError::Timeout)),
+                    Completed::Success(decided) => Ok(DecidedVote {
+                        block_root: decided.block_root,
+                        source: decided.source,
+                        target: decided.target,
+                        decided_hash: decided.hash(),
+                        decided_index: None,
+                    }),
+                }
+            }
+        };
+        drop(timer);
+        result
+    }
+
     /// Sign sync committee messages for all validators in a single SSV committee.
     ///
     /// Runs QBFT consensus once for the committee, then collects signatures for each validator.
@@ -1424,37 +1517,24 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let validator_attestation_committees =
             self.get_attesting_validators_in_committee(&voting_context, committee_id);
 
-        // Run QBFT consensus once for the entire committee
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self
-                .get_instant_in_slot(slot, self.spec.get_slot_duration() / 3)?,
-        };
-
-        let completed = self
-            .consensus
-            .decide_instance(
-                CommitteeInstanceId {
-                    committee: committee_id,
-                    instance_height: slot.as_usize().into(),
-                },
-                voting_context.beacon_vote.clone(),
-                self.create_beacon_vote_validator(slot, validator_attestation_committees),
-                timeout_mode,
+        // Decide over the fork-matching QBFT type so this call attaches to the SAME shared
+        // instance the attestation path creates (instances are keyed by `D` via `D::get_map`).
+        // Both paths pass the same `voting_context.vote`, so the initial-value hashes match by
+        // construction and the second caller joins through `on_completed` instead of spawning a
+        // sibling. The helper also makes the shared instance timing structural.
+        let decided = self
+            .decide_committee_vote(
+                committee_id,
+                slot,
+                voting_context.vote.clone(),
+                validator_attestation_committees,
                 &cluster.cluster_members,
             )
-            .await
-            .map_err(SpecificError::from)?;
-        drop(timer);
-
-        let data = match completed {
-            Completed::TimedOut => return Err(Error::SpecificError(SpecificError::Timeout)),
-            Completed::Success(data) => data,
-        };
+            .await?;
 
         // Prepare all validators (metadata already resolved by `group_by_committee`)
         let domain = self.get_domain(epoch, Domain::SyncCommittee);
-        let signing_root = data.block_root.signing_root(domain);
+        let signing_root = decided.block_root.signing_root(domain);
 
         let prepared: Vec<SigningRequest<u64>> = messages
             .into_iter()
@@ -1477,7 +1557,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 slot,
                 &cluster,
                 validator_partial_signature_batch_size,
-                data.hash(),
+                decided.decided_hash,
                 &prepared,
             )
             .await?;
@@ -1505,7 +1585,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             );
             results.push(SyncCommitteeMessage {
                 slot,
-                beacon_block_root: data.block_root,
+                beacon_block_root: decided.block_root,
                 validator_index,
                 signature,
             });
@@ -1529,91 +1609,23 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             return Ok(vec![]);
         };
         let slot = first_attestation.attestation.data().slot;
-        let first_att_data = first_attestation.attestation.data();
 
         let voting_context_tx = self.get_voting_context(slot).await?;
         let validator_attestation_committees =
             self.get_attesting_validators_in_committee(&voting_context_tx, committee_id);
 
-        // Run QBFT consensus once for the entire committee
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
-        let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self
-                .get_instant_in_slot(slot, self.spec.get_attestation_due::<E>(slot))?,
-        };
-
-        let instance_id = CommitteeInstanceId {
-            committee: committee_id,
-            instance_height: slot.as_usize().into(),
-        };
-
-        let (block_root, source, target, decided_hash) = if self
-            .spec
-            .fork_name_at_slot::<E>(slot)
-            .gloas_enabled()
-        {
-            let completed = self
-                .consensus
-                .decide_instance(
-                    instance_id,
-                    GloasBeaconVote {
-                        block_root: first_att_data.beacon_block_root,
-                        source: first_att_data.source,
-                        target: first_att_data.target,
-                        attestation_data_index: first_att_data.index,
-                    },
-                    self.create_gloas_beacon_vote_validator(slot, validator_attestation_committees),
-                    timeout_mode,
-                    &cluster.cluster_members,
-                )
-                .await
-                .map_err(SpecificError::from)?;
-            drop(timer);
-            match completed {
-                Completed::TimedOut => {
-                    return Err(Error::SpecificError(SpecificError::Timeout));
-                }
-                // TODO(#1027): apply `decided.attestation_data_index` to each validator's
-                // `attestation.data.index` before signing.
-                Completed::Success(decided) => (
-                    decided.block_root,
-                    decided.source,
-                    decided.target,
-                    decided.hash(),
-                ),
-            }
-        } else {
-            let completed = self
-                .consensus
-                .decide_instance(
-                    instance_id,
-                    BeaconVote {
-                        block_root: first_att_data.beacon_block_root,
-                        source: first_att_data.source,
-                        target: first_att_data.target,
-                    },
-                    self.create_beacon_vote_validator(slot, validator_attestation_committees),
-                    timeout_mode,
-                    &cluster.cluster_members,
-                )
-                .await
-                .map_err(SpecificError::from)?;
-            drop(timer);
-            match completed {
-                Completed::TimedOut => {
-                    return Err(Error::SpecificError(SpecificError::Timeout));
-                }
-                Completed::Success(decided) => (
-                    decided.block_root,
-                    decided.source,
-                    decided.target,
-                    decided.hash(),
-                ),
-            }
-        };
+        let decided = self
+            .decide_committee_vote(
+                committee_id,
+                slot,
+                voting_context_tx.vote.clone(),
+                validator_attestation_committees,
+                &cluster.cluster_members,
+            )
+            .await?;
 
         // Shared values for all validators in this committee
-        let domain_hash = self.get_domain(target.epoch, Domain::BeaconAttester);
+        let domain_hash = self.get_domain(decided.target.epoch, Domain::BeaconAttester);
 
         // Prepare all validators and apply consensus results upfront
         // (metadata already resolved by `group_by_committee`)
@@ -1621,9 +1633,15 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .into_iter()
             .map(|(validator, mut att)| {
                 // Apply consensus result to this attestation
-                att.attestation.data_mut().beacon_block_root = block_root;
-                att.attestation.data_mut().source = source;
-                att.attestation.data_mut().target = target;
+                att.attestation.data_mut().beacon_block_root = decided.block_root;
+                att.attestation.data_mut().source = decided.source;
+                att.attestation.data_mut().target = decided.target;
+                // Gloas: all operators sign over the single cluster-decided attestation index so
+                // signing roots match cluster-wide. Pre-Gloas (`None`) leaves the
+                // BN-supplied index untouched (`committee_index` pre-Electra, `0` at Electra+).
+                if let Some(index) = decided.decided_index {
+                    att.attestation.data_mut().index = index;
+                }
 
                 let signing_root = att.attestation.data().signing_root(domain_hash);
                 SigningRequest {
@@ -1646,7 +1664,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 slot,
                 &cluster,
                 validator_partial_signature_batch_size,
-                decided_hash,
+                decided.decided_hash,
                 &prepared,
             )
             .await?;
@@ -2177,8 +2195,50 @@ fn decrypt_key_share(
 struct VotingContext {
     /// Cached voting assignments (computed at slot start, reused here)
     voting_assignments: Arc<VotingAssignments>,
-    /// The `BeaconVote` (only available at 1/3 slot from beacon node)
-    beacon_vote: BeaconVote,
+    /// The fork-tagged attestation vote for this slot (only available at 1/3 slot from the
+    /// beacon node).
+    vote: SlotVote,
+}
+
+/// The slot's agreed attestation vote, tagged by fork.
+///
+/// Pre-Gloas slots carry a [`BeaconVote`]; Gloas slots carry a [`GloasBeaconVote`], which adds
+/// the BN-supplied `attestation_data_index`. The committee QBFT decides over the fork-matching
+/// type, so the variant tracks the slot's fork. Collapses to a single variant once `BeaconVote`
+/// is retired post-fork.
+#[derive(Clone)]
+enum SlotVote {
+    Base(BeaconVote),
+    Gloas(GloasBeaconVote),
+}
+
+impl SlotVote {
+    fn block_root(&self) -> Hash256 {
+        match self {
+            SlotVote::Base(beacon_vote) => beacon_vote.block_root,
+            SlotVote::Gloas(gloas_beacon_vote) => gloas_beacon_vote.block_root,
+        }
+    }
+
+    fn source(&self) -> Checkpoint {
+        match self {
+            SlotVote::Base(beacon_vote) => beacon_vote.source,
+            SlotVote::Gloas(gloas_beacon_vote) => gloas_beacon_vote.source,
+        }
+    }
+    fn target(&self) -> Checkpoint {
+        match self {
+            SlotVote::Base(beacon_vote) => beacon_vote.target,
+            SlotVote::Gloas(gloas_beacon_vote) => gloas_beacon_vote.target,
+        }
+    }
+
+    fn index(&self) -> u64 {
+        match self {
+            SlotVote::Base(_) => 0,
+            SlotVote::Gloas(gloas_beacon_vote) => gloas_beacon_vote.attestation_data_index,
+        }
+    }
 }
 
 /// Cached validator voting assignments for a slot.
@@ -3725,5 +3785,64 @@ mod tests {
         assert_ne!(pre, post);
         assert_eq!(pre, spec.unaggregated_attestation_due);
         assert_eq!(post, spec.unaggregated_attestation_due_gloas);
+    }
+
+    // ==================== SlotVote accessor tests ====================
+
+    /// Builds a non-trivial checkpoint so accessor tests can distinguish source from target and
+    /// catch any accidental field swap in the `SlotVote` accessors.
+    fn distinct_checkpoint(epoch: u64, root_byte: u8) -> Checkpoint {
+        Checkpoint {
+            epoch: Epoch::new(epoch),
+            root: Hash256::repeat_byte(root_byte),
+        }
+    }
+
+    /// `SlotVote::index()` is the load-bearing accessor for the `#1027` Gloas change: it must
+    /// report `0` for the pre-Gloas `Base` variant (which carries no index) and the inner
+    /// `attestation_data_index` for the `Gloas` variant. The remaining accessors must surface the
+    /// inner `block_root`/`source`/`target` unchanged for both variants.
+    #[test]
+    fn slotvote_index_returns_zero_for_base_and_bn_index_for_gloas() {
+        // Arrange: distinct field values per variant so a wrong accessor cannot accidentally pass.
+        let base_block_root = Hash256::repeat_byte(0xAA);
+        let base_source = distinct_checkpoint(1, 0x11);
+        let base_target = distinct_checkpoint(2, 0x22);
+        let base = SlotVote::Base(BeaconVote {
+            block_root: base_block_root,
+            source: base_source,
+            target: base_target,
+        });
+
+        let gloas_block_root = Hash256::repeat_byte(0xBB);
+        let gloas_source = distinct_checkpoint(3, 0x33);
+        let gloas_target = distinct_checkpoint(4, 0x44);
+        let gloas = SlotVote::Gloas(GloasBeaconVote {
+            block_root: gloas_block_root,
+            source: gloas_source,
+            target: gloas_target,
+            attestation_data_index: 1,
+        });
+
+        // Act + Assert: index() is the fork-tagged accessor.
+        assert_eq!(
+            base.index(),
+            0,
+            "Base carries no attestation index, so index() must report 0"
+        );
+        assert_eq!(
+            gloas.index(),
+            1,
+            "Gloas must surface the inner attestation_data_index"
+        );
+
+        // Act + Assert: the remaining accessors must pass the inner fields straight through.
+        assert_eq!(base.block_root(), base_block_root);
+        assert_eq!(base.source(), base_source);
+        assert_eq!(base.target(), base_target);
+
+        assert_eq!(gloas.block_root(), gloas_block_root);
+        assert_eq!(gloas.source(), gloas_source);
+        assert_eq!(gloas.target(), gloas_target);
     }
 }

@@ -2965,6 +2965,69 @@ mod tests {
         );
     }
 
+    /// The QBFT-decided hash is the partial-signature base and binds the SSV signing
+    /// root; for cluster-wide root agreement it MUST be sensitive to
+    /// `attestation_data_index`. This isolates that single-field binding: two votes that
+    /// agree on `block_root`/`source`/`target` and differ ONLY in
+    /// `attestation_data_index` must hash differently, while two votes equal in every
+    /// field must hash identically. (#1027 C3 support / #1061 hash-equality. The
+    /// index=0-vs-1 case is also exercised inside `test_gloas_beacon_vote_hash_deterministic`;
+    /// this test pins the binding contract on its own.)
+    #[test]
+    fn test_gloas_beacon_vote_hash_binds_attestation_data_index() {
+        // Arrange: a fixed (block_root, source, target) baseline shared by all votes so
+        // `attestation_data_index` is the only variable across the index pair.
+        let block_root = Hash256::from_low_u64_be(0xb10c);
+        let source_root = Hash256::from_low_u64_be(0x5005);
+        let target_root = Hash256::from_low_u64_be(0x7007);
+        let source_epoch = 3u64;
+        let target_epoch = 4u64;
+
+        let index_zero = create_gloas_beacon_vote(
+            block_root,
+            source_epoch,
+            source_root,
+            target_epoch,
+            target_root,
+            0,
+        );
+        let index_one = create_gloas_beacon_vote(
+            block_root,
+            source_epoch,
+            source_root,
+            target_epoch,
+            target_root,
+            1,
+        );
+        let index_zero_again = create_gloas_beacon_vote(
+            block_root,
+            source_epoch,
+            source_root,
+            target_epoch,
+            target_root,
+            0,
+        );
+
+        // Act
+        let hash_zero = index_zero.hash();
+        let hash_one = index_one.hash();
+        let hash_zero_again = index_zero_again.hash();
+
+        // Assert: differing only in `attestation_data_index` must change the decided hash.
+        assert_ne!(
+            hash_zero, hash_one,
+            "votes differing only in attestation_data_index (0 vs 1) must hash differently \
+             so the decided/signing root binds the index"
+        );
+
+        // Assert: fully identical fields must produce identical hashes (no
+        // identity/address dependence in the hash).
+        assert_eq!(
+            hash_zero, hash_zero_again,
+            "votes with fully identical fields must hash identically"
+        );
+    }
+
     #[test]
     fn test_beacon_vote_rejects_gloas_bytes() {
         // Arrange: encode a `GloasBeaconVote` (120 bytes).
