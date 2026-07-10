@@ -15,11 +15,11 @@ use futures::StreamExt;
 use signature_collector::SignatureRequester;
 use ssv_types::{
     OperatorId,
-    consensus::{GloasBeaconVote, QbftData},
+    consensus::{BeaconVote, GloasBeaconVote, QbftData},
 };
 use types::{
-    Attestation, AttestationData, ChainSpec, Checkpoint, Domain, EthSpec, Hash256, MainnetEthSpec,
-    SignedRoot, Slot,
+    Attestation, AttestationData, ChainSpec, Checkpoint, Domain, Epoch, EthSpec, Hash256,
+    MainnetEthSpec, SignedRoot, Slot,
 };
 use validator_store::ValidatorStore;
 
@@ -288,14 +288,35 @@ async fn pre_gloas_electra_attestation_index_is_zero_and_untouched() {
 async fn pre_gloas_pre_electra_attestation_index_equals_committee_index() {
     // Arrange: default mainnet spec => TEST_SLOT is pre-Electra; echo decider.
     let committee_index: u64 = 3;
+    let voting_block_root = Hash256::repeat_byte(0xBA);
+    let voting_source = Checkpoint {
+        epoch: Epoch::new(0),
+        root: Hash256::repeat_byte(0x51),
+    };
+    let voting_target = Checkpoint {
+        epoch: Epoch::new(0),
+        root: Hash256::repeat_byte(0x71),
+    };
+    let voting_vote = BeaconVote {
+        block_root: voting_block_root,
+        source: voting_source,
+        target: voting_target,
+    };
+    let expected_base_hash = voting_vote.hash();
     let committee = create_committee_setup(&COMMITTEE_OPERATORS, COMMITTEE_VALIDATOR_COUNT, 0);
     let harness = ValidatorStoreTestHarness::new(vec![committee], OUR_OPERATOR);
-    harness.seed_voting_context();
+    harness.seed_base_voting_context_with_vote(voting_vote);
     // Seed each validator's duty with data.index == committee_index, as a pre-Electra BN would.
     let attestations = vec![
         harness.create_attestation_with_index(0, 0, committee_index),
         harness.create_attestation_with_index(0, 1, committee_index),
     ];
+    for attestation in &attestations {
+        let duty_data = attestation.attestation.data();
+        assert_ne!(duty_data.beacon_block_root, voting_block_root);
+        assert_ne!(duty_data.source, voting_source);
+        assert_ne!(duty_data.target, voting_target);
+    }
 
     // Act
     let signed = run_sign_attestations(&harness, attestations).await;
@@ -308,20 +329,38 @@ async fn pre_gloas_pre_electra_attestation_index_equals_committee_index() {
             committee_index,
             "pre-Electra attestation index must equal the BN committee index, untouched"
         );
+        assert_eq!(attestation.data().beacon_block_root, voting_block_root);
+        assert_eq!(attestation.data().source, voting_source);
+        assert_eq!(attestation.data().target, voting_target);
     }
 
-    // Assert: signing roots are computed over the untouched committee index.
-    let expected_root = expected_attester_signing_root(
-        &harness.spec,
+    // Assert: consensus and signing use the shared voting-context vote, while retaining the
+    // pre-Electra duty index.
+    let slot = Slot::new(TEST_SLOT);
+    let epoch = slot.epoch(MainnetEthSpec::slots_per_epoch());
+    let domain = harness.spec.get_domain(
+        epoch,
+        Domain::BeaconAttester,
+        &harness.spec.fork_at_epoch(epoch),
         harness.genesis_validators_root,
-        Slot::new(TEST_SLOT),
-        committee_index,
     );
+    let expected_root = AttestationData {
+        slot,
+        index: committee_index,
+        beacon_block_root: voting_block_root,
+        source: voting_source,
+        target: voting_target,
+    }
+    .signing_root(domain);
     for call in harness.captured_calls.lock().iter() {
         assert_eq!(
             call.signing_root, expected_root,
-            "pre-Electra signing root must be computed over the untouched committee index"
+            "pre-Electra signing root must use the voting-context fields and untouched index"
         );
+        let SignatureRequester::Committee { base_hash, .. } = &call.requester else {
+            panic!("attestation signing must use the committee signature requester");
+        };
+        assert_eq!(*base_hash, expected_base_hash);
     }
 }
 
@@ -336,6 +375,21 @@ async fn pre_gloas_pre_electra_attestation_index_equals_committee_index() {
 #[tokio::test(flavor = "multi_thread")]
 async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     // Arrange: one Gloas committee, both an attestation duty and a sync duty for the same slot.
+    let voting_block_root = Hash256::repeat_byte(0xB1);
+    let voting_source = Checkpoint {
+        epoch: Epoch::new(0),
+        root: Hash256::repeat_byte(0x52),
+    };
+    let voting_target = Checkpoint {
+        epoch: Epoch::new(0),
+        root: Hash256::repeat_byte(0x72),
+    };
+    let voting_vote = GloasBeaconVote {
+        block_root: voting_block_root,
+        source: voting_source,
+        target: voting_target,
+        attestation_data_index: SEED_INDEX,
+    };
     let committee = create_committee_setup(&COMMITTEE_OPERATORS, COMMITTEE_VALIDATOR_COUNT, 0);
     let committee_id = committee.cluster.committee_id();
     let harness = ValidatorStoreTestHarness::new_with_options(
@@ -347,23 +401,35 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
             ..Default::default()
         },
     );
-    harness.seed_gloas_voting_context(SEED_INDEX);
+    harness.seed_gloas_voting_context_with_vote(voting_vote);
 
     // The decided hash both paths feed into the signature collector is the hash of the decided
     // GloasBeaconVote. Both paths build that vote from the same seed, so this is the shared base.
     let expected_base_hash = GloasBeaconVote {
-        block_root: Hash256::zero(),
-        source: Checkpoint::default(),
-        target: Checkpoint::default(),
+        block_root: voting_block_root,
+        source: voting_source,
+        target: voting_target,
         attestation_data_index: DECIDED_INDEX,
     }
     .hash();
 
     // Act: drive the attestation path, capture its committee base hash + committee id.
-    let _attestation_signed =
-        run_sign_attestations(&harness, vec![harness.create_attestation(0, 0)]).await;
+    let duty = harness.create_attestation(0, 0);
+    assert_ne!(duty.attestation.data().beacon_block_root, voting_block_root);
+    assert_ne!(duty.attestation.data().source, voting_source);
+    assert_ne!(duty.attestation.data().target, voting_target);
+    let attestation_signed = run_sign_attestations(&harness, vec![duty]).await;
     let (attestation_base_hash, attestation_committee_id) =
         committee_call_base_hash_and_id(&harness);
+
+    // Assert: the attestation path applies all decided voting-context fields, not the incoming
+    // duty's fields. The mock changes only the index, preserving the remaining seed fields.
+    assert_eq!(attestation_signed.len(), 1);
+    let signed_data = attestation_signed[0].1.data();
+    assert_eq!(signed_data.beacon_block_root, voting_block_root);
+    assert_eq!(signed_data.source, voting_source);
+    assert_eq!(signed_data.target, voting_target);
+    assert_eq!(signed_data.index, DECIDED_INDEX);
 
     // Reset captures so the sync path's calls are isolated.
     harness.captured_calls.lock().clear();

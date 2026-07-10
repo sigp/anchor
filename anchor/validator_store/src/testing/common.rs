@@ -21,8 +21,8 @@ use ssv_types::{
     Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share, ValidatorIndex,
     ValidatorMetadata,
     consensus::{
-        AggregatorCommitteeConsensusData, AssignedAggregator, DataVersion, GloasBeaconVote,
-        QbftDataValidator,
+        AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion,
+        GloasBeaconVote, QbftDataValidator,
     },
 };
 use ssz::Encode;
@@ -462,13 +462,19 @@ impl ValidatorStoreTestHarness {
     /// Seeds the `VotingContext` with a pre-Gloas `BeaconVote` so `get_voting_context` returns
     /// immediately for `TEST_SLOT`. Used by harnesses on a pre-Gloas spec (Base path).
     pub(super) fn seed_voting_context(&self) {
+        self.seed_base_voting_context_with_vote(BeaconVote {
+            block_root: Hash256::zero(),
+            source: Self::zero_checkpoint(),
+            target: Self::zero_checkpoint(),
+        });
+    }
+
+    /// Seeds the pre-Gloas voting context with an explicit vote, allowing tests to make the
+    /// shared metadata-service seed differ from the incoming attestation duty.
+    pub(super) fn seed_base_voting_context_with_vote(&self, vote: BeaconVote) {
         self.validator_store.update_voting_context(VotingContext {
             voting_assignments: Arc::new(self.test_slot_voting_assignments()),
-            vote: crate::SlotVote::Base(ssv_types::consensus::BeaconVote {
-                block_root: Hash256::zero(),
-                source: Self::zero_checkpoint(),
-                target: Self::zero_checkpoint(),
-            }),
+            vote: crate::SlotVote::Base(vote),
         });
     }
 
@@ -476,14 +482,20 @@ impl ValidatorStoreTestHarness {
     /// modeling this operator's local seed for the committee QBFT. Used by harnesses on a
     /// Gloas-enabled spec (Gloas path).
     pub(super) fn seed_gloas_voting_context(&self, attestation_data_index: u64) {
+        self.seed_gloas_voting_context_with_vote(GloasBeaconVote {
+            block_root: Hash256::zero(),
+            source: Self::zero_checkpoint(),
+            target: Self::zero_checkpoint(),
+            attestation_data_index,
+        });
+    }
+
+    /// Seeds the Gloas voting context with an explicit vote, allowing tests to distinguish the
+    /// shared metadata-service seed from the incoming attestation duty.
+    pub(super) fn seed_gloas_voting_context_with_vote(&self, vote: GloasBeaconVote) {
         self.validator_store.update_voting_context(VotingContext {
             voting_assignments: Arc::new(self.test_slot_voting_assignments()),
-            vote: crate::SlotVote::Gloas(GloasBeaconVote {
-                block_root: Hash256::zero(),
-                source: Self::zero_checkpoint(),
-                target: Self::zero_checkpoint(),
-                attestation_data_index,
-            }),
+            vote: crate::SlotVote::Gloas(vote),
         });
     }
 
