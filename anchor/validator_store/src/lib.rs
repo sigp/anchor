@@ -2229,6 +2229,15 @@ impl VotingContext {
             }
         }
     }
+
+    /// Return the committee decision when available, otherwise use the slot's local seed vote.
+    fn vote_for_committee(&self, committee_id: &CommitteeId) -> SlotVote {
+        self.decided_votes
+            .lock()
+            .get(committee_id)
+            .cloned()
+            .unwrap_or_else(|| self.vote.clone())
+    }
 }
 
 /// The slot's agreed attestation vote, tagged by fork.
@@ -3913,6 +3922,23 @@ mod tests {
             target: distinct_checkpoint(root_byte as u64 + 1, root_byte.wrapping_add(2)),
             attestation_data_index: index,
         })
+    }
+
+    #[test]
+    fn voting_context_returns_committee_decision_or_seed() {
+        let seed = test_gloas_vote(0x10, 0);
+        let committee_a = CommitteeId([0xA1; 32]);
+        let committee_b = CommitteeId([0xB2; 32]);
+        let decided_a = test_gloas_vote(0x21, 1);
+        let context = test_voting_context(seed.clone());
+
+        assert_eq!(context.vote_for_committee(&committee_a), seed);
+        context
+            .remember_decided_vote(committee_a, decided_a.clone())
+            .expect("first committee decision should be stored");
+
+        assert_eq!(context.vote_for_committee(&committee_a), decided_a);
+        assert_eq!(context.vote_for_committee(&committee_b), seed);
     }
 
     #[test]
