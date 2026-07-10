@@ -481,6 +481,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let voting_context = VotingContext {
             voting_assignments,
             vote,
+            decided_votes: Default::default(),
         };
 
         self.validator_store.update_voting_context(voting_context);
