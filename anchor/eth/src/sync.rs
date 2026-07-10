@@ -161,10 +161,7 @@ impl SsvEventSyncer {
             .connect_ws(ws)
             .await
             .map_err(|e| {
-                ExecutionError::SyncError(format!(
-                    "Failed to bind to WS: {}, {}",
-                    &config.ws_url, e
-                ))
+                ExecutionError::SyncError(format!("Failed to bind to WS: {}, {}", config.ws_url, e))
             })?;
         debug!("Created ws client");
 

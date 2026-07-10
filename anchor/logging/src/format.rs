@@ -201,7 +201,7 @@ where
                     let dimmed = Style::new().dimmed();
                     write!(writer, " {}", dimmed.paint(&fields.fields))?;
                 } else {
-                    write!(writer, " {}", &fields.fields)?;
+                    write!(writer, " {}", fields.fields)?;
                 }
             }
         }
