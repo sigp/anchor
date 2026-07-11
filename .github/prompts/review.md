@@ -20,5 +20,7 @@ Do NOT comment on:
 
 When you DO find issues:
 - Use inline comments with concrete fix suggestions
+- Post each inline comment as soon as the issue is confirmed; do not save
+  them all up for the end of the review
 - Post a brief summary comment ONLY listing the issues found
 - No preamble, no praise, no filler
