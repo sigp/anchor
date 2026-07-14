@@ -1400,6 +1400,7 @@ mod tests {
                 matches!(
                     failure,
                     ValidationFailure::RoleNotActiveAfterEthFork {
+                        role: Role::ValidatorRegistration,
                         deprecated_since_fork: types::ForkName::Gloas,
                         ..
                     }
