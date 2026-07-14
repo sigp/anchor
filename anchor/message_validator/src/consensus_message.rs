@@ -1400,7 +1400,7 @@ mod tests {
         ValidationFailure::{EarlySlotMessage, LateSlotMessage},
         tests::{
             MockDutiesProvider, QbftMessageBuilder, create_message_id_for_test,
-            create_signed_consensus_message,
+            create_signed_consensus_message, spec_with_gloas,
         },
     };
 
@@ -1801,12 +1801,15 @@ mod tests {
         assert_eq!(result, Ok(Some(2)));
     }
 
-    /// Helper function for testing role validation against fork schedules.
-    ///
-    /// Tests whether a consensus message for a given role is properly accepted or rejected
-    /// based on the fork schedule. Used to verify that deprecated roles (Aggregator and
-    /// SyncCommittee) are rejected after the Boole fork but accepted before it.
-    fn test_role_fork_validation(role: Role, is_after_boole: bool, should_be_rejected: bool) {
+    /// Builds a signed consensus message for `role` and runs it through the full
+    /// `validate_ssv_message` path (including `validate_role_for_fork`) with the
+    /// given fork schedule and chain spec, returning the result for the caller
+    /// to assert on.
+    fn run_role_fork_validation(
+        role: Role,
+        fork_schedule: Arc<ForkSchedule>,
+        spec: Arc<types::ChainSpec>,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
         // Arrange: Set up test data and validation context
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
@@ -1815,7 +1818,7 @@ mod tests {
 
         let qbft_message = QbftMessageBuilder::new(role, QbftMessageType::Prepare).build();
         let signed_msg = create_signed_consensus_message(
-            qbft_message.clone(),
+            qbft_message,
             vec![OperatorId(1)],
             vec![],
             vec![private_key],
@@ -1831,16 +1834,6 @@ mod tests {
         slot_clock.advance_slot();
         slot_clock.advance_time(slot_duration);
 
-        let fork_schedule = if is_after_boole {
-            Arc::new(ForkSchedule::new(
-                Fork::Boole,
-                DomainType::default(),
-                "testing",
-            ))
-        } else {
-            generate_fork_schedule()
-        };
-
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
@@ -1852,17 +1845,37 @@ mod tests {
             slot_clock,
             operator_pub_keys: &map,
             fork_schedule,
-            spec: Arc::new(types::ChainSpec::mainnet()),
+            spec,
         };
 
         // Act: Validate the message
-        let result = validate_ssv_message(
+        validate_ssv_message(
             validation_context,
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
             }),
-        );
+        )
+    }
+
+    /// Helper function for testing role validation against fork schedules.
+    ///
+    /// Tests whether a consensus message for a given role is properly accepted or rejected
+    /// based on the fork schedule. Used to verify that deprecated roles (Aggregator and
+    /// SyncCommittee) are rejected after the Boole fork but accepted before it.
+    fn test_role_fork_validation(role: Role, is_after_boole: bool, should_be_rejected: bool) {
+        let fork_schedule = if is_after_boole {
+            Arc::new(ForkSchedule::new(
+                Fork::Boole,
+                DomainType::default(),
+                "testing",
+            ))
+        } else {
+            generate_fork_schedule()
+        };
+
+        let result =
+            run_role_fork_validation(role, fork_schedule, Arc::new(types::ChainSpec::mainnet()));
 
         // Assert: Verify the expected outcome
         if should_be_rejected {
@@ -1906,5 +1919,33 @@ mod tests {
     #[test]
     fn test_sync_committee_consensus_message_rejected_after_boole() {
         test_role_fork_validation(Role::SyncCommittee, true, true);
+    }
+
+    #[test]
+    fn test_validator_registration_consensus_message_rejected_after_gloas() {
+        // A ValidatorRegistration consensus message with Gloas active at epoch 0
+        // (the builder's height of 1 is a slot in epoch 0). The Ethereum fork
+        // gate runs before the structural non-QBFT-role check, so the
+        // deprecated-role rejection surfaces instead of UnexpectedConsensusMessage.
+        let result = run_role_fork_validation(
+            Role::ValidatorRegistration,
+            generate_fork_schedule(),
+            spec_with_gloas(Some(0)),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveAfterEthFork {
+                        role: Role::ValidatorRegistration,
+                        deprecated_since_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveAfterEthFork (ValidatorRegistration consensus message post-Gloas)",
+        );
     }
 }
