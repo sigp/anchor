@@ -118,7 +118,6 @@ pub enum ValidationFailure {
     NonExistentCommitteeID,
     RoundTooHigh,
     ValidatorIndexMismatch,
-    TooManyDutiesPerEpoch,
     NoDuty,
     EstimatedRoundNotInAllowedSpread {
         got: String,
@@ -249,7 +248,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::RoundTooHigh
             | ValidationFailure::RoundOverflow
             | ValidationFailure::ValidatorIndexMismatch
-            | ValidationFailure::TooManyDutiesPerEpoch
+            | ValidationFailure::ExcessiveDutyCount { .. }
             | ValidationFailure::NoDuty
             | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
                 MessageAcceptance::Ignore
@@ -1130,11 +1129,31 @@ mod tests {
     use ssz::Encode;
     use types::{Epoch, Slot};
 
-    use crate::{ValidationFailure, hash_data};
+    use crate::{MessageAcceptance, ValidationFailure, hash_data};
 
     // Constants for committee sizes in tests to improve readability.
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
     pub(crate) const FOUR_NODE_COMMITTEE: usize = 4;
+
+    /// Test that an `ExcessiveDutyCount` maps to `Ignore`.
+    /// Duty-limit breach is a rate condition. An honest relayer can forward a message that
+    /// pushes a signer over its per-epoch duty count. Not a provable protocol violation.
+    #[test]
+    fn excessive_duty_count_maps_to_ignore() {
+        // Duty-limit breach (count over the per-epoch limit for a committee duty).
+        let failure = ValidationFailure::ExcessiveDutyCount {
+            got: 5,
+            limit: 4,
+            role: Role::Committee,
+        };
+
+        // Gossip classification must be Ignore, not Reject.
+        assert_eq!(
+            MessageAcceptance::from(&failure),
+            MessageAcceptance::Ignore,
+            "duty-limit breach (ExcessiveDutyCount) must classify as Ignore, not Reject."
+        );
+    }
 
     // Helper struct for directly creating consensus messages for tests
     pub(crate) struct QbftMessageBuilder {
