@@ -234,9 +234,8 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
     }
 }
 
-/// Whether the periodic registration publish should be skipped because the slot's fork is
-/// Gloas. SIP-94 §4: the relay-builder registration flow is gone under Gloas, replaced by
-/// the `proposer_preferences` p2p mechanism.
+/// Whether the periodic registration publish should be skipped because `slot`'s fork is
+/// Gloas or later. See the call site for the rationale.
 fn should_skip_for_gloas<E: EthSpec>(spec: &ChainSpec, slot: Slot) -> bool {
     spec.fork_name_at_slot::<E>(slot).gloas_enabled()
 }
@@ -261,32 +260,6 @@ mod tests {
     use types::{Epoch, MainnetEthSpec};
 
     use super::*;
-
-    #[test]
-    fn should_skip_for_gloas_returns_true_after_fork() {
-        // Arrange: Gloas is scheduled from genesis.
-        let mut spec = ChainSpec::mainnet();
-        spec.gloas_fork_epoch = Some(Epoch::new(0));
-
-        // Act
-        let skip = should_skip_for_gloas::<MainnetEthSpec>(&spec, Slot::new(0));
-
-        // Assert
-        assert!(skip, "registrations must be skipped once Gloas is active");
-    }
-
-    #[test]
-    fn should_skip_for_gloas_returns_false_before_fork() {
-        // Arrange: Gloas is scheduled far in the future; the queried slot is pre-fork.
-        let mut spec = ChainSpec::mainnet();
-        spec.gloas_fork_epoch = Some(Epoch::new(100_000));
-
-        // Act
-        let skip = should_skip_for_gloas::<MainnetEthSpec>(&spec, Slot::new(32));
-
-        // Assert
-        assert!(!skip, "registrations must continue before the Gloas fork");
-    }
 
     #[test]
     fn should_skip_for_gloas_flips_exactly_at_fork_boundary() {
