@@ -116,23 +116,16 @@ impl Uninitialized {
         init: QbftInitialization<D>,
         sender: &Arc<dyn MessageSender>,
     ) -> Initialized<D> {
-        // Sleep until the start time embedded in the timeout mode
-        let start_time = match init.timeout_mode {
-            TimeoutMode::SlotTime {
-                instance_start_time,
-            } => instance_start_time,
-            TimeoutMode::Relative {
-                current_round_start_time,
-            } => current_round_start_time,
-        };
-        tokio::time::sleep_until(start_time).await;
-
-        // For Relative mode, reset to Instant::now() after the sleep
+        // `SlotTime` instances start round 1 immediately: every call site is data-gated by
+        // its caller, and `round_deadline_origin` alone keeps round-change deadlines synchronized
+        // across operators. `Relative` instances (block proposals) still wait for the
+        // scheduled round start and then restart the round timer from now for per-round cadence.
         let mut timeout_mode = init.timeout_mode;
         if let TimeoutMode::Relative {
             current_round_start_time,
         } = &mut timeout_mode
         {
+            tokio::time::sleep_until(*current_round_start_time).await;
             *current_round_start_time = Instant::now();
         }
 

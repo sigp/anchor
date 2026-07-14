@@ -10,8 +10,11 @@ const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 
 /// Calculate when the current round should timeout.
 ///
-/// For `SlotTime` mode: Cumulative timeout from instance start.
-///   Round N ends at: instance_start_time + sum of all round timeouts up to N.
+/// For `SlotTime` mode: Cumulative timeout from a fixed origin instant.
+///   Round N ends at: `round_deadline_origin` + sum of all round timeouts up to N.
+///   The instance may initialize before or after the origin without shifting the
+///   deadlines; a deadline already in the past fires immediately, cascading round
+///   changes until the rounds catch up.
 ///   Used for attestations, aggregations, sync committee duties.
 ///
 /// For `Relative` mode: Single round timeout from the current round's start time.
@@ -21,8 +24,8 @@ const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 pub fn calculate_round_timeout(round: u64, timeout_mode: TimeoutMode) -> Option<Instant> {
     match timeout_mode {
         TimeoutMode::SlotTime {
-            instance_start_time,
-        } => instance_start_time.checked_add(cumulative_timeout(round)?),
+            round_deadline_origin,
+        } => round_deadline_origin.checked_add(cumulative_timeout(round)?),
         TimeoutMode::Relative {
             current_round_start_time,
         } => current_round_start_time.checked_add(single_round_timeout(round)),

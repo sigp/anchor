@@ -419,7 +419,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metric_label]);
         let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self
+            round_deadline_origin: self
                 .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
         };
 
@@ -1007,7 +1007,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 &[metrics::AGGREGATE_AND_PROOF],
             );
             let timeout_mode = TimeoutMode::SlotTime {
-                instance_start_time: self.get_instant_in_slot(
+                round_deadline_origin: self.get_instant_in_slot(
                     message.aggregate().data().slot,
                     self.spec.get_slot_duration() * 2 / 3,
                 )?,
@@ -1159,7 +1159,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
             );
             let timeout_mode = TimeoutMode::SlotTime {
-                instance_start_time: self
+                round_deadline_origin: self
                     .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
             };
 
@@ -1421,7 +1421,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     ///
     /// Attestation and sync-message callers for the same `(committee, slot)` attach to one typed
     /// QBFT instance. The first initialization owns the timeout configuration, so constructing the
-    /// instance ID and start time here prevents the two callers from drifting independently.
+    /// instance ID and round-deadline origin here prevents the two callers from drifting
+    /// independently.
     async fn decide_committee_vote(
         &self,
         committee_id: CommitteeId,
@@ -1432,7 +1433,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     ) -> Result<DecidedVote, Error> {
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
         let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self
+            round_deadline_origin: self
                 .get_instant_in_slot(slot, self.spec.get_attestation_due::<E>(slot))?,
         };
         let instance_id = CommitteeInstanceId {
