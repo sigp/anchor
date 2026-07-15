@@ -924,12 +924,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     dependent_root = ?preferences.dependent_root,
                     ?signing_root,
                     ?error,
-                    "ProposerPreferences reconstruction failed; operators likely diverged on the \
-                     signing root (target_gas_limit or dependent_root)"
+                    "Insufficient partial signatures to reconstruct ProposerPreferences; possible \
+                     causes: too few operators reached the threshold, partial-signature delivery \
+                     loss, or operators diverged on the signing root (target_gas_limit or \
+                     dependent_root)"
                 );
                 metrics::inc_counter_vec(
                     &metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES,
-                    &[metrics::PROPOSER_PREFERENCES_FAILURE_SIGNING_ROOT_DIVERGENCE],
+                    &[metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES],
                 );
             }
             CollectionFailureClass::Infra => {

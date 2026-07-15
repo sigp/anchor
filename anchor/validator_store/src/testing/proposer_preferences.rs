@@ -225,17 +225,17 @@ async fn proposer_preferences_envelope_slot_is_proposal_slot() {
 
 /// A collection failure that classifies as `NoSignature` propagates the real
 /// `SignatureCollectionFailed` error (not `Unsupported`) and increments the
-/// `signing_root_divergence` reconstruction-failure metric exactly once.
+/// `insufficient_partial_signatures` reconstruction-failure metric exactly once.
 ///
 /// Log-field assertion path: the codebase has no tracing/log-capture utility (no `tracing-test`
 /// dependency, no `logs_contain`/subscriber-capture helper), so we deliberately do NOT build
 /// fragile tracing infrastructure. The warn-log fields (validator index, proposal slot,
-/// `target_gas_limit`, `dependent_root`, signing root) and the `signing_root_divergence` metric
-/// increment are emitted by the *same* `NoSignature` match arm in
+/// `target_gas_limit`, `dependent_root`, signing root) and the `insufficient_partial_signatures`
+/// metric increment are emitted by the *same* `NoSignature` match arm in
 /// `report_proposer_preferences_collection_failure`, so the metric increment proves that warn
 /// branch executed; the log-field assertion is covered indirectly.
 #[tokio::test(flavor = "multi_thread")]
-async fn proposer_preferences_signing_root_divergence_warns_and_metrics() {
+async fn proposer_preferences_insufficient_partial_signatures_warns_and_metrics() {
     // The global prometheus registry makes cross-label delta assertions racy between the two
     // metric tests, so they serialize against each other.
     let _guard = METRIC_TEST_LOCK.lock().await;
@@ -248,7 +248,8 @@ async fn proposer_preferences_signing_root_divergence_warns_and_metrics() {
         vec![committee],
         our_operator_id,
         HarnessOptions {
-            // QueueClosedError classifies as the NoSignature / signing-root-divergence class.
+            // QueueClosedError classifies as the NoSignature / insufficient-partial-signatures
+            // class.
             collector_failure: Some(CollectionError::QueueClosedError),
             disable_slashing_protection: true,
         },
@@ -260,11 +261,13 @@ async fn proposer_preferences_signing_root_divergence_warns_and_metrics() {
     // we assert on the delta. The other metric test also touches this label, so the delta is only
     // reliable because both tests hold `METRIC_TEST_LOCK`; future failure tests must join that
     // serialization or use distinct labels.
-    let divergence_counter = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
+    let failure_counter = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
         .as_ref()
         .expect("metric should be created")
-        .with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_SIGNING_ROOT_DIVERGENCE]);
-    let count_before = divergence_counter.get();
+        .with_label_values(&[
+            crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
+        ]);
+    let count_before = failure_counter.get();
 
     // Act
     let result = harness
@@ -284,21 +287,21 @@ async fn proposer_preferences_signing_root_divergence_warns_and_metrics() {
          Unsupported), got: {result:?}"
     );
     assert_eq!(
-        divergence_counter.get() - count_before,
+        failure_counter.get() - count_before,
         1,
-        "QueueClosedError should increment the signing_root_divergence reconstruction-failure \
+        "QueueClosedError should increment the insufficient_partial_signatures reconstruction-failure \
          metric once"
     );
 }
 
-/// The code classifies collection failures only into the coarse `signing_root_divergence` /
+/// The code classifies collection failures only into the coarse `insufficient_partial_signatures` /
 /// `infra` buckets; it never attributes a divergence to a specific input field. A
 /// `target_gas_limit` or `dependent_root` mismatch is only observable as a signing-root split
 /// (threshold-not-reached), which surfaces here as the same `QueueClosedError`.
 ///
-/// This asserts the `signing_root_divergence` label increments while the per-input attribution
-/// labels (`"target_gas_limit_divergence"`, `"dependent_root_divergence"`) stay at 0, proving the
-/// code emits no per-input attribution reason.
+/// This asserts the `insufficient_partial_signatures` label increments while the per-input
+/// attribution labels (`"target_gas_limit_divergence"`, `"dependent_root_divergence"`) stay at 0,
+/// proving the code emits no per-input attribution reason.
 #[tokio::test(flavor = "multi_thread")]
 async fn proposer_preferences_does_not_classify_remote_input_without_metadata() {
     // Touches the same global metric as the other failure test, so it joins the same
@@ -325,14 +328,15 @@ async fn proposer_preferences_does_not_classify_remote_input_without_metadata() 
     let metric = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
         .as_ref()
         .expect("metric should be created");
-    let divergence_counter = metric
-        .with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_SIGNING_ROOT_DIVERGENCE]);
+    let failure_counter = metric.with_label_values(&[
+        crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
+    ]);
     // Read the hypothetical per-input attribution labels directly; the code never emits them, so
     // they must stay at zero. Using literal strings (not consts) is deliberate: no such consts
     // exist because the production code never references these buckets.
     let target_gas_limit_attribution = metric.with_label_values(&["target_gas_limit_divergence"]);
     let dependent_root_attribution = metric.with_label_values(&["dependent_root_divergence"]);
-    let divergence_before = divergence_counter.get();
+    let count_before = failure_counter.get();
 
     // Act
     let result = harness
@@ -351,9 +355,9 @@ async fn proposer_preferences_does_not_classify_remote_input_without_metadata() 
         "expected QueueClosedError surfaced as SignatureCollectionFailed, got: {result:?}"
     );
     assert_eq!(
-        divergence_counter.get() - divergence_before,
+        failure_counter.get() - count_before,
         1,
-        "the coarse signing_root_divergence bucket should increment once"
+        "the coarse insufficient_partial_signatures bucket should increment once"
     );
     // The per-input attribution buckets are never written by the production code: it cannot tell a
     // target_gas_limit split from a dependent_root split at the partial-signature wire, so it emits

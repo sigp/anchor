@@ -157,10 +157,13 @@ pub static PTC_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> = LazyLo
     )
 });
 
-/// Threshold-not-reached for a ProposerPreferences signing. An upper bound on true signing-root
-/// divergence: at the current collector granularity it also covers channel close / not-enough
-/// operators, which are indistinguishable from a root split at the partial-signature wire.
-pub const PROPOSER_PREFERENCES_FAILURE_SIGNING_ROOT_DIVERGENCE: &str = "signing_root_divergence";
+/// The committee never reached the partial-signature threshold for a ProposerPreferences signing.
+/// At the current collector granularity this single bucket covers every no-quorum cause — too few
+/// operators, partial-signature delivery loss, and operators diverging on the signing root
+/// (`target_gas_limit` / `dependent_root`) — which are indistinguishable at the wire. Mirrors
+/// `PTC_FAILURE_NO_SIGNATURE`.
+pub const PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES: &str =
+    "insufficient_partial_signatures";
 /// Local collection or reconstruction infrastructure fault.
 pub const PROPOSER_PREFERENCES_FAILURE_INFRA: &str = "infra";
 

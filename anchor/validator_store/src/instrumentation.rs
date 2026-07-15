@@ -51,6 +51,11 @@ pub fn classify_collection_failure(error: &Error) -> CollectionFailureClass {
         // forces a conscious classification decision here at compile time.
         Error::SpecificError(SpecificError::SignatureCollectionFailed(collection_error)) => {
             match collection_error {
+                // `CollectionTimeout` is not currently produced by the collector (it has no
+                // deadline path yet); it is classified defensively here alongside the real
+                // `QueueClosedError` threshold-not-reached signal so that, if a future explicit
+                // collection deadline starts emitting it, it lands in the same no-signature bucket
+                // without a silent misclassification.
                 CollectionError::QueueClosedError | CollectionError::CollectionTimeout => {
                     CollectionFailureClass::NoSignature
                 }
