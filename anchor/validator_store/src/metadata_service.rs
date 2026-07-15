@@ -777,25 +777,19 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             sync_contributions,
         };
 
-        let mut result = HashMap::with_capacity(ssv_committees.len());
-        for ssv_committee_id in ssv_committees {
-            let ssv_committee_attesters = attesters_by_ssv_committee.get(&ssv_committee_id);
-            let ssv_committee_sync = sync_by_ssv_committee.get(&ssv_committee_id);
-            let vote = committee_votes
-                .get(&ssv_committee_id)
-                .ok_or_else(|| format!("Missing vote for committee {ssv_committee_id:?}"))?;
-
+        let mut result = HashMap::with_capacity(committee_votes.len());
+        for (ssv_committee_id, vote) in &committee_votes {
             let consensus_data = self.build_consensus_data_for_committee(
                 slot,
-                &ssv_committee_id,
-                ssv_committee_attesters,
-                ssv_committee_sync,
+                ssv_committee_id,
+                attesters_by_ssv_committee.get(ssv_committee_id),
+                sync_by_ssv_committee.get(ssv_committee_id),
                 vote,
                 &fetch_results,
             )?;
 
             if let Some(data) = consensus_data {
-                result.insert(ssv_committee_id, Arc::new(data));
+                result.insert(*ssv_committee_id, Arc::new(data));
             }
         }
 
