@@ -5605,6 +5605,7 @@ dependencies = [
 name = "operator_doppelganger"
 version = "0.1.0"
 dependencies = [
+ "bls",
  "database",
  "message_validator",
  "ssv_types",

@@ -12,5 +12,6 @@ tracing = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+bls = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 types = { workspace = true }
