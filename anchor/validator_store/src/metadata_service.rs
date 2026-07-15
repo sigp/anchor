@@ -49,6 +49,33 @@ struct SyncAggregatorData {
 /// Map from SSV committee to its sync aggregators grouped by subnet.
 type SyncByCommitteeMap = HashMap<CommitteeId, Vec<(SyncSubnetId, SyncAggregatorData)>>;
 
+/// Identifies one aggregate-attestation Beacon API request within a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct AggregateFetchKey {
+    attestation_data_root: Hash256,
+    committee_index: u64,
+}
+
+/// Identifies one sync-contribution Beacon API request within a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SyncContributionFetchKey {
+    block_root: Hash256,
+    subnet_id: SyncSubnetId,
+}
+
+/// Resolved committee votes and their deduplicated Beacon API request keys.
+struct ResolvedCommitteeRequests {
+    votes: HashMap<CommitteeId, SlotVote>,
+    aggregate_attestation_keys: HashSet<AggregateFetchKey>,
+    sync_contribution_keys: HashSet<SyncContributionFetchKey>,
+}
+
+/// Deduplicated Beacon API results shared by all SSV committees in one slot.
+struct AggregationFetchResults<E: EthSpec> {
+    aggregated_attestations: HashMap<AggregateFetchKey, Attestation<E>>,
+    sync_contributions: HashMap<SyncContributionFetchKey, SyncCommitteeContribution<E>>,
+}
+
 /// Maximum time to wait for beacon node API calls to fetch aggregated attestations
 /// and sync contributions. After this timeout, we return whatever partial results
 /// have been collected. This is shorter than the standard 3-second Lighthouse timeout
@@ -165,6 +192,31 @@ fn aggregate_fetch_attestation_data<E: EthSpec>(
         beacon_block_root: vote.block_root(),
         source: vote.source(),
         target: vote.target(),
+    }
+}
+
+/// Identify one aggregate-attestation request from its complete Beacon API inputs.
+fn aggregate_fetch_key<E: EthSpec>(
+    spec: &ChainSpec,
+    slot: Slot,
+    vote: &SlotVote,
+    committee_index: u64,
+) -> AggregateFetchKey {
+    let attestation_data = aggregate_fetch_attestation_data::<E>(spec, slot, vote, committee_index);
+    AggregateFetchKey {
+        attestation_data_root: attestation_data.tree_hash_root(),
+        committee_index,
+    }
+}
+
+/// Identify one sync-contribution request from its complete Beacon API inputs.
+fn sync_contribution_fetch_key(
+    vote: &SlotVote,
+    subnet_id: SyncSubnetId,
+) -> SyncContributionFetchKey {
+    SyncContributionFetchKey {
+        block_root: vote.block_root(),
+        subnet_id,
     }
 }
 
@@ -481,6 +533,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let voting_context = VotingContext {
             voting_assignments,
             vote,
+            decided_votes: Default::default(),
         };
 
         self.validator_store.update_voting_context(voting_context);
@@ -563,16 +616,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         // SINGLE PASS over attesters with `selection_proof`
         // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: `aggregator_committees`, `attesters_by_ssv_committee`,
-        //           `attestation_committee_indexes`
+        // Collects: `aggregator_committees`, `attesters_by_ssv_committee`
         // ═══════════════════════════════════════════════════════════════════════
         let mut aggregator_committees: HashMap<PublicKeyBytes, u64> =
             HashMap::with_capacity(attesters.len());
         let mut attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>> =
             HashMap::new();
-        let mut attestation_committee_indexes: HashSet<u64> =
-            HashSet::with_capacity(attesters.len());
-
         for attester in attesters.iter().filter(|d| d.selection_proof.is_some()) {
             // Only process validators with valid, non-liquidated SSV committees
             if let Some(ssv_committee_id) = self
@@ -589,23 +638,18 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     .entry(ssv_committee_id)
                     .or_default()
                     .push(attester);
-                attestation_committee_indexes.insert(attester.duty.committee_index);
             }
         }
 
         // ═══════════════════════════════════════════════════════════════════════
         // SINGLE PASS over `sync_aggregators`
         // Only processes validators with valid, non-liquidated SSV committees.
-        // Collects: `validator_subnet_counts` (for multi_sync), `sync_by_ssv_committee`,
-        //           `all_subnet_ids`
+        // Collects: `validator_subnet_counts` (for multi_sync), `sync_by_ssv_committee`
         // ═══════════════════════════════════════════════════════════════════════
         let sync_aggregators = sync_duties.as_ref().map(|duties| &duties.aggregators);
 
         let mut validator_subnet_counts: HashMap<PublicKeyBytes, usize> = HashMap::new();
         let mut sync_by_ssv_committee: SyncByCommitteeMap = HashMap::new();
-        let mut all_subnet_ids: HashSet<SyncSubnetId> =
-            HashSet::with_capacity(sync_aggregators.map(|a| a.len()).unwrap_or(0));
-
         if let Some(aggregators) = sync_aggregators {
             for (subnet_id, subnet_aggregators) in aggregators {
                 for (validator_index, pubkey, selection_proof) in subnet_aggregators {
@@ -632,7 +676,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                             .entry(ssv_committee_id)
                             .or_default()
                             .push((*subnet_id, sync_aggregator));
-                        all_subnet_ids.insert(*subnet_id);
                     }
                 }
             }
@@ -658,8 +701,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     slot,
                     attesters_by_ssv_committee,
                     sync_by_ssv_committee,
-                    attestation_committee_indexes,
-                    all_subnet_ids,
                 )
                 .await?
             } else {
@@ -680,6 +721,54 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         Ok(())
     }
 
+    /// Resolve the effective vote for every SSV committee with aggregation duties, then derive the
+    /// Beacon API request keys required by those duties.
+    ///
+    /// A committee uses its decided vote when available and otherwise falls back to the slot seed.
+    /// Identical request keys are deduplicated across committees.
+    fn resolve_committee_requests(
+        spec: &ChainSpec,
+        slot: Slot,
+        voting_context: &VotingContext,
+        attesters_by_ssv_committee: &HashMap<CommitteeId, Vec<&DutyAndProof>>,
+        sync_by_ssv_committee: &SyncByCommitteeMap,
+    ) -> ResolvedCommitteeRequests {
+        let ssv_committees: HashSet<CommitteeId> = attesters_by_ssv_committee
+            .keys()
+            .chain(sync_by_ssv_committee.keys())
+            .copied()
+            .collect();
+        let mut votes = HashMap::with_capacity(ssv_committees.len());
+        let mut aggregate_attestation_keys = HashSet::new();
+        let mut sync_contribution_keys = HashSet::new();
+
+        for ssv_committee_id in &ssv_committees {
+            let vote = voting_context.vote_for_committee(ssv_committee_id);
+
+            if let Some(attesters) = attesters_by_ssv_committee.get(ssv_committee_id) {
+                aggregate_attestation_keys.extend(attesters.iter().map(|attester| {
+                    aggregate_fetch_key::<E>(spec, slot, &vote, attester.duty.committee_index)
+                }));
+            }
+
+            if let Some(sync_entries) = sync_by_ssv_committee.get(ssv_committee_id) {
+                sync_contribution_keys.extend(
+                    sync_entries
+                        .iter()
+                        .map(|(subnet_id, _)| sync_contribution_fetch_key(&vote, *subnet_id)),
+                );
+            }
+
+            votes.insert(*ssv_committee_id, vote);
+        }
+
+        ResolvedCommitteeRequests {
+            votes,
+            aggregate_attestation_keys,
+            sync_contribution_keys,
+        }
+    }
+
     /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
     ///
     /// Takes pre-grouped data from `update_aggregation_assignments` to avoid redundant iteration.
@@ -688,8 +777,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         slot: Slot,
         attesters_by_ssv_committee: HashMap<CommitteeId, Vec<&DutyAndProof>>,
         sync_by_ssv_committee: SyncByCommitteeMap,
-        attestation_committee_indexes: HashSet<u64>,
-        all_subnet_ids: HashSet<SyncSubnetId>,
     ) -> Result<HashMap<CommitteeId, Arc<AggregatorCommitteeConsensusData<E>>>, String> {
         // Get `VotingContext` for the slot's `vote` (cached at 1/3 slot)
         let voting_context = self
@@ -698,49 +785,46 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .await
             .map_err(|e| format!("Failed to get voting context: {:?}", e))?;
 
-        // Parallel fetch from beacon node with timeout for partial results.
-        // Uses `FuturesUnordered` internally to collect results as they complete.
-        // After BEACON_API_FETCH_TIMEOUT (2s), returns whatever has been collected.
-        // This ensures we don't block on slow beacon nodes while still getting partial data.
+        let committee_requests = Self::resolve_committee_requests(
+            &self.spec,
+            slot,
+            &voting_context,
+            &attesters_by_ssv_committee,
+            &sync_by_ssv_committee,
+        );
+
+        // Fetch both categories concurrently. Each helper keeps the existing partial-result
+        // behavior and one two-second deadline for all unique requests in its category.
         let (aggregated_attestations, sync_contributions) = tokio::join!(
             self.fetch_aggregated_attestations(
                 slot,
-                &voting_context.vote,
-                &attestation_committee_indexes,
+                &committee_requests.aggregate_attestation_keys,
                 BEACON_API_FETCH_TIMEOUT,
             ),
             self.fetch_sync_contributions(
                 slot,
-                voting_context.vote.block_root(),
-                &all_subnet_ids,
+                &committee_requests.sync_contribution_keys,
                 BEACON_API_FETCH_TIMEOUT,
             ),
         );
+        let fetch_results = AggregationFetchResults {
+            aggregated_attestations,
+            sync_contributions,
+        };
 
-        // Build consensus data per committee
-        // All committees with work
-        let ssv_committees: HashSet<CommitteeId> = attesters_by_ssv_committee
-            .keys()
-            .chain(sync_by_ssv_committee.keys())
-            .copied()
-            .collect();
-
-        let mut result = HashMap::with_capacity(ssv_committees.len());
-        for ssv_committee_id in ssv_committees {
-            let ssv_committee_attesters = attesters_by_ssv_committee.get(&ssv_committee_id);
-            let ssv_committee_sync = sync_by_ssv_committee.get(&ssv_committee_id);
-
+        let mut result = HashMap::with_capacity(committee_requests.votes.len());
+        for (ssv_committee_id, vote) in &committee_requests.votes {
             let consensus_data = self.build_consensus_data_for_committee(
                 slot,
-                &ssv_committee_id,
-                ssv_committee_attesters,
-                ssv_committee_sync,
-                &aggregated_attestations,
-                &sync_contributions,
+                ssv_committee_id,
+                attesters_by_ssv_committee.get(ssv_committee_id),
+                sync_by_ssv_committee.get(ssv_committee_id),
+                vote,
+                &fetch_results,
             )?;
 
             if let Some(data) = consensus_data {
-                result.insert(ssv_committee_id, Arc::new(data));
+                result.insert(*ssv_committee_id, Arc::new(data));
             }
         }
 
@@ -764,8 +848,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         ssv_committee_id: &CommitteeId,
         ssv_committee_attesters: Option<&Vec<&DutyAndProof>>,
         ssv_committee_sync: Option<&Vec<(SyncSubnetId, SyncAggregatorData)>>,
-        aggregated_attestations: &HashMap<u64, Attestation<E>>,
-        sync_contributions: &HashMap<SyncSubnetId, SyncCommitteeContribution<E>>,
+        vote: &SlotVote,
+        fetch_results: &AggregationFetchResults<E>,
     ) -> Result<Option<AggregatorCommitteeConsensusData<E>>, String> {
         // === AGGREGATORS ===
         // Process pre-filtered attesters for this committee
@@ -803,10 +887,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             }
         }
 
-        // Sort and filter aggregators using helper functions
-        sort_aggregators_by_validator_index(&mut aggregators);
-        filter_aggregators_with_attestations(&mut aggregators, aggregated_attestations);
-
         // === CONTRIBUTORS ===
         // Process pre-filtered sync aggregators for this committee
         // These validators are already confirmed to be in this committee
@@ -837,84 +917,17 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             }
         }
 
-        // Sort and filter contributors using helper functions
-        sort_contributors_by_signing_root_then_validator_index(&mut contributors_with_roots);
-        filter_contributors_with_contributions(&mut contributors_with_roots, sync_contributions);
-
-        let contributors: Vec<AssignedAggregator> = contributors_with_roots
-            .into_iter()
-            .map(|(_, contributor)| contributor)
-            .collect();
-
-        // Early exit if no aggregators/contributors
-        if aggregators.is_empty() && contributors.is_empty() {
-            return Ok(None);
-        }
-
-        // === COMMITTEE INDEXES & ATTESTATIONS ===
-        // Extract unique committee indexes preserving first-seen order from sorted aggregators.
-        // `IndexSet` deduplicates while maintaining insertion order, matching SSV Go's approach
-        // of adding new indexes as they're encountered during iteration.
-        let attestation_committee_indexes: IndexSet<u64> =
-            aggregators.iter().map(|a| a.committee_index).collect();
-
-        // Get attestations in attestation_committee_indexes order (1:1 correspondence)
-        let attestations_bytes: Vec<VariableList<u8, _>> = attestation_committee_indexes
-            .iter()
-            .filter_map(|committee_index| aggregated_attestations.get(committee_index))
-            .map(|attestation| {
-                let bytes = attestation.as_ssz_bytes();
-                VariableList::new(bytes).map_err(|e| {
-                    warn!("Failed to create attestation bytes list: {:?}", e);
-                    e
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to create attestation bytes: {:?}", e))?;
-
-        // === SUBNET IDS & CONTRIBUTIONS ===
-        // Extract unique subnet IDs preserving first-seen order from sorted contributors.
-        // `IndexSet` deduplicates while maintaining insertion order, matching SSV Go's approach
-        // of adding new IDs as they're encountered during iteration.
-        let subnet_ids: IndexSet<SyncSubnetId> = contributors
-            .iter()
-            .map(|c| SyncSubnetId::new(c.committee_index))
-            .collect();
-
-        let contributions: Vec<SyncCommitteeContribution<E>> = subnet_ids
-            .iter()
-            .filter_map(|id| sync_contributions.get(id).cloned())
-            .collect();
-
-        // Get the fork version
-        let epoch = slot.epoch(E::slots_per_epoch());
-        let fork_name = self.spec.fork_name_at_epoch(epoch);
-        let version = DataVersion::from(fork_name);
-
-        Ok(Some(AggregatorCommitteeConsensusData {
-            version,
-            aggregators: aggregators
-                .try_into()
-                .map_err(|e| format!("aggregators: {e:?}"))?,
-            aggregator_committee_indexes: attestation_committee_indexes
-                .into_iter()
-                .collect::<Vec<_>>()
-                .try_into()
-                .map_err(|e| format!("aggregator_committee_indexes: {e:?}"))?,
-            aggregated_attestations: attestations_bytes
-                .try_into()
-                .map_err(|e| format!("aggregated_attestations: {e:?}"))?,
-            contributors: contributors
-                .try_into()
-                .map_err(|e| format!("contributors: {e:?}"))?,
-            sync_committee_contributions: contributions
-                .try_into()
-                .map_err(|e| format!("sync_committee_contributions: {e:?}"))?,
-        }))
+        build_consensus_data_from_candidates::<E>(
+            &self.spec,
+            slot,
+            vote,
+            aggregators,
+            contributors_with_roots,
+            fetch_results,
+        )
     }
 
-    /// Fetch aggregated attestations from beacon node for the given committee indexes.
-    /// Returns a map of `committee_index` -> `Attestation`.
+    /// Fetch aggregated attestations from beacon nodes for the given request identities.
     ///
     /// Uses `FuturesUnordered` to collect results as they complete. When the timeout is reached,
     /// returns whatever results have been collected so far (partial results). This ensures
@@ -922,10 +935,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     async fn fetch_aggregated_attestations(
         &self,
         slot: Slot,
-        vote: &SlotVote,
-        attestation_committee_indexes: &HashSet<u64>,
+        requests: &HashSet<AggregateFetchKey>,
         timeout: Duration,
-    ) -> HashMap<u64, Attestation<E>> {
+    ) -> HashMap<AggregateFetchKey, Attestation<E>> {
         let _timer = metrics::start_timer_vec(
             &metrics::AGGREGATOR_COMMITTEE_FETCH_TIMES,
             &["aggregated_attestations"],
@@ -933,20 +945,9 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // Create `FuturesUnordered` for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;
-        let mut futures: FuturesUnordered<_> = attestation_committee_indexes
+        let mut futures: FuturesUnordered<_> = requests
             .iter()
-            .map(|&committee_index| {
-                // Reconstruct the attestation data to compute its tree hash root.
-                // Pre-Electra uses the committee index, Electra through pre-Gloas uses zero,
-                // and Gloas uses the BN-supplied index carried by the slot vote.
-                let attestation_data = aggregate_fetch_attestation_data::<E>(
-                    &self.spec,
-                    slot,
-                    vote,
-                    committee_index,
-                );
-                let attestation_data_root = attestation_data.tree_hash_root();
-
+            .map(|&request| {
                 async move {
                     let result = beacon_nodes
                         .first_success(|beacon_node| async move {
@@ -957,8 +958,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                             beacon_node
                                 .get_validator_aggregate_attestation_v2(
                                     slot,
-                                    attestation_data_root,
-                                    committee_index,
+                                    request.attestation_data_root,
+                                    request.committee_index,
                                 )
                                 .await
                                 .map_err(|e| {
@@ -967,19 +968,19 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                                 .ok_or_else(|| {
                                     format!(
                                         "[AggregatorCommittee] No aggregate available for slot {}, committee {}",
-                                        slot, committee_index
+                                        slot, request.committee_index
                                     )
                                 })
                                 .map(|result| result.into_data())
                         })
                         .await;
-                    (committee_index, result)
+                    (request, result)
                 }
             })
             .collect();
 
-        let total_committees = attestation_committee_indexes.len();
-        let mut aggregated_attestations = HashMap::with_capacity(total_committees);
+        let total_requests = requests.len();
+        let mut aggregated_attestations = HashMap::with_capacity(total_requests);
         let deadline = Instant::now() + timeout;
 
         // Collect results as they complete, until timeout or all done
@@ -990,15 +991,16 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             }
 
             tokio::select! {
-                Some((committee_index, result)) = futures.next() => {
+                Some((request, result)) = futures.next() => {
                     match result {
                         Ok(attestation) => {
-                            aggregated_attestations.insert(committee_index, attestation);
+                            aggregated_attestations.insert(request, attestation);
                         }
                         Err(e) => {
                             warn!(
                                 %slot,
-                                %committee_index,
+                                committee_index = request.committee_index,
+                                attestation_data_root = ?request.attestation_data_root,
                                 error = %e,
                                 "[AggregatorCommittee] Failed to fetch aggregated attestation for committee"
                             );
@@ -1006,11 +1008,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     }
                 }
                 _ = sleep_until(deadline) => {
-                    if aggregated_attestations.len() < total_committees {
+                    if aggregated_attestations.len() < total_requests {
                         warn!(
                             %slot,
                             collected = aggregated_attestations.len(),
-                            total = total_committees,
+                            total = total_requests,
                             "[AggregatorCommittee] Timeout fetching aggregated attestations, returning partial results"
                         );
                         metrics::inc_counter_vec(
@@ -1025,7 +1027,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // Track success/failure counts
         let successful = aggregated_attestations.len();
-        let total = total_committees;
+        let total = total_requests;
         let failed = total.saturating_sub(successful);
         metrics::inc_counter_vec_by(
             &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
@@ -1041,8 +1043,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         aggregated_attestations
     }
 
-    /// Fetch sync committee contributions from beacon node for the given subnet IDs.
-    /// Returns a map of subnet_id -> SyncCommitteeContribution.
+    /// Fetch sync committee contributions from beacon nodes for the given request identities.
     ///
     /// Uses `FuturesUnordered` to collect results as they complete. When the timeout is reached,
     /// returns whatever results have been collected so far (partial results). This ensures
@@ -1050,25 +1051,24 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     async fn fetch_sync_contributions(
         &self,
         slot: Slot,
-        beacon_block_root: Hash256,
-        subnet_ids: &HashSet<SyncSubnetId>,
+        requests: &HashSet<SyncContributionFetchKey>,
         timeout: Duration,
-    ) -> HashMap<SyncSubnetId, SyncCommitteeContribution<E>> {
+    ) -> HashMap<SyncContributionFetchKey, SyncCommitteeContribution<E>> {
         let _timer = metrics::start_timer_vec(
             &metrics::AGGREGATOR_COMMITTEE_FETCH_TIMES,
             &["sync_contributions"],
         );
         // Create `FuturesUnordered` for concurrent execution with partial result collection
         let beacon_nodes = &self.beacon_nodes;
-        let mut futures: FuturesUnordered<_> = subnet_ids
+        let mut futures: FuturesUnordered<_> = requests
             .iter()
-            .map(|&subnet_id| async move {
+            .map(|&request| async move {
                 let result = beacon_nodes
                     .first_success(|beacon_node| async move {
                         let sync_contribution_data = SyncContributionData {
                             slot,
-                            beacon_block_root,
-                            subcommittee_index: subnet_id.into(),
+                            beacon_block_root: request.block_root,
+                            subcommittee_index: request.subnet_id.into(),
                         };
 
                         beacon_node
@@ -1077,12 +1077,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     })
                     .instrument(info_span!("fetch_sync_contribution"))
                     .await;
-                (subnet_id, result)
+                (request, result)
             })
             .collect();
 
-        let total_subnets = subnet_ids.len();
-        let mut sync_contributions = HashMap::with_capacity(total_subnets);
+        let total_requests = requests.len();
+        let mut sync_contributions = HashMap::with_capacity(total_requests);
         let deadline = Instant::now() + timeout;
 
         // Collect results as they complete, until timeout or all done
@@ -1093,24 +1093,24 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             }
 
             tokio::select! {
-                Some((subnet_id, result)) = futures.next() => {
+                Some((request, result)) = futures.next() => {
                     match result {
                         Ok(Some(response)) => {
-                            sync_contributions.insert(subnet_id, response.data);
+                            sync_contributions.insert(request, response.data);
                         }
                         Ok(None) => {
                             warn!(
                                 %slot,
-                                ?beacon_block_root,
-                                ?subnet_id,
+                                beacon_block_root = ?request.block_root,
+                                subnet_id = ?request.subnet_id,
                                 "[AggregatorCommittee] No sync contribution found for subnet"
                             );
                         }
                         Err(e) => {
                             error!(
                                 %slot,
-                                ?beacon_block_root,
-                                ?subnet_id,
+                                beacon_block_root = ?request.block_root,
+                                subnet_id = ?request.subnet_id,
                                 error = %e,
                                 "[AggregatorCommittee] Failed to fetch sync contribution for subnet"
                             );
@@ -1118,11 +1118,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     }
                 }
                 _ = sleep_until(deadline) => {
-                    if sync_contributions.len() < total_subnets {
+                    if sync_contributions.len() < total_requests {
                         warn!(
                             %slot,
                             collected = sync_contributions.len(),
-                            total = total_subnets,
+                            total = total_requests,
                             "[AggregatorCommittee] Timeout fetching sync contributions, returning partial results"
                         );
                         metrics::inc_counter_vec(
@@ -1137,7 +1137,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // Track success/failure counts
         let successful = sync_contributions.len();
-        let total = total_subnets;
+        let total = total_requests;
         let failed = total.saturating_sub(successful);
         metrics::inc_counter_vec_by(
             &metrics::AGGREGATOR_COMMITTEE_FETCH_SUCCESS,
@@ -1359,6 +1359,97 @@ struct ScoredAttestationData {
 // unit testing of the sorting and filtering logic without requiring beacon node mocks.
 // The sorting order MUST match SSV-Go exactly for consensus compatibility.
 
+/// Assemble consensus data deterministically from selected candidates and completed fetches.
+///
+/// For the same candidates and successfully fetched request identities, this preserves go-ssv's
+/// ordering and object association. Beacon API retry scheduling is deliberately outside this
+/// function, since network outcomes are not part of the encoded consensus-data contract.
+fn build_consensus_data_from_candidates<E: EthSpec>(
+    spec: &ChainSpec,
+    slot: Slot,
+    vote: &SlotVote,
+    mut aggregators: Vec<AssignedAggregator>,
+    mut contributors_with_roots: Vec<(Hash256, AssignedAggregator)>,
+    fetch_results: &AggregationFetchResults<E>,
+) -> Result<Option<AggregatorCommitteeConsensusData<E>>, String> {
+    sort_aggregators_by_validator_index(&mut aggregators);
+    aggregators.retain(|aggregator| {
+        let key = aggregate_fetch_key::<E>(spec, slot, vote, aggregator.committee_index);
+        fetch_results.aggregated_attestations.contains_key(&key)
+    });
+
+    sort_contributors_by_signing_root_then_validator_index(&mut contributors_with_roots);
+    contributors_with_roots.retain(|(_, contributor)| {
+        let subnet_id = SyncSubnetId::new(contributor.committee_index);
+        let key = sync_contribution_fetch_key(vote, subnet_id);
+        fetch_results.sync_contributions.contains_key(&key)
+    });
+
+    let contributors: Vec<AssignedAggregator> = contributors_with_roots
+        .into_iter()
+        .map(|(_, contributor)| contributor)
+        .collect();
+
+    if aggregators.is_empty() && contributors.is_empty() {
+        return Ok(None);
+    }
+
+    // Preserve first-seen order from the sorted candidates, matching go-ssv's append order.
+    let attestation_committee_indexes: IndexSet<u64> =
+        aggregators.iter().map(|a| a.committee_index).collect();
+    let attestations_bytes: Vec<VariableList<u8, _>> = attestation_committee_indexes
+        .iter()
+        .filter_map(|committee_index| {
+            let key = aggregate_fetch_key::<E>(spec, slot, vote, *committee_index);
+            fetch_results.aggregated_attestations.get(&key)
+        })
+        .map(|attestation| {
+            let bytes = attestation.as_ssz_bytes();
+            VariableList::new(bytes).map_err(|e| {
+                warn!("Failed to create attestation bytes list: {:?}", e);
+                e
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to create attestation bytes: {e:?}"))?;
+
+    let subnet_ids: IndexSet<SyncSubnetId> = contributors
+        .iter()
+        .map(|c| SyncSubnetId::new(c.committee_index))
+        .collect();
+    let contributions: Vec<SyncCommitteeContribution<E>> = subnet_ids
+        .iter()
+        .filter_map(|id| {
+            let key = sync_contribution_fetch_key(vote, *id);
+            fetch_results.sync_contributions.get(&key).cloned()
+        })
+        .collect();
+
+    let epoch = slot.epoch(E::slots_per_epoch());
+    let version = DataVersion::from(spec.fork_name_at_epoch(epoch));
+
+    Ok(Some(AggregatorCommitteeConsensusData {
+        version,
+        aggregators: aggregators
+            .try_into()
+            .map_err(|e| format!("aggregators: {e:?}"))?,
+        aggregator_committee_indexes: attestation_committee_indexes
+            .into_iter()
+            .collect::<Vec<_>>()
+            .try_into()
+            .map_err(|e| format!("aggregator_committee_indexes: {e:?}"))?,
+        aggregated_attestations: attestations_bytes
+            .try_into()
+            .map_err(|e| format!("aggregated_attestations: {e:?}"))?,
+        contributors: contributors
+            .try_into()
+            .map_err(|e| format!("contributors: {e:?}"))?,
+        sync_committee_contributions: contributions
+            .try_into()
+            .map_err(|e| format!("sync_committee_contributions: {e:?}"))?,
+    }))
+}
+
 /// Sort aggregators by `validator_index` ascending.
 ///
 /// CRITICAL for consensus: All aggregators share the same signing root (attestation data),
@@ -1382,31 +1473,10 @@ pub fn sort_contributors_by_signing_root_then_validator_index(
     });
 }
 
-/// Filter aggregators to only those whose attestation was successfully fetched.
-///
-/// This maintains 1:1 correspondence between `aggregator_committee_indexes` and attestations.
-pub fn filter_aggregators_with_attestations<E: EthSpec>(
-    aggregators: &mut Vec<AssignedAggregator>,
-    aggregated_attestations: &HashMap<u64, Attestation<E>>,
-) {
-    aggregators.retain(|agg| aggregated_attestations.contains_key(&agg.committee_index));
-}
-
-/// Filter contributors to only those whose sync contribution was successfully fetched.
-///
-/// This maintains 1:1 correspondence between `subnet_ids` and contributions.
-pub fn filter_contributors_with_contributions<E: EthSpec>(
-    contributors_with_roots: &mut Vec<(Hash256, AssignedAggregator)>,
-    sync_contributions: &HashMap<SyncSubnetId, SyncCommitteeContribution<E>>,
-) {
-    contributors_with_roots.retain(|(_, contrib)| {
-        sync_contributions.contains_key(&SyncSubnetId::new(contrib.committee_index))
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use bls::{AggregateSignature, FixedBytesExtended, Signature};
+    use eth2::types::AttesterData;
     use ssv_types::{
         IndexSet, VariableList,
         consensus::{
@@ -1415,10 +1485,10 @@ mod tests {
         },
     };
     use ssz::Encode;
-    use ssz_types::BitList;
+    use ssz_types::{BitList, BitVector};
     use types::{
-        AttestationBase, AttestationData, Checkpoint, Epoch, ForkName, MainnetEthSpec, Slot,
-        SyncCommitteeContribution,
+        AttestationBase, AttestationData, AttestationElectra, Checkpoint, Epoch, ForkName,
+        MainnetEthSpec, SelectionProof, Slot, SyncCommitteeContribution,
     };
 
     use super::*;
@@ -1450,27 +1520,6 @@ mod tests {
                 committee_index: subnet_id,
             },
         )
-    }
-
-    /// Create a test attestation for a given committee index
-    fn create_test_attestation(index: u64) -> Attestation<MainnetEthSpec> {
-        Attestation::Base(AttestationBase {
-            aggregation_bits: BitList::with_capacity(128).expect("valid capacity"),
-            data: AttestationData {
-                slot: Slot::new(1000),
-                index,
-                beacon_block_root: Hash256::zero(),
-                source: Checkpoint {
-                    epoch: Epoch::new(10),
-                    root: Hash256::zero(),
-                },
-                target: Checkpoint {
-                    epoch: Epoch::new(11),
-                    root: Hash256::zero(),
-                },
-            },
-            signature: AggregateSignature::infinity(),
-        })
     }
 
     /// Create test attestation bytes for consensus data
@@ -1506,6 +1555,20 @@ mod tests {
         }
     }
 
+    fn create_test_contribution_for_vote(
+        slot: Slot,
+        vote: &SlotVote,
+        subnet_id: u64,
+    ) -> SyncCommitteeContribution<MainnetEthSpec> {
+        SyncCommitteeContribution {
+            slot,
+            beacon_block_root: vote.block_root(),
+            subcommittee_index: subnet_id,
+            aggregation_bits: Default::default(),
+            signature: AggregateSignature::infinity(),
+        }
+    }
+
     fn distinct_vote_fields() -> (Hash256, Checkpoint, Checkpoint) {
         (
             Hash256::repeat_byte(0xB1),
@@ -1518,6 +1581,171 @@ mod tests {
                 root: Hash256::repeat_byte(0x71),
             },
         )
+    }
+
+    fn gloas_test_spec() -> ChainSpec {
+        let mut spec = ChainSpec::mainnet();
+        spec.electra_fork_epoch = Some(Epoch::new(0));
+        spec.gloas_fork_epoch = Some(Epoch::new(0));
+        spec
+    }
+
+    fn gloas_test_vote(root_byte: u8, attestation_data_index: u64) -> SlotVote {
+        SlotVote::Gloas(GloasBeaconVote {
+            block_root: Hash256::repeat_byte(root_byte),
+            source: Checkpoint {
+                epoch: Epoch::new(5),
+                root: Hash256::repeat_byte(0x51),
+            },
+            target: Checkpoint {
+                epoch: Epoch::new(6),
+                root: Hash256::repeat_byte(0x71),
+            },
+            attestation_data_index,
+        })
+    }
+
+    fn test_voting_context(slot: Slot, seed: SlotVote) -> VotingContext {
+        VotingContext {
+            voting_assignments: Arc::new(VotingAssignments {
+                slot,
+                attesting_validators: vec![],
+                attesting_committees: HashMap::new(),
+                sync_validators_by_subnet: HashMap::new(),
+            }),
+            vote: seed,
+            decided_votes: Default::default(),
+        }
+    }
+
+    fn test_attester(slot: Slot, committee_index: u64) -> DutyAndProof {
+        let mut duty_and_proof = DutyAndProof::new_without_selection_proof(
+            AttesterData {
+                pubkey: PublicKeyBytes::empty(),
+                validator_index: 0,
+                committees_at_slot: 1,
+                committee_index,
+                committee_length: 1,
+                validator_committee_index: 0,
+                slot,
+            },
+            slot.saturating_sub(1_u64),
+        );
+        duty_and_proof.selection_proof = Some(SelectionProof::from(Signature::empty()));
+        duty_and_proof
+    }
+
+    fn test_sync_aggregator() -> SyncAggregatorData {
+        SyncAggregatorData {
+            validator_index: 0,
+            pubkey: PublicKeyBytes::empty(),
+            selection_proof: SyncSelectionProof::from(Signature::empty()),
+        }
+    }
+
+    /// Committee request resolution must carry committee-local QBFT decisions into both Beacon API
+    /// request categories. Sharing the beacon committee index and sync subnet ensures only the
+    /// resolved vote can distinguish the two committees' request identities.
+    #[test]
+    fn resolved_committee_requests_use_each_committee_decision() {
+        let slot = Slot::new(1);
+        let spec = gloas_test_spec();
+        let shared_committee_index = 7;
+        let shared_subnet = SyncSubnetId::new(2);
+        let committee_a = CommitteeId([0xA1; 32]);
+        let committee_b = CommitteeId([0xB2; 32]);
+        let seed = gloas_test_vote(0x10, 0);
+        let decision_a = gloas_test_vote(0x21, 1);
+        let decision_b = gloas_test_vote(0x32, 1);
+        let voting_context = test_voting_context(slot, seed.clone());
+        voting_context
+            .remember_decided_vote(committee_a, decision_a.clone())
+            .expect("committee A decision should be stored");
+        voting_context
+            .remember_decided_vote(committee_b, decision_b.clone())
+            .expect("committee B decision should be stored");
+
+        let attester_a = test_attester(slot, shared_committee_index);
+        let attester_b = test_attester(slot, shared_committee_index);
+        let attesters_by_ssv_committee = HashMap::from([
+            (committee_a, vec![&attester_a]),
+            (committee_b, vec![&attester_b]),
+        ]);
+        let sync_by_ssv_committee = HashMap::from([
+            (committee_a, vec![(shared_subnet, test_sync_aggregator())]),
+            (committee_b, vec![(shared_subnet, test_sync_aggregator())]),
+        ]);
+
+        let requests =
+            MetadataService::<MainnetEthSpec, ManualSlotClock>::resolve_committee_requests(
+                &spec,
+                slot,
+                &voting_context,
+                &attesters_by_ssv_committee,
+                &sync_by_ssv_committee,
+            );
+
+        assert_eq!(requests.votes.get(&committee_a), Some(&decision_a));
+        assert_eq!(requests.votes.get(&committee_b), Some(&decision_b));
+
+        let aggregate_a =
+            aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &decision_a, shared_committee_index);
+        let aggregate_b =
+            aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &decision_b, shared_committee_index);
+        let aggregate_seed =
+            aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &seed, shared_committee_index);
+        assert_ne!(aggregate_a, aggregate_b);
+        assert_ne!(aggregate_a, aggregate_seed);
+        assert_ne!(aggregate_b, aggregate_seed);
+        assert_eq!(
+            requests.aggregate_attestation_keys,
+            HashSet::from([aggregate_a, aggregate_b])
+        );
+        assert!(
+            !requests
+                .aggregate_attestation_keys
+                .contains(&aggregate_seed)
+        );
+
+        let sync_a = sync_contribution_fetch_key(&decision_a, shared_subnet);
+        let sync_b = sync_contribution_fetch_key(&decision_b, shared_subnet);
+        let sync_seed = sync_contribution_fetch_key(&seed, shared_subnet);
+        assert_ne!(sync_a, sync_b);
+        assert_ne!(sync_a, sync_seed);
+        assert_ne!(sync_b, sync_seed);
+        assert_eq!(
+            requests.sync_contribution_keys,
+            HashSet::from([sync_a, sync_b])
+        );
+        assert!(!requests.sync_contribution_keys.contains(&sync_seed));
+    }
+
+    fn create_test_gloas_attestation(
+        slot: Slot,
+        vote: &SlotVote,
+        committee_index: usize,
+    ) -> Attestation<MainnetEthSpec> {
+        let mut aggregation_bits = BitList::with_capacity(128).expect("valid capacity");
+        aggregation_bits
+            .set(committee_index, true)
+            .expect("committee index fits aggregation bits");
+        let mut committee_bits = BitVector::default();
+        committee_bits
+            .set(committee_index, true)
+            .expect("committee index fits committee bits");
+
+        Attestation::Electra(AttestationElectra {
+            aggregation_bits,
+            data: AttestationData {
+                slot,
+                index: vote.index(),
+                beacon_block_root: vote.block_root(),
+                source: vote.source(),
+                target: vote.target(),
+            },
+            signature: AggregateSignature::infinity(),
+            committee_bits,
+        })
     }
 
     #[test]
@@ -1635,6 +1863,189 @@ mod tests {
             gloas.tree_hash_root(),
             gloas_with_zero_index.tree_hash_root(),
             "the aggregate-fetch root must bind the Gloas attestation index"
+        );
+    }
+
+    #[test]
+    fn composite_fetch_keys_deduplicate_only_identical_requests() {
+        let slot = Slot::new(1);
+        let subnet_id = SyncSubnetId::new(2);
+        let other_subnet_id = SyncSubnetId::new(3);
+        let mut spec = ChainSpec::mainnet();
+        spec.electra_fork_epoch = Some(Epoch::new(0));
+        spec.gloas_fork_epoch = Some(Epoch::new(0));
+
+        let vote_a = SlotVote::Gloas(GloasBeaconVote {
+            block_root: Hash256::repeat_byte(0xA1),
+            source: Checkpoint {
+                epoch: Epoch::new(1),
+                root: Hash256::repeat_byte(0x51),
+            },
+            target: Checkpoint {
+                epoch: Epoch::new(2),
+                root: Hash256::repeat_byte(0x71),
+            },
+            attestation_data_index: 1,
+        });
+        let vote_b = SlotVote::Gloas(GloasBeaconVote {
+            block_root: Hash256::repeat_byte(0xB2),
+            source: vote_a.source(),
+            target: vote_a.target(),
+            attestation_data_index: 1,
+        });
+
+        let aggregate_a = aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote_a, 7);
+        let aggregate_identical = aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote_a, 7);
+        let aggregate_divergent = aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote_b, 7);
+        let aggregate_other_committee =
+            aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote_a, 8);
+
+        assert_eq!(aggregate_a, aggregate_identical);
+        assert_ne!(aggregate_a, aggregate_divergent);
+        assert_eq!(
+            aggregate_a.attestation_data_root, aggregate_other_committee.attestation_data_root,
+            "Gloas committees sharing one decided vote use the same attestation-data root"
+        );
+        assert_ne!(
+            aggregate_a, aggregate_other_committee,
+            "the beacon committee index must remain part of the request identity"
+        );
+        assert_eq!(
+            HashSet::from([
+                aggregate_a,
+                aggregate_identical,
+                aggregate_divergent,
+                aggregate_other_committee,
+            ])
+            .len(),
+            3,
+            "only byte-for-byte identical request identities may deduplicate"
+        );
+
+        let sync_a = sync_contribution_fetch_key(&vote_a, subnet_id);
+        let sync_identical = sync_contribution_fetch_key(&vote_a, subnet_id);
+        let sync_divergent = sync_contribution_fetch_key(&vote_b, subnet_id);
+        let sync_other_subnet = sync_contribution_fetch_key(&vote_a, other_subnet_id);
+        assert_eq!(sync_a, sync_identical);
+        assert_ne!(sync_a, sync_divergent);
+        assert_ne!(sync_a, sync_other_subnet);
+        assert_eq!(
+            HashSet::from([sync_a, sync_identical, sync_divergent, sync_other_subnet,]).len(),
+            3
+        );
+    }
+
+    /// Verifies two consensus-critical properties:
+    /// 1. Composite-key isolation: candidates ignore fetch results whose Beacon API request
+    ///    identity does not match the one derived from the current vote and committee index or
+    ///    subnet.
+    /// 2. Wire compatibility: surviving aggregators are ordered by validator index, contributors by
+    ///    signing root then validator index, with one aligned beacon object per first-seen
+    ///    committee index or subnet.
+    #[test]
+    fn build_consensus_data_uses_composite_results_and_preserves_wire_order() {
+        let slot = Slot::new(1);
+        let spec = gloas_test_spec();
+        let vote = gloas_test_vote(0xA1, 1);
+        let foreign_vote = gloas_test_vote(0xB2, 0);
+
+        let attestation_5 = create_test_gloas_attestation(slot, &vote, 5);
+        let attestation_10 = create_test_gloas_attestation(slot, &vote, 10);
+        let foreign_attestation_7 = create_test_gloas_attestation(slot, &foreign_vote, 7);
+        let contribution_0 = create_test_contribution_for_vote(slot, &vote, 0);
+        let contribution_1 = create_test_contribution_for_vote(slot, &vote, 1);
+        let foreign_contribution_2 = create_test_contribution_for_vote(slot, &foreign_vote, 2);
+
+        let fetch_results = AggregationFetchResults {
+            aggregated_attestations: HashMap::from([
+                (
+                    aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote, 5),
+                    attestation_5.clone(),
+                ),
+                (
+                    aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote, 10),
+                    attestation_10.clone(),
+                ),
+                (
+                    aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &foreign_vote, 7),
+                    foreign_attestation_7,
+                ),
+            ]),
+            sync_contributions: HashMap::from([
+                (
+                    sync_contribution_fetch_key(&vote, SyncSubnetId::new(0)),
+                    contribution_0.clone(),
+                ),
+                (
+                    sync_contribution_fetch_key(&vote, SyncSubnetId::new(1)),
+                    contribution_1.clone(),
+                ),
+                (
+                    sync_contribution_fetch_key(&foreign_vote, SyncSubnetId::new(2)),
+                    foreign_contribution_2,
+                ),
+            ]),
+        };
+
+        let aggregators = vec![
+            create_aggregator(300, 10),
+            create_aggregator(100, 5),
+            create_aggregator(200, 5),
+            create_aggregator(50, 7),
+        ];
+        let contributors_with_roots = vec![
+            create_contributor_with_root(Hash256::repeat_byte(0xB0), 150, 1),
+            create_contributor_with_root(Hash256::repeat_byte(0xA0), 250, 0),
+            create_contributor_with_root(Hash256::repeat_byte(0xA0), 50, 0),
+            create_contributor_with_root(Hash256::repeat_byte(0xC0), 75, 2),
+        ];
+
+        let data = build_consensus_data_from_candidates::<MainnetEthSpec>(
+            &spec,
+            slot,
+            &vote,
+            aggregators,
+            contributors_with_roots,
+            &fetch_results,
+        )
+        .expect("valid consensus data")
+        .expect("matching fetches produce consensus data");
+
+        assert_eq!(data.version, DataVersion::from(ForkName::Gloas));
+        assert_eq!(
+            data.aggregators
+                .iter()
+                .map(|aggregator| (aggregator.validator_index.0, aggregator.committee_index))
+                .collect::<Vec<_>>(),
+            vec![(100, 5), (200, 5), (300, 10)]
+        );
+        assert_eq!(
+            data.aggregator_committee_indexes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![5, 10]
+        );
+        assert_eq!(
+            data.aggregated_attestations
+                .iter()
+                .map(|attestation| attestation.to_vec())
+                .collect::<Vec<_>>(),
+            vec![attestation_5.as_ssz_bytes(), attestation_10.as_ssz_bytes()]
+        );
+        assert_eq!(
+            data.contributors
+                .iter()
+                .map(|contributor| (contributor.validator_index.0, contributor.committee_index))
+                .collect::<Vec<_>>(),
+            vec![(50, 0), (250, 0), (150, 1)]
+        );
+        assert_eq!(
+            data.sync_committee_contributions
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![contribution_0, contribution_1]
         );
     }
 
@@ -1921,61 +2332,6 @@ mod tests {
     // Additional Edge Case Tests
     // ═══════════════════════════════════════════════════════════════════════════════════
 
-    /// Test filter_aggregators_with_attestations removes aggregators without attestations
-    #[test]
-    fn test_filter_aggregators_removes_unfetched() {
-        let mut aggregators = vec![
-            create_aggregator(100, 5),
-            create_aggregator(200, 10),
-            create_aggregator(300, 15),
-        ];
-
-        // Only have attestation for committee 5 and 15, not 10
-        let mut attestations = HashMap::new();
-        attestations.insert(5, create_test_attestation(5));
-        attestations.insert(15, create_test_attestation(15));
-
-        filter_aggregators_with_attestations(&mut aggregators, &attestations);
-
-        assert_eq!(
-            aggregators.len(),
-            2,
-            "Should filter out aggregator with committee_index 10"
-        );
-        let remaining_indexes: Vec<usize> =
-            aggregators.iter().map(|a| a.validator_index.0).collect();
-        assert_eq!(remaining_indexes, vec![100, 300]);
-    }
-
-    /// Test filter_contributors_with_contributions removes contributors without contributions
-    #[test]
-    fn test_filter_contributors_removes_unfetched() {
-        let root = Hash256::zero();
-        let mut contributors = vec![
-            create_contributor_with_root(root, 100, 0),
-            create_contributor_with_root(root, 200, 1),
-            create_contributor_with_root(root, 300, 2),
-        ];
-
-        // Only have contributions for subnet 0 and 2, not 1
-        let mut contributions = HashMap::new();
-        contributions.insert(SyncSubnetId::new(0), create_test_contribution(0));
-        contributions.insert(SyncSubnetId::new(2), create_test_contribution(2));
-
-        filter_contributors_with_contributions(&mut contributors, &contributions);
-
-        assert_eq!(
-            contributors.len(),
-            2,
-            "Should filter out contributor with subnet_id 1"
-        );
-        let remaining_indexes: Vec<usize> = contributors
-            .iter()
-            .map(|(_, a)| a.validator_index.0)
-            .collect();
-        assert_eq!(remaining_indexes, vec![100, 300]);
-    }
-
     /// Test that IndexSet preserves first-seen order from sorted aggregators
     #[test]
     fn test_committee_indexes_preserve_first_seen_order() {
@@ -2073,51 +2429,36 @@ mod tests {
     /// in build_consensus_data_for_committee).
     #[test]
     fn test_all_fetches_fail_returns_none() {
-        // Create aggregators with various committee indexes
-        let mut aggregators = vec![
+        let slot = Slot::new(1);
+        let spec = gloas_test_spec();
+        let vote = gloas_test_vote(0xA1, 1);
+        let aggregators = vec![
             create_aggregator(100, 5),
             create_aggregator(200, 10),
             create_aggregator(300, 15),
         ];
-        sort_aggregators_by_validator_index(&mut aggregators);
-
-        // Create contributors with various subnet IDs
         let root = Hash256::zero();
-        let mut contributors = vec![
+        let contributors = vec![
             create_contributor_with_root(root, 50, 0),
             create_contributor_with_root(root, 150, 1),
             create_contributor_with_root(root, 250, 2),
         ];
-        sort_contributors_by_signing_root_then_validator_index(&mut contributors);
+        let fetch_results = AggregationFetchResults {
+            aggregated_attestations: HashMap::new(),
+            sync_contributions: HashMap::new(),
+        };
 
-        // Empty attestations map - simulates all fetches failing
-        let aggregated_attestations: HashMap<u64, Attestation<MainnetEthSpec>> = HashMap::new();
+        let result = build_consensus_data_from_candidates::<MainnetEthSpec>(
+            &spec,
+            slot,
+            &vote,
+            aggregators,
+            contributors,
+            &fetch_results,
+        )
+        .expect("empty fetch results are valid");
 
-        // Empty contributions map - simulates all fetches failing
-        let sync_contributions: HashMap<SyncSubnetId, SyncCommitteeContribution<MainnetEthSpec>> =
-            HashMap::new();
-
-        // Apply the filter functions (as done in build_consensus_data_for_committee)
-        filter_aggregators_with_attestations(&mut aggregators, &aggregated_attestations);
-        filter_contributors_with_contributions(&mut contributors, &sync_contributions);
-
-        // After filtering, both should be empty because no attestations/contributions were fetched
-        assert!(
-            aggregators.is_empty(),
-            "All aggregators should be filtered out when no attestations are fetched"
-        );
-        assert!(
-            contributors.is_empty(),
-            "All contributors should be filtered out when no contributions are fetched"
-        );
-
-        // This matches the early exit condition in build_consensus_data_for_committee:
-        // if aggregators.is_empty() && contributors.is_empty() { return Ok(None); }
-        let should_return_none = aggregators.is_empty() && contributors.is_empty();
-        assert!(
-            should_return_none,
-            "When all fetches fail, build_consensus_data_for_committee should return None"
-        );
+        assert!(result.is_none());
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════
@@ -2131,86 +2472,56 @@ mod tests {
     /// aggregation duties and no attestation aggregation duties for a given slot.
     #[test]
     fn test_empty_aggregators_only_contributors() {
-        // No aggregators
-        let aggregators: Vec<AssignedAggregator> = vec![];
-
-        // Create contributors with contributions
+        let slot = Slot::new(1);
+        let spec = gloas_test_spec();
+        let vote = gloas_test_vote(0xA1, 1);
         let root_a = Hash256::from_low_u64_be(1);
         let root_b = Hash256::from_low_u64_be(2);
-        let mut contributors_with_roots = vec![
+        let contributors_with_roots = vec![
             create_contributor_with_root(root_b, 150, 1),
             create_contributor_with_root(root_a, 250, 0),
             create_contributor_with_root(root_a, 50, 0), // Same subnet as validator 250
         ];
-        sort_contributors_by_signing_root_then_validator_index(&mut contributors_with_roots);
-
-        // Create contributions for all subnets
-        let mut sync_contributions = HashMap::new();
-        sync_contributions.insert(SyncSubnetId::new(0), create_test_contribution(0));
-        sync_contributions.insert(SyncSubnetId::new(1), create_test_contribution(1));
-
-        // Filter contributors (all should remain since we have contributions)
-        filter_contributors_with_contributions(&mut contributors_with_roots, &sync_contributions);
-
-        // Extract contributors after filtering
-        let contributors: Vec<AssignedAggregator> = contributors_with_roots
-            .into_iter()
-            .map(|(_, contrib)| contrib)
-            .collect();
-
-        assert!(
-            !contributors.is_empty(),
-            "Contributors should not be empty when contributions are fetched"
-        );
-        assert_eq!(
-            contributors.len(),
-            3,
-            "All 3 contributors should remain after filtering"
-        );
-
-        // Extract subnet IDs in first-seen order
-        let subnet_ids: IndexSet<SyncSubnetId> = contributors
-            .iter()
-            .map(|c| SyncSubnetId::new(c.committee_index))
-            .collect();
-
-        // Build contributions matching subnet IDs
-        let contributions: Vec<SyncCommitteeContribution<MainnetEthSpec>> = subnet_ids
-            .iter()
-            .filter_map(|id| sync_contributions.get(id).cloned())
-            .collect();
-
-        // Build the consensus data with empty aggregators but populated contributors
-        let consensus_data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
-            version: DataVersion::from(ForkName::Deneb),
-            aggregators: aggregators.try_into().expect("valid empty aggregators"),
-            aggregator_committee_indexes: Vec::<u64>::new()
-                .try_into()
-                .expect("valid empty indexes"),
-            aggregated_attestations: VariableList::empty(),
-            contributors: contributors.try_into().expect("valid contributors"),
-            sync_committee_contributions: contributions.try_into().expect("valid contributions"),
+        let contribution_0 = create_test_contribution_for_vote(slot, &vote, 0);
+        let contribution_1 = create_test_contribution_for_vote(slot, &vote, 1);
+        let fetch_results = AggregationFetchResults {
+            aggregated_attestations: HashMap::new(),
+            sync_contributions: HashMap::from([
+                (
+                    sync_contribution_fetch_key(&vote, SyncSubnetId::new(0)),
+                    contribution_0,
+                ),
+                (
+                    sync_contribution_fetch_key(&vote, SyncSubnetId::new(1)),
+                    contribution_1,
+                ),
+            ]),
         };
 
-        // Verify structure is valid
-        assert!(
-            consensus_data.aggregators.is_empty(),
-            "Aggregators should be empty"
-        );
-        assert!(
-            !consensus_data.contributors.is_empty(),
-            "Contributors should be populated"
-        );
-        assert!(
-            consensus_data.aggregated_attestations.is_empty(),
-            "Attestations should be empty"
-        );
-        assert!(
-            !consensus_data.sync_committee_contributions.is_empty(),
-            "Contributions should be populated"
-        );
+        let consensus_data = build_consensus_data_from_candidates::<MainnetEthSpec>(
+            &spec,
+            slot,
+            &vote,
+            vec![],
+            contributors_with_roots,
+            &fetch_results,
+        )
+        .expect("valid contributor-only data")
+        .expect("contributors produce consensus data");
 
-        // Validate with the consensus data validator
+        assert!(consensus_data.aggregators.is_empty());
+        assert!(consensus_data.aggregator_committee_indexes.is_empty());
+        assert!(consensus_data.aggregated_attestations.is_empty());
+        assert_eq!(
+            consensus_data
+                .contributors
+                .iter()
+                .map(|contributor| (contributor.validator_index.0, contributor.committee_index))
+                .collect::<Vec<_>>(),
+            vec![(50, 0), (250, 0), (150, 1)]
+        );
+        assert_eq!(consensus_data.sync_committee_contributions.len(), 2);
+
         let validator = AggregatorCommitteeDataValidator::<MainnetEthSpec>::new();
         let result = validator.do_validation(&consensus_data);
         assert!(
@@ -2227,212 +2538,72 @@ mod tests {
     /// aggregation duties and no sync committee aggregation duties for a given slot.
     #[test]
     fn test_empty_contributors_only_aggregators() {
-        // Create aggregators with attestations
-        let mut aggregators = vec![
+        let slot = Slot::new(1);
+        let spec = gloas_test_spec();
+        let vote = gloas_test_vote(0xA1, 1);
+        let aggregators = vec![
             create_aggregator(300, 10),
             create_aggregator(100, 5),
             create_aggregator(200, 7),
         ];
-        sort_aggregators_by_validator_index(&mut aggregators);
-
-        // Create attestations for all committees
-        let mut aggregated_attestations = HashMap::new();
-        aggregated_attestations.insert(5, create_test_attestation(5));
-        aggregated_attestations.insert(7, create_test_attestation(7));
-        aggregated_attestations.insert(10, create_test_attestation(10));
-
-        // Filter aggregators (all should remain since we have attestations)
-        filter_aggregators_with_attestations(&mut aggregators, &aggregated_attestations);
-
-        assert!(
-            !aggregators.is_empty(),
-            "Aggregators should not be empty when attestations are fetched"
-        );
-        assert_eq!(
-            aggregators.len(),
-            3,
-            "All 3 aggregators should remain after filtering"
-        );
-
-        // Extract committee indexes in first-seen order from sorted aggregators
-        let committee_indexes: IndexSet<u64> =
-            aggregators.iter().map(|a| a.committee_index).collect();
-
-        // Build attestation bytes matching committee indexes
-        let attestation_bytes: Vec<VariableList<u8, MaxAggregatedAttestationBytes>> =
-            committee_indexes
-                .iter()
-                .map(|&idx| create_attestation_bytes(idx))
-                .collect();
-
-        // No contributors
-        let contributors: Vec<AssignedAggregator> = vec![];
-
-        // Build the consensus data with populated aggregators but empty contributors
-        let consensus_data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
-            version: DataVersion::from(ForkName::Deneb),
-            aggregators: aggregators.try_into().expect("valid aggregators"),
-            aggregator_committee_indexes: committee_indexes
-                .into_iter()
-                .collect::<Vec<_>>()
-                .try_into()
-                .expect("valid indexes"),
-            aggregated_attestations: attestation_bytes.try_into().expect("valid attestations"),
-            contributors: contributors.try_into().expect("valid empty contributors"),
-            sync_committee_contributions: VariableList::empty(),
+        let attestation_5 = create_test_gloas_attestation(slot, &vote, 5);
+        let attestation_7 = create_test_gloas_attestation(slot, &vote, 7);
+        let attestation_10 = create_test_gloas_attestation(slot, &vote, 10);
+        let fetch_results = AggregationFetchResults {
+            aggregated_attestations: HashMap::from([
+                (
+                    aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote, 5),
+                    attestation_5,
+                ),
+                (
+                    aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote, 7),
+                    attestation_7,
+                ),
+                (
+                    aggregate_fetch_key::<MainnetEthSpec>(&spec, slot, &vote, 10),
+                    attestation_10,
+                ),
+            ]),
+            sync_contributions: HashMap::new(),
         };
 
-        // Verify structure is valid
-        assert!(
-            !consensus_data.aggregators.is_empty(),
-            "Aggregators should be populated"
-        );
-        assert!(
-            consensus_data.contributors.is_empty(),
-            "Contributors should be empty"
-        );
-        assert!(
-            !consensus_data.aggregated_attestations.is_empty(),
-            "Attestations should be populated"
-        );
-        assert!(
-            consensus_data.sync_committee_contributions.is_empty(),
-            "Contributions should be empty"
-        );
+        let consensus_data = build_consensus_data_from_candidates::<MainnetEthSpec>(
+            &spec,
+            slot,
+            &vote,
+            aggregators,
+            vec![],
+            &fetch_results,
+        )
+        .expect("valid aggregator-only data")
+        .expect("aggregators produce consensus data");
 
-        // Validate with the consensus data validator
+        assert_eq!(
+            consensus_data
+                .aggregators
+                .iter()
+                .map(|aggregator| (aggregator.validator_index.0, aggregator.committee_index))
+                .collect::<Vec<_>>(),
+            vec![(100, 5), (200, 7), (300, 10)]
+        );
+        assert_eq!(
+            consensus_data
+                .aggregator_committee_indexes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![5, 7, 10]
+        );
+        assert_eq!(consensus_data.aggregated_attestations.len(), 3);
+        assert!(consensus_data.contributors.is_empty());
+        assert!(consensus_data.sync_committee_contributions.is_empty());
+
         let validator = AggregatorCommitteeDataValidator::<MainnetEthSpec>::new();
         let result = validator.do_validation(&consensus_data);
         assert!(
             result.is_ok(),
             "Consensus data with only aggregators should pass validation. Error: {:?}",
             result.err()
-        );
-    }
-
-    /// P2-3: 5 aggregators all assigned to committee_index 42.
-    ///
-    /// Should:
-    /// - Sort by validator_index
-    /// - Deduplicate committee_index to single entry in IndexSet
-    /// - All 5 aggregators remain in the list
-    /// - Only 1 committee_index in the output
-    ///
-    /// This tests the deduplication behavior of IndexSet for committee indexes
-    /// when multiple aggregators share the same committee.
-    #[test]
-    fn test_multiple_aggregators_same_committee() {
-        // Create 5 aggregators all with committee_index 42, in unsorted order
-        let mut aggregators = vec![
-            create_aggregator(500, 42),
-            create_aggregator(100, 42),
-            create_aggregator(300, 42),
-            create_aggregator(200, 42),
-            create_aggregator(400, 42),
-        ];
-
-        // Sort by validator_index
-        sort_aggregators_by_validator_index(&mut aggregators);
-
-        // Verify sorted order
-        let validator_indices: Vec<usize> =
-            aggregators.iter().map(|a| a.validator_index.0).collect();
-        assert_eq!(
-            validator_indices,
-            vec![100, 200, 300, 400, 500],
-            "Aggregators must be sorted by validator_index ascending"
-        );
-
-        // Create attestation for committee 42
-        let mut aggregated_attestations = HashMap::new();
-        aggregated_attestations.insert(42, create_test_attestation(42));
-
-        // Filter aggregators (all should remain since we have the attestation for committee 42)
-        filter_aggregators_with_attestations(&mut aggregators, &aggregated_attestations);
-
-        // All 5 aggregators should remain
-        assert_eq!(
-            aggregators.len(),
-            5,
-            "All 5 aggregators should remain after filtering since attestation for committee 42 exists"
-        );
-
-        // Extract committee indexes in first-seen order (should deduplicate to 1 entry)
-        let committee_indexes: IndexSet<u64> =
-            aggregators.iter().map(|a| a.committee_index).collect();
-
-        // Verify only 1 unique committee_index
-        assert_eq!(
-            committee_indexes.len(),
-            1,
-            "IndexSet should deduplicate to single committee_index"
-        );
-        assert!(
-            committee_indexes.contains(&42),
-            "The single committee_index should be 42"
-        );
-
-        // Build attestation bytes (only 1 attestation for the single committee_index)
-        let attestation_bytes: Vec<VariableList<u8, MaxAggregatedAttestationBytes>> =
-            committee_indexes
-                .iter()
-                .map(|&idx| create_attestation_bytes(idx))
-                .collect();
-
-        assert_eq!(
-            attestation_bytes.len(),
-            1,
-            "Should have exactly 1 attestation bytes entry for the deduplicated committee"
-        );
-
-        // Build the consensus data
-        let consensus_data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
-            version: DataVersion::from(ForkName::Deneb),
-            aggregators: aggregators.try_into().expect("valid aggregators"),
-            aggregator_committee_indexes: committee_indexes
-                .into_iter()
-                .collect::<Vec<_>>()
-                .try_into()
-                .expect("valid indexes"),
-            aggregated_attestations: attestation_bytes.try_into().expect("valid attestations"),
-            contributors: Vec::<AssignedAggregator>::new()
-                .try_into()
-                .expect("valid empty contributors"),
-            sync_committee_contributions: VariableList::empty(),
-        };
-
-        // Verify final structure
-        assert_eq!(
-            consensus_data.aggregators.len(),
-            5,
-            "Should have all 5 aggregators in final consensus data"
-        );
-        assert_eq!(
-            consensus_data.aggregator_committee_indexes.len(),
-            1,
-            "Should have only 1 committee_index in final consensus data"
-        );
-        assert_eq!(
-            consensus_data.aggregated_attestations.len(),
-            1,
-            "Should have only 1 attestation in final consensus data"
-        );
-
-        // Validate with the consensus data validator
-        let validator = AggregatorCommitteeDataValidator::<MainnetEthSpec>::new();
-        let result = validator.do_validation(&consensus_data);
-        assert!(
-            result.is_ok(),
-            "Consensus data with multiple aggregators same committee should pass validation. Error: {:?}",
-            result.err()
-        );
-
-        // Also verify via QbftDataValidator trait
-        let passes_trait_validation =
-            QbftDataValidator::validate(&validator, &consensus_data, &consensus_data);
-        assert!(
-            passes_trait_validation,
-            "Consensus data must pass QbftDataValidator trait validation"
         );
     }
 

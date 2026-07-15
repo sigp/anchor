@@ -1426,7 +1426,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         &self,
         committee_id: CommitteeId,
         slot: Slot,
-        vote: SlotVote,
+        voting_context: &VotingContext,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
         cluster_members: &IndexSet<OperatorId>,
     ) -> Result<DecidedVote, Error> {
@@ -1440,7 +1440,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             instance_height: slot.as_usize().into(),
         };
 
-        let result = match vote {
+        let result = match voting_context.vote.clone() {
             SlotVote::Gloas(seed) => {
                 let completed = self
                     .consensus
@@ -1459,13 +1459,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
                 match completed {
                     Completed::TimedOut => Err(Error::SpecificError(SpecificError::Timeout)),
-                    Completed::Success(decided) => Ok(DecidedVote {
-                        block_root: decided.block_root,
-                        source: decided.source,
-                        target: decided.target,
-                        decided_hash: decided.hash(),
-                        decided_index: Some(decided.attestation_data_index),
-                    }),
+                    Completed::Success(decided) => Ok(SlotVote::Gloas(decided)),
                 }
             }
             SlotVote::Base(seed) => {
@@ -1483,18 +1477,20 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
                 match completed {
                     Completed::TimedOut => Err(Error::SpecificError(SpecificError::Timeout)),
-                    Completed::Success(decided) => Ok(DecidedVote {
-                        block_root: decided.block_root,
-                        source: decided.source,
-                        target: decided.target,
-                        decided_hash: decided.hash(),
-                        decided_index: None,
-                    }),
+                    Completed::Success(decided) => Ok(SlotVote::Base(decided)),
                 }
             }
         };
         drop(timer);
-        result
+        let decided_vote = result?;
+        voting_context.remember_decided_vote(committee_id, decided_vote.clone())?;
+        Ok(DecidedVote {
+            block_root: decided_vote.block_root(),
+            source: decided_vote.source(),
+            target: decided_vote.target(),
+            decided_hash: decided_vote.qbft_hash(),
+            decided_index: decided_vote.decided_index(),
+        })
     }
 
     /// Sign sync committee messages for all validators in a single SSV committee.
@@ -1526,7 +1522,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .decide_committee_vote(
                 committee_id,
                 slot,
-                voting_context.vote.clone(),
+                &voting_context,
                 validator_attestation_committees,
                 &cluster.cluster_members,
             )
@@ -1618,7 +1614,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .decide_committee_vote(
                 committee_id,
                 slot,
-                voting_context_tx.vote.clone(),
+                &voting_context_tx,
                 validator_attestation_committees,
                 &cluster.cluster_members,
             )
@@ -2198,6 +2194,50 @@ struct VotingContext {
     /// The fork-tagged attestation vote for this slot (only available at 1/3 slot from the
     /// beacon node).
     vote: SlotVote,
+    /// Committee decisions completed during this slot, used by the later aggregation phase.
+    decided_votes: Mutex<HashMap<CommitteeId, SlotVote>>,
+}
+
+impl VotingContext {
+    /// Remember the first decided vote for a committee in this slot.
+    ///
+    /// Attestation and sync-message signing share one QBFT instance, so both callers may observe
+    /// the same completion. A different second value would violate that shared-instance invariant;
+    /// keep the first value so aggregation cannot be redirected by a late conflicting write.
+    fn remember_decided_vote(
+        &self,
+        committee_id: CommitteeId,
+        vote: SlotVote,
+    ) -> Result<(), SpecificError> {
+        let mut decided_votes = self.decided_votes.lock();
+        match decided_votes.entry(committee_id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(vote);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                if entry.get() == &vote {
+                    Ok(())
+                } else {
+                    Err(SpecificError::CommitteeDecisionConflict {
+                        slot: self.voting_assignments.slot,
+                        committee_id,
+                        existing_decided_hash: entry.get().qbft_hash(),
+                        new_decided_hash: vote.qbft_hash(),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Return the committee decision when available, otherwise use the slot's local seed vote.
+    fn vote_for_committee(&self, committee_id: &CommitteeId) -> SlotVote {
+        self.decided_votes
+            .lock()
+            .get(committee_id)
+            .cloned()
+            .unwrap_or_else(|| self.vote.clone())
+    }
 }
 
 /// The slot's agreed attestation vote, tagged by fork.
@@ -2206,7 +2246,7 @@ struct VotingContext {
 /// the BN-supplied `attestation_data_index`. The committee QBFT decides over the fork-matching
 /// type, so the variant tracks the slot's fork. Collapses to a single variant once `BeaconVote`
 /// is retired post-fork.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SlotVote {
     Base(BeaconVote),
     Gloas(GloasBeaconVote),
@@ -2237,6 +2277,20 @@ impl SlotVote {
         match self {
             SlotVote::Base(_) => 0,
             SlotVote::Gloas(gloas_beacon_vote) => gloas_beacon_vote.attestation_data_index,
+        }
+    }
+
+    fn decided_index(&self) -> Option<u64> {
+        match self {
+            SlotVote::Base(_) => None,
+            SlotVote::Gloas(gloas_beacon_vote) => Some(gloas_beacon_vote.attestation_data_index),
+        }
+    }
+
+    fn qbft_hash(&self) -> Hash256 {
+        match self {
+            SlotVote::Base(beacon_vote) => beacon_vote.hash(),
+            SlotVote::Gloas(gloas_beacon_vote) => gloas_beacon_vote.hash(),
         }
     }
 }
@@ -2464,6 +2518,13 @@ pub enum SpecificError {
     },
     /// Pre-built consensus data not found for this committee (Boole+)
     ConsensusDataNotFound,
+    /// A shared committee QBFT instance returned different decisions to two signing callers.
+    CommitteeDecisionConflict {
+        slot: Slot,
+        committee_id: CommitteeId,
+        existing_decided_hash: Hash256,
+        new_decided_hash: Hash256,
+    },
     /// This committee's aggregate not found in consensus data (Boole+)
     AggregateNotInConsensus(u64),
     /// This subcommittee's contribution not found in consensus data (Boole+)
@@ -3844,5 +3905,96 @@ mod tests {
         assert_eq!(gloas.block_root(), gloas_block_root);
         assert_eq!(gloas.source(), gloas_source);
         assert_eq!(gloas.target(), gloas_target);
+    }
+
+    fn test_voting_context(seed: SlotVote) -> VotingContext {
+        VotingContext {
+            voting_assignments: Arc::new(create_test_voting_assignments(vec![], vec![])),
+            vote: seed,
+            decided_votes: Default::default(),
+        }
+    }
+
+    fn test_gloas_vote(root_byte: u8, index: u64) -> SlotVote {
+        SlotVote::Gloas(GloasBeaconVote {
+            block_root: Hash256::repeat_byte(root_byte),
+            source: distinct_checkpoint(root_byte as u64, root_byte.wrapping_add(1)),
+            target: distinct_checkpoint(root_byte as u64 + 1, root_byte.wrapping_add(2)),
+            attestation_data_index: index,
+        })
+    }
+
+    /// Verifies committee-local lookup: a committee with a recorded decision gets that vote, while
+    /// a different undecided committee still falls back to the slot seed.
+    #[test]
+    fn voting_context_returns_committee_decision_or_seed() {
+        let seed = test_gloas_vote(0x10, 0);
+        let committee_a = CommitteeId([0xA1; 32]);
+        let committee_b = CommitteeId([0xB2; 32]);
+        let decided_a = test_gloas_vote(0x21, 1);
+        let context = test_voting_context(seed.clone());
+
+        assert_eq!(context.vote_for_committee(&committee_a), seed);
+        context
+            .remember_decided_vote(committee_a, decided_a.clone())
+            .expect("first committee decision should be stored");
+
+        assert_eq!(context.vote_for_committee(&committee_a), decided_a);
+        assert_eq!(context.vote_for_committee(&committee_b), seed);
+    }
+
+    #[test]
+    fn voting_context_accepts_repeated_identical_decision() {
+        let committee_id = CommitteeId([0xA4; 32]);
+        let first = test_gloas_vote(0x41, 1);
+        let repeated = first.clone();
+        let context = test_voting_context(test_gloas_vote(0x40, 0));
+
+        context
+            .remember_decided_vote(committee_id, first.clone())
+            .expect("first decision should be stored");
+        context
+            .remember_decided_vote(committee_id, repeated)
+            .expect("identical decision should be idempotent");
+
+        let decided_votes = context.decided_votes.lock();
+        assert_eq!(decided_votes.len(), 1);
+        assert_eq!(decided_votes.get(&committee_id), Some(&first));
+    }
+
+    #[test]
+    fn voting_context_rejects_conflicting_decision_and_keeps_first() {
+        let committee_id = CommitteeId([0xA4; 32]);
+        let first = test_gloas_vote(0x41, 1);
+        let conflicting = test_gloas_vote(0x42, 0);
+        let existing_decided_hash = first.qbft_hash();
+        let new_decided_hash = conflicting.qbft_hash();
+        let context = test_voting_context(test_gloas_vote(0x40, 0));
+
+        context
+            .remember_decided_vote(committee_id, first.clone())
+            .expect("first decision should be stored");
+        let error = context
+            .remember_decided_vote(committee_id, conflicting)
+            .expect_err("conflicting decision should be rejected");
+
+        match error {
+            SpecificError::CommitteeDecisionConflict {
+                slot,
+                committee_id: actual_committee_id,
+                existing_decided_hash: actual_existing_hash,
+                new_decided_hash: actual_new_hash,
+            } => {
+                assert_eq!(slot, Slot::new(100));
+                assert_eq!(actual_committee_id, committee_id);
+                assert_eq!(actual_existing_hash, existing_decided_hash);
+                assert_eq!(actual_new_hash, new_decided_hash);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let decided_votes = context.decided_votes.lock();
+        assert_eq!(decided_votes.len(), 1);
+        assert_eq!(decided_votes.get(&committee_id), Some(&first));
     }
 }
