@@ -3924,6 +3924,8 @@ mod tests {
         })
     }
 
+    /// Verifies committee-local lookup: a committee with a recorded decision gets that vote, while
+    /// a different undecided committee still falls back to the slot seed.
     #[test]
     fn voting_context_returns_committee_decision_or_seed() {
         let seed = test_gloas_vote(0x10, 0);
