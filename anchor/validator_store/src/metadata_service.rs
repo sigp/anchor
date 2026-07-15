@@ -1939,8 +1939,8 @@ mod tests {
     /// 1. Composite-key isolation: candidates ignore fetch results whose Beacon API request
     ///    identity does not match the one derived from the current vote and committee index or
     ///    subnet.
-    /// 2. Wire compatibility: surviving aggregators are ordered by validator index, contributors
-    ///    by signing root then validator index, with one aligned beacon object per first-seen
+    /// 2. Wire compatibility: surviving aggregators are ordered by validator index, contributors by
+    ///    signing root then validator index, with one aligned beacon object per first-seen
     ///    committee index or subnet.
     #[test]
     fn build_consensus_data_uses_composite_results_and_preserves_wire_order() {
