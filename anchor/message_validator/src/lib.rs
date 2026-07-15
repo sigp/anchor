@@ -535,21 +535,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     ) -> RefMut<'_, MessageId, DutyState> {
         self.duty_state_map
             .entry(message_id.clone())
-            .or_insert_with(|| {
-                // Default: keep the last two epochs. ProposerPreferences also spans the proposer
-                // lookahead into the future (its envelope slot is a future proposal_slot), so its
-                // ring must cover lookahead + default; otherwise a validly accepted future-slot
-                // write would evict a live slot's dedup state (the ring is indexed by slot % len).
-                let stored_slot_count = match role {
-                    Role::ProposerPreferences => {
-                        (1 + self.spec.min_seed_lookahead.as_u64()) * slots_per_epoch
-                            + slots_per_epoch * 2
-                    }
-                    _ => slots_per_epoch * 2,
-                };
-
-                DutyState::new(stored_slot_count as usize)
-            })
+            .or_insert_with(|| DutyState::new(stored_slot_count(role, slots_per_epoch, &self.spec)))
     }
 
     async fn cleaner(self: Arc<Self>) {
@@ -702,6 +688,26 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         trace!(subnet = ?expected_subnet, fork = ?expected_fork, "Topic validation passed");
         Ok(())
     }
+}
+
+/// Number of slots the `DutyState` ring must retain for `role`.
+///
+/// Default: keep the last two epochs. `ProposerPreferences` also spans the proposer lookahead into
+/// the future (its envelope slot is a future `proposal_slot`), so its ring must cover
+/// `lookahead + default`; otherwise a validly accepted future-slot write would evict a live slot's
+/// dedup state (the ring is indexed by `slot % len`).
+///
+/// Shared by the production selector (`get_duty_state`) and its regression test so neither can
+/// drift from the other.
+pub(crate) fn stored_slot_count(role: Role, slots_per_epoch: u64, spec: &ChainSpec) -> usize {
+    let default = slots_per_epoch * 2;
+    let count = match role {
+        Role::ProposerPreferences => {
+            (1 + spec.min_seed_lookahead.as_u64()) * slots_per_epoch + default
+        }
+        _ => default,
+    };
+    count as usize
 }
 
 fn validate_ssv_message(

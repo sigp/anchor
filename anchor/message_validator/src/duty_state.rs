@@ -132,6 +132,15 @@ impl DutyState {
                 .first()
                 .ok_or(ValidationFailure::NoPartialSignatureMessages)?
                 .signing_root;
+            // Duplicate identity takes precedence over capacity: an already-seen root is a
+            // Reject-class DuplicatedMessage even once the distinct-root set is full, whereas only
+            // a NEW root beyond the cap is the Ignore-class TooManyDistinctSigningRoots (SIP-94
+            // §7).
+            if signer_state.seen_preferences.contains(&root) {
+                return Err(ValidationFailure::DuplicatedMessage {
+                    got: format!("proposer-preferences root {root:?}"),
+                });
+            }
             if signer_state.seen_preferences.len() >= MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS {
                 return Err(ValidationFailure::TooManyDistinctSigningRoots {
                     got: format!(
@@ -140,11 +149,7 @@ impl DutyState {
                     ),
                 });
             }
-            if !signer_state.seen_preferences.insert(root) {
-                return Err(ValidationFailure::DuplicatedMessage {
-                    got: format!("proposer-preferences root {root:?}"),
-                });
-            }
+            signer_state.seen_preferences.insert(root);
         }
 
         // Record the partial signature (only once)

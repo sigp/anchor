@@ -2663,6 +2663,41 @@ mod tests {
             );
         }
 
+        // While the set is exactly full (CAP distinct roots), a resend of the FIRST already-seen
+        // root must be a Reject-class `DuplicatedMessage` — identity takes precedence over the cap,
+        // NOT the Ignore-class `TooManyDistinctSigningRoots`.
+        let mut first_root_bytes = [0u8; 32];
+        first_root_bytes[0..8].copy_from_slice(&0u64.to_le_bytes());
+        let signed_dup = create_signed_proposer_preferences_message(
+            signer_id,
+            &private_key,
+            proposal_slot,
+            Hash256::from(first_root_bytes),
+        );
+        let context_dup =
+            create_proposer_preferences_context(&signed_dup, &committee_info, &map, proposal_slot);
+        let result_dup = validate_partial_signature_message(
+            context_dup,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        );
+        assert_validation_error(
+            result_dup,
+            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
+            "DuplicatedMessage (already-seen root takes precedence over cap)",
+        );
+        // Pin the Reject mapping so a future reclassification is caught here. `MessageAcceptance`
+        // has no `PartialEq`, so match on the variant.
+        assert!(
+            matches!(
+                MessageAcceptance::from(&ValidationFailure::DuplicatedMessage {
+                    got: String::new()
+                }),
+                MessageAcceptance::Reject
+            ),
+            "DuplicatedMessage must map to Reject"
+        );
+
         // One more distinct root exceeds the cap and is rejected as an Ignore.
         let mut over_cap_bytes = [0u8; 32];
         over_cap_bytes[0..8].copy_from_slice(&(CAP as u64).to_le_bytes());
@@ -2948,10 +2983,19 @@ mod tests {
             create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
         let signer_id = OperatorId(1);
 
-        // Production ProposerPreferences ring size:
-        // (1 + min_seed_lookahead) * spe + spe * 2, with min_seed_lookahead = 1.
-        let ring = ((1 + 1) * SLOTS_PER_EPOCH_TEST + 2 * SLOTS_PER_EPOCH_TEST) as usize;
+        // Exercise the production ring-size selector so this test fails if the role-8 arm ever
+        // loses its lookahead-sized ring. `spec_with_gloas(None)` is mainnet-based
+        // (`min_seed_lookahead` = 1), so the selected ring is (1 + 1) * spe + 2 * spe = 128.
+        let spec = spec_with_gloas(None);
+        let ring = crate::stored_slot_count(Role::ProposerPreferences, SLOTS_PER_EPOCH_TEST, &spec);
         let mut duty_state = DutyState::new(ring);
+
+        // Guard: a representative non-role-8 role keeps the plain two-epoch default, confirming the
+        // lookahead expansion is specific to `ProposerPreferences`.
+        assert_eq!(
+            crate::stored_slot_count(Role::Proposer, SLOTS_PER_EPOCH_TEST, &spec),
+            (2 * SLOTS_PER_EPOCH_TEST) as usize,
+        );
 
         let slot_s = Slot::new(1);
         let far_slot = slot_s + Slot::new(2 * SLOTS_PER_EPOCH_TEST); // earliness bound
