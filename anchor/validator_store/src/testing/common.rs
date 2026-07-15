@@ -18,8 +18,8 @@ use signature_collector::{
 use slashing_protection::SlashingDatabase;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
-    Cluster, ClusterId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share, ValidatorIndex,
-    ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share,
+    ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion,
         GloasBeaconVote, QbftDataValidator,
@@ -475,6 +475,7 @@ impl ValidatorStoreTestHarness {
         self.validator_store.update_voting_context(VotingContext {
             voting_assignments: Arc::new(self.test_slot_voting_assignments()),
             vote: crate::SlotVote::Base(vote),
+            decided_votes: Default::default(),
         });
     }
 
@@ -496,7 +497,25 @@ impl ValidatorStoreTestHarness {
         self.validator_store.update_voting_context(VotingContext {
             voting_assignments: Arc::new(self.test_slot_voting_assignments()),
             vote: crate::SlotVote::Gloas(vote),
+            decided_votes: Default::default(),
         });
+    }
+
+    /// Reads the slot-local committee decision recorded by the production voting path.
+    pub(super) async fn cached_vote_for_committee(
+        &self,
+        committee_id: CommitteeId,
+    ) -> Option<crate::SlotVote> {
+        let voting_context = self
+            .validator_store
+            .get_voting_context(Slot::new(TEST_SLOT))
+            .await
+            .expect("test voting context should be available");
+        voting_context
+            .decided_votes
+            .lock()
+            .get(&committee_id)
+            .cloned()
     }
 
     /// Seeds `AggregationAssignments` for the given committees at the provided slot.

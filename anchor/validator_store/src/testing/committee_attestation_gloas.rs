@@ -421,6 +421,18 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     let attestation_signed = run_sign_attestations(&harness, vec![duty]).await;
     let (attestation_base_hash, attestation_committee_id, _) = committee_call_data(&harness);
 
+    let expected_decided_vote = GloasBeaconVote {
+        block_root: voting_block_root,
+        source: voting_source,
+        target: voting_target,
+        attestation_data_index: DECIDED_INDEX,
+    };
+    assert_eq!(
+        harness.cached_vote_for_committee(committee_id).await,
+        Some(crate::SlotVote::Gloas(expected_decided_vote.clone())),
+        "attestation-first completion must cache the exact committee decision"
+    );
+
     // Assert: the attestation path applies all decided voting-context fields, not the incoming
     // duty's fields. The mock changes only the index, preserving the remaining seed fields.
     assert_eq!(attestation_signed.len(), 1);
@@ -463,6 +475,11 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     let duty_sync_signing_root = duty_block_root.signing_root(sync_domain);
     assert_ne!(expected_sync_signing_root, duty_sync_signing_root);
     assert_eq!(sync_signing_root, expected_sync_signing_root);
+    assert_eq!(
+        harness.cached_vote_for_committee(committee_id).await,
+        Some(crate::SlotVote::Gloas(expected_decided_vote)),
+        "the shared sync completion must retain the same committee decision"
+    );
 
     // Assert: both paths feed the same decided hash as the partial-signature base.
     assert_eq!(
@@ -484,6 +501,57 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     assert_eq!(
         attestation_committee_id, sync_committee_id,
         "both paths address the same committee instance"
+    );
+}
+
+/// The sync-message path can be the first caller to complete committee QBFT. It must populate the
+/// same slot-local cache that the later aggregation phase reads, even when no attestation path has
+/// run yet.
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_first_populates_the_decided_vote_cache() {
+    let seed = GloasBeaconVote {
+        block_root: Hash256::repeat_byte(0xB2),
+        source: Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::repeat_byte(0x53),
+        },
+        target: Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::repeat_byte(0x73),
+        },
+        attestation_data_index: SEED_INDEX,
+    };
+    let committee = create_committee_setup(&COMMITTEE_OPERATORS, COMMITTEE_VALIDATOR_COUNT, 0);
+    let committee_id = committee.cluster.committee_id();
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        OUR_OPERATOR,
+        HarnessOptions {
+            spec: gloas_at_genesis_spec(),
+            forced_gloas_index: Some(DECIDED_INDEX),
+            ..Default::default()
+        },
+    );
+    harness.seed_gloas_voting_context_with_vote(seed.clone());
+    assert_eq!(harness.cached_vote_for_committee(committee_id).await, None);
+
+    let results: Vec<_> = harness
+        .validator_store
+        .sign_sync_committee_signatures(vec![harness.create_sync_message(0, 0)])
+        .collect()
+        .await;
+    assert_eq!(results.len(), 1);
+    results[0]
+        .as_ref()
+        .expect("sync committee batch should succeed");
+
+    assert_eq!(
+        harness.cached_vote_for_committee(committee_id).await,
+        Some(crate::SlotVote::Gloas(GloasBeaconVote {
+            attestation_data_index: DECIDED_INDEX,
+            ..seed
+        })),
+        "sync-first completion must cache every field of the decided vote"
     );
 }
 
