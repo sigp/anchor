@@ -190,6 +190,9 @@ pub enum ValidationFailure {
     InvalidPartialSignatureTypeCount {
         got: String,
     },
+    TooManyDistinctSigningRoots {
+        got: String,
+    },
     TooManyPartialSignatureMessages {
         got: usize,
         limit: usize,
@@ -250,9 +253,8 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::ValidatorIndexMismatch
             | ValidationFailure::ExcessiveDutyCount { .. }
             | ValidationFailure::NoDuty
-            | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
-                MessageAcceptance::Ignore
-            }
+            | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. }
+            | ValidationFailure::TooManyDistinctSigningRoots { .. } => MessageAcceptance::Ignore,
             _ => MessageAcceptance::Reject,
         }
     }
@@ -471,7 +473,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             | Role::SyncCommittee
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
-            | Role::PTCAttester => {
+            | Role::PTCAttester
+            | Role::ProposerPreferences => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -498,7 +501,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
         drop(network_state);
 
-        let mut duty_state = self.get_duty_state(ssv_message.msg_id(), self.slots_per_epoch);
+        let mut duty_state = self.get_duty_state(ssv_message.msg_id(), role, self.slots_per_epoch);
 
         let validation_context = ValidationContext {
             signed_ssv_message,
@@ -526,15 +529,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     fn get_duty_state(
         &self,
         message_id: &MessageId,
+        role: Role,
         slots_per_epoch: u64,
     ) -> RefMut<'_, MessageId, DutyState> {
         self.duty_state_map
             .entry(message_id.clone())
-            .or_insert_with(|| {
-                let stored_slot_count = slots_per_epoch * 2; // Store last two epochs
-
-                DutyState::new(stored_slot_count as usize)
-            })
+            .or_insert_with(|| DutyState::new(stored_slot_count(role, slots_per_epoch, &self.spec)))
     }
 
     async fn cleaner(self: Arc<Self>) {
@@ -689,6 +689,26 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     }
 }
 
+/// Number of slots the `DutyState` ring must retain for `role`.
+///
+/// Default: keep the last two epochs. `ProposerPreferences` also spans the proposer lookahead into
+/// the future (its envelope slot is a future `proposal_slot`), so its ring must cover
+/// `lookahead + default`; otherwise a validly accepted future-slot write would evict a live slot's
+/// dedup state (the ring is indexed by `slot % len`).
+///
+/// Shared by the production selector (`get_duty_state`) and its regression test so neither can
+/// drift from the other.
+pub(crate) fn stored_slot_count(role: Role, slots_per_epoch: u64, spec: &ChainSpec) -> usize {
+    let default = slots_per_epoch * 2;
+    let count = match role {
+        Role::ProposerPreferences => {
+            (1 + spec.min_seed_lookahead.as_u64()) * slots_per_epoch + default
+        }
+        _ => default,
+    };
+    count as usize
+}
+
 fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
@@ -818,6 +838,28 @@ pub(crate) fn validate_beacon_duty(
         }
     }
 
+    // Rule: For a proposer-preferences message, the validator must be the assigned proposer at the
+    // preference's `proposal_slot` (= `slot` here). Checked only once the slot-epoch's proposer
+    // duties are known locally, so a not-yet-fetched epoch is tolerated. No RANDAO tolerance:
+    // ProposerPreferences carries no RANDAO signature.
+    if role == Role::ProposerPreferences {
+        // Non-committee roles always have one validator index
+        let validator_index = validation_context
+            .committee_info
+            .validator_indices
+            .first()
+            .copied()
+            .ok_or(ValidationFailure::UnexpectedFailure {
+                msg: "Unexpected error when getting first validator index".to_string(),
+            })?;
+
+        if duty_provider.is_epoch_known_for_proposers(epoch)
+            && !duty_provider.is_validator_proposer_at_slot(slot, validator_index)
+        {
+            return Err(ValidationFailure::NoDuty);
+        }
+    }
+
     // Rule: For a sync committee duty message, check if the validator is assigned
     if role == Role::SyncCommittee {
         let period =
@@ -845,6 +887,7 @@ pub(crate) fn validate_beacon_duty(
 /// - AggregatorCommittee before Boole fork (not yet active)
 /// - Aggregator and SyncCommittee after Boole fork (deprecated)
 /// - PTCAttester before the Ethereum Gloas (ePBS) fork (not yet active)
+/// - ProposerPreferences before the Ethereum Gloas (ePBS) fork (not yet active)
 pub(crate) fn validate_role_for_fork(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
@@ -883,6 +926,19 @@ pub(crate) fn validate_role_for_fork(
         }
     }
 
+    // Reject ProposerPreferences before the Ethereum Gloas (ePBS) fork, read from the consensus
+    // spec.
+    if role == Role::ProposerPreferences {
+        let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
+        if !current_fork.gloas_enabled() {
+            return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
+                role,
+                current_fork,
+                minimum_fork: ForkName::Gloas,
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -906,7 +962,7 @@ pub(crate) fn validate_slot_time(
 ) -> Result<(), ValidationFailure> {
     // Check if the message is too early
     let earliness = message_earliness(msg_slot, validation_context)?;
-    if earliness > CLOCK_ERROR_TOLERANCE {
+    if earliness > CLOCK_ERROR_TOLERANCE + early_slot_allowance(validation_context) {
         return Err(ValidationFailure::EarlySlotMessage {
             got: format!("early by {earliness:?}"),
         });
@@ -936,6 +992,27 @@ fn message_earliness(
         .unwrap_or_default())
 }
 
+/// Extra future-slot tolerance (on top of `CLOCK_ERROR_TOLERANCE`) allowed for a role's message
+/// slot. Only `ProposerPreferences` is non-zero: its envelope slot is the duty's future
+/// `proposal_slot`, so the whole proposer lookahead (current epoch + `min_seed_lookahead`) ahead of
+/// that slot must be accepted. Every other role keeps the strict no-future rule.
+fn early_slot_allowance(validation_context: &ValidationContext<impl SlotClock>) -> Duration {
+    match validation_context.role {
+        Role::ProposerPreferences => {
+            let allowance_slots = u32::try_from(
+                (1 + validation_context.spec.min_seed_lookahead.as_u64())
+                    * validation_context.slots_per_epoch,
+            )
+            .unwrap_or(u32::MAX);
+            validation_context
+                .slot_clock
+                .slot_duration()
+                .saturating_mul(allowance_slots)
+        }
+        _ => Duration::ZERO,
+    }
+}
+
 /// Returns how late a message is compared to its deadline based on role.
 /// If the message was received before the deadline, it returns 0.
 /// If the message was received after the deadline, it returns the duration by which it was late.
@@ -950,6 +1027,7 @@ fn message_lateness(
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
         | Role::AggregatorCommittee => validation_context.slots_per_epoch + LATE_SLOT_ALLOWANCE,
+        Role::ProposerPreferences => LATE_SLOT_ALLOWANCE,
     };
 
     let deadline = slot_start_time(slot + ttl, validation_context.slot_clock.clone())
@@ -1060,6 +1138,7 @@ fn duty_limit(
         }
         // Proposer and SyncCommittee have no duty limit
         Role::Proposer | Role::SyncCommittee => Ok(None),
+        Role::ProposerPreferences => Ok(Some(validation_context.slots_per_epoch)),
     }
 }
 
@@ -1333,7 +1412,8 @@ mod tests {
             | Role::SyncCommittee
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
-            | Role::PTCAttester => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            | Role::PTCAttester
+            | Role::ProposerPreferences => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }
@@ -1365,10 +1445,30 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
     pub struct MockDutiesProvider {
         pub(crate) voluntary_exit_duty_count: u64,
+        /// Value returned by `is_epoch_known_for_proposers`. Defaults to `true`
+        /// so existing tests keep the historical "epoch always known" behavior.
+        pub(crate) epoch_known_for_proposers: bool,
+        /// Value returned by `is_validator_proposer_at_slot`. Defaults to `true`
+        /// so existing tests keep the historical "validator is always proposer"
+        /// behavior.
+        pub(crate) validator_is_proposer: bool,
     }
+
+    // Manual `Default` (not derived) so the two proposer flags default to `true`,
+    // preserving the behavior all pre-existing tests relied on before these fields
+    // were added. New tests set them explicitly to drive the proposer-assignment arm.
+    impl Default for MockDutiesProvider {
+        fn default() -> Self {
+            Self {
+                voluntary_exit_duty_count: 0,
+                epoch_known_for_proposers: true,
+                validator_is_proposer: true,
+            }
+        }
+    }
+
     impl DutiesProvider for MockDutiesProvider {
         fn is_validator_in_sync_committee(
             &self,
@@ -1379,7 +1479,7 @@ mod tests {
         }
 
         fn is_epoch_known_for_proposers(&self, _epoch: Epoch) -> bool {
-            true
+            self.epoch_known_for_proposers
         }
 
         fn is_validator_proposer_at_slot(
@@ -1387,7 +1487,7 @@ mod tests {
             _slot: Slot,
             _validator_index: ValidatorIndex,
         ) -> bool {
-            true
+            self.validator_is_proposer
         }
 
         fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
