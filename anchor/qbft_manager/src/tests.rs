@@ -355,6 +355,12 @@ where
     ) -> UnboundedReceiver<(Hash256, Result<Completed<D>, QbftError>)> {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
+        // All operators share the same round-deadline origin, mirroring production where the origin
+        // is derived from the slot clock rather than each operator's own initialization
+        // time. Operators initialized with a delay start with (partially) expired round
+        // deadlines and must catch up to the committee's round cadence.
+        let round_deadline_origin = Instant::now();
+
         for (data, data_id) in all_data {
             let height = *data.instance_height(&data_id) as u64;
             self.identifiers.insert(height, data_id.clone());
@@ -399,7 +405,7 @@ where
                                 data_clone.clone(),
                                 Box::new(NoDataValidation),
                                 TimeoutMode::SlotTime {
-                                    instance_start_time: Instant::now(),
+                                    round_deadline_origin,
                                 },
                                 &cluster.cluster_members,
                             )
@@ -834,6 +840,33 @@ mod manager_tests {
         let initialization_delays = HashMap::from([
             (OperatorId(2), Duration::from_secs(3)), // Middle of round 2
             (OperatorId(3), Duration::from_secs(5)), // Middle of round 3
+        ]);
+
+        let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
+            setup.clock,
+            setup.executor,
+            CommitteeSize::Four,
+            setup.all_data,
+            initialization_delays,
+        )
+        .await;
+
+        context.verify_consensus().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    // Test operators initializing at different times against a shared round-deadline origin.
+    // All operators measure their round deadlines from the same instant, so late initializers
+    // start with already-expired round deadlines and rejoin the committee's cadence (the
+    // cascade itself is pinned by `test_slottime_late_init_cascades_round_changes`).
+    // Consensus must still be reached.
+    async fn test_slottime_init_skew_convergence() {
+        let setup = setup_test(1);
+
+        let initialization_delays = HashMap::from([
+            (OperatorId(2), Duration::from_secs(1)), // Middle of round 1
+            (OperatorId(3), Duration::from_secs(3)), // Middle of round 2
+            (OperatorId(4), Duration::from_secs(5)), // Middle of round 3
         ]);
 
         let mut context = TestContext::<types::MainnetEthSpec, BeaconVote>::new_with_delays(
