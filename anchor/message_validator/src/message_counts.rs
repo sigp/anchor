@@ -81,6 +81,8 @@ impl MessageCounts {
                     });
                 }
             }
+            // ProposerPreferences does not use the shared pre_consensus round cap
+            PartialSignatureKind::ProposerPreferences => {}
         }
 
         Ok(())
@@ -113,6 +115,8 @@ impl MessageCounts {
             | PartialSignatureKind::AggregatorCommitteePartialSig
             | PartialSignatureKind::PTCAttester => self.pre_consensus += 1,
             PartialSignatureKind::PostConsensus => self.post_consensus += 1,
+            // Tracked per signing-root on `SignerState`, not via a shared counter.
+            PartialSignatureKind::ProposerPreferences => {}
         }
     }
 }

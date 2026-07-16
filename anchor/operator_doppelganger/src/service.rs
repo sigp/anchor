@@ -5,7 +5,7 @@ use std::{
 
 use database::OwnOperatorId;
 use message_validator::ValidatedSSVMessage;
-use ssv_types::{Slot, message::SignedSSVMessage};
+use ssv_types::{Slot, message::SignedSSVMessage, msgid::Role};
 use tokio::sync::watch;
 use tracing::{error, info};
 
@@ -145,6 +145,16 @@ impl OperatorDoppelgangerService {
             return false;
         }
 
+        // Role-aware freshness exemption: a `ProposerPreferences` envelope slot is the duty's
+        // FUTURE `proposal_slot`, not the message's emission time, so `msg_slot > startup_slot` is
+        // not evidence of a live twin. Replaying a valid packet signed by a prior process (for a
+        // proposal_slot still ahead of this instance's startup) would otherwise false-positive and
+        // abort a legitimate replacement. The wire carries no authenticated emission time, so
+        // slot-based freshness cannot distinguish an old packet from a twin here; exclude the role.
+        if signed_message.ssv_message().msg_id().role() == Some(Role::ProposerPreferences) {
+            return false;
+        }
+
         // Extract slot from validated message (no decoding needed)
         let msg_slot = extract_message_slot(validated_message);
 
@@ -239,13 +249,15 @@ impl OperatorDoppelgangerService {
 mod tests {
     use std::time::Duration;
 
+    use bls::{PublicKeyBytes, Signature};
     use database::OwnOperatorId;
     use ssv_types::{
-        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, VariableList,
+        CommitteeId, OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
         consensus::{QbftMessage, QbftMessageType},
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
+        partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
     };
     use types::Hash256;
 
@@ -326,6 +338,66 @@ mod tests {
         (signed_message, validated_message)
     }
 
+    /// Helper to build a single-signer validator-scoped `PartialSignatureMessages` for
+    /// doppelgänger detection.
+    ///
+    /// The `MessageId` is validator-scoped (`DutyExecutor::Validator`) so
+    /// `signed_message.ssv_message().msg_id().role()` reads `role`, which drives the role-aware
+    /// freshness exemption in `is_doppelganger`. The envelope `slot` populates
+    /// `PartialSignatureMessages::slot`, the value `extract_message_slot` reads.
+    ///
+    /// # Arguments
+    /// * `role` - The role encoded into the `MessageId`
+    /// * `kind` - The `PartialSignatureKind` carried by the envelope
+    /// * `signer` - The single signing `OperatorId`
+    /// * `slot` - The envelope slot (a `proposal_slot` for `ProposerPreferences`)
+    fn create_partial_sig_message(
+        role: Role,
+        kind: PartialSignatureKind,
+        signer: OperatorId,
+        slot: Slot,
+    ) -> (SignedSSVMessage, ValidatedSSVMessage) {
+        // Validator-scoped MessageId so `msg_id().role()` returns `role`.
+        let message_id = MessageId::new(
+            &DomainType([0; 4]),
+            role,
+            &DutyExecutor::Validator(PublicKeyBytes::empty()),
+        );
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind,
+            slot,
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer,
+                validator_index: ValidatorIndex(0),
+            }])
+            .unwrap(),
+        };
+
+        // Payload bytes are irrelevant to detection: `is_doppelganger` reads the pre-decoded
+        // `ValidatedSSVMessage`, so a minimal placeholder mirrors `create_test_message`.
+        let ssv_message = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            message_id,
+            vec![0u8; 100],
+        )
+        .expect("should create SSVMessage");
+
+        let signed_message = SignedSSVMessage::new(
+            vec![[0u8; RSA_SIGNATURE_SIZE]],
+            vec![signer],
+            ssv_message,
+            vec![],
+        )
+        .expect("should create SignedSSVMessage");
+
+        let validated_message = ValidatedSSVMessage::PartialSignatureMessages(partial_sig_messages);
+
+        (signed_message, validated_message)
+    }
+
     #[test]
     fn test_service_creation() {
         let service = create_service_with_slot(Slot::new(100));
@@ -373,6 +445,62 @@ mod tests {
         // This should detect a twin (message slot > startup_slot)
         let result = service.is_doppelganger(&signed_message, &validated_message);
         assert!(result, "Message for slot after startup should detect twin");
+    }
+
+    #[test]
+    fn test_no_twin_proposer_preferences_future_proposal_slot() {
+        // A `ProposerPreferences` envelope slot is the duty's FUTURE `proposal_slot`, not the
+        // message's emission time. A valid packet signed by a PRIOR process (for a `proposal_slot`
+        // still ahead of this instance's `startup_slot`) can be replayed on the wire; without the
+        // role-aware exemption its `slot > startup_slot` would false-positive as a live twin and
+        // abort a legitimate replacement.
+
+        // Arrange: startup_slot = 100; a single-signer role-8 packet from our own `OperatorId(1)`
+        // whose envelope slot 120 is a future proposal_slot (> startup).
+        let service = create_service_with_slot(Slot::new(100));
+        let (signed_message, validated_message) = create_partial_sig_message(
+            Role::ProposerPreferences,
+            PartialSignatureKind::ProposerPreferences,
+            OperatorId(1),
+            Slot::new(120),
+        );
+
+        // Act
+        let result = service.is_doppelganger(&signed_message, &validated_message);
+
+        // Assert: the future proposal_slot must NOT be treated as twin evidence.
+        assert!(
+            !result,
+            "ProposerPreferences future proposal_slot should NOT detect twin (replayed prior-process packet)"
+        );
+    }
+
+    #[test]
+    fn test_twin_detected_non_exempt_partial_sig_future_slot() {
+        // Contrast to `test_no_twin_proposer_preferences_future_proposal_slot`: the freshness
+        // exemption is specific to `Role::ProposerPreferences`, NOT a blanket skip of all
+        // validator-scoped partial-signature messages. `Role::PTCAttester` is a non-exempt
+        // partial-sig role whose envelope slot IS the emission slot, so a future-slot packet
+        // signed with our own operator ID still indicates a live twin.
+
+        // Arrange: startup_slot = 100; a single-signer `PTCAttester` packet from our own
+        // `OperatorId(1)` whose envelope slot 101 is after startup.
+        let service = create_service_with_slot(Slot::new(100));
+        let (signed_message, validated_message) = create_partial_sig_message(
+            Role::PTCAttester,
+            PartialSignatureKind::PTCAttester,
+            OperatorId(1),
+            Slot::new(101),
+        );
+
+        // Act
+        let result = service.is_doppelganger(&signed_message, &validated_message);
+
+        // Assert: a non-exempt role for slot > startup_slot detects a twin.
+        assert!(
+            result,
+            "Non-exempt PTCAttester message for slot after startup should detect twin"
+        );
     }
 
     #[test]
