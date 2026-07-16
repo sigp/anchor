@@ -252,6 +252,7 @@ async fn proposer_preferences_insufficient_partial_signatures_warns_and_metrics(
             // class.
             collector_failure: Some(CollectionError::QueueClosedError),
             disable_slashing_protection: true,
+            ..Default::default()
         },
     );
     let preferences =
@@ -320,6 +321,7 @@ async fn proposer_preferences_does_not_classify_remote_input_without_metadata() 
             // split, i.e. threshold-not-reached, which the collector surfaces as QueueClosedError.
             collector_failure: Some(CollectionError::QueueClosedError),
             disable_slashing_protection: true,
+            ..Default::default()
         },
     );
     let preferences =
