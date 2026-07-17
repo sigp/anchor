@@ -52,9 +52,12 @@ const QBFT_RETAIN_SLOTS: u64 = 1;
 /// Determines how round timeouts are calculated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutMode {
-    /// Cumulative timeouts from instance start. Never resets.
+    /// Cumulative timeouts measured from a fixed slot-relative instant: round N times out at
+    /// `round_deadline_origin + cumulative_timeout(N)`. The instance starts round 1 immediately
+    /// upon initialization; the origin only governs round-change deadlines, keeping the round
+    /// cadence synchronized across operators regardless of when each one initializes.
     /// Used for: attestations, aggregations, sync committee.
-    SlotTime { instance_start_time: Instant },
+    SlotTime { round_deadline_origin: Instant },
     /// Per-round timeouts. Resets on round changes.
     /// Used for: block proposals.
     Relative { current_round_start_time: Instant },
@@ -283,7 +286,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Committee | Role::AggregatorCommittee)
                     // These roles don't use QBFT consensus
                     | Some(
-                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester,
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
                     )
                     | None => {
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
@@ -352,7 +355,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
                     // These roles don't use QBFT consensus
                     | Some(
-                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester,
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
                     )
                     | None => Err(QbftError::InconsistentMessageId),
                 }

@@ -608,6 +608,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: expected_duty_count,
+                ..Default::default()
             }),
         );
 
@@ -657,6 +658,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -713,6 +715,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -766,6 +769,7 @@ mod tests {
             &mut DutyState::new(2),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -980,11 +984,12 @@ mod tests {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
         // Every non-QBFT role must reject consensus messages, including
-        // PTCAttester (leaderless, no QBFT round since the SIP-94 rewrite).
+        // PTCAttester and ProposerPreferences (both leaderless, no QBFT round).
         for role in [
             Role::ValidatorRegistration,
             Role::VoluntaryExit,
             Role::PTCAttester,
+            Role::ProposerPreferences,
         ] {
             let msg_id = create_message_id_for_test(role);
             let qbft_message = QbftMessageBuilder::new(role, QbftMessageType::Proposal)
@@ -1627,6 +1632,7 @@ mod tests {
             &mut duty_state,
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -1658,6 +1664,7 @@ mod tests {
             &mut duty_state,
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         );
 
@@ -1709,6 +1716,7 @@ mod tests {
         let expected_duty_count = 5;
         let mock_duties_provider = Arc::new(MockDutiesProvider {
             voluntary_exit_duty_count: expected_duty_count,
+            ..Default::default()
         });
 
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
@@ -1762,6 +1770,7 @@ mod tests {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
         let mock_duties_provider = Arc::new(MockDutiesProvider {
             voluntary_exit_duty_count: 0,
+            ..Default::default()
         });
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
@@ -1799,6 +1808,78 @@ mod tests {
         let many = vec![ValidatorIndex(0); 100];
         let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
         assert_eq!(result, Ok(Some(2)));
+    }
+
+    #[test]
+    fn test_duty_limit_proposer_preferences() {
+        // Arrange: ProposerPreferences is validator-scoped and non-QBFT. Unlike the
+        // flat-2 per-validator roles, its duty limit is `slots_per_epoch` (a proposer
+        // may publish preferences across the whole lookahead window), independent of
+        // the validator-index slice length.
+        const SLOTS_PER_EPOCH: u64 = 32;
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(100),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        let msg_id = MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            Role::ProposerPreferences,
+            &DutyExecutor::Validator(PublicKeyBytes::empty()),
+        );
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
+            .expect("SSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+        let mock_duties_provider = Arc::new(MockDutiesProvider {
+            voluntary_exit_duty_count: 0,
+            ..Default::default()
+        });
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::ProposerPreferences,
+            received_at: now,
+            slots_per_epoch: SLOTS_PER_EPOCH,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: slot_clock.clone(),
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
+        };
+
+        let slot = slot_clock.now().unwrap();
+
+        // Act: the limit equals `slots_per_epoch` for a single validator index.
+        let one_validator = vec![ValidatorIndex(0)];
+        let result = duty_limit(
+            &validation_context,
+            slot,
+            &one_validator,
+            mock_duties_provider.clone(),
+        );
+
+        // Assert
+        assert_eq!(result, Ok(Some(SLOTS_PER_EPOCH)));
+
+        // The limit is fixed at `slots_per_epoch` and does not scale with the slice
+        // length.
+        let many = vec![ValidatorIndex(0); 100];
+        let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
+        assert_eq!(result, Ok(Some(SLOTS_PER_EPOCH)));
     }
 
     /// Builds a signed consensus message for `role` and runs it through the full
@@ -1854,6 +1935,7 @@ mod tests {
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider {
                 voluntary_exit_duty_count: 0,
+                ..Default::default()
             }),
         )
     }

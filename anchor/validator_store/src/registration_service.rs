@@ -68,6 +68,22 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> RegistrationService<S,
         let validator_registration_fut = async move {
             loop {
                 if let Some(slot) = self.inner.slot_clock.now() {
+                    // SIP-94 §4: under Gloas, the relay-builder registration mechanism is
+                    // removed along with blinded blocks, so registrations no longer feed
+                    // block production. Skip the periodic publish to avoid wasted RPC and
+                    // operator-log noise. The service stays spawned and re-evaluates each
+                    // wakeup so pre-Gloas networks and the transition window are unaffected.
+                    if should_skip_for_gloas::<S::E>(&spec, slot) {
+                        debug!(%slot, "Skipping validator registration, deprecated since Gloas");
+                        let sleep_duration = self
+                            .inner
+                            .slot_clock
+                            .duration_to_next_epoch(S::E::slots_per_epoch())
+                            .unwrap_or_else(|| slot_duration * S::E::slots_per_epoch() as u32);
+                        sleep(sleep_duration).await;
+                        continue;
+                    }
+
                     let inner = self.inner.clone();
                     let executor = inner.executor.clone();
                     let future = async move {
@@ -218,6 +234,12 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> Inner<S, T> {
     }
 }
 
+/// Whether the periodic registration publish should be skipped because `slot`'s fork is
+/// Gloas or later. See the call site for the rationale.
+fn should_skip_for_gloas<E: EthSpec>(spec: &ChainSpec, slot: Slot) -> bool {
+    spec.fork_name_at_slot::<E>(slot).gloas_enabled()
+}
+
 /// To not sign for all validators at once, select based on the current slot.
 /// Note that it is important that this is the same across client implementations, as else
 /// the nodes broadcast partial signatures for their validators at varying times.
@@ -231,4 +253,50 @@ fn is_scheduled_for_slot(
     number_of_slots_between_registrations: u64,
 ) -> bool {
     slot % number_of_slots_between_registrations != index % number_of_slots_between_registrations
+}
+
+#[cfg(test)]
+mod tests {
+    use types::{Epoch, MainnetEthSpec};
+
+    use super::*;
+
+    #[test]
+    fn should_skip_for_gloas_flips_exactly_at_fork_boundary() {
+        // Arrange: Gloas is scheduled mid-chain; the fork activates at the first slot of
+        // its epoch (inclusive boundary).
+        let mut spec = ChainSpec::mainnet();
+        spec.gloas_fork_epoch = Some(Epoch::new(100));
+        let fork_slot = Epoch::new(100).start_slot(MainnetEthSpec::slots_per_epoch());
+
+        // Act
+        let skip_before = should_skip_for_gloas::<MainnetEthSpec>(&spec, fork_slot - 1);
+        let skip_at_fork = should_skip_for_gloas::<MainnetEthSpec>(&spec, fork_slot);
+
+        // Assert
+        assert!(
+            !skip_before,
+            "registrations must continue at the last pre-Gloas slot"
+        );
+        assert!(
+            skip_at_fork,
+            "registrations must be skipped from the first slot of the Gloas fork epoch"
+        );
+    }
+
+    #[test]
+    fn should_skip_for_gloas_returns_false_when_unscheduled() {
+        // Arrange: Gloas is not scheduled at all.
+        let mut spec = ChainSpec::mainnet();
+        spec.gloas_fork_epoch = None;
+
+        // Act
+        let skip = should_skip_for_gloas::<MainnetEthSpec>(&spec, Slot::new(100_000));
+
+        // Assert
+        assert!(
+            !skip,
+            "registrations must continue when Gloas is unscheduled"
+        );
+    }
 }

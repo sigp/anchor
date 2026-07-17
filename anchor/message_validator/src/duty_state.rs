@@ -7,8 +7,9 @@ use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
     message::SignedSSVMessage,
-    partial_sig::PartialSignatureMessages,
+    partial_sig::{PartialSignatureKind, PartialSignatureMessages},
 };
+use types::Hash256;
 
 use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 // duty_state.rs
@@ -19,6 +20,29 @@ use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 //  - OperatorState: The state for a specific operator over a range of slots.
 //  - SignerState: The state of a signer at a particular slot, including message counts and proposal
 //    data.
+
+/// Maximum distinct `ProposerPreferences` signing roots accepted per
+/// (`MessageId`, operator, `proposal_slot`).
+///
+/// A validator can legitimately sign several distinct roots for one `proposal_slot` when its
+/// preference inputs change between emissions — chiefly a `dependent_root` shift under reorg (the
+/// SIP-94 §5 re-emission trigger), and also `target_gas_limit` / `fee_recipient` config changes
+/// across operator restarts. Per SIP-94 §7 the cap is policy headroom for a few realistic
+/// reorg-driven corrections while bounding spam — not a safety/consensus bound. That is why
+/// exceeding it is an Ignore (`TooManyDistinctSigningRoots`), whereas a repeat of an already-seen
+/// root stays a Reject-class duplicate.
+const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS: usize = 4;
+
+/// Test-only, crate-visible mirror of the private cap so pipeline tests in sibling modules
+/// (e.g. `partial_signature`) can reference the real value instead of hardcoding `4`. The
+/// compile-time assertion below makes the mirror impossible to drift from production.
+#[cfg(test)]
+pub(crate) const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST: usize =
+    MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS;
+#[cfg(test)]
+const _: () = assert!(
+    MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST == MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS
+);
 
 /// DutyState manages the state for duty validation across operators and slots
 pub(crate) struct DutyState {
@@ -96,6 +120,37 @@ impl DutyState {
                 )
             }
         };
+
+        // ProposerPreferences-specific per-slot signing-root dedup (not the shared pre_consensus
+        // counter): the envelope slot is the duty's proposal_slot, and a validator may sign several
+        // distinct roots for one proposal_slot as its preference inputs change between emissions
+        // (chiefly a dependent_root shift under reorg). Track the distinct roots per
+        // (MessageId, operator, proposal_slot), capped at MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS.
+        if partial_signature_messages.kind == PartialSignatureKind::ProposerPreferences {
+            let root = partial_signature_messages
+                .messages
+                .first()
+                .ok_or(ValidationFailure::NoPartialSignatureMessages)?
+                .signing_root;
+            // Duplicate identity takes precedence over capacity: an already-seen root is a
+            // Reject-class DuplicatedMessage even once the distinct-root set is full, whereas only
+            // a NEW root beyond the cap is the Ignore-class TooManyDistinctSigningRoots (SIP-94
+            // §7).
+            if signer_state.seen_preferences.contains(&root) {
+                return Err(ValidationFailure::DuplicatedMessage {
+                    got: format!("proposer-preferences root {root:?}"),
+                });
+            }
+            if signer_state.seen_preferences.len() >= MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS {
+                return Err(ValidationFailure::TooManyDistinctSigningRoots {
+                    got: format!(
+                        "proposer-preferences distinct roots exceed cap \
+                         {MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS}"
+                    ),
+                });
+            }
+            signer_state.seen_preferences.insert(root);
+        }
 
         // Record the partial signature (only once)
         signer_state
@@ -277,6 +332,9 @@ pub(crate) struct SignerState {
     pub(crate) proposal_hash: Option<[u8; 32]>,
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
+    /// Distinct ProposerPreferences signing roots already seen for this
+    /// (MessageId, operator, slot), used to reject exact-duplicate resends.
+    seen_preferences: HashSet<Hash256>,
 }
 
 impl SignerState {
@@ -288,6 +346,7 @@ impl SignerState {
             message_counts: MessageCounts::default(),
             proposal_hash: None,
             seen_signers: HashSet::new(),
+            seen_preferences: HashSet::new(),
         }
     }
 
