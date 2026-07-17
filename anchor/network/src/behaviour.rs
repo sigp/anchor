@@ -25,27 +25,18 @@ use crate::{
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
 
-/// Subscription filter for gossipsub: peers may only subscribe us to topics that are valid on
-/// this network (any subnet of any scheduled fork), bounded by the size of that topic set.
-type SubscriptionFilter =
-    gossipsub::MaxCountSubscriptionFilter<gossipsub::WhitelistSubscriptionFilter>;
-
-/// The gossipsub behaviour type used by Anchor.
-pub type Gossipsub = gossipsub::Behaviour<gossipsub::IdentityTransform, SubscriptionFilter>;
+/// The gossipsub behaviour type used by Anchor. The subscription filter ensures peers may only
+/// subscribe us to topics that are valid on this network (any subnet of any scheduled fork).
+pub type Gossipsub =
+    gossipsub::Behaviour<gossipsub::IdentityTransform, gossipsub::WhitelistSubscriptionFilter>;
 
 /// Build the subscription filter from the fork schedule.
 ///
 /// The whitelist is built with the same topic construction used when subscribing, so it covers
 /// every subnet of every scheduled fork and nothing else. Note the filter also applies to our
 /// own `subscribe` calls.
-fn subscription_filter(fork_schedule: &ForkSchedule) -> SubscriptionFilter {
-    let possible_topics = topic::whitelist_topic_hashes(fork_schedule);
-    gossipsub::MaxCountSubscriptionFilter {
-        // A peer can at most subscribe to every valid topic.
-        max_subscribed_topics: possible_topics.len(),
-        max_subscriptions_per_request: possible_topics.len(),
-        filter: gossipsub::WhitelistSubscriptionFilter(possible_topics),
-    }
+fn subscription_filter(fork_schedule: &ForkSchedule) -> gossipsub::WhitelistSubscriptionFilter {
+    gossipsub::WhitelistSubscriptionFilter(topic::whitelist_topic_hashes(fork_schedule))
 }
 
 /// Gossipsub heartbeat interval in milliseconds (how often messages are propagated)
@@ -361,15 +352,11 @@ mod tests {
         use fork::Fork;
         use libp2p::gossipsub::TopicSubscriptionFilter;
         use ssv_types::domain_type::DomainType;
-        use subnet_service::{SUBNET_COUNT, SubnetId, topic::create_topic};
+        use subnet_service::{SubnetId, topic::create_topic};
 
         let network_name = "mainnet";
         let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType([0, 0, 0, 1]), network_name);
         let mut filter = subscription_filter(&fork_schedule);
-
-        // Both forks are scheduled, so both bounds cover every valid topic
-        assert_eq!(filter.max_subscribed_topics, 2 * SUBNET_COUNT);
-        assert_eq!(filter.max_subscriptions_per_request, 2 * SUBNET_COUNT);
 
         // Topics built the way the subscription path builds them must pass the filter,
         // otherwise our own `subscribe` calls would fail with `SubscriptionError::NotAllowed`.
@@ -377,9 +364,7 @@ mod tests {
         for fork in Fork::all() {
             let topic = create_topic(&fork.topic_prefix(network_name), SubnetId::from(0u64));
             assert!(
-                filter
-                    .filter
-                    .can_subscribe(&gossipsub::IdentTopic::new(topic).hash()),
+                filter.can_subscribe(&gossipsub::IdentTopic::new(topic).hash()),
                 "valid topic must be whitelisted"
             );
         }
@@ -387,9 +372,7 @@ mod tests {
         // Anything else is rejected
         for invalid in ["ssv.v2.128", "/ssv/holesky/boole/0", "random-topic"] {
             assert!(
-                !filter
-                    .filter
-                    .can_subscribe(&gossipsub::IdentTopic::new(invalid).hash()),
+                !filter.can_subscribe(&gossipsub::IdentTopic::new(invalid).hash()),
                 "invalid topic {invalid} must be rejected"
             );
         }
