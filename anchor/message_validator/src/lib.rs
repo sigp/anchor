@@ -230,6 +230,12 @@ pub enum ValidationFailure {
         current_fork: ForkName,
         minimum_fork: ForkName,
     },
+    /// A role deprecated at an Ethereum hard fork was seen at/after that fork activated.
+    RoleNotActiveAfterEthFork {
+        role: Role,
+        current_fork: ForkName,
+        deprecated_since_fork: ForkName,
+    },
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -887,6 +893,7 @@ pub(crate) fn validate_beacon_duty(
 /// - AggregatorCommittee before Boole fork (not yet active)
 /// - Aggregator and SyncCommittee after Boole fork (deprecated)
 /// - PTCAttester before the Ethereum Gloas (ePBS) fork (not yet active)
+/// - ValidatorRegistration at/after the Ethereum Gloas (ePBS) fork (deprecated by SIP-94)
 /// - ProposerPreferences before the Ethereum Gloas (ePBS) fork (not yet active)
 pub(crate) fn validate_role_for_fork(
     slot: Slot,
@@ -922,6 +929,22 @@ pub(crate) fn validate_role_for_fork(
                 role,
                 current_fork,
                 minimum_fork: ForkName::Gloas,
+            });
+        }
+    }
+
+    // Reject ValidatorRegistration at/after the Ethereum Gloas (ePBS) fork; SIP-94
+    // deprecates the duty (proposer preferences replace relay registrations). Gated
+    // on the message's duty slot, not wall clock, so registrations for pre-fork
+    // slots remain valid through their TTL window. Wire values are retained for
+    // pre-Gloas decode per SIP-94.
+    if role == Role::ValidatorRegistration {
+        let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
+        if current_fork.gloas_enabled() {
+            return Err(ValidationFailure::RoleNotActiveAfterEthFork {
+                role,
+                current_fork,
+                deprecated_since_fork: ForkName::Gloas,
             });
         }
     }
@@ -1187,7 +1210,7 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
 
     use bls::{Hash256, PublicKeyBytes};
     use duties_tracker::DutiesProvider;
@@ -1424,6 +1447,16 @@ mod tests {
         public_keys: Vec<Rsa<Public>>,
     ) -> HashMap<OperatorId, Rsa<Public>> {
         committee_members.into_iter().zip(public_keys).collect()
+    }
+
+    /// Build a `ChainSpec` whose Ethereum Gloas (ePBS) fork activates at
+    /// `gloas_fork_epoch` (`None` = "Gloas never happens"). Used by role gates
+    /// keyed to the Ethereum fork, e.g. PTCAttester activation and
+    /// ValidatorRegistration deprecation.
+    pub(crate) fn spec_with_gloas(gloas_fork_epoch: Option<u64>) -> Arc<types::ChainSpec> {
+        let mut spec = types::ChainSpec::mainnet();
+        spec.gloas_fork_epoch = gloas_fork_epoch.map(types::Epoch::new);
+        Arc::new(spec)
     }
 
     // Assert helpers for common validation patterns

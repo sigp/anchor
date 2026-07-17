@@ -365,7 +365,7 @@ mod tests {
         tests::{
             FOUR_NODE_COMMITTEE, MockDutiesProvider, assert_validation_error,
             create_committee_info, create_message_id_for_test, create_operator_pub_keys,
-            generate_random_rsa_public_keys,
+            generate_random_rsa_public_keys, spec_with_gloas,
         },
     };
 
@@ -495,15 +495,6 @@ mod tests {
 
     fn generate_fork_schedule(fork: Fork) -> Arc<ForkSchedule> {
         Arc::new(ForkSchedule::new(fork, DomainType::default(), "testing"))
-    }
-
-    /// Build a `ChainSpec` whose Ethereum Gloas (ePBS) fork activates at
-    /// `gloas_fork_epoch` (`None` = "Gloas never happens"). Used to gate
-    /// post-Gloas roles such as `PTCAttester`.
-    fn spec_with_gloas(gloas_fork_epoch: Option<u64>) -> Arc<types::ChainSpec> {
-        let mut spec = types::ChainSpec::mainnet();
-        spec.gloas_fork_epoch = gloas_fork_epoch.map(types::Epoch::new);
-        Arc::new(spec)
     }
 
     #[test]
@@ -1388,6 +1379,60 @@ mod tests {
     }
 
     #[test]
+    fn test_validator_registration_rejected_after_gloas() {
+        // Setup
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ValidatorRegistration,
+            PartialSignatureKind::ValidatorRegistration,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let fork_schedule = ForkSchedule::new(Fork::Alan, DomainType::default(), "testing");
+        let mut validation_context = create_ttl_validation_context(
+            &signed_msg,
+            &committee_info,
+            Role::ValidatorRegistration,
+            &map,
+            TTL_SLOTS,
+            Arc::new(fork_schedule),
+        );
+        // ValidatorRegistration is deprecated at Gloas; the role gate reads the Ethereum
+        // fork from the spec. The message slot (1) is in epoch 0, where Gloas is active.
+        validation_context.spec = spec_with_gloas(Some(0));
+
+        // Execute
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+                ..Default::default()
+            }),
+        );
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveAfterEthFork {
+                        role: Role::ValidatorRegistration,
+                        deprecated_since_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveAfterEthFork (ValidatorRegistration post-Gloas)",
+        );
+    }
+
+    #[test]
     fn test_voluntary_exit_within_ttl_accepted() {
         // Setup
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -1806,6 +1851,62 @@ mod tests {
             },
             "RoleNotActiveBeforeEthFork (PTCAttester pre-Gloas)",
         );
+    }
+
+    #[test]
+    fn test_validator_registration_rejected_at_gloas_boundary() {
+        use crate::validate_role_for_fork;
+
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let signed_msg = create_signed_partial_sig_message(
+            Role::ValidatorRegistration,
+            PartialSignatureKind::ValidatorRegistration,
+            OperatorId(1),
+            &private_key,
+        );
+
+        let fork_schedule = generate_fork_schedule(Fork::Boole);
+        let mut validation_context = create_test_validation_context_with_fork(
+            &signed_msg,
+            &committee_info,
+            Role::ValidatorRegistration,
+            &map,
+            Some(fork_schedule),
+        );
+        // The role gate reads the Ethereum fork from the spec; Gloas activates at epoch 2.
+        validation_context.spec = spec_with_gloas(Some(2));
+
+        // Slot 63 is the last slot of epoch 1 (32 slots per epoch): still pre-Gloas,
+        // so registrations remain valid.
+        let result = validate_role_for_fork(Slot::new(63), &validation_context);
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
+
+        // Slot 64 is the first slot of epoch 2: Gloas is active, the deprecated
+        // duty is rejected.
+        let result = validate_role_for_fork(Slot::new(64), &validation_context);
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveAfterEthFork {
+                        role: Role::ValidatorRegistration,
+                        deprecated_since_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveAfterEthFork (ValidatorRegistration post-Gloas)",
+        );
+
+        // Pins the mainnet no-op: with Gloas unscheduled, the deprecation gate
+        // never fires regardless of slot.
+        validation_context.spec = spec_with_gloas(None);
+        let result = validate_role_for_fork(Slot::new(100_000), &validation_context);
+        assert!(result.is_ok(), "Expected ok but got: {result:?}");
     }
 
     #[test]
