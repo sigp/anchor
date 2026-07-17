@@ -611,6 +611,7 @@ impl Client {
             outcome_rx,
             executor.clone(),
             spec.clone(),
+            fork_schedule.clone(),
             lifecycle_rx,
         )
         .await
