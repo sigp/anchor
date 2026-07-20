@@ -30,7 +30,7 @@ pub static SIGNED_RANDAO_REVEALS_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLo
 pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
     LazyLock::new(|| {
         try_create_int_counter_vec(
-            "signed_proposer_preferences_total",
+            "anchor_signed_proposer_preferences_total",
             "Total count of ProposerPreferences signings",
             &["status"],
         )
