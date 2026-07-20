@@ -434,6 +434,101 @@ async fn proposer_preferences_infra_failure_increments_infra_metric() {
     );
 }
 
+/// A collection that never reaches quorum must fail per-validator with a *bounded* timeout and must
+/// never hang the caller indefinitely (issue #1063 AC7). The mock collector captures the call and
+/// then returns a future that never resolves, so the only way `sign_proposer_preferences` can return
+/// is the production `tokio::time::timeout` elapsing after
+/// `spec.get_slot_duration() * PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS` (= 24s under the
+/// harness's mainnet spec). On elapse it synthesizes
+/// `CollectionError::CollectionTimeout`, which classifies as the NoSignature bucket and increments
+/// the `insufficient_partial_signatures` reconstruction-failure metric.
+///
+/// Falsifiability guard (intrinsic, no extra assertion needed): were the production
+/// `tokio::time::timeout` removed, this test would hang forever awaiting the pending collector
+/// future instead of returning `CollectionTimeout`. Completing at all — and returning the timeout
+/// error — is exactly the "never hangs the caller" behavior AC7 requires.
+///
+/// Timing: `#[tokio::test(start_paused = true)]` runs on the current-thread runtime with a paused,
+/// auto-advancing clock. Neither the harness constructor nor the `sign_proposer_preferences` path
+/// spawns a background task that keeps the runtime busy, so once the call awaits the timeout the
+/// runtime goes idle and tokio auto-advances virtual time straight to the 24s deadline. The 24s
+/// therefore elapse in ~0 real time (verified via a wall-clock guard on the suite run), so no manual
+/// `tokio::time::advance` is required.
+#[tokio::test(start_paused = true)]
+async fn proposer_preferences_no_quorum_hits_bounded_timeout() {
+    // Reads the same global prometheus labels as the other failure tests, so it joins the same
+    // serialization; the cross-label delta reads are only reliable under this lock.
+    let _guard = METRIC_TEST_LOCK.lock().await;
+
+    // Arrange
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+    let pubkey = committee.validators[0].public_key;
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            // The collector captures the call and then never resolves, so only the production
+            // collection timeout can unblock the caller.
+            collector_hangs: true,
+            disable_slashing_protection: true,
+            ..Default::default()
+        },
+    );
+    let preferences =
+        create_proposer_preferences(STARTING_VALIDATOR_INDEX as u64, Slot::new(TEST_SLOT));
+
+    let metric = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
+        .as_ref()
+        .expect("metric should be created");
+    let insufficient_counter = metric.with_label_values(&[
+        crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
+    ]);
+    let infra_counter =
+        metric.with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_INFRA]);
+    let insufficient_before = insufficient_counter.get();
+    let infra_before = infra_counter.get();
+
+    // Act
+    let result = harness
+        .validator_store
+        .sign_proposer_preferences(pubkey, preferences)
+        .await;
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(
+                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout)
+            ))
+        ),
+        "a no-quorum collection must surface CollectionTimeout via the bounded collection timeout, \
+         got: {result:?}"
+    );
+    assert_eq!(
+        insufficient_counter.get() - insufficient_before,
+        1,
+        "CollectionTimeout should increment the insufficient_partial_signatures reconstruction-failure \
+         metric once (NoSignature bucket)"
+    );
+    // Pins the classification boundary: a bounded-timeout no-quorum is a NoSignature-class failure
+    // and must NOT be attributed to the infra bucket.
+    assert_eq!(
+        infra_counter.get() - infra_before,
+        0,
+        "CollectionTimeout must not leak into the infra reconstruction-failure metric"
+    );
+    // The collection attempt must have started (the call was captured) before the collector hung,
+    // proving the timeout wrapped an in-flight collection rather than short-circuiting earlier.
+    let captured = harness.captured_calls.lock();
+    assert_eq!(
+        captured.len(),
+        1,
+        "exactly one sign_and_collect call should have been captured before the collector hung"
+    );
+}
+
 // ==================== Slashing-protection tests ====================
 
 /// `sign_proposer_preferences` succeeds with slashing protection enabled, proving the path never

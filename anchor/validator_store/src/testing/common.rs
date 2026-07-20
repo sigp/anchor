@@ -125,10 +125,16 @@ pub(super) struct CapturedSignatureCall {
     pub(super) signing_root: Hash256,
 }
 
-/// Mock that captures calls and returns a canned infinity signature, or a configured failure.
+/// Mock that captures calls and returns a canned infinity signature, or a configured failure, or
+/// a future that never resolves (`hang`).
 struct MockSignatureCollector {
     captured: CapturedCalls,
     failure: Option<CollectionError>,
+    /// When `true`, `sign_and_collect` captures the call and then returns a future that never
+    /// resolves, modeling a quorum that never forms. This lets tests drive the production
+    /// `tokio::time::timeout` in `sign_proposer_preferences` to elapse; `hang` takes precedence
+    /// over `failure`.
+    hang: bool,
 }
 
 impl SignatureCollecting for MockSignatureCollector {
@@ -138,13 +144,19 @@ impl SignatureCollecting for MockSignatureCollector {
         requester: SignatureRequester,
         signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
-        // Capture before failing so tests can assert that the collection attempt happened even
-        // when the configured outcome is an error.
+        // Capture before hanging/failing so tests can assert that the collection attempt happened
+        // even when the configured outcome is a stall or an error.
         self.captured.lock().push(CapturedSignatureCall {
             requester,
             metadata,
             signing_root: signing_data.root,
         });
+        if self.hang {
+            // Never resolves, so the caller only unblocks via the production collection timeout.
+            // `std::future::pending::<Result<Arc<Signature>, CollectionError>>()` is `Send`, which
+            // satisfies the returned future's bound.
+            return Box::pin(std::future::pending());
+        }
         if let Some(failure) = self.failure.clone() {
             return Box::pin(async move { Err(failure) });
         }
@@ -156,11 +168,13 @@ impl SignatureCollecting for MockSignatureCollector {
 /// Creates a mock signature collector and returns the shared captured calls handle.
 fn create_mock_collector(
     failure: Option<CollectionError>,
+    hang: bool,
 ) -> (Box<dyn SignatureCollecting>, CapturedCalls) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
         failure,
+        hang,
     };
     (Box::new(mock), captured)
 }
@@ -238,6 +252,10 @@ pub(super) fn create_committee_setup(
 pub(super) struct HarnessOptions {
     /// When set, every `sign_and_collect` call fails with this error after being captured.
     pub(super) collector_failure: Option<CollectionError>,
+    /// When `true`, every `sign_and_collect` call captures the call and then returns a future that
+    /// never resolves, modeling a quorum that never forms. Used to drive the production
+    /// collection-timeout path. Takes precedence over `collector_failure`.
+    pub(super) collector_hangs: bool,
     pub(super) disable_slashing_protection: bool,
     /// Chain spec to wire into the store. Defaults to `ChainSpec::mainnet()`, under which
     /// `TEST_SLOT` is pre-Electra. Tests that need a specific fork at `TEST_SLOT` (Electra or
@@ -252,6 +270,7 @@ impl Default for HarnessOptions {
     fn default() -> Self {
         Self {
             collector_failure: None,
+            collector_hangs: false,
             // Slashing protection is disabled by default because the harness never registers
             // validators in the slashing DB, which would fail block/attestation signing paths.
             disable_slashing_protection: true,
@@ -337,7 +356,8 @@ impl ValidatorStoreTestHarness {
             "test",
         ));
 
-        let (mock_collector, captured_calls) = create_mock_collector(options.collector_failure);
+        let (mock_collector, captured_calls) =
+            create_mock_collector(options.collector_failure, options.collector_hangs);
 
         // Database
         let database = Arc::new(
