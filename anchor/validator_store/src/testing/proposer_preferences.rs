@@ -8,14 +8,21 @@
 //!    future slot via the ProposerPreferences role's earliness allowance and validate proposer
 //!    assignment against it (#1062), and keying the collector to `proposal_slot` keeps it alive
 //!    until `proposal_slot + 1` passes.
+//!
+//! Scope of the slot assertions: these tests assert `call.metadata.slot`, the value captured by
+//! the mock at the `sign_and_collect` trait boundary. The real `create_message` that builds the
+//! on-wire `PartialSignatureMessages` never runs here, so the wire-slot field is not observed
+//! directly. `create_message` copies `metadata.slot` verbatim into `PartialSignatureMessages.slot`
+//! (see `signature_collector::SignatureCollectorManager::create_message`), and that verbatim copy
+//! is covered by signature_collector's own tests; asserting `metadata.slot` therefore pins the
+//! input to that copy.
 use std::sync::LazyLock;
 
-use bls::FixedBytesExtended;
 use signature_collector::{CollectionError, SignatureRequester};
 use ssv_types::{OperatorId, msgid::Role, partial_sig::PartialSignatureKind};
 use types::{
-    Address, ChainSpec, Domain, EthSpec, Hash256, MainnetEthSpec, ProposerPreferences, SignedRoot,
-    Slot,
+    Address, ChainSpec, Domain, Epoch, EthSpec, Hash256, MainnetEthSpec, ProposerPreferences,
+    SignedRoot, Slot,
 };
 use validator_store::ValidatorStore;
 
@@ -55,19 +62,26 @@ fn create_proposer_preferences(validator_index: u64, proposal_slot: Slot) -> Pro
     }
 }
 
-/// Independently recomputes the expected signing root for a `ProposerPreferences`, using the same
-/// mainnet spec and zero `genesis_validators_root` the harness wires up. Pins that the domain is
-/// `Domain::ProposerPreferences` and that its epoch is derived from `proposal_slot`.
-fn expected_signing_root(preferences: &ProposerPreferences) -> Hash256 {
-    let spec = ChainSpec::mainnet();
-    let epoch = preferences
-        .proposal_slot
-        .epoch(MainnetEthSpec::slots_per_epoch());
+/// Independently recomputes the expected signing root for a `ProposerPreferences` under the
+/// `Domain::ProposerPreferences` domain keyed at an explicit `epoch`, using the harness's own
+/// `spec` and `genesis_validators_root` (rather than hardcoding a spec / zero root) so the
+/// recompute exactly tracks the store's fork selection.
+///
+/// `epoch` is a parameter, not derived from `proposal_slot`, so a caller can recompute the root
+/// under both the proposal epoch (the correct key) and the send epoch (the regressed key) and
+/// contrast them. On a spec with a fork boundary between those two epochs the domains differ, which
+/// is what makes the "keyed on the proposal epoch, not the send epoch" assertion falsifiable.
+fn expected_signing_root(
+    preferences: &ProposerPreferences,
+    spec: &ChainSpec,
+    genesis_validators_root: Hash256,
+    epoch: Epoch,
+) -> Hash256 {
     let domain = spec.get_domain(
         epoch,
         Domain::ProposerPreferences,
         &spec.fork_at_epoch(epoch),
-        Hash256::zero(),
+        genesis_validators_root,
     );
     preferences.signing_root(domain)
 }
@@ -79,19 +93,38 @@ fn expected_signing_root(preferences: &ProposerPreferences) -> Hash256 {
 /// domain keyed by the proposal slot's epoch.
 ///
 /// Uses a lookahead `proposal_slot` (LOOKAHEAD_EPOCHS ahead of the send slot) so the recomputed
-/// domain epoch is `epoch(proposal_slot)` for a *future* slot, not the send slot's epoch: this
-/// exercises acceptance criterion "domain epoch equals `epoch(proposal_slot)`" for a real
-/// lookahead. It also asserts the broadcast `PartialSignatureMessages.slot` (captured via the
-/// collector call) equals `preferences.proposal_slot`, the SIP-94 §5/§7 wire-slot invariant.
+/// domain epoch is `epoch(proposal_slot)` for a *future* slot, not the send slot's epoch.
+/// Critically, the harness runs on a spec with Gloas activated exactly at `LOOKAHEAD_EPOCHS`, so a
+/// fork boundary sits strictly between the send epoch (0, genesis fork version) and the proposal
+/// epoch (`LOOKAHEAD_EPOCHS`, Gloas fork version). Those two fork versions produce byte-distinct
+/// signing domains, so the test can both (a) assert the observed root matches a recompute keyed at
+/// the proposal epoch and (b) assert it does NOT match a recompute keyed at the send epoch.
+/// Assertion (b) is the falsifiability guard: a regression to keying the domain on the send epoch
+/// would flip it, whereas under `ChainSpec::mainnet()` (send and proposal epochs both pre-Altair)
+/// both epochs share the genesis fork version and the guard could not distinguish them.
+///
+/// It also asserts `call.metadata.slot` (the value captured at the collector boundary, which
+/// `create_message` copies verbatim into `PartialSignatureMessages.slot`) equals
+/// `preferences.proposal_slot`, the SIP-94 §5/§7 wire-slot invariant.
 #[tokio::test(flavor = "multi_thread")]
 async fn proposer_preferences_reconstruction_threshold() {
     // Arrange
     let our_operator_id = OperatorId(1);
     let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
     let pubkey = committee.validators[0].public_key;
-    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id);
-    // A future proposal slot so `epoch(proposal_slot)` differs from the send slot's epoch; the
-    // independent root recompute then pins the domain epoch to the proposal slot, not the clock.
+    // Gloas at epoch LOOKAHEAD_EPOCHS puts a fork boundary strictly inside the lookahead window, so
+    // the proposal epoch (Gloas) and the send epoch (genesis) resolve to different signing domains.
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            spec: gloas_at_epoch_spec(Epoch::new(LOOKAHEAD_EPOCHS)),
+            ..Default::default()
+        },
+    );
+    // A future proposal slot so `epoch(proposal_slot)` differs from the send slot's epoch; with the
+    // Gloas boundary at LOOKAHEAD_EPOCHS, `epoch(proposal_slot) == LOOKAHEAD_EPOCHS` is the Gloas
+    // epoch while the send epoch (0) stays on the genesis fork version.
     let future_proposal_slot =
         Slot::new(TEST_SLOT + MainnetEthSpec::slots_per_epoch() * LOOKAHEAD_EPOCHS);
     let preferences =
@@ -136,23 +169,45 @@ async fn proposer_preferences_reconstruction_threshold() {
         Role::ProposerPreferences,
         "the network message should be routed under the ProposerPreferences role"
     );
-    // The broadcast `PartialSignatureMessages.slot` (captured off the collector call) must equal
-    // `proposal_slot`: SIP-94 §5/§7 pins the wire slot to the slot being proposed, and #1062
-    // validates proposer assignment against it.
+    // `call.metadata.slot` (captured at the collector boundary) must equal `proposal_slot`: SIP-94
+    // §5/§7 pins the wire slot to the slot being proposed, and #1062 validates proposer assignment
+    // against it. `create_message` copies this value verbatim into `PartialSignatureMessages.slot`.
     assert_eq!(
         call.metadata.slot, preferences.proposal_slot,
-        "the broadcast partial-signature slot should equal the proposal slot"
+        "the collected partial-signature slot should equal the proposal slot"
     );
 
     // Recompute the root independently to lock the ProposerPreferences-specific signing decisions
-    // that no other test covers: the `Domain::ProposerPreferences` choice, the epoch derived from
-    // `proposal_slot` (here a future slot, so this pins epoch keying to the proposal, not the
-    // clock), and the signed object being the `ProposerPreferences` itself. A regression to a
-    // different domain or a different epoch key fails here.
-    let expected_root = expected_signing_root(&preferences);
+    // that no other test covers: the `Domain::ProposerPreferences` choice, the epoch keyed off
+    // `proposal_slot`, and the signed object being the `ProposerPreferences` itself. Recompute
+    // under both epochs and assert the observed root matches the proposal epoch but NOT the send
+    // epoch. The inequality is meaningful only because the Gloas boundary at LOOKAHEAD_EPOCHS makes
+    // the two epochs' domains differ; a regression to send-epoch keying would satisfy the first
+    // assert but fail on flipping to match the second recompute.
+    let slots_per_epoch = MainnetEthSpec::slots_per_epoch();
+    let proposal_epoch = preferences.proposal_slot.epoch(slots_per_epoch);
+    let send_epoch = Slot::new(TEST_SLOT).epoch(slots_per_epoch);
+    let expected_root = expected_signing_root(
+        &preferences,
+        &harness.spec,
+        harness.genesis_validators_root,
+        proposal_epoch,
+    );
     assert_eq!(
         call.signing_root, expected_root,
-        "signing root should commit to the proposer preferences under the ProposerPreferences domain"
+        "signing root should commit to the proposer preferences under the ProposerPreferences \
+         domain keyed by the proposal slot's epoch"
+    );
+    let send_epoch_root = expected_signing_root(
+        &preferences,
+        &harness.spec,
+        harness.genesis_validators_root,
+        send_epoch,
+    );
+    assert_ne!(
+        call.signing_root, send_epoch_root,
+        "signing root must NOT be keyed by the send slot's epoch: the proposal epoch (Gloas) and \
+         the send epoch (genesis) yield different domains, so send-epoch keying is observable here"
     );
 }
 
@@ -196,10 +251,10 @@ async fn proposer_preferences_envelope_slot_is_proposal_slot() {
     );
     let call = &captured[0];
 
-    // The envelope slot must be the future `proposal_slot` (SIP-94 §5/§7), so the on-wire
-    // `PartialSignatureMessages.slot` equals the slot the preference targets. This is what peers
-    // validate proposer assignment against (#1062) and what keeps the collector alive until
-    // `proposal_slot + 1`.
+    // `call.metadata.slot` (captured at the collector boundary) must be the future `proposal_slot`
+    // (SIP-94 §5/§7). `create_message` copies it verbatim into `PartialSignatureMessages.slot`, so
+    // the on-wire slot equals the slot the preference targets: this is what peers validate proposer
+    // assignment against (#1062) and what keeps the collector alive until `proposal_slot + 1`.
     assert_eq!(
         call.metadata.slot, preferences.proposal_slot,
         "collection should be scheduled at the future proposal slot"
@@ -259,16 +314,19 @@ async fn proposer_preferences_insufficient_partial_signatures_warns_and_metrics(
         create_proposer_preferences(STARTING_VALIDATOR_INDEX as u64, Slot::new(TEST_SLOT));
 
     // The metric lives in the global prometheus registry shared by every test in the process, so
-    // we assert on the delta. The other metric test also touches this label, so the delta is only
+    // we assert on deltas. The infra metric test also touches these labels, so the deltas are only
     // reliable because both tests hold `METRIC_TEST_LOCK`; future failure tests must join that
     // serialization or use distinct labels.
-    let failure_counter = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
+    let metric = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
         .as_ref()
-        .expect("metric should be created")
-        .with_label_values(&[
-            crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
-        ]);
-    let count_before = failure_counter.get();
+        .expect("metric should be created");
+    let insufficient_counter = metric.with_label_values(&[
+        crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
+    ]);
+    let infra_counter =
+        metric.with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_INFRA]);
+    let insufficient_before = insufficient_counter.get();
+    let infra_before = infra_counter.get();
 
     // Act
     let result = harness
@@ -288,25 +346,34 @@ async fn proposer_preferences_insufficient_partial_signatures_warns_and_metrics(
          Unsupported), got: {result:?}"
     );
     assert_eq!(
-        failure_counter.get() - count_before,
+        insufficient_counter.get() - insufficient_before,
         1,
         "QueueClosedError should increment the insufficient_partial_signatures reconstruction-failure \
          metric once"
     );
+    // Pins the classification boundary: QueueClosedError is a NoSignature-class failure and must
+    // NOT be attributed to the infra bucket. A regression that reclassified it as infra would flip
+    // this zero delta.
+    assert_eq!(
+        infra_counter.get() - infra_before,
+        0,
+        "QueueClosedError must not leak into the infra reconstruction-failure metric"
+    );
 }
 
-/// The code classifies collection failures only into the coarse `insufficient_partial_signatures` /
-/// `infra` buckets; it never attributes a divergence to a specific input field. A
-/// `target_gas_limit` or `dependent_root` mismatch is only observable as a signing-root split
-/// (threshold-not-reached), which surfaces here as the same `QueueClosedError`.
+/// An infrastructure collection failure (`EmptySignature`) propagates the real
+/// `SignatureCollectionFailed` error and increments the `infra` reconstruction-failure metric,
+/// leaving the `insufficient_partial_signatures` metric untouched.
 ///
-/// This asserts the `insufficient_partial_signatures` label increments while the per-input
-/// attribution labels (`"target_gas_limit_divergence"`, `"dependent_root_divergence"`) stay at 0,
-/// proving the code emits no per-input attribution reason.
+/// This gives the `Infra` arm of `report_proposer_preferences_collection_failure` its first
+/// coverage and pins the classification boundary: the zero delta on
+/// `insufficient_partial_signatures` proves an infra failure does not drift into the
+/// observation-divergence bucket (whose value is an upper bound on the true divergence rate, so a
+/// leak would silently inflate it).
 #[tokio::test(flavor = "multi_thread")]
-async fn proposer_preferences_does_not_classify_remote_input_without_metadata() {
-    // Touches the same global metric as the other failure test, so it joins the same
-    // serialization.
+async fn proposer_preferences_infra_failure_increments_infra_metric() {
+    // Reads the same global prometheus labels as the other failure test, so it joins the same
+    // serialization; the cross-label zero-delta reads are only reliable under this lock.
     let _guard = METRIC_TEST_LOCK.lock().await;
 
     // Arrange
@@ -317,9 +384,8 @@ async fn proposer_preferences_does_not_classify_remote_input_without_metadata() 
         vec![committee],
         our_operator_id,
         HarnessOptions {
-            // A target_gas_limit / dependent_root mismatch is only observable as a signing-root
-            // split, i.e. threshold-not-reached, which the collector surfaces as QueueClosedError.
-            collector_failure: Some(CollectionError::QueueClosedError),
+            // EmptySignature classifies as the infra failure class.
+            collector_failure: Some(CollectionError::EmptySignature),
             disable_slashing_protection: true,
             ..Default::default()
         },
@@ -330,15 +396,13 @@ async fn proposer_preferences_does_not_classify_remote_input_without_metadata() 
     let metric = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
         .as_ref()
         .expect("metric should be created");
-    let failure_counter = metric.with_label_values(&[
+    let infra_counter =
+        metric.with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_INFRA]);
+    let insufficient_counter = metric.with_label_values(&[
         crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
     ]);
-    // Read the hypothetical per-input attribution labels directly; the code never emits them, so
-    // they must stay at zero. Using literal strings (not consts) is deliberate: no such consts
-    // exist because the production code never references these buckets.
-    let target_gas_limit_attribution = metric.with_label_values(&["target_gas_limit_divergence"]);
-    let dependent_root_attribution = metric.with_label_values(&["dependent_root_divergence"]);
-    let count_before = failure_counter.get();
+    let infra_before = infra_counter.get();
+    let insufficient_before = insufficient_counter.get();
 
     // Act
     let result = harness
@@ -351,27 +415,63 @@ async fn proposer_preferences_does_not_classify_remote_input_without_metadata() 
         matches!(
             result,
             Err(Error::SpecificError(
-                SpecificError::SignatureCollectionFailed(CollectionError::QueueClosedError)
+                SpecificError::SignatureCollectionFailed(CollectionError::EmptySignature)
             ))
         ),
-        "expected QueueClosedError surfaced as SignatureCollectionFailed, got: {result:?}"
+        "expected EmptySignature surfaced as SignatureCollectionFailed, got: {result:?}"
     );
     assert_eq!(
-        failure_counter.get() - count_before,
+        infra_counter.get() - infra_before,
         1,
-        "the coarse insufficient_partial_signatures bucket should increment once"
+        "EmptySignature should increment the infra reconstruction-failure metric once"
     );
-    // The per-input attribution buckets are never written by the production code: it cannot tell a
-    // target_gas_limit split from a dependent_root split at the partial-signature wire, so it emits
-    // no per-input reason.
+    // The zero delta pins the classification boundary: an infra variant drifting into the
+    // insufficient_partial_signatures bucket would silently inflate the divergence estimate.
     assert_eq!(
-        target_gas_limit_attribution.get(),
+        insufficient_counter.get() - insufficient_before,
         0,
-        "code must not attribute divergence to a target_gas_limit mismatch"
+        "infra failures must not leak into the insufficient_partial_signatures divergence metric"
     );
+}
+
+// ==================== Slashing-protection tests ====================
+
+/// `sign_proposer_preferences` succeeds with slashing protection enabled, proving the path never
+/// consults the slashing DB.
+///
+/// Tripwire mechanism: the harness slashing DB is created empty and no validator is ever
+/// registered in it, so any slashing-protection check would fail for an unregistered validator. If
+/// such a check were ever added to this code path, this call would flip from Ok to Err, which makes
+/// the success assertion a real behavioral assertion rather than a tautology. No metric lock is
+/// needed: this test reads no global prometheus labels.
+#[tokio::test(flavor = "multi_thread")]
+async fn proposer_preferences_does_not_touch_slashing_db() {
+    // Arrange
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+    let pubkey = committee.validators[0].public_key;
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            collector_failure: None,
+            disable_slashing_protection: false,
+            ..Default::default()
+        },
+    );
+    let preferences =
+        create_proposer_preferences(STARTING_VALIDATOR_INDEX as u64, Slot::new(TEST_SLOT));
+
+    // Act
+    let result = harness
+        .validator_store
+        .sign_proposer_preferences(pubkey, preferences.clone())
+        .await;
+
+    // Assert
+    let signed = result.expect("signing should succeed despite slashing protection being enabled");
     assert_eq!(
-        dependent_root_attribution.get(),
-        0,
-        "code must not attribute divergence to a dependent_root mismatch"
+        signed.message, preferences,
+        "signed message should echo the input preferences unchanged"
     );
 }

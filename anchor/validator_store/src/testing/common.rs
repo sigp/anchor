@@ -269,6 +269,18 @@ pub(super) fn gloas_at_genesis_spec() -> Arc<ChainSpec> {
     Arc::new(spec)
 }
 
+/// Builds a `ChainSpec` based on mainnet but with Gloas activated at `gloas_epoch` (leaving
+/// mainnet's other fork epochs untouched, so they stay far in the future). This places a fork
+/// boundary strictly inside a lookahead window: an epoch below `gloas_epoch` resolves to the
+/// genesis fork version while `gloas_epoch` and beyond resolve to the Gloas fork version, giving
+/// two byte-distinct signing domains on either side of the boundary. Used to make the
+/// "domain keyed on the *proposal* epoch, not the send epoch" assertion falsifiable.
+pub(super) fn gloas_at_epoch_spec(gloas_epoch: Epoch) -> Arc<ChainSpec> {
+    let mut spec = ChainSpec::mainnet();
+    spec.gloas_fork_epoch = Some(gloas_epoch);
+    Arc::new(spec)
+}
+
 /// Builds a `ChainSpec` based on mainnet but with Electra activated at genesis and Gloas
 /// disabled, so `TEST_SLOT` resolves to Electra (post-Electra, pre-Gloas). The committee QBFT
 /// decides over `BeaconVote` and the attestation index stays untouched at `0`.
