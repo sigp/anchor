@@ -98,7 +98,10 @@ const AGGREGATE_LOG_NAME: &str = "aggregate";
 const SELECTION_PROOF_LOG_NAME: &str = "selection proof";
 const SYNC_SELECTION_PROOF_LOG_NAME: &str = "sync selection proof";
 const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution";
-const PROPOSER_PREFERENCES_LOG_NAME: &str = "proposer preferences";
+
+/// Upper bound, in slots, on how long `sign_proposer_preferences` waits for a validator's signature
+/// to be reconstructed.
+const PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS: u32 = 2;
 
 /// A request to collect a committee signature for a single validator.
 ///
@@ -3552,42 +3555,54 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         // (#1062). A future proposal_slot also keeps the collector alive until that slot passes.
         let proposal_slot = preferences.proposal_slot;
 
-        let future = async {
-            let signature = match self
-                .collect_signature(
-                    PartialSignatureKind::ProposerPreferences,
-                    Role::ProposerPreferences,
-                    CollectionMode::SingleValidator,
-                    &validator,
-                    &cluster,
-                    signing_root,
-                    proposal_slot,
-                )
-                .await
-            {
-                Ok(signature) => signature,
-                Err(err) => {
-                    self.report_proposer_preferences_collection_failure(
-                        &err,
-                        &preferences,
-                        signing_root,
-                    );
-                    return Err(err);
-                }
-            };
+        // Bound the wait so a no-quorum validator cannot head-of-line-block the LH service's
+        // sequential per-validator loop (see `PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS`).
+        let collection_timeout =
+            self.spec.get_slot_duration() * PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS;
 
-            Ok(SignedProposerPreferences {
-                message: preferences,
-                signature,
-            })
-        };
-
-        run_and_update_metrics(
-            PROPOSER_PREFERENCES_LOG_NAME,
-            &metrics::SIGNED_PROPOSER_PREFERENCES_TOTAL,
-            future,
+        // Map a deadline elapse to `CollectionTimeout` so it and any collector error share the
+        // single reporting/return path below.
+        let collected = match tokio::time::timeout(
+            collection_timeout,
+            self.collect_signature(
+                PartialSignatureKind::ProposerPreferences,
+                Role::ProposerPreferences,
+                CollectionMode::SingleValidator,
+                &validator,
+                &cluster,
+                signing_root,
+                proposal_slot,
+            ),
         )
         .await
+        {
+            Ok(result) => result,
+            Err(_elapsed) => Err(Error::SpecificError(
+                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout),
+            )),
+        };
+
+        let signature = match collected {
+            Ok(signature) => signature,
+            Err(err) => {
+                self.report_proposer_preferences_collection_failure(
+                    &err,
+                    &preferences,
+                    signing_root,
+                );
+                return Err(err);
+            }
+        };
+
+        validator_metrics::inc_counter_vec(
+            &metrics::SIGNED_PROPOSER_PREFERENCES_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
+        Ok(SignedProposerPreferences {
+            message: preferences,
+            signature,
+        })
     }
 }
 
