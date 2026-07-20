@@ -961,4 +961,172 @@ mod manager_tests {
             result
         );
     }
+
+    #[tokio::test]
+    async fn envelope_proposer_validator_executor_is_transient_role_not_active() {
+        // Validator-executor EnvelopeProposer is a correctly-formed message whose QBFT
+        // routing is not wired yet (PR4/#1122): transient RoleNotActive, NOT InconsistentMessageId.
+        use fork::{Fork, ForkSchedule};
+        use message_sender::testing::MockMessageSender;
+        use ssv_types::{
+            RSA_SIGNATURE_SIZE,
+            consensus::{QbftMessage, QbftMessageType},
+            message::{MsgType, SSVMessage, SignedSSVMessage},
+        };
+        use ssz::Encode;
+
+        let setup = setup_test(1);
+
+        // Create fork schedule with Boole active (latest SSV fork)
+        // EnvelopeProposer requires Ethereum's Gloas (ePBS) fork, which mainnet ChainSpec has
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "test");
+
+        let config = processor::Config {
+            max_workers: 4,
+            queue_size: Default::default(),
+        };
+        let senders = processor::spawn(config, setup.executor);
+        let (network_tx, _network_rx) = mpsc::unbounded_channel();
+
+        let manager = QbftManager::<types::MainnetEthSpec, _>::new(
+            senders,
+            OperatorId(1).into(),
+            setup.clock,
+            Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
+            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
+            Arc::new(fork_schedule),
+            Arc::new(types::ChainSpec::mainnet()),
+        )
+        .expect("Manager creation should succeed");
+
+        // Create an EnvelopeProposer message with Validator executor
+        let msg_id = MessageId::new(
+            &DomainType([0; 4]),
+            Role::EnvelopeProposer,
+            &DutyExecutor::Validator(bls::PublicKeyBytes::empty()),
+        );
+
+        let qbft_message = QbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 100, // Any slot in Gloas fork
+            round: 1,
+            identifier: (&msg_id).into(),
+            root: Hash256::from([0u8; 32]),
+            data_round: 1,
+            round_change_justification: ssv_types::VariableList::empty(),
+            prepare_justification: ssv_types::VariableList::empty(),
+        };
+
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            msg_id,
+            qbft_message.as_ssz_bytes(),
+        )
+        .expect("SSVMessage creation should succeed");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage creation should succeed");
+
+        // Act: Call receive_data
+        let result = manager.receive_data(signed_msg, qbft_message);
+
+        // Assert: Must be transient RoleNotActive (routing not wired), NOT InconsistentMessageId
+        assert!(
+            matches!(result, Err(QbftError::RoleNotActive)),
+            "validator-executor EnvelopeProposer must be transient RoleNotActive, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn envelope_proposer_committee_executor_decodes_as_validator_executor() {
+        // NOTE: This test documents a MessageId encoding constraint.
+        // Due to MessageId encoding, Role::EnvelopeProposer is always decoded as
+        // DutyExecutor::Validator (bytes 8-55), making Committee-executor EnvelopeProposer
+        // impossible to construct via normal MessageId operations.
+        //
+        // This test verifies the encoding behavior: attempting to create a
+        // Committee-executor EnvelopeProposer in MessageId results in a Validator-executor
+        // being decoded, which then returns RoleNotActive (routing not wired).
+        use fork::{Fork, ForkSchedule};
+        use message_sender::testing::MockMessageSender;
+        use ssv_types::{
+            RSA_SIGNATURE_SIZE,
+            consensus::{QbftMessage, QbftMessageType},
+            message::{MsgType, SSVMessage, SignedSSVMessage},
+        };
+        use ssz::Encode;
+
+        let setup = setup_test(1);
+
+        // Create fork schedule with Boole active (latest SSV fork)
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "test");
+
+        let config = processor::Config {
+            max_workers: 4,
+            queue_size: Default::default(),
+        };
+        let senders = processor::spawn(config, setup.executor);
+        let (network_tx, _network_rx) = mpsc::unbounded_channel();
+
+        let manager = QbftManager::<types::MainnetEthSpec, _>::new(
+            senders,
+            OperatorId(1).into(),
+            setup.clock,
+            Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
+            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
+            Arc::new(fork_schedule),
+            Arc::new(types::ChainSpec::mainnet()),
+        )
+        .expect("Manager creation should succeed");
+
+        // Attempt to create EnvelopeProposer with Committee executor.
+        // Due to MessageId encoding (Committee writes bytes 24-55, but EnvelopeProposer
+        // decodes bytes 8-55 as Validator), this will be decoded as Validator executor.
+        let msg_id = MessageId::new(
+            &DomainType([0; 4]),
+            Role::EnvelopeProposer,
+            &DutyExecutor::Committee(CommitteeId([0; 32])),
+        );
+
+        let qbft_message = QbftMessage {
+            qbft_message_type: QbftMessageType::Proposal,
+            height: 100,
+            round: 1,
+            identifier: (&msg_id).into(),
+            root: Hash256::from([0u8; 32]),
+            data_round: 1,
+            round_change_justification: ssv_types::VariableList::empty(),
+            prepare_justification: ssv_types::VariableList::empty(),
+        };
+
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVConsensusMsgType,
+            msg_id,
+            qbft_message.as_ssz_bytes(),
+        )
+        .expect("SSVMessage creation should succeed");
+
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage creation should succeed");
+
+        // Act: Call receive_data
+        let result = manager.receive_data(signed_msg, qbft_message);
+
+        // Assert: Due to encoding, this is decoded as Validator executor,
+        // so we get RoleNotActive (routing not wired), not InconsistentMessageId.
+        assert!(
+            matches!(result, Err(QbftError::RoleNotActive)),
+            "EnvelopeProposer is always decoded as Validator, so expect RoleNotActive, got: {result:?}"
+        );
+    }
 }

@@ -282,6 +282,11 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Proposer) => ValidatorDutyKind::Proposal,
                     Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
+                    Some(Role::EnvelopeProposer) => {
+                        // TODO: wire EnvelopeProposer instance routing (#1122)
+                        warn!(?msg_id, "EnvelopeProposer routing not yet wired");
+                        return Err(QbftError::RoleNotActive);
+                    }
                     // Committee roles use DutyExecutor::Committee, not Validator
                     Some(Role::Committee | Role::AggregatorCommittee)
                     // These roles don't use QBFT consensus
@@ -352,7 +357,12 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     }
                     // Validator roles should use DutyExecutor::Validator, not
                     // Committee
-                    Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
+                    Some(
+                        Role::Aggregator
+                        | Role::Proposer
+                        | Role::SyncCommittee
+                        | Role::EnvelopeProposer,
+                    )
                     // These roles don't use QBFT consensus
                     | Some(
                         Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
