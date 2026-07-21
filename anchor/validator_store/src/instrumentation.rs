@@ -23,12 +23,16 @@ pub mod checkpoints {
     pub const DUTY_FAILED: &str = "duty_failed";
 }
 
-/// Telemetry classification of `collect_signature` failures during PTC duties.
+/// Telemetry classification of `collect_signature` failures.
+///
+/// Shared by every single-validator signing path (PTC, ProposerPreferences, ...): the
+/// classification depends only on the generic `collect_signature` error, never on the role, so
+/// each caller maps these classes onto its own log message and reconstruction-failure metric.
 ///
 /// Returned as an enum rather than a label string because the class drives two independent
 /// effects in the caller: the log level and whether a reconstruction-failure metric is
 /// incremented at all.
-pub enum PtcFailureClass {
+pub enum CollectionFailureClass {
     /// The committee never reached the partial signature threshold. This surfaces as
     /// `QueueClosedError` because the collector is evicted after
     /// `SIGNATURE_COLLECTOR_RETAIN_SLOTS`, dropping the result channel while we await it, so it
@@ -41,22 +45,27 @@ pub enum PtcFailureClass {
     NonCollection,
 }
 
-pub fn classify_ptc_collection_failure(error: &Error) -> PtcFailureClass {
+pub fn classify_collection_failure(error: &Error) -> CollectionFailureClass {
     match error {
         // The inner match is deliberately wildcard-free so a future `CollectionError` variant
         // forces a conscious classification decision here at compile time.
         Error::SpecificError(SpecificError::SignatureCollectionFailed(collection_error)) => {
             match collection_error {
+                // `CollectionTimeout` is synthesized by `sign_proposer_preferences` when its
+                // bounded collection-wait deadline elapses; the collector itself never emits it. It
+                // shares the no-signature bucket with the `QueueClosedError` threshold-not-reached
+                // signal because a deadline elapse likewise means the threshold was not reached
+                // within the wait window.
                 CollectionError::QueueClosedError | CollectionError::CollectionTimeout => {
-                    PtcFailureClass::NoSignature
+                    CollectionFailureClass::NoSignature
                 }
                 CollectionError::QueueFullError
                 | CollectionError::OwnOperatorIdUnknown
                 | CollectionError::EmptySignature
-                | CollectionError::RecoverError(_) => PtcFailureClass::Infra,
+                | CollectionError::RecoverError(_) => CollectionFailureClass::Infra,
             }
         }
-        _ => PtcFailureClass::NonCollection,
+        _ => CollectionFailureClass::NonCollection,
     }
 }
 
