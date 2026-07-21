@@ -1256,50 +1256,6 @@ mod tests {
         );
     }
 
-    /// Tests that the `MessageAcceptance` classification for EnvelopeProposer adheres to the SSV
-    /// spec.
-    #[test]
-    fn envelope_proposer_relevant_classifications_match_ssv_spec() {
-        // NoDuty and duty-limit overflow are Ignore; fork-gate, kind mismatch,
-        // packet-count overflow are Reject.
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::NoDuty),
-            MessageAcceptance::Ignore,
-            "NoDuty must be Ignore",
-        );
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::ExcessiveDutyCount {
-                got: 33,
-                limit: 32,
-                role: Role::EnvelopeProposer,
-            }),
-            MessageAcceptance::Ignore,
-            "duty-limit overflow must be Ignore",
-        );
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::RoleNotActiveBeforeEthFork {
-                role: Role::EnvelopeProposer,
-                current_fork: types::ForkName::Base,
-                minimum_fork: types::ForkName::Gloas,
-            }),
-            MessageAcceptance::Reject,
-            "fork-gate failure must be Reject",
-        );
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::PartialSignatureTypeRoleMismatch),
-            MessageAcceptance::Reject,
-            "kind mismatch must be Reject",
-        );
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::TooManyPartialSignatureMessages {
-                got: 2,
-                limit: 1
-            }),
-            MessageAcceptance::Reject,
-            "packet-count overflow must be Reject",
-        );
-    }
-
     // Helper struct for directly creating consensus messages for tests
     pub(crate) struct QbftMessageBuilder {
         msg_type: QbftMessageType,

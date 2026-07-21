@@ -497,7 +497,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, ValidatedSSVMessage, duty_limit,
+        LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, MessageAcceptance, ValidatedSSVMessage,
+        duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
             create_operator_pub_keys, generate_random_rsa_public_keys,
@@ -2126,7 +2127,6 @@ mod tests {
             generate_fork_schedule(),
             spec_with_gloas(None),
         );
-
         assert_validation_error(
             result,
             |failure| {
@@ -2139,6 +2139,18 @@ mod tests {
                 )
             },
             "RoleNotActiveBeforeEthFork (EnvelopeProposer consensus message pre-Gloas)",
+        );
+
+        // Ensures that pre-Gloas EnvelopeProposer messages caught at fork-gate are rejected and not
+        // ignored.
+        assert_eq!(
+            MessageAcceptance::from(&ValidationFailure::RoleNotActiveBeforeEthFork {
+                role: Role::EnvelopeProposer,
+                current_fork: types::ForkName::Base,
+                minimum_fork: types::ForkName::Gloas,
+            }),
+            MessageAcceptance::Reject,
+            "fork-gate failure must be Reject",
         );
     }
 }

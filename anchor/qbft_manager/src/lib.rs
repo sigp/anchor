@@ -30,7 +30,7 @@ use tokio::{
     },
     time::{Instant, sleep},
 };
-use tracing::{Instrument, debug_span, error, warn};
+use tracing::{Instrument, debug, debug_span, error, warn};
 use types::{ChainSpec, Epoch, EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
@@ -284,7 +284,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
                     Some(Role::EnvelopeProposer) => {
                         // TODO: wire EnvelopeProposer instance routing (#1122)
-                        warn!(?msg_id, "EnvelopeProposer routing not yet wired");
+                        debug!(?msg_id, "EnvelopeProposer routing not yet wired");
                         return Err(QbftError::RoleNotActive);
                     }
                     // Committee roles use DutyExecutor::Committee, not Validator
