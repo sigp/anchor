@@ -436,8 +436,8 @@ async fn proposer_preferences_infra_failure_increments_infra_metric() {
 
 /// A collection that never reaches quorum must fail per-validator with a *bounded* timeout and must
 /// never hang the caller indefinitely (issue #1063 AC7). The mock collector captures the call and
-/// then returns a future that never resolves, so the only way `sign_proposer_preferences` can return
-/// is the production `tokio::time::timeout` elapsing after
+/// then returns a future that never resolves, so the only way `sign_proposer_preferences` can
+/// return is the production `tokio::time::timeout` elapsing after
 /// `spec.get_slot_duration() * PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS` (= 24s under the
 /// harness's mainnet spec). On elapse it synthesizes
 /// `CollectionError::CollectionTimeout`, which classifies as the NoSignature bucket and increments
@@ -452,8 +452,8 @@ async fn proposer_preferences_infra_failure_increments_infra_metric() {
 /// auto-advancing clock. Neither the harness constructor nor the `sign_proposer_preferences` path
 /// spawns a background task that keeps the runtime busy, so once the call awaits the timeout the
 /// runtime goes idle and tokio auto-advances virtual time straight to the 24s deadline. The 24s
-/// therefore elapse in ~0 real time (verified via a wall-clock guard on the suite run), so no manual
-/// `tokio::time::advance` is required.
+/// therefore elapse in ~0 real time (verified via a wall-clock guard on the suite run), so no
+/// manual `tokio::time::advance` is required.
 #[tokio::test(start_paused = true)]
 async fn proposer_preferences_no_quorum_hits_bounded_timeout() {
     // Reads the same global prometheus labels as the other failure tests, so it joins the same
