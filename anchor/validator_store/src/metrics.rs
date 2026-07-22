@@ -27,6 +27,15 @@ pub static SIGNED_RANDAO_REVEALS_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLo
     )
 });
 
+pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_signed_proposer_preferences_total",
+            "Total count of ProposerPreferences signings",
+            &["status"],
+        )
+    });
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MetadataService metrics
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -147,3 +156,22 @@ pub static PTC_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> = LazyLo
         &["reason"],
     )
 });
+
+/// The committee never reached the partial-signature threshold for a ProposerPreferences signing.
+/// At the current collector granularity this single bucket covers every no-quorum cause — too few
+/// operators, partial-signature delivery loss, and operators diverging on the signing root
+/// (`target_gas_limit` / `dependent_root`) — which are indistinguishable at the wire. Mirrors
+/// `PTC_FAILURE_NO_SIGNATURE`.
+pub const PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES: &str =
+    "insufficient_partial_signatures";
+/// Local collection or reconstruction infrastructure fault.
+pub const PROPOSER_PREFERENCES_FAILURE_INFRA: &str = "infra";
+
+pub static PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_proposer_preferences_reconstruction_failures_total",
+            "ProposerPreferences signature collection failures by reason",
+            &["reason"],
+        )
+    });
