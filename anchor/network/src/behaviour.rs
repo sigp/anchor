@@ -1,6 +1,6 @@
 use std::{hash::Hasher, time::Duration};
 
-use fork::ForkLifecycle;
+use fork::{ForkLifecycle, ForkSchedule};
 use libp2p::{
     gossipsub::{self, ConfigBuilderError, MessageAuthenticity, ValidationMode},
     identify, ping,
@@ -8,6 +8,7 @@ use libp2p::{
     upnp::tokio::Behaviour as Upnp,
 };
 use prometheus_client::registry::Registry;
+use subnet_service::topic;
 use thiserror::Error;
 use tokio::sync::watch;
 use twox_hash::XxHash64;
@@ -16,7 +17,6 @@ use version::version_with_platform;
 
 use crate::{
     Config,
-    behaviour::BehaviourError::Gossipsub,
     discovery::{Discovery, FIND_NODE_QUERY_CLOSEST_PEERS},
     handshake,
     peer_manager::PeerManager,
@@ -24,6 +24,20 @@ use crate::{
 };
 
 const MAX_TRANSMIT_SIZE_BYTES: usize = 5_000_000;
+
+/// The gossipsub behaviour type used by Anchor. The subscription filter ensures peers may only
+/// subscribe us to topics that are valid on this network (any subnet of any scheduled fork).
+pub type Gossipsub =
+    gossipsub::Behaviour<gossipsub::IdentityTransform, gossipsub::WhitelistSubscriptionFilter>;
+
+/// Build the subscription filter from the fork schedule.
+///
+/// The whitelist is built with the same topic construction used when subscribing, so it covers
+/// every subnet of every scheduled fork and nothing else. Note the filter also applies to our
+/// own `subscribe` calls.
+fn subscription_filter(fork_schedule: &ForkSchedule) -> gossipsub::WhitelistSubscriptionFilter {
+    gossipsub::WhitelistSubscriptionFilter(topic::whitelist_topic_hashes(fork_schedule))
+}
 
 /// Gossipsub heartbeat interval in milliseconds (how often messages are propagated)
 pub const GOSSIPSUB_HEARTBEAT_INTERVAL_MILLIS: u64 = 700;
@@ -76,7 +90,7 @@ pub struct AnchorBehaviour {
     /// Used for connection health checks.
     pub ping: ping::Behaviour,
     /// The routing pub-sub mechanism for Anchor.
-    pub gossipsub: gossipsub::Behaviour,
+    pub gossipsub: Gossipsub,
     /// Discv5 Discovery protocol.
     pub discovery: Discovery,
     /// Anchor peer manager, wrapping libp2p behaviours with minimal added logic for peer
@@ -94,6 +108,7 @@ impl AnchorBehaviour {
         network_config: &Config,
         metrics_registry: &mut Registry,
         spec: &ChainSpec,
+        fork_schedule: &ForkSchedule,
         lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Self, BehaviourError> {
         let identify = {
@@ -132,9 +147,12 @@ impl AnchorBehaviour {
             .validate_messages()
             .build()?;
 
-        let mut gossipsub =
-            gossipsub::Behaviour::new(MessageAuthenticity::RandomAuthor, gossipsub_config)
-                .map_err(|e| Gossipsub(e.to_string()))?;
+        let mut gossipsub = gossipsub::Behaviour::new_with_subscription_filter(
+            MessageAuthenticity::RandomAuthor,
+            gossipsub_config,
+            subscription_filter(fork_schedule),
+        )
+        .map_err(|e| BehaviourError::Gossipsub(e.to_string()))?;
         gossipsub = gossipsub.with_metrics(
             metrics_registry.sub_registry_with_prefix("gossipsub"),
             gossipsub::MetricsConfig::default(),
@@ -151,7 +169,7 @@ impl AnchorBehaviour {
             gossipsub
                 .with_peer_score(score_params, score_thresholds)
                 .map_err(|e| {
-                    Gossipsub(format!(
+                    BehaviourError::Gossipsub(format!(
                         "Failed to activate the peer scoring system with the given parameters: {e}"
                     ))
                 })?;
@@ -327,5 +345,36 @@ mod tests {
 
         // Same data should produce same message ID
         assert_eq!(msg_id_1, msg_id_2);
+    }
+
+    #[test]
+    fn test_subscription_filter_allows_valid_topics_and_rejects_others() {
+        use fork::Fork;
+        use libp2p::gossipsub::TopicSubscriptionFilter;
+        use ssv_types::domain_type::DomainType;
+        use subnet_service::{SubnetId, topic::create_topic};
+
+        let network_name = "mainnet";
+        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType([0, 0, 0, 1]), network_name);
+        let mut filter = subscription_filter(&fork_schedule);
+
+        // Topics built the way the subscription path builds them must pass the filter,
+        // otherwise our own `subscribe` calls would fail with `SubscriptionError::NotAllowed`.
+        // Exhaustive whitelist coverage lives in the `subnet_service::topic` tests.
+        for fork in Fork::all() {
+            let topic = create_topic(&fork.topic_prefix(network_name), SubnetId::from(0u64));
+            assert!(
+                filter.can_subscribe(&gossipsub::IdentTopic::new(topic).hash()),
+                "valid topic must be whitelisted"
+            );
+        }
+
+        // Anything else is rejected
+        for invalid in ["ssv.v2.128", "/ssv/holesky/boole/0", "random-topic"] {
+            assert!(
+                !filter.can_subscribe(&gossipsub::IdentTopic::new(invalid).hash()),
+                "invalid topic {invalid} must be rejected"
+            );
+        }
     }
 }

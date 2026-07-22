@@ -5,8 +5,10 @@
 //! - Alan (legacy): `ssv.v2.<subnet_id>`
 //! - Boole and later: `/ssv/<network>/<fork>/<subnet_id>`
 
-use fork::Fork;
-use libp2p::gossipsub::TopicHash;
+use std::collections::HashSet;
+
+use fork::{Fork, ForkSchedule};
+use libp2p::gossipsub::{IdentTopic, TopicHash};
 
 use crate::{SUBNET_COUNT, SubnetId};
 
@@ -15,6 +17,27 @@ use crate::{SUBNET_COUNT, SubnetId};
 /// The prefix should include the trailing separator (e.g., "ssv.v2." or "/ssv/mainnet/boole/").
 pub fn create_topic(prefix: &str, subnet: SubnetId) -> String {
     format!("{}{}", prefix, *subnet)
+}
+
+/// Compute the set of all gossipsub topic hashes that are valid on this network.
+///
+/// Covers every subnet of every fork in the schedule, using the same
+/// [`Fork::topic_prefix`]/[`create_topic`] construction as the subscription path, so the
+/// result exactly matches the topics the node may subscribe to. Used to build the gossipsub
+/// subscription whitelist that stops peers from subscribing us to arbitrary topics.
+pub fn whitelist_topic_hashes(schedule: &ForkSchedule) -> HashSet<TopicHash> {
+    let mut hashes = HashSet::with_capacity(Fork::all().len() * SUBNET_COUNT);
+    for fork in Fork::all() {
+        if schedule.config(*fork).is_none() {
+            continue;
+        }
+        let prefix = fork.topic_prefix(schedule.network_name());
+        for subnet in 0..SUBNET_COUNT as u64 {
+            let topic = create_topic(&prefix, SubnetId::from(subnet));
+            hashes.insert(IdentTopic::new(topic).hash());
+        }
+    }
+    hashes
 }
 
 /// Result of parsing a topic hash.
@@ -109,8 +132,12 @@ pub fn extract_subnet_id(topic_str: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use libp2p::gossipsub::IdentTopic;
     use ssv_network_config::ALAN_TOPIC_PREFIX;
+    use ssv_types::domain_type::DomainType;
+    use types::Epoch;
 
     use super::*;
 
@@ -122,6 +149,10 @@ mod tests {
     const TEST_SUBNET_ID: u64 = 42;
     const ALTERNATE_SUBNET_ID: u64 = 100;
     const OUT_OF_RANGE_SUBNET_ID: u64 = 200;
+
+    // Test fork domains
+    const ALAN_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
+    const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
 
     /// Constructs the expected Boole topic string for a network and subnet.
     fn expected_boole_topic(network: &str, subnet_id: u64) -> String {
@@ -165,6 +196,70 @@ mod tests {
             topic.as_str(),
             expected_boole_topic(MAINNET, TEST_SUBNET_ID),
             "Boole topic should use network-specific prefix"
+        );
+    }
+
+    // ==================== whitelist_topic_hashes tests ====================
+
+    /// Constructs a schedule with Alan at epoch 0 and Boole at a later epoch.
+    fn two_fork_schedule(network: &str) -> ForkSchedule {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), ALAN_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(100), BOOLE_DOMAIN));
+        ForkSchedule::from_fork_configs(configs, network).expect("valid test schedule")
+    }
+
+    #[test]
+    fn test_whitelist_topic_hashes_covers_all_subnets_of_all_scheduled_forks() {
+        // Arrange
+        let schedule = two_fork_schedule(MAINNET);
+
+        // Act
+        let hashes = whitelist_topic_hashes(&schedule);
+
+        // Assert
+        assert_eq!(
+            hashes.len(),
+            2 * SUBNET_COUNT,
+            "should contain one topic per subnet per scheduled fork"
+        );
+        for subnet_id in 0..SUBNET_COUNT as u64 {
+            let alan_hash = IdentTopic::new(expected_alan_topic(subnet_id)).hash();
+            let boole_hash = IdentTopic::new(expected_boole_topic(MAINNET, subnet_id)).hash();
+            assert!(
+                hashes.contains(&alan_hash),
+                "should contain Alan topic for subnet {subnet_id}"
+            );
+            assert!(
+                hashes.contains(&boole_hash),
+                "should contain Boole topic for subnet {subnet_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_whitelist_topic_hashes_excludes_invalid_topics() {
+        // Arrange
+        let schedule = two_fork_schedule(MAINNET);
+
+        // Act
+        let hashes = whitelist_topic_hashes(&schedule);
+
+        // Assert
+        let out_of_range = IdentTopic::new(expected_alan_topic(OUT_OF_RANGE_SUBNET_ID)).hash();
+        let wrong_network = IdentTopic::new(expected_boole_topic(HOLESKY, TEST_SUBNET_ID)).hash();
+        let foreign = IdentTopic::new("/eth2/12345678/beacon_block/ssz_snappy").hash();
+        assert!(
+            !hashes.contains(&out_of_range),
+            "should not contain out-of-range subnet topics"
+        );
+        assert!(
+            !hashes.contains(&wrong_network),
+            "should not contain topics for other networks"
+        );
+        assert!(
+            !hashes.contains(&foreign),
+            "should not contain topics from other protocols"
         );
     }
 
