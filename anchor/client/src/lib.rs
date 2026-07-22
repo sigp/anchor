@@ -63,6 +63,7 @@ use validator_services::{
     latency_service::start_latency_service,
     payload_attestation_service::PayloadAttestationService,
     preparation_service::PreparationServiceBuilder,
+    proposer_preferences_service::ProposerPreferencesService,
     sync_committee_service::SyncCommitteeService,
 };
 
@@ -821,7 +822,6 @@ impl Client {
         // mirroring LH's VC (validator_client/src/lib.rs:657). The service also self-gates per
         // slot on `gloas_enabled()`, but gating the start avoids spawning a perpetual idle task
         // on networks where Gloas is not scheduled.
-        // TODO(gloas, #1064): `ProposerPreferences` joins this block once implemented
         if spec.is_gloas_scheduled() {
             PayloadAttestationService::new(
                 duties_service.clone(),
@@ -833,6 +833,17 @@ impl Client {
             )
             .start_update_service()
             .map_err(|e| format!("Unable to start payload attestation service: {e}"))?;
+
+            ProposerPreferencesService::new(
+                duties_service.clone(),
+                validator_store.clone(),
+                slot_clock.clone(),
+                beacon_nodes.clone(),
+                executor.clone(),
+                spec.clone(),
+            )
+            .start_update_service()
+            .map_err(|e| format!("Unable to start proposer preferences service: {e}"))?;
         }
 
         http_api_shared_state.write().database_state = Some(database.watch());
