@@ -497,7 +497,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, ValidatedSSVMessage, duty_limit,
+        LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, MessageAcceptance, ValidatedSSVMessage,
+        duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
             create_operator_pub_keys, generate_random_rsa_public_keys,
@@ -1882,6 +1883,90 @@ mod tests {
         assert_eq!(result, Ok(Some(SLOTS_PER_EPOCH)));
     }
 
+    #[test]
+    fn test_duty_limit_envelope_proposer() {
+        // EnvelopeProposer is validator-scoped and per-slot. Its duty limit is
+        // `slots_per_epoch` (one envelope per slot across the lookahead window),
+        // independent of the validator-index slice length. Mirror
+        // test_duty_limit_proposer_preferences.
+        const SLOTS_PER_EPOCH: u64 = 32;
+
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(100),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(1),
+        );
+
+        let msg_id = MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            Role::EnvelopeProposer,
+            &DutyExecutor::Validator(PublicKeyBytes::empty()),
+        );
+        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
+            .expect("SSVMessage should be created");
+        let signed_msg = SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_msg,
+            vec![],
+        )
+        .expect("SignedSSVMessage should be created");
+
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let mock_duties_provider = Arc::new(MockDutiesProvider::default());
+        let map = HashMap::new();
+
+        // Create fork schedule with Boole at epoch 0 (active from start).
+        let mut fork_epochs = BTreeMap::new();
+        fork_epochs.insert(Fork::Alan, (Epoch::new(0), DomainType([0, 0, 0, 42])));
+        fork_epochs.insert(Fork::Boole, (Epoch::new(0), DomainType([0, 0, 0, 43])));
+        let fork_schedule = Arc::new(
+            fork::ForkSchedule::from_fork_configs(fork_epochs, "testing")
+                .expect("test fork schedule creation should succeed"),
+        );
+
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::EnvelopeProposer,
+            received_at: now,
+            slots_per_epoch: SLOTS_PER_EPOCH,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: slot_clock.clone(),
+            operator_pub_keys: &map,
+            fork_schedule,
+            spec: Arc::new(types::ChainSpec::mainnet()),
+        };
+
+        let slot = slot_clock.now().unwrap();
+
+        // Act: Call duty_limit directly (private items visible to child-module tests).
+        let result = duty_limit(
+            &validation_context,
+            slot,
+            &[ValidatorIndex(0)], // Single validator; irrelevant for EnvelopeProposer
+            mock_duties_provider.clone(),
+        );
+
+        // Assert: Duty cap must equal slots_per_epoch and be independent of slice length.
+        assert_eq!(
+            result,
+            Ok(Some(SLOTS_PER_EPOCH)),
+            "EnvelopeProposer duty cap must be slots_per_epoch"
+        );
+
+        // Verify independence from slice length.
+        let many = vec![ValidatorIndex(0); 100];
+        let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
+        assert_eq!(
+            result,
+            Ok(Some(SLOTS_PER_EPOCH)),
+            "duty cap must be independent of validator-index slice length"
+        );
+    }
+
     /// Builds a signed consensus message for `role` and runs it through the full
     /// `validate_ssv_message` path (including `validate_role_for_fork`) with the
     /// given fork schedule and chain spec, returning the result for the caller
@@ -2028,6 +2113,44 @@ mod tests {
                 )
             },
             "RoleNotActiveAfterEthFork (ValidatorRegistration consensus message post-Gloas)",
+        );
+    }
+
+    #[test]
+    fn test_envelope_proposer_consensus_message_rejected_before_gloas() {
+        // `EnvelopeProposer` is a post-Gloas role. With Gloas never activating
+        // (`spec_with_gloas(None)`), the shared `validate_role_for_fork` gate must reject
+        // its consensus message at every slot. The gate is role-agnostic across entry
+        // points, so exercising it once via the consensus path covers the envelope role.
+        let result = run_role_fork_validation(
+            Role::EnvelopeProposer,
+            generate_fork_schedule(),
+            spec_with_gloas(None),
+        );
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeEthFork {
+                        minimum_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveBeforeEthFork (EnvelopeProposer consensus message pre-Gloas)",
+        );
+
+        // Ensures that pre-Gloas EnvelopeProposer messages caught at fork-gate are rejected and not
+        // ignored.
+        assert_eq!(
+            MessageAcceptance::from(&ValidationFailure::RoleNotActiveBeforeEthFork {
+                role: Role::EnvelopeProposer,
+                current_fork: types::ForkName::Base,
+                minimum_fork: types::ForkName::Gloas,
+            }),
+            MessageAcceptance::Reject,
+            "fork-gate failure must be Reject",
         );
     }
 }

@@ -23,6 +23,7 @@ pub enum Role {
     AggregatorCommittee,
     PTCAttester,
     ProposerPreferences,
+    EnvelopeProposer,
 }
 
 impl From<Role> for [u8; 4] {
@@ -37,6 +38,7 @@ impl From<Role> for [u8; 4] {
             Role::AggregatorCommittee => [6, 0, 0, 0],
             Role::PTCAttester => [7, 0, 0, 0],
             Role::ProposerPreferences => [8, 0, 0, 0],
+            Role::EnvelopeProposer => [9, 0, 0, 0],
         }
     }
 }
@@ -55,6 +57,7 @@ impl TryFrom<&[u8]> for Role {
             [6, 0, 0, 0] => Ok(Role::AggregatorCommittee),
             [7, 0, 0, 0] => Ok(Role::PTCAttester),
             [8, 0, 0, 0] => Ok(Role::ProposerPreferences),
+            [9, 0, 0, 0] => Ok(Role::EnvelopeProposer),
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -77,6 +80,7 @@ impl Role {
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::SyncCommittee => Some(6),
+            Role::EnvelopeProposer => Some(2),
             // These roles don't use QBFT consensus
             Role::ValidatorRegistration
             | Role::VoluntaryExit
@@ -178,7 +182,8 @@ impl MessageId {
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences => PublicKeyBytes::deserialize(&self.0[8..])
+            | Role::ProposerPreferences
+            | Role::EnvelopeProposer => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
         }
@@ -416,6 +421,7 @@ mod tests {
             Role::AggregatorCommittee,
             Role::Proposer,
             Role::SyncCommittee,
+            Role::EnvelopeProposer,
         ] {
             assert!(role.is_qbft_role(), "{role:?} runs QBFT");
             assert!(role.max_round().is_some(), "{role:?} must have a max round");
@@ -459,11 +465,58 @@ mod tests {
             Role::ValidatorRegistration,
             Role::VoluntaryExit,
             Role::PTCAttester,
+            Role::EnvelopeProposer,
         ] {
             assert!(
                 role.monotonic_slot_role(),
                 "{role:?} must be a monotonic-slot role"
             );
         }
+    }
+
+    /// Tests that EnvelopeProposer is a validator-scoped QBFT role with
+    /// round cut-off 2.
+    #[test]
+    fn envelope_proposer_is_validator_scoped_qbft_with_round_cutoff_two() {
+        assert!(
+            !Role::EnvelopeProposer.is_committee_role(),
+            "EnvelopeProposer is per-validator, not a committee role"
+        );
+        assert_eq!(
+            Role::EnvelopeProposer.max_round(),
+            Some(2),
+            "Envelope QBFT cut-off round must be 2"
+        );
+        assert!(
+            Role::EnvelopeProposer.is_qbft_role(),
+            "EnvelopeProposer runs QBFT (max_round is Some)"
+        );
+        assert!(
+            Role::EnvelopeProposer.monotonic_slot_role(),
+            "EnvelopeProposer signers advance slot-by-slot; lower slots are stale"
+        );
+
+        // Wire byte 9 for EnvelopeProposer check.
+        let bytes: [u8; 4] = Role::EnvelopeProposer.into();
+        assert_eq!(bytes, [9, 0, 0, 0], "EnvelopeProposer wire byte is 9");
+        assert_eq!(
+            Role::try_from(bytes.as_slice()).unwrap(),
+            Role::EnvelopeProposer,
+            "wire byte 9 decodes back to EnvelopeProposer"
+        );
+
+        // duty_executor resolves to Validator (per-proposer, pubkey-scoped).
+        let domain = DomainType([0, 0, 0, 1]);
+        let pk = PublicKeyBytes::empty();
+        let msg_id = MessageId::new(
+            &domain,
+            Role::EnvelopeProposer,
+            &DutyExecutor::Validator(pk),
+        );
+        assert_eq!(
+            msg_id.duty_executor(),
+            Some(DutyExecutor::Validator(pk)),
+            "EnvelopeProposer resolves to a validator-scoped duty executor"
+        );
     }
 }
