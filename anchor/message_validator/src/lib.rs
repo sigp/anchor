@@ -480,7 +480,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences => {
+            | Role::ProposerPreferences
+            | Role::EnvelopeProposer => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -844,11 +845,11 @@ pub(crate) fn validate_beacon_duty(
         }
     }
 
-    // Rule: For a proposer-preferences message, the validator must be the assigned proposer at the
-    // preference's `proposal_slot` (= `slot` here). Checked only once the slot-epoch's proposer
-    // duties are known locally, so a not-yet-fetched epoch is tolerated. No RANDAO tolerance:
-    // ProposerPreferences carries no RANDAO signature.
-    if role == Role::ProposerPreferences {
+    // Rule: For a proposer-preferences or envelope-proposer message, the validator must be the
+    // assigned proposer at the slot. Checked only once the slot-epoch's proposer duties are known
+    // locally, so a not-yet-fetched epoch is tolerated. No RANDAO tolerance: neither
+    // ProposerPreferences nor EnvelopeProposer carry a RANDAO signature.
+    if matches!(role, Role::ProposerPreferences | Role::EnvelopeProposer) {
         // Non-committee roles always have one validator index
         let validator_index = validation_context
             .committee_info
@@ -895,6 +896,7 @@ pub(crate) fn validate_beacon_duty(
 /// - PTCAttester before the Ethereum Gloas (ePBS) fork (not yet active)
 /// - ValidatorRegistration at/after the Ethereum Gloas (ePBS) fork (deprecated by SIP-94)
 /// - ProposerPreferences before the Ethereum Gloas (ePBS) fork (not yet active)
+/// - EnvelopeProposer before the Ethereum Gloas (ePBS) fork (not yet active)
 pub(crate) fn validate_role_for_fork(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
@@ -921,18 +923,6 @@ pub(crate) fn validate_role_for_fork(
         });
     }
 
-    // Reject PTCAttester before the Ethereum Gloas (ePBS) fork, read from the consensus spec.
-    if role == Role::PTCAttester {
-        let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
-        if !current_fork.gloas_enabled() {
-            return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
-                role,
-                current_fork,
-                minimum_fork: ForkName::Gloas,
-            });
-        }
-    }
-
     // Reject ValidatorRegistration at/after the Ethereum Gloas (ePBS) fork; SIP-94
     // deprecates the duty (proposer preferences replace relay registrations). Gated
     // on the message's duty slot, not wall clock, so registrations for pre-fork
@@ -949,9 +939,12 @@ pub(crate) fn validate_role_for_fork(
         }
     }
 
-    // Reject ProposerPreferences before the Ethereum Gloas (ePBS) fork, read from the consensus
-    // spec.
-    if role == Role::ProposerPreferences {
+    // Reject post-Gloas roles (PTCAttester, ProposerPreferences, EnvelopeProposer) before the
+    // Ethereum Gloas (ePBS) fork, read from the consensus spec.
+    if matches!(
+        role,
+        Role::PTCAttester | Role::ProposerPreferences | Role::EnvelopeProposer
+    ) {
         let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
         if !current_fork.gloas_enabled() {
             return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
@@ -1044,7 +1037,9 @@ fn message_lateness(
     validation_context: &ValidationContext<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
-        Role::Proposer | Role::SyncCommittee | Role::PTCAttester => 1 + LATE_SLOT_ALLOWANCE,
+        Role::Proposer | Role::SyncCommittee | Role::PTCAttester | Role::EnvelopeProposer => {
+            1 + LATE_SLOT_ALLOWANCE
+        }
         Role::Committee
         | Role::Aggregator
         | Role::ValidatorRegistration
@@ -1161,7 +1156,11 @@ fn duty_limit(
         }
         // Proposer and SyncCommittee have no duty limit
         Role::Proposer | Role::SyncCommittee => Ok(None),
-        Role::ProposerPreferences => Ok(Some(validation_context.slots_per_epoch)),
+        // Per-proposal-slot roles: max duties capped at SLOTS_PER_EPOCH (one preferences packet /
+        // one self-build envelope per proposal slot). Overflow is IGNORE-classified.
+        Role::ProposerPreferences | Role::EnvelopeProposer => {
+            Ok(Some(validation_context.slots_per_epoch))
+        }
     }
 }
 
@@ -1436,7 +1435,8 @@ mod tests {
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            | Role::ProposerPreferences
+            | Role::EnvelopeProposer => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }
