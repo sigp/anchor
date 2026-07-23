@@ -372,15 +372,7 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
                 }
             }
             BEACON_ROLE_PROPOSER => {
-                // SIP-94 §4: `version` is leader-supplied and selects how `data_ssz` is decoded,
-                // so it must equal the fork scheduled at the duty slot. Keyed on our own duty's
-                // slot (equal to `value.duty.slot` after the `SlotMismatch` check above).
-                let expected = self.spec.fork_name_at_slot::<E>(our_value.duty.slot);
-                let got = ForkName::from(value.version);
-                if got != expected {
-                    return Err(DataValidationError::VersionMismatch { expected, got });
-                }
-                self.validate_block_proposal(value, got)?;
+                self.validate_block_proposal(value)?;
             }
             BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION => {
                 // There is nothing special to check for sync committee contributions.
@@ -392,13 +384,22 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         Ok(())
     }
 
-    /// `fork` is the value's version already validated against the duty-slot fork schedule
-    /// by [`Self::do_validation`].
     fn validate_block_proposal(
         &self,
         value: &ProposerConsensusData,
-        fork: ForkName,
     ) -> Result<(), DataValidationError> {
+        // SIP-94 §4: `version` is leader-supplied and selects how `data_ssz` is decoded, so it
+        // must equal the fork scheduled at the duty slot (`value.duty.slot` is pinned to our own
+        // duty by the `SlotMismatch` check in `do_validation`).
+        let expected = self.spec.fork_name_at_slot::<E>(value.duty.slot);
+        let fork = ForkName::from(value.version);
+        if fork != expected {
+            return Err(DataValidationError::VersionMismatch {
+                expected,
+                got: fork,
+            });
+        }
+
         // Decode the block header to ensure the value is decodable (even when slashing
         // protection is disabled). Under Gloas (EIP-7732), DataSSZ is decoded directly as a plain
         // BeaconBlock. This behaviour is not behaviourally load-bearing as the execution
@@ -3104,12 +3105,8 @@ mod tests {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
 
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(Slot::new(0)),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(block.as_ssz_bytes())
-                .expect("Gloas block bytes should fit in DataSSZ"),
-        };
+        let consensus_data =
+            proposer_consensus_data(Slot::new(0), ForkName::Gloas, block.as_ssz_bytes());
 
         let decoded = consensus_data
             .decode_block::<MainnetEthSpec>()
@@ -3125,14 +3122,11 @@ mod tests {
     /// Tests that `decode_blinded_block` rejects Gloas input with `DecodeError::NoMatchingVariant`.
     fn decode_blinded_block_rejects_gloas() {
         let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
-
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(Slot::new(0)),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(block.as_ssz_bytes())
-                .expect("Gloas block bytes should fit in DataSSZ"),
-        };
+        let consensus_data = proposer_consensus_data(
+            Slot::new(0),
+            ForkName::Gloas,
+            gloas_block_bytes(&spec, Slot::new(0)),
+        );
 
         let result = consensus_data.decode_blinded_block::<MainnetEthSpec>();
 
@@ -3193,18 +3187,21 @@ mod tests {
         (dir, validator)
     }
 
-    /// Mainnet-based spec with Gloas scheduled at epoch 500000, past every fork mainnet already
+    /// Gloas activation epoch used by [`gloas_scheduled_spec`]: past every fork mainnet already
     /// schedules (Deneb 269568, Electra 364032, Fulu 411392), so each era is reachable by slot
     /// choice.
+    const GLOAS_TEST_EPOCH: u64 = 500000;
+
+    /// Mainnet-based spec with Gloas scheduled at [`GLOAS_TEST_EPOCH`].
     fn gloas_scheduled_spec() -> ChainSpec {
         let mut spec = ChainSpec::mainnet();
-        spec.gloas_fork_epoch = Some(Epoch::new(500000));
+        spec.gloas_fork_epoch = Some(Epoch::new(GLOAS_TEST_EPOCH));
         spec
     }
 
-    /// A slot in the Gloas era of [`gloas_scheduled_spec`] (epoch 500000 >= Gloas epoch).
+    /// A slot in the Gloas era of [`gloas_scheduled_spec`].
     fn gloas_era_slot() -> Slot {
-        Epoch::new(500000).start_slot(MainnetEthSpec::slots_per_epoch())
+        Epoch::new(GLOAS_TEST_EPOCH).start_slot(MainnetEthSpec::slots_per_epoch())
     }
 
     /// A slot in mainnet's Deneb era (epoch 300000: >= Deneb's 269568, < Electra's 364032).
@@ -3245,26 +3242,9 @@ mod tests {
     }
 
     #[test]
-    /// Tests `validate_block_proposal` Gloas block success case.
-    fn validate_block_proposal_gloas_decodes_directly() {
-        let spec = gloas_scheduled_spec();
-        let slot = gloas_era_slot();
-        let consensus_data =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
-
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
-        let result = validator.validate_block_proposal(&consensus_data, ForkName::Gloas);
-
-        assert!(
-            result.is_ok(),
-            "Gloas block proposal should validate via the Gloas decode branch, got {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
     /// Tests that decoding failures when processing garbage SSZ block bytes are correctly
-    /// propagated by the Gloas branch.
+    /// propagated by the Gloas branch. (Happy-path decode coverage lives in the
+    /// `do_validation_accepts_matching_*` tests below, which reach the same branches.)
     fn validate_block_proposal_gloas_rejects_invalid_bytes() {
         let consensus_data =
             proposer_consensus_data(gloas_era_slot(), ForkName::Gloas, vec![0xff; 32]);
@@ -3273,33 +3253,45 @@ mod tests {
             test_block_proposal_validator(Arc::new(gloas_scheduled_spec()), true);
 
         assert!(
-            validator
-                .validate_block_proposal(&consensus_data, ForkName::Gloas)
-                .is_err(),
+            validator.validate_block_proposal(&consensus_data).is_err(),
             "Gloas branch should reject undecodable block bytes"
         );
     }
 
-    #[test]
-    /// Tests that existing blinded-then-full pre-gloas behavior is intact with a
-    /// `FullBlockContents` shape via `decode_block_contents`.
-    fn validate_block_proposal_pre_gloas_unchanged() {
-        let spec = gloas_scheduled_spec();
-        let slot = deneb_era_slot();
-        let consensus_data = proposer_consensus_data(
-            slot,
-            ForkName::Deneb,
-            deneb_block_contents_bytes(&spec, slot),
-        );
+    /// Asserts `result` is exactly `VersionMismatch { expected, got }`.
+    fn assert_version_mismatch(
+        result: Result<(), DataValidationError>,
+        expected_fork: ForkName,
+        got_fork: ForkName,
+    ) {
+        match result {
+            Err(DataValidationError::VersionMismatch { expected, got }) => {
+                assert_eq!(expected, expected_fork, "expected fork should match");
+                assert_eq!(got, got_fork, "got fork should match");
+            }
+            other => panic!("expected VersionMismatch, got {other:?}"),
+        }
+    }
 
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
-        let result = validator.validate_block_proposal(&consensus_data, ForkName::Deneb);
-
-        assert!(
-            result.is_ok(),
-            "pre-Gloas (Deneb) block proposal should validate via the existing fallback, got {:?}",
-            result.err()
-        );
+    /// Asserts `result` is exactly `BlockSlotMismatch { expected, got }`.
+    fn assert_block_slot_mismatch(
+        result: Result<(), DataValidationError>,
+        expected_slot: Slot,
+        got_slot: Slot,
+    ) {
+        match result {
+            Err(DataValidationError::BlockSlotMismatch { expected, got }) => {
+                assert_eq!(
+                    expected, expected_slot,
+                    "expected slot should be the duty slot"
+                );
+                assert_eq!(
+                    got, got_slot,
+                    "got slot should be the block's internal slot"
+                );
+            }
+            other => panic!("expected BlockSlotMismatch, got {other:?}"),
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -3308,28 +3300,27 @@ mod tests {
 
     #[test]
     /// Tests that a value stamped Deneb at a Gloas-era duty slot is rejected with
-    /// `VersionMismatch` (SIP-94 §4), not misdiagnosed as a decode failure.
+    /// `VersionMismatch` (SIP-94 §4), not misdiagnosed as a decode failure. The
+    /// protection-enabled leg proves the check fires before the slashing gate: the empty
+    /// slashing DB would reject any proposal that reached it.
     fn do_validation_rejects_deneb_version_at_gloas_slot() {
-        let spec = gloas_scheduled_spec();
-        let slot = gloas_era_slot();
-        let our_value =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
-        // Well-formed Deneb bytes: rejection must come from the version check, not decoding.
-        let value = proposer_consensus_data(
-            slot,
-            ForkName::Deneb,
-            deneb_block_contents_bytes(&spec, slot),
-        );
+        for disable_slashing_protection in [true, false] {
+            let spec = gloas_scheduled_spec();
+            let slot = gloas_era_slot();
+            let our_value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+            // Well-formed Deneb bytes: rejection must come from the version check, not decoding.
+            let value = proposer_consensus_data(
+                slot,
+                ForkName::Deneb,
+                deneb_block_contents_bytes(&spec, slot),
+            );
 
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
-        let result = validator.do_validation(&value, &our_value);
+            let (_dir, validator) =
+                test_block_proposal_validator(Arc::new(spec), disable_slashing_protection);
+            let result = validator.do_validation(&value, &our_value);
 
-        match result {
-            Err(DataValidationError::VersionMismatch { expected, got }) => {
-                assert_eq!(expected, ForkName::Gloas, "expected fork should be Gloas");
-                assert_eq!(got, ForkName::Deneb, "got fork should be Deneb");
-            }
-            other => panic!("expected VersionMismatch, got {other:?}"),
+            assert_version_mismatch(result, ForkName::Gloas, ForkName::Deneb);
         }
     }
 
@@ -3349,13 +3340,7 @@ mod tests {
         let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
         let result = validator.do_validation(&value, &our_value);
 
-        match result {
-            Err(DataValidationError::VersionMismatch { expected, got }) => {
-                assert_eq!(expected, ForkName::Deneb, "expected fork should be Deneb");
-                assert_eq!(got, ForkName::Gloas, "got fork should be Gloas");
-            }
-            other => panic!("expected VersionMismatch, got {other:?}"),
-        }
+        assert_version_mismatch(result, ForkName::Deneb, ForkName::Gloas);
     }
 
     #[test]
@@ -3402,33 +3387,6 @@ mod tests {
         );
     }
 
-    #[test]
-    /// Tests that the version check fires before the slashing protection gate: with slashing
-    /// protection enabled and an empty slashing DB (which would reject any proposal that
-    /// reached it), a mismatched version still surfaces as `VersionMismatch`.
-    fn do_validation_version_mismatch_precedes_slashing_protection() {
-        let spec = gloas_scheduled_spec();
-        let slot = gloas_era_slot();
-        let our_value =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
-        let value = proposer_consensus_data(
-            slot,
-            ForkName::Deneb,
-            deneb_block_contents_bytes(&spec, slot),
-        );
-
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), false);
-        let result = validator.do_validation(&value, &our_value);
-
-        match result {
-            Err(DataValidationError::VersionMismatch { expected, got }) => {
-                assert_eq!(expected, ForkName::Gloas, "expected fork should be Gloas");
-                assert_eq!(got, ForkName::Deneb, "got fork should be Deneb");
-            }
-            other => panic!("expected VersionMismatch, got {other:?}"),
-        }
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════════
     // do_validation Block-Slot Pin Tests
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -3436,29 +3394,24 @@ mod tests {
     #[test]
     /// Tests that a well-formed Gloas block whose internal slot differs from the duty slot is
     /// rejected with `BlockSlotMismatch`: the block is signed under its own header slot, so a
-    /// leader embedding a block built for a different slot must not reach signing.
+    /// leader embedding a block built for a different slot must not reach signing. The
+    /// protection-enabled leg proves the pin fires before the slashing gate: the empty
+    /// slashing DB would reject any proposal that reached it.
     fn do_validation_rejects_gloas_block_slot_mismatch() {
-        let spec = gloas_scheduled_spec();
-        let slot = gloas_era_slot();
-        let our_value =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
-        // Version matches the duty-slot fork; only the block's internal slot is off by one.
-        let value =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot + 1));
+        for disable_slashing_protection in [true, false] {
+            let spec = gloas_scheduled_spec();
+            let slot = gloas_era_slot();
+            let our_value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+            // Version matches the duty-slot fork; only the block's internal slot is off by one.
+            let value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot + 1));
 
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
-        let result = validator.do_validation(&value, &our_value);
+            let (_dir, validator) =
+                test_block_proposal_validator(Arc::new(spec), disable_slashing_protection);
+            let result = validator.do_validation(&value, &our_value);
 
-        match result {
-            Err(DataValidationError::BlockSlotMismatch { expected, got }) => {
-                assert_eq!(expected, slot, "expected slot should be the duty slot");
-                assert_eq!(
-                    got,
-                    slot + 1,
-                    "got slot should be the block's internal slot"
-                );
-            }
-            other => panic!("expected BlockSlotMismatch, got {other:?}"),
+            assert_block_slot_mismatch(result, slot, slot + 1);
         }
     }
 
@@ -3483,44 +3436,6 @@ mod tests {
         let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
         let result = validator.do_validation(&value, &our_value);
 
-        match result {
-            Err(DataValidationError::BlockSlotMismatch { expected, got }) => {
-                assert_eq!(expected, slot, "expected slot should be the duty slot");
-                assert_eq!(
-                    got,
-                    slot + 1,
-                    "got slot should be the block's internal slot"
-                );
-            }
-            other => panic!("expected BlockSlotMismatch, got {other:?}"),
-        }
-    }
-
-    #[test]
-    /// Tests that the block-slot pin fires before the slashing protection gate: with slashing
-    /// protection enabled and an empty slashing DB (which would reject any proposal that
-    /// reached it), a mismatched block slot still surfaces as `BlockSlotMismatch`.
-    fn do_validation_block_slot_mismatch_precedes_slashing_protection() {
-        let spec = gloas_scheduled_spec();
-        let slot = gloas_era_slot();
-        let our_value =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
-        let value =
-            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot + 1));
-
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), false);
-        let result = validator.do_validation(&value, &our_value);
-
-        match result {
-            Err(DataValidationError::BlockSlotMismatch { expected, got }) => {
-                assert_eq!(expected, slot, "expected slot should be the duty slot");
-                assert_eq!(
-                    got,
-                    slot + 1,
-                    "got slot should be the block's internal slot"
-                );
-            }
-            other => panic!("expected BlockSlotMismatch, got {other:?}"),
-        }
+        assert_block_slot_mismatch(result, slot, slot + 1);
     }
 }
