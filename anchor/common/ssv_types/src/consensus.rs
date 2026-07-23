@@ -388,14 +388,24 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         &self,
         value: &ProposerConsensusData,
     ) -> Result<(), DataValidationError> {
+        // SIP-94 §4: `version` is leader-supplied and selects how `data_ssz` is decoded, so it
+        // must equal the fork scheduled at the duty slot (`value.duty.slot` is pinned to our own
+        // duty by the `SlotMismatch` check in `do_validation`).
+        let expected = self.spec.fork_name_at_slot::<E>(value.duty.slot);
+        let fork = ForkName::from(value.version);
+        if fork != expected {
+            return Err(DataValidationError::VersionMismatch {
+                expected,
+                got: fork,
+            });
+        }
+
         // Decode the block header to ensure the value is decodable (even when slashing
         // protection is disabled). Under Gloas (EIP-7732), DataSSZ is decoded directly as a plain
         // BeaconBlock. This behaviour is not behaviourally load-bearing as the execution
         // payload is decoupled from the block body. The outcome of `decode_blinded_block`
         // and `decode_block` are identical for this variant. The Pre-Gloas branch
         // preserves the existing try-blinded-then-full fallback.
-        let fork = ForkName::from(value.version);
-
         let header = if fork >= ForkName::Gloas {
             value
                 .decode_block::<E>()
@@ -412,6 +422,18 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
                 })
                 .map_err(DataValidationError::DecodeError)?
         };
+
+        // The block is signed under `header.slot` and slashing protection keys on it, so when
+        // the slashing DB has no conflicting entry at that slot (or protection is disabled),
+        // nothing ties the signed slot back to the duty: a leader embedding a block built for a
+        // different slot could harvest a signature for it. Pin it (go-ssv applies the same pin
+        // on its Gloas path). Also bounds `header.slot` for the epoch/domain derivation below.
+        if header.slot != value.duty.slot {
+            return Err(DataValidationError::BlockSlotMismatch {
+                expected: value.duty.slot,
+                got: header.slot,
+            });
+        }
 
         if !self.disable_slashing_protection {
             let epoch = header.slot.epoch(E::slots_per_epoch());
@@ -455,6 +477,10 @@ pub enum DataValidationError {
         expected: ValidatorIndex,
         got: ValidatorIndex,
     },
+    #[error("wrong data version: expected fork {expected:?}, got {got:?}")]
+    VersionMismatch { expected: ForkName, got: ForkName },
+    #[error("wrong block slot: expected {expected}, got {got}")]
+    BlockSlotMismatch { expected: Slot, got: Slot },
     #[error("Block proposal would be slashable: {0}")]
     SlashableBlockProposal(NotSafe),
 }
@@ -3057,12 +3083,12 @@ mod tests {
     // ProposerConsensusData Gloas (EIP-7732) Tests
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    /// Creates a minimal proposer `ValidatorDuty` at slot 0 for Gloas block tests.
-    fn test_proposer_duty() -> ValidatorDuty {
+    /// Creates a minimal proposer `ValidatorDuty` at `slot` for block proposal tests.
+    fn test_proposer_duty(slot: Slot) -> ValidatorDuty {
         ValidatorDuty {
             r#type: BEACON_ROLE_PROPOSER,
             pub_key: PublicKeyBytes::empty(),
-            slot: Slot::new(0),
+            slot,
             validator_index: ValidatorIndex(0),
             committee_index: 0,
             committee_length: 0,
@@ -3079,12 +3105,8 @@ mod tests {
         let spec = ChainSpec::mainnet();
         let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
 
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(block.as_ssz_bytes())
-                .expect("Gloas block bytes should fit in DataSSZ"),
-        };
+        let consensus_data =
+            proposer_consensus_data(Slot::new(0), ForkName::Gloas, block.as_ssz_bytes());
 
         let decoded = consensus_data
             .decode_block::<MainnetEthSpec>()
@@ -3100,14 +3122,11 @@ mod tests {
     /// Tests that `decode_blinded_block` rejects Gloas input with `DecodeError::NoMatchingVariant`.
     fn decode_blinded_block_rejects_gloas() {
         let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
-
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(block.as_ssz_bytes())
-                .expect("Gloas block bytes should fit in DataSSZ"),
-        };
+        let consensus_data = proposer_consensus_data(
+            Slot::new(0),
+            ForkName::Gloas,
+            gloas_block_bytes(&spec, Slot::new(0)),
+        );
 
         let result = consensus_data.decode_blinded_block::<MainnetEthSpec>();
 
@@ -3141,12 +3160,15 @@ mod tests {
     // validate_block_proposal Fork-Branch Tests
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    /// Builds a `ProposerConsensusDataValidator` with slashing protection disabled.
+    /// Builds a `ProposerConsensusDataValidator` over `spec` with the given slashing
+    /// protection setting.
     ///
-    /// The `SlashingDatabase` is constructed (no path-less constructor exists) but never
-    /// exercised because `disable_slashing_protection` is `true`. The caller must keep the
-    /// returned `TempDir` alive for the lifetime of the validator.
-    fn test_block_proposal_validator() -> (
+    /// The `SlashingDatabase` is constructed (no path-less constructor exists) but stays empty.
+    /// The caller must keep the returned `TempDir` alive for the lifetime of the validator.
+    fn test_block_proposal_validator(
+        spec: Arc<ChainSpec>,
+        disable_slashing_protection: bool,
+    ) -> (
         tempfile::TempDir,
         ProposerConsensusDataValidator<MainnetEthSpec>,
     ) {
@@ -3157,47 +3179,78 @@ mod tests {
         );
         let validator = ProposerConsensusDataValidator::<MainnetEthSpec>::new(
             slashing_db,
-            true,
-            Arc::new(ChainSpec::mainnet()),
+            disable_slashing_protection,
+            spec,
             PublicKeyBytes::empty(),
             Hash256::zero(),
         );
         (dir, validator)
     }
 
-    #[test]
-    /// Tests `validate_block_proposal` Gloas block success case.
-    fn validate_block_proposal_gloas_decodes_directly() {
-        let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(block.as_ssz_bytes())
-                .expect("Gloas block bytes should fit in DataSSZ"),
-        };
+    /// Gloas activation epoch used by [`gloas_scheduled_spec`]: past every fork mainnet already
+    /// schedules (Deneb 269568, Electra 364032, Fulu 411392), so each era is reachable by slot
+    /// choice.
+    const GLOAS_TEST_EPOCH: u64 = 500000;
 
-        let (_dir, validator) = test_block_proposal_validator();
-        let result = validator.validate_block_proposal(&consensus_data);
+    /// Mainnet-based spec with Gloas scheduled at [`GLOAS_TEST_EPOCH`].
+    fn gloas_scheduled_spec() -> ChainSpec {
+        let mut spec = ChainSpec::mainnet();
+        spec.gloas_fork_epoch = Some(Epoch::new(GLOAS_TEST_EPOCH));
+        spec
+    }
 
-        assert!(
-            result.is_ok(),
-            "Gloas block proposal should validate via the Gloas decode branch, got {:?}",
-            result.err()
-        );
+    /// A slot in the Gloas era of [`gloas_scheduled_spec`].
+    fn gloas_era_slot() -> Slot {
+        Epoch::new(GLOAS_TEST_EPOCH).start_slot(MainnetEthSpec::slots_per_epoch())
+    }
+
+    /// A slot in mainnet's Deneb era (epoch 300000: >= Deneb's 269568, < Electra's 364032).
+    fn deneb_era_slot() -> Slot {
+        Epoch::new(300000).start_slot(MainnetEthSpec::slots_per_epoch())
+    }
+
+    /// Builds a proposer `ProposerConsensusData` at `slot`, stamped with `fork` and carrying
+    /// `data_ssz`.
+    fn proposer_consensus_data(
+        slot: Slot,
+        fork: ForkName,
+        data_ssz: Vec<u8>,
+    ) -> ProposerConsensusData {
+        ProposerConsensusData {
+            duty: test_proposer_duty(slot),
+            version: DataVersion::from(fork),
+            data_ssz: VariableList::new(data_ssz).expect("block bytes should fit in DataSSZ"),
+        }
+    }
+
+    /// SSZ bytes of an empty Gloas `BeaconBlock` whose internal slot equals `slot`.
+    fn gloas_block_bytes(spec: &ChainSpec, slot: Slot) -> Vec<u8> {
+        let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(spec);
+        block.slot = slot;
+        BeaconBlock::Gloas(block).as_ssz_bytes()
+    }
+
+    /// SSZ bytes of an empty Deneb `FullBlockContents` whose block's internal slot equals `slot`.
+    fn deneb_block_contents_bytes(spec: &ChainSpec, slot: Slot) -> Vec<u8> {
+        let mut block = BeaconBlockDeneb::<MainnetEthSpec>::empty(spec);
+        block.slot = slot;
+        FullBlockContents::<MainnetEthSpec>::new(
+            BeaconBlock::Deneb(block),
+            Some((VariableList::empty(), VariableList::empty())),
+        )
+        .as_ssz_bytes()
     }
 
     #[test]
     /// Tests that decoding failures when processing garbage SSZ block bytes are correctly
-    /// propagated by the Gloas branch.
+    /// propagated by the Gloas branch. (Happy-path decode coverage lives in the
+    /// `do_validation_accepts_matching_*` tests below, which reach the same branches.)
     fn validate_block_proposal_gloas_rejects_invalid_bytes() {
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(vec![0xff; 32]).expect("32 bytes should fit in DataSSZ"),
-        };
+        let consensus_data =
+            proposer_consensus_data(gloas_era_slot(), ForkName::Gloas, vec![0xff; 32]);
 
-        let (_dir, validator) = test_block_proposal_validator();
+        let (_dir, validator) =
+            test_block_proposal_validator(Arc::new(gloas_scheduled_spec()), true);
 
         assert!(
             validator.validate_block_proposal(&consensus_data).is_err(),
@@ -3205,30 +3258,184 @@ mod tests {
         );
     }
 
-    #[test]
-    /// Tests that existing blinded-then-full pre-gloas behavior is intact with a
-    /// `FullBlockContents` shape via `decode_block_contents`.
-    fn validate_block_proposal_pre_gloas_unchanged() {
-        let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Deneb(BeaconBlockDeneb::<MainnetEthSpec>::empty(&spec));
-        let block_contents = FullBlockContents::<MainnetEthSpec>::new(
-            block,
-            Some((VariableList::empty(), VariableList::empty())),
-        );
-        let consensus_data = ProposerConsensusData {
-            duty: test_proposer_duty(),
-            version: DataVersion::from(ForkName::Deneb),
-            data_ssz: VariableList::new(block_contents.as_ssz_bytes())
-                .expect("Deneb block contents bytes should fit in DataSSZ"),
-        };
+    /// Asserts `result` is exactly `VersionMismatch { expected, got }`.
+    fn assert_version_mismatch(
+        result: Result<(), DataValidationError>,
+        expected_fork: ForkName,
+        got_fork: ForkName,
+    ) {
+        match result {
+            Err(DataValidationError::VersionMismatch { expected, got }) => {
+                assert_eq!(expected, expected_fork, "expected fork should match");
+                assert_eq!(got, got_fork, "got fork should match");
+            }
+            other => panic!("expected VersionMismatch, got {other:?}"),
+        }
+    }
 
-        let (_dir, validator) = test_block_proposal_validator();
-        let result = validator.validate_block_proposal(&consensus_data);
+    /// Asserts `result` is exactly `BlockSlotMismatch { expected, got }`.
+    fn assert_block_slot_mismatch(
+        result: Result<(), DataValidationError>,
+        expected_slot: Slot,
+        got_slot: Slot,
+    ) {
+        match result {
+            Err(DataValidationError::BlockSlotMismatch { expected, got }) => {
+                assert_eq!(
+                    expected, expected_slot,
+                    "expected slot should be the duty slot"
+                );
+                assert_eq!(
+                    got, got_slot,
+                    "got slot should be the block's internal slot"
+                );
+            }
+            other => panic!("expected BlockSlotMismatch, got {other:?}"),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // do_validation SIP-94 §4 Version / Fork-Schedule Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    /// Tests that a value stamped Deneb at a Gloas-era duty slot is rejected with
+    /// `VersionMismatch` (SIP-94 §4), not misdiagnosed as a decode failure. The
+    /// protection-enabled leg proves the check fires before the slashing gate: the empty
+    /// slashing DB would reject any proposal that reached it.
+    fn do_validation_rejects_deneb_version_at_gloas_slot() {
+        for disable_slashing_protection in [true, false] {
+            let spec = gloas_scheduled_spec();
+            let slot = gloas_era_slot();
+            let our_value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+            // Well-formed Deneb bytes: rejection must come from the version check, not decoding.
+            let value = proposer_consensus_data(
+                slot,
+                ForkName::Deneb,
+                deneb_block_contents_bytes(&spec, slot),
+            );
+
+            let (_dir, validator) =
+                test_block_proposal_validator(Arc::new(spec), disable_slashing_protection);
+            let result = validator.do_validation(&value, &our_value);
+
+            assert_version_mismatch(result, ForkName::Gloas, ForkName::Deneb);
+        }
+    }
+
+    #[test]
+    /// Tests that a value stamped Gloas at a Deneb-era duty slot is rejected with
+    /// `VersionMismatch` (SIP-94 §4).
+    fn do_validation_rejects_gloas_version_at_deneb_slot() {
+        let spec = gloas_scheduled_spec();
+        let slot = deneb_era_slot();
+        let our_value = proposer_consensus_data(
+            slot,
+            ForkName::Deneb,
+            deneb_block_contents_bytes(&spec, slot),
+        );
+        let value = proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
+        let result = validator.do_validation(&value, &our_value);
+
+        assert_version_mismatch(result, ForkName::Deneb, ForkName::Gloas);
+    }
+
+    #[test]
+    /// Tests that a value stamped Gloas at a Gloas-era duty slot passes `do_validation`
+    /// with well-formed Gloas block bytes.
+    fn do_validation_accepts_matching_gloas_version_at_gloas_slot() {
+        let spec = gloas_scheduled_spec();
+        let slot = gloas_era_slot();
+        let our_value =
+            proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+        let value = our_value.clone();
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
+        let result = validator.do_validation(&value, &our_value);
 
         assert!(
             result.is_ok(),
-            "pre-Gloas (Deneb) block proposal should validate via the existing fallback, got {:?}",
+            "matching Gloas version at a Gloas-era slot should validate, got {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    /// Tests that a value stamped Deneb at a Deneb-era duty slot passes `do_validation`
+    /// with well-formed `FullBlockContents` bytes (preserving the blinded-then-contents
+    /// fallback).
+    fn do_validation_accepts_matching_deneb_version_at_deneb_slot() {
+        let spec = gloas_scheduled_spec();
+        let slot = deneb_era_slot();
+        let our_value = proposer_consensus_data(
+            slot,
+            ForkName::Deneb,
+            deneb_block_contents_bytes(&spec, slot),
+        );
+        let value = our_value.clone();
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
+        let result = validator.do_validation(&value, &our_value);
+
+        assert!(
+            result.is_ok(),
+            "matching Deneb version at a Deneb-era slot should validate, got {:?}",
+            result.err()
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // do_validation Block-Slot Pin Tests
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    /// Tests that a well-formed Gloas block whose internal slot differs from the duty slot is
+    /// rejected with `BlockSlotMismatch`: the block is signed under its own header slot, so a
+    /// leader embedding a block built for a different slot must not reach signing. The
+    /// protection-enabled leg proves the pin fires before the slashing gate: the empty
+    /// slashing DB would reject any proposal that reached it.
+    fn do_validation_rejects_gloas_block_slot_mismatch() {
+        for disable_slashing_protection in [true, false] {
+            let spec = gloas_scheduled_spec();
+            let slot = gloas_era_slot();
+            let our_value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+            // Version matches the duty-slot fork; only the block's internal slot is off by one.
+            let value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot + 1));
+
+            let (_dir, validator) =
+                test_block_proposal_validator(Arc::new(spec), disable_slashing_protection);
+            let result = validator.do_validation(&value, &our_value);
+
+            assert_block_slot_mismatch(result, slot, slot + 1);
+        }
+    }
+
+    #[test]
+    /// Tests that the block-slot pin also covers the pre-Gloas fallback arm: a well-formed
+    /// Deneb `FullBlockContents` whose block's internal slot differs from the duty slot is
+    /// rejected with `BlockSlotMismatch`.
+    fn do_validation_rejects_deneb_block_slot_mismatch() {
+        let spec = gloas_scheduled_spec();
+        let slot = deneb_era_slot();
+        let our_value = proposer_consensus_data(
+            slot,
+            ForkName::Deneb,
+            deneb_block_contents_bytes(&spec, slot),
+        );
+        let value = proposer_consensus_data(
+            slot,
+            ForkName::Deneb,
+            deneb_block_contents_bytes(&spec, slot + 1),
+        );
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
+        let result = validator.do_validation(&value, &our_value);
+
+        assert_block_slot_mismatch(result, slot, slot + 1);
     }
 }
