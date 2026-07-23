@@ -73,7 +73,7 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse latest from unstable (4b3a9d3)
+# Lighthouse v8.2.1 release (b263df5)
 beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "b263df5" }
 bls = { git = "https://github.com/sigp/lighthouse", rev = "b263df5" }
 eth2 = { git = "https://github.com/sigp/lighthouse", rev = "b263df5" }
