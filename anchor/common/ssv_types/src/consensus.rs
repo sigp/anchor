@@ -3778,11 +3778,8 @@ mod tests {
         );
     }
 
-    /// Encode an EnvelopeConsensusData and decode it back. Confirm:
-    /// 1. The value.
-    /// 2. Its root.
-    /// 3. The nested blinded envelope inside data_ssz.
-    /// All come back identical.
+    /// Encode an EnvelopeConsensusData and decode it back, confirming the value, its root, and
+    /// the nested blinded envelope inside data_ssz all come back identical.
     #[test]
     fn envelope_consensus_data_ssz_round_trip() {
         // EnvelopeConsensusData whose data_ssz holds a real blinded envelope.
