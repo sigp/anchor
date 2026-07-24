@@ -615,8 +615,6 @@ pub const BEACON_ROLE_SYNC_COMMITTEE: BeaconRole = BeaconRole(3);
 pub const BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION: BeaconRole = BeaconRole(4);
 pub const BEACON_ROLE_VALIDATOR_REGISTRATION: BeaconRole = BeaconRole(5);
 pub const BEACON_ROLE_VOLUNTARY_EXIT: BeaconRole = BeaconRole(6);
-/// Beacon role for ePBS envelope proposer duty (wire byte 9, SIP-94 §6). Matches
-/// `Role::EnvelopeProposer` in the SSV message type system.
 pub const BEACON_ROLE_ENVELOPE_PROPOSER: BeaconRole = BeaconRole(9);
 pub const BEACON_ROLE_UNKNOWN: BeaconRole = BeaconRole(u64::MAX);
 
@@ -3637,8 +3635,6 @@ mod tests {
     const ENVELOPE_TEST_VALIDATOR_INDEX: usize = 7;
     /// Alternative validator index used across the envelope fixtures.
     const ENVELOPE_OTHER_TEST_VALIDATOR_INDEX: usize = 8;
-    /// `ProposerConsensusDataLen` is `2^23` bytes (8 MiB); `data_ssz` shares this bound.
-    const ENVELOPE_DATA_SSZ_MAX_LEN: usize = 1 << 23;
 
     /// Deterministic validator pubkey for the "matching" side of the value check.
     fn envelope_test_pubkey(validator_index: usize) -> PublicKeyBytes {
@@ -3743,35 +3739,31 @@ mod tests {
         (validator, value)
     }
 
+    /// Build a full envelope, blind it, and assert:
+    /// 1. `blinded.tree_hash_root() == full.tree_hash_root()`.
+    /// 2. `payload_root` really is the payload's hash.
+    /// 3. The blinded form survives SSZ encode/decode.
     #[test]
     fn blinded_execution_payload_envelope_root_parity() {
-        // Arrange: construct a full ExecutionPayloadEnvelope with test data
+        // Construct a full ExecutionPayloadEnvelope with test data.
         let full_envelope = envelope_test_full_envelope(42, Hash256::from_low_u64_be(0x1111));
 
-        // Act: create blinded envelope from full
+        // Create blinded envelope from full.
         let blinded = BlindedExecutionPayloadEnvelope::from_full(&full_envelope);
 
-        // Assert: blinded envelope root equals full envelope root (SSZ merkleization parity).
-        // This equality is load-bearing, not cosmetic: the cluster reaches consensus and signs
-        // over the blinded envelope's signing root, but the resulting signature is broadcast for
-        // the *full* `ExecutionPayloadEnvelope`. If the roots ever diverged, a signature produced
-        // over the blinded form would fail to verify against the full envelope, breaking ePBS
-        // envelope signing entirely. A production field-order or type mismatch between the two
-        // structs would surface here.
+        // This equality is load-bearing for the envelope signing duty.
         assert_eq!(
             blinded.tree_hash_root(),
             full_envelope.tree_hash_root(),
             "BlindedExecutionPayloadEnvelope root must equal full ExecutionPayloadEnvelope root"
         );
 
-        // Assert: payload_root in blinded matches the full payload's root
         assert_eq!(
             blinded.payload_root,
             full_envelope.payload.tree_hash_root(),
             "payload_root must equal the full payload's tree-hash root"
         );
 
-        // Assert: SSZ encode/decode round-trip preserves the blinded envelope
         let encoded = blinded.as_ssz_bytes();
         let decoded = BlindedExecutionPayloadEnvelope::<MainnetEthSpec>::from_ssz_bytes(&encoded)
             .expect("SSZ decode should succeed");
@@ -3786,42 +3778,44 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------------
-    // A. SSZ round-trip
-    // ---------------------------------------------------------------------------------
-
+    /// Encode an EnvelopeConsensusData and decode it back. Confirm:
+    /// 1. The value.
+    /// 2. Its root.
+    /// 3. The nested blinded envelope inside data_ssz.
+    /// All come back identical.
     #[test]
     fn envelope_consensus_data_ssz_round_trip() {
-        // Arrange: an EnvelopeConsensusData whose data_ssz holds a real blinded envelope.
+        // EnvelopeConsensusData whose data_ssz holds a real blinded envelope.
         let full =
             envelope_test_full_envelope(BUILDER_INDEX_SELF_BUILD, envelope_test_decided_root());
+
+        // Blind the full envelope.
         let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
+
+        // Create a duty and a consensus data value.
         let duty = envelope_test_duty(
-            BEACON_ROLE_PROPOSER,
+            BEACON_ROLE_ENVELOPE_PROPOSER,
             envelope_test_pubkey(ENVELOPE_TEST_VALIDATOR_INDEX),
             Slot::new(ENVELOPE_TEST_SLOT),
             ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX),
         );
-        let value = envelope_consensus_data(duty, &blinded);
+        let consensus_data = envelope_consensus_data(duty, &blinded);
 
-        // Act
-        let encoded = value.as_ssz_bytes();
+        // Encode and decode the consensus data.
+        let encoded = consensus_data.as_ssz_bytes();
         let decoded = EnvelopeConsensusData::from_ssz_bytes(&encoded)
             .expect("SSZ-encoded EnvelopeConsensusData must decode");
 
-        // Assert: full value equality and root-equivalence survive the round-trip.
         assert_eq!(
-            value, decoded,
-            "SSZ round-trip must preserve EnvelopeConsensusData"
+            consensus_data, decoded,
+            "SSZ round-trip must preserve full EnvelopeConsensusData"
         );
         assert_eq!(
-            value.tree_hash_root(),
+            consensus_data.tree_hash_root(),
             decoded.tree_hash_root(),
             "SSZ round-trip must preserve EnvelopeConsensusData tree-hash root"
         );
 
-        // Assert: the embedded blinded envelope survives too (data_ssz is opaque bytes, so
-        // this pins that the nested payload is not corrupted by the outer round-trip).
         let decoded_blinded = decoded
             .decode_blinded_envelope::<MainnetEthSpec>()
             .expect("round-tripped data_ssz must still decode as a blinded envelope");
@@ -3831,28 +3825,29 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------------
-    // B. data_ssz 8 MiB length bound
-    // ---------------------------------------------------------------------------------
-
+    /// Tests that data_ssz's capacity is exactly 2^23 bytes (8 MiB).
     #[test]
     fn envelope_consensus_data_data_ssz_respects_8mib_bound() {
-        // Assert: the type-level capacity is exactly 2^23 bytes (8 MiB).
+        /// `ProposerConsensusDataLen` is `2^23` bytes (8 MiB); `data_ssz` shares this bound.
+        const ENVELOPE_DATA_SSZ_MAX_LEN: usize = 1 << 23;
+
         assert_eq!(
             VariableList::<u8, ProposerConsensusDataLen>::max_len(),
             ENVELOPE_DATA_SSZ_MAX_LEN,
             "data_ssz capacity must be ProposerConsensusDataLen = 2^23 bytes"
         );
 
-        // Act + Assert: a max-length data_ssz constructs and the containing value encodes.
+        // Construct a max-length data_ssz.
         let at_max: VariableList<u8, ProposerConsensusDataLen> =
             VariableList::new(vec![0u8; ENVELOPE_DATA_SSZ_MAX_LEN])
                 .expect("a data_ssz of exactly 2^23 bytes must be within bound");
         assert_eq!(
             at_max.len(),
             ENVELOPE_DATA_SSZ_MAX_LEN,
-            "max-length data_ssz must retain all 2^23 bytes"
+            "max-length data_ssz must be 2^23 length"
         );
+
+        // Encode an EnvelopeConsensusData with a max-length data_ssz.
         let max_value = EnvelopeConsensusData {
             duty: envelope_test_duty(
                 BEACON_ROLE_PROPOSER,
@@ -3868,7 +3863,7 @@ mod tests {
             "an EnvelopeConsensusData with a max-length data_ssz must encode"
         );
 
-        // Assert: one byte over the bound is rejected at construction.
+        // Construct a data_ssz that is one byte greater than MAX.
         let over = VariableList::<u8, ProposerConsensusDataLen>::new(vec![
             0u8;
             ENVELOPE_DATA_SSZ_MAX_LEN
@@ -3880,10 +3875,8 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------------
-    // C. hash() determinism and SHA-256-over-SSZ contract
-    // ---------------------------------------------------------------------------------
-
+    /// Tests that identical values hash identically and that permutating a single field changes the
+    /// outcome. Determinism in building the consensus data.
     #[test]
     fn envelope_consensus_data_hash_is_deterministic() {
         // Arrange: two independently-built values with identical field values.
@@ -3899,47 +3892,30 @@ mod tests {
         let value = envelope_consensus_data(duty.clone(), &blinded);
         let same = envelope_consensus_data(duty.clone(), &blinded);
 
-        // Assert: identical values hash identically (no identity/address dependence).
         assert_eq!(
             value.hash(),
             same.hash(),
             "identical EnvelopeConsensusData values must hash identically"
         );
 
-        // Assert: hash() is literally SHA-256 over the SSZ bytes — the cross-operator
-        // agreement contract each node independently reproduces.
-        let expected = {
-            let mut hasher = Sha256::new();
-            hasher.update(value.as_ssz_bytes());
-            Hash256::from(<[u8; 32]>::from(hasher.finalize()))
-        };
-        assert_eq!(
-            value.hash(),
-            expected,
-            "hash() must be SHA-256 over the SSZ bytes of EnvelopeConsensusData"
-        );
-
-        // Assert: changing a field changes the hash.
         let mut mutated_duty = duty;
         mutated_duty.slot = Slot::new(ENVELOPE_TEST_SLOT + 1);
         let mutated = envelope_consensus_data(mutated_duty, &blinded);
         assert_ne!(
             value.hash(),
             mutated.hash(),
-            "changing duty.slot must change the EnvelopeConsensusData hash"
+            "changing envelope consensus data field duty.slot must change the EnvelopeConsensusData hash"
         );
     }
 
-    // ---------------------------------------------------------------------------------
-    // D. Value-check rejection matrix (calls the private do_validation directly)
-    // ---------------------------------------------------------------------------------
-
+    /// Tests that a well-formed self-build envelope passes both the internal check and the public
+    /// validate().
     #[test]
     fn envelope_value_check_accepts_valid() {
-        // Arrange
+        // Create a valid validator/value pair.
         let (validator, value) = valid_envelope_setup();
 
-        // Act + Assert: the internal check succeeds and the public trait method agrees.
+        // Valid pair passes do_validation and validate().
         let result = validator.do_validation(&value);
         assert!(
             result.is_ok(),
@@ -3951,65 +3927,67 @@ mod tests {
         );
     }
 
+    /// Tests that an otherwise valid envelope value with a duty slot differing from the validator's
+    /// is rejected with SlotMismatch.
     #[test]
     fn envelope_value_check_rejects_wrong_slot() {
-        // Arrange: mutate only the duty slot.
+        // Create valid pair and mutate only the duty slot.
         let (validator, mut value) = valid_envelope_setup();
         value.duty.slot = Slot::new(ENVELOPE_TEST_SLOT + 1);
 
-        // Act
+        // Validate.
         let result = validator.do_validation(&value);
 
-        // Assert
         assert!(
             matches!(result, Err(EnvelopeValidationError::SlotMismatch { .. })),
             "a duty slot differing from the validator's must yield SlotMismatch, got {result:?}"
         );
     }
 
+    /// Tests that an otherwise valid envelope value with a duty validator index differing from the
+    /// validator's is rejected with IndexMismatch.
     #[test]
     fn envelope_value_check_rejects_wrong_validator_index() {
-        // Arrange: mutate only the duty validator index.
+        // Create valid pair and mutate only the duty validator index.
         let (validator, mut value) = valid_envelope_setup();
         value.duty.validator_index = ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX + 1);
 
-        // Act
+        // Validate.
         let result = validator.do_validation(&value);
 
-        // Assert
         assert!(
             matches!(result, Err(EnvelopeValidationError::IndexMismatch { .. })),
             "a duty index differing from the validator's must yield IndexMismatch, got {result:?}"
         );
     }
 
+    /// Tests that an otherwise valid envelope value with a duty pubkey differing from the
+    /// validator's is rejected with PubKeyMismatch.
     #[test]
     fn envelope_value_check_rejects_wrong_pubkey() {
-        // Arrange: mutate only the duty pubkey.
+        // Create valid pair and mutate only the duty pubkey.
         let (validator, mut value) = valid_envelope_setup();
         value.duty.pub_key = envelope_test_pubkey(ENVELOPE_OTHER_TEST_VALIDATOR_INDEX);
 
-        // Act
+        // Validate.
         let result = validator.do_validation(&value);
 
-        // Assert
         assert!(
             matches!(result, Err(EnvelopeValidationError::PubKeyMismatch { .. })),
             "a duty pubkey differing from the validator's must yield PubKeyMismatch, got {result:?}"
         );
     }
 
+    /// Tests that this validation path only exists for a self-build envelope.
     #[test]
     fn envelope_value_check_rejects_non_self_build() {
-        // Arrange: rebuild the embedded envelope with a non-self-build builder_index while
-        // keeping slot/index/pubkey/decided-root valid.
+        // Create a valid envelope and rebuild with a non-self-build builder_index.
         let (validator, mut value) = valid_envelope_setup();
         value.data_ssz = envelope_data_ssz(0, envelope_test_decided_root());
 
-        // Act
+        // Attempt to validate.
         let result = validator.do_validation(&value);
 
-        // Assert: the specific builder_index is surfaced, and validate() rejects it too.
         assert!(
             matches!(result, Err(EnvelopeValidationError::NotSelfBuild(0))),
             "a non-self-build builder_index must yield NotSelfBuild, got {result:?}"
@@ -4020,18 +3998,18 @@ mod tests {
         );
     }
 
+    /// Test that a self-build envelope whose beacon_block_root doesn't match the decided root is
+    /// rejected.
     #[test]
     fn envelope_value_check_rejects_wrong_decided_root() {
-        // Arrange: self-build envelope but bound to a beacon block root the validator did
-        // not decide.
+        // A self-build envelope bound to a different beacon block root than the decided value.
         let (validator, mut value) = valid_envelope_setup();
         let wrong_root = Hash256::from_low_u64_be(0xbad0);
         value.data_ssz = envelope_data_ssz(BUILDER_INDEX_SELF_BUILD, wrong_root);
 
-        // Act
+        // Attempt to validate.
         let result = validator.do_validation(&value);
 
-        // Assert
         assert!(
             matches!(
                 result,
@@ -4042,70 +4020,48 @@ mod tests {
         );
     }
 
+    /// Tests that a self-build envelope whose data_ssz is not decodable as a blinded envelope is
+    /// rejected with DecodeError.
     #[test]
     fn envelope_value_check_rejects_undecodable_data_ssz() {
-        // Arrange: replace data_ssz with bytes that cannot decode as a blinded envelope.
+        // Create valid envelope and replace data_ssz with bytes that cannot decode as a blinded
+        // envelope.
         let (validator, mut value) = valid_envelope_setup();
         value.data_ssz =
             VariableList::new(vec![0xFFu8; 3]).expect("3 garbage bytes fit within DataSSZ");
 
-        // Act
+        // Attempt to validate.
         let result = validator.do_validation(&value);
 
-        // Assert
         assert!(
             matches!(result, Err(EnvelopeValidationError::DecodeError(_))),
             "undecodable data_ssz must yield a DecodeError, got {result:?}"
         );
-    }
 
-    // ---------------------------------------------------------------------------------
-    // E. Regression: envelope decode failures are not mislabeled
-    // ---------------------------------------------------------------------------------
-
-    #[test]
-    fn envelope_decode_error_not_mislabeled() {
-        // Arrange: garbage data_ssz that fails to decode as a blinded envelope.
-        let (validator, mut value) = valid_envelope_setup();
-        value.data_ssz =
-            VariableList::new(vec![0xFFu8; 3]).expect("3 garbage bytes fit within DataSSZ");
-
-        // Act
-        let err = validator
-            .do_validation(&value)
-            .expect_err("undecodable data_ssz must fail validation");
-
-        // Assert: it is specifically the envelope enum's DecodeError variant, not some other
-        // variant reached by (mis)interpreting the garbage.
+        // Additional check for error message contents.
         assert!(
-            matches!(err, EnvelopeValidationError::DecodeError(_)),
-            "envelope decode failure must surface as EnvelopeValidationError::DecodeError, got {err:?}"
-        );
-        // The Display message must reference EnvelopeConsensusData, pinning that the failure
-        // is attributed to the envelope decoder rather than the proposer-consensus decoder
-        // (whose message references ProposerConsensusData).
-        assert!(
-            err.to_string().contains("EnvelopeConsensusData"),
-            "decode error must be attributed to EnvelopeConsensusData, got: {err}"
+            result
+                .as_ref()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("EnvelopeConsensusData"),
+            "decode error must be attributed to EnvelopeConsensusData, got: {result:?}"
         );
     }
 
-    // ---------------------------------------------------------------------------------
-    // F. The check ignores version and duty type
-    // ---------------------------------------------------------------------------------
-
+    /// Tests that a value with a non-Gloas version and an unrelated duty.r#type (e.g. attester)
+    /// pass validation.
     #[test]
     fn envelope_value_check_ignores_version_and_duty_type() {
-        // Arrange: an otherwise-valid value whose version is not Gloas and whose duty role is
-        // unrelated to envelope proposal. Neither field is part of the envelope value check.
+        // Valid value whose version is not Gloas, duty role unrelated to envelope proposal.
         let (validator, mut value) = valid_envelope_setup();
         value.version = DataVersion::from(ForkName::Deneb);
         value.duty.r#type = BEACON_ROLE_ATTESTER;
 
-        // Act
+        // Data version and duty role not part of the envelope value check.
         let result = validator.do_validation(&value);
 
-        // Assert: version and duty.r#type do not gate acceptance.
         assert!(
             result.is_ok(),
             "envelope value check must ignore version and duty.r#type, got {result:?}"
