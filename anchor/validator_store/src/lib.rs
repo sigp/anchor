@@ -65,9 +65,10 @@ use types::{
     AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
     AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
     BeaconBlockRef, BlindedPayload, ChainSpec, ContributionAndProof, Domain, Epoch, EthSpec,
-    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, SelectionProof,
-    SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
-    SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedRoot,
+    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData,
+    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
+    SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
+    SignedExecutionPayloadEnvelope, SignedProposerPreferences, SignedRoot,
     SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
     SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
     SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
@@ -403,10 +404,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metric_label]);
         let timeout_mode = TimeoutMode::SlotTime {
-            instance_start_time: self.get_instant_in_slot(
-                slot,
-                Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-            )?,
+            instance_start_time: self
+                .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
         };
 
         let completed = self
@@ -938,7 +937,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let timeout_mode = TimeoutMode::SlotTime {
                 instance_start_time: self.get_instant_in_slot(
                     message.aggregate().data().slot,
-                    Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
+                    self.spec.get_slot_duration() * 2 / 3,
                 )?,
             };
 
@@ -1088,10 +1087,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 &[metrics::SYNC_CONTRIBUTION_AND_PROOF],
             );
             let timeout_mode = TimeoutMode::SlotTime {
-                instance_start_time: self.get_instant_in_slot(
-                    slot,
-                    Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3,
-                )?,
+                instance_start_time: self
+                    .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
             };
 
             let completed = self
@@ -1372,7 +1369,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
         let timeout_mode = TimeoutMode::SlotTime {
             instance_start_time: self
-                .get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?,
+                .get_instant_in_slot(slot, self.spec.get_slot_duration() / 3)?,
         };
 
         let completed = self
@@ -1483,7 +1480,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BEACON_VOTE]);
         let timeout_mode = TimeoutMode::SlotTime {
             instance_start_time: self
-                .get_instant_in_slot(slot, Duration::from_secs(self.spec.seconds_per_slot) / 3)?,
+                .get_instant_in_slot(slot, self.spec.get_slot_duration() / 3)?,
         };
 
         let completed = self
@@ -2626,7 +2623,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
             // Stop at two thirds of the slot. If the selection proof is not ready by then, we
             // will not produce an aggregation anyway.
-            let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
+            let delay = self.spec.get_slot_duration() * 2 / 3;
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
                 let committee_id = cluster.committee_id();
@@ -2736,7 +2733,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
             // Stop at two thirds of the slot. If the selection proof is not ready by then, we
             // will not produce an aggregation anyway.
-            let delay = Duration::from_secs(self.spec.seconds_per_slot) * 2 / 3;
+            let delay = self.spec.get_slot_duration() * 2 / 3;
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
                 // Under Boole, sync selection proofs use the same committee path as attestation
@@ -3048,6 +3045,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         _validator_pubkey: PublicKeyBytes,
         _envelope: ExecutionPayloadEnvelope<E>,
     ) -> Result<SignedExecutionPayloadEnvelope<E>, Error> {
+        Err(Error::SpecificError(SpecificError::Unsupported))
+    }
+
+    async fn sign_payload_attestation(
+        &self,
+        _validator_pubkey: PublicKeyBytes,
+        _data: PayloadAttestationData,
+    ) -> Result<PayloadAttestationMessage, Error> {
+        Err(Error::SpecificError(SpecificError::Unsupported))
+    }
+
+    async fn sign_proposer_preferences(
+        &self,
+        _validator_pubkey: PublicKeyBytes,
+        _preferences: ProposerPreferences,
+    ) -> Result<SignedProposerPreferences, Error> {
         Err(Error::SpecificError(SpecificError::Unsupported))
     }
 }

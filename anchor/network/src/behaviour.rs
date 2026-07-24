@@ -120,8 +120,7 @@ impl AnchorBehaviour {
         };
 
         let slots_per_epoch = E::slots_per_epoch();
-        let seconds_per_slot = spec.seconds_per_slot;
-        let duplicate_cache_time = Duration::from_secs(slots_per_epoch * seconds_per_slot); // 6.4 min TODO make this configurable
+        let duplicate_cache_time = spec.get_slot_duration() * slots_per_epoch as u32; // 6.4 min TODO make this configurable
 
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .duplicate_cache_time(duplicate_cache_time) // This is equivalent to seen_msg_ttl used in PeerScoreParams in go ssv
@@ -161,7 +160,7 @@ impl AnchorBehaviour {
         // Add peer scoring if not disabled
         if !network_config.disable_gossipsub_peer_scoring {
             let slots_per_epoch = E::slots_per_epoch();
-            let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+            let slot_duration = spec.get_slot_duration();
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
             let score_params = peer_score_params(one_epoch_duration);
             let score_thresholds = peer_score_thresholds();
@@ -186,7 +185,7 @@ impl AnchorBehaviour {
 
         let peer_manager = {
             let slots_per_epoch = E::slots_per_epoch();
-            let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+            let slot_duration = spec.get_slot_duration();
             let one_epoch_duration = slot_duration * slots_per_epoch as u32;
             PeerManager::new(network_config, one_epoch_duration, lifecycle_rx.clone())
         };
