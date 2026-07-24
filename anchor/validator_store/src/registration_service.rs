@@ -19,7 +19,7 @@ use bls::PublicKeyBytes;
 use futures::future::join_all;
 use slot_clock::SlotClock;
 use task_executor::TaskExecutor;
-use tokio::time::{Duration, sleep};
+use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use types::{ChainSpec, EthSpec, SignedValidatorRegistrationData, Slot, ValidatorRegistrationData};
 use validator_store::{DoppelgangerStatus, ValidatorStore};
@@ -61,7 +61,7 @@ impl<S: ValidatorStore + 'static, T: SlotClock + 'static> RegistrationService<S,
         info!("Validator registration service started");
 
         let spec = spec.clone();
-        let slot_duration = Duration::from_secs(spec.seconds_per_slot);
+        let slot_duration = spec.get_slot_duration();
 
         let executor = self.inner.executor.clone();
 

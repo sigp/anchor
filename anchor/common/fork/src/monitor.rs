@@ -302,7 +302,7 @@ mod tests {
 
     /// Get seconds per slot from minimal spec.
     fn seconds_per_slot() -> u64 {
-        ChainSpec::minimal().seconds_per_slot
+        ChainSpec::minimal().get_slot_duration().as_secs()
     }
 
     fn make_schedule_with_boole(boole_epoch: u64) -> Arc<ForkSchedule> {
