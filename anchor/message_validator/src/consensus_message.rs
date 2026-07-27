@@ -933,6 +933,61 @@ mod tests {
         );
     }
 
+    /// A proposer consensus message above the round 2 cap is rejected.
+    #[test]
+    fn test_proposer_consensus_message_round_three_too_high() {
+        // Create proposer QBFT message with round 3 (exceeds round 2 cap).
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+        let qbft_message = QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Prepare)
+            .with_round(3)
+            .build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
+        // Validate consensus message.
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
+
+        // Should reject with RoundTooHigh error.
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::RoundTooHigh),
+            "RoundTooHigh",
+        );
+    }
+
+    /// A proposer consensus message at the round 2 cap is still accepted.
+    #[test]
+    fn test_proposer_consensus_message_round_two_accepted() {
+        // Create a proposer QBFT message with round 2 (at the cap boundary).
+        let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
+        let qbft_message = QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Prepare)
+            .with_round(2)
+            .build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![OperatorId(1)],
+            vec![],
+            vec![],
+        );
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
+
+        // Validate consensus message.
+        let result =
+            validate_consensus_message_semantics(&signed_msg, &qbft_message, &committee_info, &map);
+
+        // Expect successful validation (round 2 is the maximum allowed).
+        assert!(
+            result.is_ok(),
+            "Proposer consensus message at round 2 cap should validate successfully, got: {result:?}"
+        );
+    }
+
     #[test]
     fn test_consensus_message_mismatched_identifier() {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
