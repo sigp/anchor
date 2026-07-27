@@ -25,7 +25,8 @@ use typenum::{
 use types::{
     AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
     AttestationElectra, BeaconBlock, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex,
-    Domain, EthSpec, ForkName, Hash256, Slot, SyncCommitteeContribution,
+    Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionRequestsGloas, ForkName, Hash256,
+    SignedRoot, Slot, SyncCommitteeContribution, consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 
 use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
@@ -283,6 +284,82 @@ impl QbftData for ProposerConsensusData {
     }
 }
 
+/// QBFT consensus value for execution payload envelope signing duty (SIP-94 §6, EIP-7732 ePBS).
+///
+/// Wire-identical to `ProposerConsensusData` but a distinct type to enable routing
+/// discrimination in `QbftDecidable` implementations. Under ePBS, envelope-signing
+/// consensus uses this type, while beacon block proposal continues to use
+/// `ProposerConsensusData`. The opaque `data_ssz` bytes contain a
+/// `BlindedExecutionPayloadEnvelope<E>` (via `decode_blinded_envelope`).
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+pub struct EnvelopeConsensusData {
+    pub duty: ValidatorDuty,
+    pub version: DataVersion,
+    pub data_ssz: VariableList<u8, ProposerConsensusDataLen>,
+}
+
+impl EnvelopeConsensusData {
+    /// Decode `data_ssz` as a `BlindedExecutionPayloadEnvelope`.
+    pub fn decode_blinded_envelope<E: EthSpec>(
+        &self,
+    ) -> Result<BlindedExecutionPayloadEnvelope<E>, DecodeError> {
+        BlindedExecutionPayloadEnvelope::<E>::from_ssz_bytes(&self.data_ssz)
+    }
+}
+
+impl QbftData for EnvelopeConsensusData {
+    type Hash = Hash256;
+
+    fn hash(&self) -> Self::Hash {
+        let bytes = self.as_ssz_bytes();
+
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash: [u8; 32] = hasher.finalize().into();
+        Hash256::from(hash)
+    }
+}
+
+/// Blinded envelope for QBFT consensus over execution payload proposals (SIP-94 §6).
+///
+/// Under ePBS (EIP-7732), the cluster runs consensus over this blinded form rather than the
+/// full multi-MB `ExecutionPayloadEnvelope`. The proposer substitutes the full `payload` field
+/// with its tree-hash root, preserving SSZ merkleization parity: the blinded envelope's root
+/// equals the full envelope's root, so a signature over the blinded signing root is valid for
+/// the full envelope.
+#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+pub struct BlindedExecutionPayloadEnvelope<E: EthSpec> {
+    /// Tree-hash root of the full `payload` (`ExecutionPayloadGloas`).
+    pub payload_root: Hash256,
+    /// Execution requests (deposits, withdrawals, consolidations, plus Gloas-added
+    /// `builder_deposits` and `builder_exits`), copied verbatim from the full envelope.
+    pub execution_requests: ExecutionRequestsGloas<E>,
+    /// Builder index: `u64::MAX` (self-build) or the builder's registry index for external
+    /// builds. Used to attribute the payload source.
+    pub builder_index: u64,
+    /// Root of the beacon block that this envelope is proposed within. Used to bind the
+    /// envelope to the proposing beacon block.
+    pub beacon_block_root: Hash256,
+    /// Root of the parent beacon block, used for fork-choice context.
+    pub parent_beacon_block_root: Hash256,
+}
+
+impl<E: EthSpec> SignedRoot for BlindedExecutionPayloadEnvelope<E> {}
+
+impl<E: EthSpec> BlindedExecutionPayloadEnvelope<E> {
+    /// Build the blinded envelope from the full `ExecutionPayloadEnvelope`, substituting the
+    /// `payload` field with its tree-hash root.
+    pub fn from_full(full: &ExecutionPayloadEnvelope<E>) -> Self {
+        Self {
+            payload_root: full.payload.tree_hash_root(),
+            execution_requests: full.execution_requests.clone(),
+            builder_index: full.builder_index,
+            beacon_block_root: full.beacon_block_root,
+            parent_beacon_block_root: full.parent_beacon_block_root,
+        }
+    }
+}
+
 pub struct ProposerConsensusDataValidator<E: EthSpec> {
     slashing_database: Arc<SlashingDatabase>,
     disable_slashing_protection: bool,
@@ -491,6 +568,29 @@ impl From<DecodeError> for DataValidationError {
     }
 }
 
+/// Validation errors for `EnvelopeConsensusData` during envelope-signing QBFT.
+#[derive(Error, Debug)]
+pub enum EnvelopeValidationError {
+    #[error("Unable to decode ssz in EnvelopeConsensusData: {0:?}")]
+    DecodeError(DecodeError),
+    #[error("Slot mismatch: expected {expected}, got {got}")]
+    SlotMismatch { expected: Slot, got: Slot },
+    #[error("wrong validator index: expected {expected:?}, got {got:?}")]
+    IndexMismatch {
+        expected: ValidatorIndex,
+        got: ValidatorIndex,
+    },
+    #[error("wrong validator pk: expected {expected:?}, got {got:?}")]
+    PubKeyMismatch {
+        expected: PublicKeyBytes,
+        got: PublicKeyBytes,
+    },
+    #[error("envelope builder_index is not self-build: {0}")]
+    NotSelfBuild(u64),
+    #[error("beacon_block_root mismatch: expected {expected:?}, got {got:?}")]
+    DecidedRootMismatch { expected: Hash256, got: Hash256 },
+}
+
 #[derive(Clone, Debug, TreeHash, PartialEq, Encode, Decode)]
 pub struct ValidatorDuty {
     pub r#type: BeaconRole,
@@ -515,6 +615,7 @@ pub const BEACON_ROLE_SYNC_COMMITTEE: BeaconRole = BeaconRole(3);
 pub const BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION: BeaconRole = BeaconRole(4);
 pub const BEACON_ROLE_VALIDATOR_REGISTRATION: BeaconRole = BeaconRole(5);
 pub const BEACON_ROLE_VOLUNTARY_EXIT: BeaconRole = BeaconRole(6);
+pub const BEACON_ROLE_ENVELOPE_PROPOSER: BeaconRole = BeaconRole(9);
 pub const BEACON_ROLE_UNKNOWN: BeaconRole = BeaconRole(u64::MAX);
 
 impl TreeHash for BeaconRole {
@@ -1386,6 +1487,90 @@ impl<E: EthSpec> GloasBeaconVoteValidator<E> {
     }
 }
 
+/// Validator for `EnvelopeConsensusData` during envelope-signing QBFT (SIP-94 §6, EIP-7732 ePBS).
+///
+/// Envelope signing is NOT slashable (no Domain check, no slashing DB interaction).
+/// Checks: (1) duty metadata (slot, validator_index, pubkey); (2) `builder_index` is
+/// `BUILDER_INDEX_SELF_BUILD` (u64::MAX, self-built envelope); (3) `beacon_block_root`
+/// matches the decided block root from beacon block QBFT.
+pub struct EnvelopeConsensusDataValidator<E: EthSpec> {
+    validator_pubkey: PublicKeyBytes,
+    validator_index: ValidatorIndex,
+    slot: Slot,
+    decided_block_root: Hash256,
+    _phantom: PhantomData<E>,
+}
+
+impl<E: EthSpec> EnvelopeConsensusDataValidator<E> {
+    /// Construct a new validator with the given duty metadata and decided block root.
+    pub fn new(
+        validator_pubkey: PublicKeyBytes,
+        validator_index: ValidatorIndex,
+        slot: Slot,
+        decided_block_root: Hash256,
+    ) -> Self {
+        Self {
+            validator_pubkey,
+            validator_index,
+            slot,
+            decided_block_root,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn do_validation(&self, value: &EnvelopeConsensusData) -> Result<(), EnvelopeValidationError> {
+        let blinded = value
+            .decode_blinded_envelope::<E>()
+            .map_err(EnvelopeValidationError::DecodeError)?;
+
+        if value.duty.slot != self.slot {
+            return Err(EnvelopeValidationError::SlotMismatch {
+                expected: self.slot,
+                got: value.duty.slot,
+            });
+        }
+
+        if value.duty.validator_index != self.validator_index {
+            return Err(EnvelopeValidationError::IndexMismatch {
+                expected: self.validator_index,
+                got: value.duty.validator_index,
+            });
+        }
+
+        if value.duty.pub_key != self.validator_pubkey {
+            return Err(EnvelopeValidationError::PubKeyMismatch {
+                expected: self.validator_pubkey,
+                got: value.duty.pub_key,
+            });
+        }
+
+        if blinded.builder_index != BUILDER_INDEX_SELF_BUILD {
+            return Err(EnvelopeValidationError::NotSelfBuild(blinded.builder_index));
+        }
+
+        if blinded.beacon_block_root != self.decided_block_root {
+            return Err(EnvelopeValidationError::DecidedRootMismatch {
+                expected: self.decided_block_root,
+                got: blinded.beacon_block_root,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+impl<E: EthSpec> QbftDataValidator<EnvelopeConsensusData> for EnvelopeConsensusDataValidator<E> {
+    fn validate(&self, value: &EnvelopeConsensusData, _our_value: &EnvelopeConsensusData) -> bool {
+        match self.do_validation(value) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(%err, "Operator proposed invalid envelope consensus data");
+                false
+            }
+        }
+    }
+}
+
 /// Details about epoch mismatches between our vote and a proposed vote.
 ///
 /// This struct is needed to avoid the linter complaining about the size of the error enum.
@@ -1459,8 +1644,8 @@ mod tests {
     use eth2::types::FullBlockContents;
     use ssz_types::{BitList, BitVector};
     use types::{
-        BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, MainnetEthSpec,
-        SyncCommitteeContribution, test_utils::generate_deterministic_keypair,
+        BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, ExecutionPayloadGloas,
+        MainnetEthSpec, SyncCommitteeContribution, test_utils::generate_deterministic_keypair,
     };
 
     use super::*;
@@ -3437,5 +3622,450 @@ mod tests {
         let result = validator.do_validation(&value, &our_value);
 
         assert_block_slot_mismatch(result, slot, slot + 1);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // EnvelopeConsensusData tests (ePBS envelope-signing QBFT value)
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Slot used across the envelope fixtures; arbitrary but non-zero to catch a validator
+    /// that ignores the configured slot.
+    const ENVELOPE_TEST_SLOT: u64 = 42;
+    /// Validator index used across the envelope fixtures.
+    const ENVELOPE_TEST_VALIDATOR_INDEX: usize = 7;
+    /// Alternative validator index used across the envelope fixtures.
+    const ENVELOPE_OTHER_TEST_VALIDATOR_INDEX: usize = 8;
+
+    /// Deterministic validator pubkey for the "matching" side of the value check.
+    fn envelope_test_pubkey(validator_index: usize) -> PublicKeyBytes {
+        generate_deterministic_keypair(validator_index)
+            .pk
+            .compress()
+    }
+
+    /// The beacon block root the validator treats as decided; a self-build envelope must
+    /// carry this value in its `beacon_block_root`.
+    fn envelope_test_decided_root() -> Hash256 {
+        Hash256::from_low_u64_be(0xdec1_ded0)
+    }
+
+    /// Builds a small full `ExecutionPayloadEnvelope` with the given `builder_index` and
+    /// `beacon_block_root`. Payload and requests stay at their (small) defaults so the blinded
+    /// form is cheap to encode.
+    fn envelope_test_full_envelope(
+        builder_index: u64,
+        beacon_block_root: Hash256,
+    ) -> ExecutionPayloadEnvelope<MainnetEthSpec> {
+        ExecutionPayloadEnvelope {
+            payload: ExecutionPayloadGloas::<MainnetEthSpec>::default(),
+            execution_requests: ExecutionRequestsGloas::<MainnetEthSpec>::default(),
+            builder_index,
+            beacon_block_root,
+            parent_beacon_block_root: Hash256::from_low_u64_be(0x2222),
+        }
+    }
+
+    /// Builds a `ValidatorDuty` with the envelope-relevant fields populated; the remaining
+    /// committee fields are irrelevant to `EnvelopeConsensusDataValidator` and are zeroed.
+    fn envelope_test_duty(
+        role: BeaconRole,
+        pub_key: PublicKeyBytes,
+        slot: Slot,
+        validator_index: ValidatorIndex,
+    ) -> ValidatorDuty {
+        ValidatorDuty {
+            r#type: role,
+            pub_key,
+            slot,
+            validator_index,
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        }
+    }
+
+    /// Wraps a blinded envelope into an `EnvelopeConsensusData` with the given duty, tagging
+    /// it as Gloas.
+    fn envelope_consensus_data(
+        duty: ValidatorDuty,
+        blinded: &BlindedExecutionPayloadEnvelope<MainnetEthSpec>,
+    ) -> EnvelopeConsensusData {
+        EnvelopeConsensusData {
+            duty,
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: VariableList::new(blinded.as_ssz_bytes())
+                .expect("blinded envelope bytes should fit in DataSSZ"),
+        }
+    }
+
+    /// Encodes a blinded envelope with the given `builder_index`/`beacon_block_root` into a
+    /// `data_ssz` payload, for tests that mutate only the embedded envelope.
+    fn envelope_data_ssz(
+        builder_index: u64,
+        beacon_block_root: Hash256,
+    ) -> VariableList<u8, ProposerConsensusDataLen> {
+        let full = envelope_test_full_envelope(builder_index, beacon_block_root);
+        let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
+        VariableList::new(blinded.as_ssz_bytes())
+            .expect("blinded envelope bytes should fit in DataSSZ")
+    }
+
+    /// Produces a matched `(validator, value)` pair that passes `do_validation`: the duty's
+    /// slot/index/pubkey equal the validator's, and the embedded blinded envelope is
+    /// self-build with `beacon_block_root == decided_block_root`.
+    fn valid_envelope_setup() -> (
+        EnvelopeConsensusDataValidator<MainnetEthSpec>,
+        EnvelopeConsensusData,
+    ) {
+        let pubkey = envelope_test_pubkey(ENVELOPE_TEST_VALIDATOR_INDEX);
+        let slot = Slot::new(ENVELOPE_TEST_SLOT);
+        let validator_index = ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX);
+        let decided_root = envelope_test_decided_root();
+
+        let validator = EnvelopeConsensusDataValidator::<MainnetEthSpec>::new(
+            pubkey,
+            validator_index,
+            slot,
+            decided_root,
+        );
+
+        let full = envelope_test_full_envelope(BUILDER_INDEX_SELF_BUILD, decided_root);
+        let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
+        let duty = envelope_test_duty(BEACON_ROLE_ENVELOPE_PROPOSER, pubkey, slot, validator_index);
+        let value = envelope_consensus_data(duty, &blinded);
+
+        (validator, value)
+    }
+
+    /// Build a full envelope, blind it, and assert:
+    /// 1. `blinded.tree_hash_root() == full.tree_hash_root()`.
+    /// 2. `payload_root` really is the payload's hash.
+    /// 3. The blinded form survives SSZ encode/decode.
+    #[test]
+    fn blinded_execution_payload_envelope_root_parity() {
+        // Construct a full ExecutionPayloadEnvelope with test data.
+        let full_envelope = envelope_test_full_envelope(42, Hash256::from_low_u64_be(0x1111));
+
+        // Create blinded envelope from full.
+        let blinded = BlindedExecutionPayloadEnvelope::from_full(&full_envelope);
+
+        // This equality is load-bearing for the envelope signing duty.
+        assert_eq!(
+            blinded.tree_hash_root(),
+            full_envelope.tree_hash_root(),
+            "BlindedExecutionPayloadEnvelope root must equal full ExecutionPayloadEnvelope root"
+        );
+
+        assert_eq!(
+            blinded.payload_root,
+            full_envelope.payload.tree_hash_root(),
+            "payload_root must equal the full payload's tree-hash root"
+        );
+
+        let encoded = blinded.as_ssz_bytes();
+        let decoded = BlindedExecutionPayloadEnvelope::<MainnetEthSpec>::from_ssz_bytes(&encoded)
+            .expect("SSZ decode should succeed");
+        assert_eq!(
+            blinded, decoded,
+            "SSZ round-trip must preserve BlindedExecutionPayloadEnvelope"
+        );
+        assert_eq!(
+            blinded.tree_hash_root(),
+            decoded.tree_hash_root(),
+            "SSZ round-trip must preserve tree-hash root"
+        );
+    }
+
+    /// Encode an EnvelopeConsensusData and decode it back, confirming the value, its root, and
+    /// the nested blinded envelope inside data_ssz all come back identical.
+    #[test]
+    fn envelope_consensus_data_ssz_round_trip() {
+        // EnvelopeConsensusData whose data_ssz holds a real blinded envelope.
+        let full =
+            envelope_test_full_envelope(BUILDER_INDEX_SELF_BUILD, envelope_test_decided_root());
+
+        // Blind the full envelope.
+        let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
+
+        // Create a duty and a consensus data value.
+        let duty = envelope_test_duty(
+            BEACON_ROLE_ENVELOPE_PROPOSER,
+            envelope_test_pubkey(ENVELOPE_TEST_VALIDATOR_INDEX),
+            Slot::new(ENVELOPE_TEST_SLOT),
+            ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX),
+        );
+        let consensus_data = envelope_consensus_data(duty, &blinded);
+
+        // Encode and decode the consensus data.
+        let encoded = consensus_data.as_ssz_bytes();
+        let decoded = EnvelopeConsensusData::from_ssz_bytes(&encoded)
+            .expect("SSZ-encoded EnvelopeConsensusData must decode");
+
+        assert_eq!(
+            consensus_data, decoded,
+            "SSZ round-trip must preserve full EnvelopeConsensusData"
+        );
+        assert_eq!(
+            consensus_data.tree_hash_root(),
+            decoded.tree_hash_root(),
+            "SSZ round-trip must preserve EnvelopeConsensusData tree-hash root"
+        );
+
+        let decoded_blinded = decoded
+            .decode_blinded_envelope::<MainnetEthSpec>()
+            .expect("round-tripped data_ssz must still decode as a blinded envelope");
+        assert_eq!(
+            blinded, decoded_blinded,
+            "round-trip must preserve the embedded BlindedExecutionPayloadEnvelope"
+        );
+    }
+
+    /// Tests that data_ssz's capacity is exactly 2^23 bytes (8 MiB).
+    #[test]
+    fn envelope_consensus_data_data_ssz_respects_8mib_bound() {
+        /// `ProposerConsensusDataLen` is `2^23` bytes (8 MiB); `data_ssz` shares this bound.
+        const ENVELOPE_DATA_SSZ_MAX_LEN: usize = 1 << 23;
+
+        assert_eq!(
+            VariableList::<u8, ProposerConsensusDataLen>::max_len(),
+            ENVELOPE_DATA_SSZ_MAX_LEN,
+            "data_ssz capacity must be ProposerConsensusDataLen = 2^23 bytes"
+        );
+
+        // Construct a max-length data_ssz.
+        let at_max: VariableList<u8, ProposerConsensusDataLen> =
+            VariableList::new(vec![0u8; ENVELOPE_DATA_SSZ_MAX_LEN])
+                .expect("a data_ssz of exactly 2^23 bytes must be within bound");
+        assert_eq!(
+            at_max.len(),
+            ENVELOPE_DATA_SSZ_MAX_LEN,
+            "max-length data_ssz must be 2^23 length"
+        );
+
+        // Encode an EnvelopeConsensusData with a max-length data_ssz.
+        let max_value = EnvelopeConsensusData {
+            duty: envelope_test_duty(
+                BEACON_ROLE_PROPOSER,
+                envelope_test_pubkey(ENVELOPE_TEST_VALIDATOR_INDEX),
+                Slot::new(ENVELOPE_TEST_SLOT),
+                ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX),
+            ),
+            version: DataVersion::from(ForkName::Gloas),
+            data_ssz: at_max,
+        };
+        assert!(
+            max_value.as_ssz_bytes().len() >= ENVELOPE_DATA_SSZ_MAX_LEN,
+            "an EnvelopeConsensusData with a max-length data_ssz must encode"
+        );
+
+        // Construct a data_ssz that is one byte greater than MAX.
+        let over = VariableList::<u8, ProposerConsensusDataLen>::new(vec![
+            0u8;
+            ENVELOPE_DATA_SSZ_MAX_LEN
+                + 1
+        ]);
+        assert!(
+            matches!(over, Err(ssz_types::Error::OutOfBounds { .. })),
+            "a data_ssz of 2^23 + 1 bytes must be rejected as out of bounds, got {over:?}"
+        );
+    }
+
+    /// Tests that identical values hash identically and that permutating a single field changes the
+    /// outcome. Determinism in building the consensus data.
+    #[test]
+    fn envelope_consensus_data_hash_is_deterministic() {
+        // Arrange: two independently-built values with identical field values.
+        let full =
+            envelope_test_full_envelope(BUILDER_INDEX_SELF_BUILD, envelope_test_decided_root());
+        let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
+        let duty = envelope_test_duty(
+            BEACON_ROLE_PROPOSER,
+            envelope_test_pubkey(ENVELOPE_TEST_VALIDATOR_INDEX),
+            Slot::new(ENVELOPE_TEST_SLOT),
+            ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX),
+        );
+        let value = envelope_consensus_data(duty.clone(), &blinded);
+        let same = envelope_consensus_data(duty.clone(), &blinded);
+
+        assert_eq!(
+            value.hash(),
+            same.hash(),
+            "identical EnvelopeConsensusData values must hash identically"
+        );
+
+        let mut mutated_duty = duty;
+        mutated_duty.slot = Slot::new(ENVELOPE_TEST_SLOT + 1);
+        let mutated = envelope_consensus_data(mutated_duty, &blinded);
+        assert_ne!(
+            value.hash(),
+            mutated.hash(),
+            "changing envelope consensus data field duty.slot must change the EnvelopeConsensusData hash"
+        );
+    }
+
+    /// Tests that a well-formed self-build envelope passes both the internal check and the public
+    /// validate().
+    #[test]
+    fn envelope_value_check_accepts_valid() {
+        // Create a valid validator/value pair.
+        let (validator, value) = valid_envelope_setup();
+
+        // Valid pair passes do_validation and validate().
+        let result = validator.do_validation(&value);
+        assert!(
+            result.is_ok(),
+            "a well-formed self-build envelope value must pass, got {result:?}"
+        );
+        assert!(
+            validator.validate(&value, &value),
+            "validate() must return true for a well-formed envelope value"
+        );
+    }
+
+    /// Tests that an otherwise valid envelope value with a duty slot differing from the validator's
+    /// is rejected with SlotMismatch.
+    #[test]
+    fn envelope_value_check_rejects_wrong_slot() {
+        // Create valid pair and mutate only the duty slot.
+        let (validator, mut value) = valid_envelope_setup();
+        value.duty.slot = Slot::new(ENVELOPE_TEST_SLOT + 1);
+
+        // Validate.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            matches!(result, Err(EnvelopeValidationError::SlotMismatch { .. })),
+            "a duty slot differing from the validator's must yield SlotMismatch, got {result:?}"
+        );
+    }
+
+    /// Tests that an otherwise valid envelope value with a duty validator index differing from the
+    /// validator's is rejected with IndexMismatch.
+    #[test]
+    fn envelope_value_check_rejects_wrong_validator_index() {
+        // Create valid pair and mutate only the duty validator index.
+        let (validator, mut value) = valid_envelope_setup();
+        value.duty.validator_index = ValidatorIndex(ENVELOPE_TEST_VALIDATOR_INDEX + 1);
+
+        // Validate.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            matches!(result, Err(EnvelopeValidationError::IndexMismatch { .. })),
+            "a duty index differing from the validator's must yield IndexMismatch, got {result:?}"
+        );
+    }
+
+    /// Tests that an otherwise valid envelope value with a duty pubkey differing from the
+    /// validator's is rejected with PubKeyMismatch.
+    #[test]
+    fn envelope_value_check_rejects_wrong_pubkey() {
+        // Create valid pair and mutate only the duty pubkey.
+        let (validator, mut value) = valid_envelope_setup();
+        value.duty.pub_key = envelope_test_pubkey(ENVELOPE_OTHER_TEST_VALIDATOR_INDEX);
+
+        // Validate.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            matches!(result, Err(EnvelopeValidationError::PubKeyMismatch { .. })),
+            "a duty pubkey differing from the validator's must yield PubKeyMismatch, got {result:?}"
+        );
+    }
+
+    /// Tests that this validation path only exists for a self-build envelope.
+    #[test]
+    fn envelope_value_check_rejects_non_self_build() {
+        // Create a valid envelope and rebuild with a non-self-build builder_index.
+        let (validator, mut value) = valid_envelope_setup();
+        value.data_ssz = envelope_data_ssz(0, envelope_test_decided_root());
+
+        // Attempt to validate.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            matches!(result, Err(EnvelopeValidationError::NotSelfBuild(0))),
+            "a non-self-build builder_index must yield NotSelfBuild, got {result:?}"
+        );
+        assert!(
+            !validator.validate(&value, &value),
+            "validate() must return false for a non-self-build envelope value"
+        );
+    }
+
+    /// Test that a self-build envelope whose beacon_block_root doesn't match the decided root is
+    /// rejected.
+    #[test]
+    fn envelope_value_check_rejects_wrong_decided_root() {
+        // A self-build envelope bound to a different beacon block root than the decided value.
+        let (validator, mut value) = valid_envelope_setup();
+        let wrong_root = Hash256::from_low_u64_be(0xbad0);
+        value.data_ssz = envelope_data_ssz(BUILDER_INDEX_SELF_BUILD, wrong_root);
+
+        // Attempt to validate.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            matches!(
+                result,
+                Err(EnvelopeValidationError::DecidedRootMismatch { .. })
+            ),
+            "a beacon_block_root differing from the decided root must yield \
+             DecidedRootMismatch, got {result:?}"
+        );
+    }
+
+    /// Tests that a self-build envelope whose data_ssz is not decodable as a blinded envelope is
+    /// rejected with DecodeError.
+    #[test]
+    fn envelope_value_check_rejects_undecodable_data_ssz() {
+        // Create valid envelope and replace data_ssz with bytes that cannot decode as a blinded
+        // envelope.
+        let (validator, mut value) = valid_envelope_setup();
+        value.data_ssz =
+            VariableList::new(vec![0xFFu8; 3]).expect("3 garbage bytes fit within DataSSZ");
+
+        // Attempt to validate.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            matches!(result, Err(EnvelopeValidationError::DecodeError(_))),
+            "undecodable data_ssz must yield a DecodeError, got {result:?}"
+        );
+
+        // Additional check for error message contents.
+        assert!(
+            result
+                .as_ref()
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("EnvelopeConsensusData"),
+            "decode error must be attributed to EnvelopeConsensusData, got: {result:?}"
+        );
+    }
+
+    /// Tests that a value with a non-Gloas version and an unrelated duty.r#type (e.g. attester)
+    /// pass validation.
+    #[test]
+    fn envelope_value_check_ignores_version_and_duty_type() {
+        // Valid value whose version is not Gloas, duty role unrelated to envelope proposal.
+        let (validator, mut value) = valid_envelope_setup();
+        value.version = DataVersion::from(ForkName::Deneb);
+        value.duty.r#type = BEACON_ROLE_ATTESTER;
+
+        // Data version and duty role not part of the envelope value check.
+        let result = validator.do_validation(&value);
+
+        assert!(
+            result.is_ok(),
+            "envelope value check must ignore version and duty.r#type, got {result:?}"
+        );
+        assert!(
+            validator.validate(&value, &value),
+            "validate() must accept regardless of version and duty.r#type"
+        );
     }
 }
