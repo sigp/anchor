@@ -3733,7 +3733,7 @@ mod tests {
 
         let full = envelope_test_full_envelope(BUILDER_INDEX_SELF_BUILD, decided_root);
         let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
-        let duty = envelope_test_duty(BEACON_ROLE_PROPOSER, pubkey, slot, validator_index);
+        let duty = envelope_test_duty(BEACON_ROLE_ENVELOPE_PROPOSER, pubkey, slot, validator_index);
         let value = envelope_consensus_data(duty, &blinded);
 
         (validator, value)
