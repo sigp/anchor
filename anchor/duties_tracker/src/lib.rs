@@ -122,4 +122,10 @@ pub trait DutiesProvider: Sync + Send + 'static {
     fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool;
 
     fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64;
+
+    fn proposer_assignment_at_slot(
+        &self,
+        slot: Slot,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Option<bool>;
 }

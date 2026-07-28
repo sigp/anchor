@@ -3,6 +3,7 @@ use std::{future::Future, sync::Arc};
 use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
 use database::NetworkState;
+use eth2::types::ProposerData;
 use safe_arith::ArithError;
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
@@ -207,45 +208,48 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
         let current_epoch = current_slot.epoch(self.slots_per_epoch);
 
-        let download_result = self
-            .beacon_nodes
-            .first_success(|beacon_node| async move {
-                beacon_node
-                    .get_validator_duties_proposer(current_epoch)
-                    .await
-            })
-            .await;
+        let mut fetched = Vec::with_capacity(2);
+        for epoch in [current_epoch, current_epoch + 1] {
+            let result = self
+                .beacon_nodes
+                .first_success(|beacon_node| async move {
+                    beacon_node.get_validator_duties_proposer(epoch).await
+                })
+                .await
+                .map(|response| response.data)
+                .map_err(|e| Error::FailedToPollProposers(e.to_string()));
+            fetched.push((epoch, result));
+        }
 
-        let result = match download_result {
-            Ok(response) => {
-                // avoid holding the borrow across .await points
-                let validator_indices = {
-                    let network_state = self.network_state_rx.borrow();
-                    network_state.validator_indices()
-                };
+        self.store_proposer_duties(current_epoch, fetched)
+    }
 
-                let relevant_duties = response
-                    .data
-                    .into_iter()
-                    .filter(|proposer_duty| {
-                        validator_indices.contains(&proposer_duty.validator_index)
-                    })
-                    .collect::<Vec<_>>();
+    /// Stores each successfully-fetched epoch's complete proposer view independently, prunes stale
+    /// epochs, and aggregates fetch failures. Split from the async fetch so the store contract —
+    /// per-epoch inserts are independent, one epoch's failure never discards another's stored view,
+    /// and a failure still propagates — is unit-testable without a beacon-node HTTP seam.
+    fn store_proposer_duties(
+        &self,
+        current_epoch: Epoch,
+        fetched: Vec<(Epoch, Result<Vec<ProposerData>, Error>)>,
+    ) -> Result<(), Error> {
+        let mut last_err = None;
+        for (epoch, result) in fetched {
+            match result {
+                Ok(proposer_duties) => {
+                    trace!(
+                        num_proposer_duties = proposer_duties.len(),
+                        "Downloaded proposer duties"
+                    );
 
-                trace!(
-                    num_relevant_duties = relevant_duties.len(),
-                    "Downloaded proposer duties"
-                );
-
-                self.duties
-                    .proposers
-                    .write()
-                    .insert(current_epoch, relevant_duties);
-                Ok(())
+                    self.duties.proposers.write().insert(epoch, proposer_duties);
+                }
+                // Keep the other epoch's stored view; we'll retry this one next slot.
+                Err(e) => {
+                    last_err = Some(e);
+                }
             }
-            // Don't return early here, we"ll try again later
-            Err(e) => Err(Error::FailedToPollProposers(e.to_string())),
-        };
+        }
 
         // Prune old duties.
         self.duties
@@ -253,7 +257,7 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             .write()
             .retain(|&epoch, _| epoch + HISTORICAL_DUTIES_EPOCHS >= current_epoch);
 
-        result
+        last_err.map_or(Ok(()), Err)
     }
 
     pub fn start(self: Arc<Self>, executor: TaskExecutor) {
@@ -355,9 +359,262 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
     fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64 {
         self.voluntary_exit_tracker.get_duty_count(slot, pubkey)
     }
+
+    fn proposer_assignment_at_slot(
+        &self,
+        slot: Slot,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Option<bool> {
+        let epoch = slot.epoch(self.slots_per_epoch);
+        self.duties.proposers.read().get(&epoch).map(|proposers| {
+            proposers
+                .iter()
+                .any(|d| d.slot == slot && d.pubkey == *validator_pubkey)
+        })
+    }
 }
 
 /// Number of epochs to wait from the start of the period before actually fetching duties.
 fn epoch_offset(spec: &ChainSpec) -> u64 {
     spec.epochs_per_sync_committee_period.as_u64() / 2
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use beacon_node_fallback::{ApiTopic, BeaconNodeFallback, CandidateBeaconNode, Config};
+    use bls::{Keypair, PublicKeyBytes};
+    use database::NetworkDatabase;
+    use eth2::{BeaconNodeHttpClient, Timeouts, types::ProposerData};
+    use openssl::rsa::Rsa;
+    use sensitive_url::SensitiveUrl;
+    use slot_clock::{ManualSlotClock, SlotClock};
+    use types::{ChainSpec, Epoch, Slot};
+
+    use super::*;
+
+    /// Slots per epoch used by these tests. Kept small and independent of any real fork schedule.
+    const SLOTS_PER_EPOCH: u64 = 32;
+    /// Genesis slot 0 anchor for the manual clock; the arm under test does not depend on wall time.
+    const GENESIS_SLOT: u64 = 0;
+    /// Slot duration for the manual clock; arbitrary, unused by the proposer-assignment arm.
+    const SLOT_DURATION: Duration = Duration::from_secs(12);
+
+    /// Builds a `DutiesTracker` whose `NetworkState` receiver comes from an EMPTY in-memory
+    /// database (so `NetworkState::validator_indices()` is empty) and whose `BeaconNodeFallback`
+    /// points at a never-contacted candidate. The tests here only exercise the read-side
+    /// `DutiesProvider` methods over a directly-seeded proposers map, so the beacon node is never
+    /// polled. An empty local validator set is exactly the condition under which #1142 must still
+    /// serve the complete, unfiltered proposer view.
+    fn tracker_with_empty_network_state() -> DutiesTracker<ManualSlotClock> {
+        // Empty in-memory DB -> a `NetworkState` with no registered validators.
+        let operator_pubkey = random_rsa_public_key();
+        let db = NetworkDatabase::new_in_memory(&operator_pubkey, "test")
+            .expect("in-memory database should be created");
+        let network_state_rx = db.watch();
+        // Guard the precondition this whole file relies on: no local validator indices.
+        assert!(
+            network_state_rx.borrow().validator_indices().is_empty(),
+            "precondition: empty database must yield no local validator indices"
+        );
+
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(GENESIS_SLOT),
+            Duration::from_secs(0),
+            SLOT_DURATION,
+        );
+
+        let spec = Arc::new(ChainSpec::mainnet());
+        let beacon_nodes = Arc::new(dummy_beacon_node_fallback(spec.clone()));
+        let voluntary_exit_tracker = Arc::new(VoluntaryExitTracker::new());
+
+        DutiesTracker::new(
+            voluntary_exit_tracker,
+            beacon_nodes,
+            spec,
+            SLOTS_PER_EPOCH,
+            slot_clock,
+            network_state_rx,
+        )
+    }
+
+    /// A `BeaconNodeFallback` with a single candidate that is never actually contacted by these
+    /// tests. It exists only to satisfy `DutiesTracker::new`.
+    fn dummy_beacon_node_fallback(spec: Arc<ChainSpec>) -> BeaconNodeFallback<ManualSlotClock> {
+        let url = SensitiveUrl::parse("http://127.0.0.1:0").expect("dummy url should parse");
+        let http_client = BeaconNodeHttpClient::new(url, Timeouts::set_all(SLOT_DURATION));
+        let candidate = CandidateBeaconNode::new(http_client, 0);
+        BeaconNodeFallback::new(vec![candidate], Config::default(), ApiTopic::all(), spec)
+    }
+
+    /// Generates a throwaway RSA public key for the in-memory database's operator identity.
+    fn random_rsa_public_key() -> Rsa<openssl::pkey::Public> {
+        let private_key = Rsa::generate(2048).expect("RSA key generation should succeed");
+        Rsa::from_public_components(
+            private_key.n().to_owned().expect("modulus"),
+            private_key.e().to_owned().expect("exponent"),
+        )
+        .expect("public RSA key should be reconstructable")
+    }
+
+    /// Generates a random validator public key for proposer entries.
+    fn random_validator_pubkey() -> PublicKeyBytes {
+        PublicKeyBytes::from(Keypair::random().pk)
+    }
+
+    /// Seeds `tracker.duties.proposers[epoch]` with `data` exactly as `poll_beacon_proposers`
+    /// does (a single unfiltered `insert` of the whole `response.data`).
+    fn seed_epoch(tracker: &DutiesTracker<ManualSlotClock>, epoch: Epoch, data: Vec<ProposerData>) {
+        tracker.duties.proposers.write().insert(epoch, data);
+    }
+
+    /// Builds a `ProposerData` for the given slot/pubkey with an arbitrary validator index.
+    fn proposer(slot: Slot, pubkey: PublicKeyBytes) -> ProposerData {
+        ProposerData {
+            pubkey,
+            validator_index: 0,
+            slot,
+        }
+    }
+
+    // ==================== store_proposer_duties ====================
+
+    #[test]
+    fn test_store_proposer_duties_keeps_successful_epoch_and_propagates_other_failure() {
+        // #1142: `store_proposer_duties` inserts each `Ok` epoch's proposer view independently and
+        // aggregates failures via `last_err.map_or(Ok(()), Err)`. This test drives the REAL
+        // store/aggregate path (not a directly-seeded map): one epoch succeeds, the other fails.
+        // The contract is that the failure propagates as `Err` while the successful epoch is still
+        // stored and queryable, and the failed epoch is neither stored nor fabricated.
+
+        // Arrange: a tracker plus a fetched batch where `current_epoch` succeeds and `next_epoch`
+        // fails.
+        let tracker = tracker_with_empty_network_state();
+        let current_epoch = Epoch::new(0);
+        let next_epoch = current_epoch + 1;
+        let current_slot = current_epoch.start_slot(SLOTS_PER_EPOCH);
+        let pubkey = random_validator_pubkey();
+
+        // Act: exercise the actual store/aggregate logic.
+        let result = tracker.store_proposer_duties(
+            current_epoch,
+            vec![
+                (current_epoch, Ok(vec![proposer(current_slot, pubkey)])),
+                (
+                    next_epoch,
+                    Err(Error::FailedToPollProposers("boom".to_string())),
+                ),
+            ],
+        );
+
+        // Assert: the failed epoch's error propagates.
+        assert!(
+            result.is_err(),
+            "a failed epoch in the batch must propagate as Err"
+        );
+
+        // Assert: the successful epoch was stored and survives despite the sibling failure.
+        assert!(
+            tracker.is_epoch_known_for_proposers(current_epoch),
+            "the successfully stored epoch must be known"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(current_slot, &pubkey),
+            Some(true),
+            "the successfully stored epoch's proposer must be served at its slot"
+        );
+
+        // Assert: the failed epoch was neither stored nor fabricated.
+        assert!(
+            !tracker.is_epoch_known_for_proposers(next_epoch),
+            "the failed epoch must not be marked known"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(next_epoch.start_slot(SLOTS_PER_EPOCH), &pubkey),
+            None,
+            "the failed epoch must report None (unknown), not a fabricated verdict"
+        );
+    }
+
+    // ==================== proposer_assignment_at_slot ====================
+
+    #[test]
+    fn test_proposer_assignment_at_slot_returns_some_true_for_assigned_pubkey() {
+        // Assigned pubkey AT its slot in a fetched epoch -> Some(true).
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(0);
+        let slot = epoch.start_slot(SLOTS_PER_EPOCH) + Slot::new(1);
+        let assigned = random_validator_pubkey();
+        seed_epoch(&tracker, epoch, vec![proposer(slot, assigned)]);
+
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &assigned),
+            Some(true),
+            "assigned pubkey at its slot must return Some(true)"
+        );
+    }
+
+    #[test]
+    fn test_proposer_assignment_at_slot_returns_some_false_for_unassigned_pubkey_in_fetched_epoch()
+    {
+        // Different (unassigned) pubkey, same fetched epoch and slot -> Some(false).
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(0);
+        let slot = epoch.start_slot(SLOTS_PER_EPOCH) + Slot::new(1);
+        let assigned = random_validator_pubkey();
+        let other = random_validator_pubkey();
+        seed_epoch(&tracker, epoch, vec![proposer(slot, assigned)]);
+
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &other),
+            Some(false),
+            "unassigned pubkey in a fetched epoch must return Some(false)"
+        );
+    }
+
+    #[test]
+    fn test_proposer_assignment_at_slot_returns_some_false_for_assigned_pubkey_at_different_slot() {
+        // The assignment is bound to the exact slot: the assigned pubkey queried at a DIFFERENT
+        // slot within the SAME fetched epoch must return Some(false) (not Some(true)). This is the
+        // slot-bind case that guards against matching on pubkey alone.
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(0);
+        let assigned_slot = epoch.start_slot(SLOTS_PER_EPOCH) + Slot::new(1);
+        let other_slot = epoch.start_slot(SLOTS_PER_EPOCH) + Slot::new(2);
+        let assigned = random_validator_pubkey();
+        seed_epoch(&tracker, epoch, vec![proposer(assigned_slot, assigned)]);
+
+        // Precondition: both slots are in the same fetched epoch.
+        assert_eq!(assigned_slot.epoch(SLOTS_PER_EPOCH), epoch);
+        assert_eq!(other_slot.epoch(SLOTS_PER_EPOCH), epoch);
+
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(other_slot, &assigned),
+            Some(false),
+            "assigned pubkey queried at a different slot in the same epoch must return Some(false)"
+        );
+    }
+
+    #[test]
+    fn test_proposer_assignment_at_slot_returns_none_for_unfetched_epoch() {
+        // A slot whose epoch has not been fetched -> None (unknown), regardless of pubkey.
+        let tracker = tracker_with_empty_network_state();
+        let fetched_epoch = Epoch::new(0);
+        let pubkey = random_validator_pubkey();
+        let fetched_slot = fetched_epoch.start_slot(SLOTS_PER_EPOCH);
+        seed_epoch(
+            &tracker,
+            fetched_epoch,
+            vec![proposer(fetched_slot, pubkey)],
+        );
+
+        // Query a slot in a DIFFERENT, unfetched epoch.
+        let unfetched_slot = (fetched_epoch + 5).start_slot(SLOTS_PER_EPOCH);
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(unfetched_slot, &pubkey),
+            None,
+            "a slot in an unfetched epoch must return None"
+        );
+    }
 }

@@ -19,3 +19,8 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 types = { workspace = true }
+
+[dev-dependencies]
+database = { workspace = true, features = ["test-utils"] }
+openssl = { workspace = true }
+sensitive_url = { workspace = true }
