@@ -85,6 +85,8 @@ struct QueryResult {
     result: Result<Vec<Enr>, discv5::QueryError>,
 }
 
+/// Returns `true` when the ENR has a valid main `domaintype` and either its main
+/// or optional `next_domaintype` matches the current domain.
 fn enr_matches_current_domain(enr: &Enr, current_domain: DomainType) -> bool {
     let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") else {
         trace!(?enr, "Rejecting ENR with missing domaintype");
