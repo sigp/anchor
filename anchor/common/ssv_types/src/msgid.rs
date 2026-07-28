@@ -77,7 +77,8 @@ impl Role {
 
     pub fn max_round(self) -> Option<u64> {
         // Caps both the incoming consensus-message round gate and the local QBFT
-        // instance round limit. ePBS (Gloas) caps specified https://github.com/ssvlabs/SIPs/pull/94.
+        // instance round limit. Values mirror go-ssv's maxRound:
+        // https://github.com/ssvlabs/ssv/blob/d2352a3dba3e7b309ef090b7a23f4cac1d9002d1/message/validation/consensus_validation.go#L434-L443
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer | Role::EnvelopeProposer => Some(2),
