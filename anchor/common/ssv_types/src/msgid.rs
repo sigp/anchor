@@ -76,11 +76,13 @@ impl Role {
     }
 
     pub fn max_round(self) -> Option<u64> {
-        // as per https://github.com/ssvlabs/ssv/blob/6382d4b52ea5e0efd9378a5a00ef481f39d6234f/message/validation/consensus_validation.go#L370
+        // Caps both the incoming consensus-message round gate and the local QBFT
+        // instance round limit. Values mirror go-ssv's maxRound:
+        // https://github.com/ssvlabs/ssv/blob/d2352a3dba3e7b309ef090b7a23f4cac1d9002d1/message/validation/consensus_validation.go#L434-L443
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
-            Role::Proposer | Role::SyncCommittee => Some(6),
-            Role::EnvelopeProposer => Some(2),
+            Role::Proposer | Role::EnvelopeProposer => Some(2),
+            Role::SyncCommittee => Some(6),
             // These roles don't use QBFT consensus
             Role::ValidatorRegistration
             | Role::VoluntaryExit
@@ -517,6 +519,21 @@ mod tests {
             msg_id.duty_executor(),
             Some(DutyExecutor::Validator(pk)),
             "EnvelopeProposer resolves to a validator-scoped duty executor"
+        );
+    }
+
+    /// Pins the proposer QBFT and sync-committee round caps.
+    #[test]
+    fn proposer_and_sync_committee_max_rounds_are_pinned() {
+        assert_eq!(
+            Role::Proposer.max_round(),
+            Some(2),
+            "`Role::Proposer` must cap QBFT at round 2"
+        );
+        assert_eq!(
+            Role::SyncCommittee.max_round(),
+            Some(6),
+            "`Role::SyncCommittee` must maintain its round 6 cap"
         );
     }
 }
