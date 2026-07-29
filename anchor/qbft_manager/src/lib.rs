@@ -14,8 +14,8 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, OperatorId,
     consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, ProposerConsensusData,
-        QbftData, QbftDataValidator,
+        AggregatorCommitteeConsensusData, BeaconVote, EnvelopeConsensusData, GloasBeaconVote,
+        ProposerConsensusData, QbftData, QbftDataValidator,
     },
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -30,7 +30,7 @@ use tokio::{
     },
     time::{Instant, sleep},
 };
-use tracing::{Instrument, debug, debug_span, error, warn};
+use tracing::{Instrument, debug_span, error, warn};
 use types::{ChainSpec, Epoch, EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
@@ -96,6 +96,14 @@ pub enum ValidatorDutyKind {
     SyncCommitteeAggregator,
 }
 
+/// Unique identifier for an envelope-proposer QBFT instance (SIP-94 §6). Envelope
+/// signing is a single per-slot duty, so no `ValidatorDutyKind` discriminator.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct EnvelopeProposerInstanceId {
+    pub validator: PublicKeyBytes,
+    pub instance_height: InstanceHeight,
+}
+
 // Message that is passed around the QbftManager
 pub struct QbftMessage<D: QbftData> {
     pub kind: QbftMessageKind<D>,
@@ -148,6 +156,8 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // QBFT instances for AggregatorCommitteeConsensusData
     aggregator_committee_instances:
         Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
+    // QBFT instances voting on Gloas self-build envelope consensus data (SIP-94 §6)
+    envelope_consensus_data_instances: Map<EnvelopeProposerInstanceId, EnvelopeConsensusData>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
     // Number of slots per epoch
@@ -178,6 +188,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             beacon_vote_instances: DashMap::new(),
             gloas_beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
+            envelope_consensus_data_instances: DashMap::new(),
             message_sender,
             slots_per_epoch,
             fork_schedule,
@@ -199,6 +210,12 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         let slot = Slot::new(*instance_height as u64);
         let epoch = slot.epoch(E::slots_per_epoch());
         self.fork_schedule.active_fork_config(epoch).domain_type
+    }
+
+    /// Whether the Ethereum Gloas (ePBS) fork is active at `slot`, per the consensus
+    /// spec. Distinct from the SSV protocol `fork_schedule`.
+    fn gloas_enabled_at_slot(&self, slot: Slot) -> bool {
+        self.spec.fork_name_at_slot::<E>(slot).gloas_enabled()
     }
 
     // Decide a brand new qbft instance
@@ -283,9 +300,24 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
                     Some(Role::EnvelopeProposer) => {
-                        // TODO: wire EnvelopeProposer instance routing (#1122)
-                        debug!(?msg_id, "EnvelopeProposer routing not yet wired");
-                        return Err(QbftError::RoleNotActive);
+                        let slot = types::Slot::new(qbft_message.height);
+                        // Defense in depth behind `validate_role_for_fork`: envelope QBFT
+                        // exists only post-Gloas.
+                        if !self.gloas_enabled_at_slot(slot) {
+                            warn!(%slot, "Ignoring EnvelopeProposer message before Gloas fork");
+                            return Err(QbftError::RoleNotActive);
+                        }
+                        let id = EnvelopeProposerInstanceId {
+                            validator,
+                            instance_height,
+                        };
+                        return self.pass_to_instance::<EnvelopeConsensusData>(
+                            id,
+                            WrappedQbftMessage {
+                                signed_message: full_message,
+                                qbft_message,
+                            },
+                        );
                     }
                     // Committee roles use DutyExecutor::Committee, not Validator
                     Some(Role::Committee | Role::AggregatorCommittee)
@@ -324,9 +356,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                             qbft_message,
                         };
 
-                        // Gate the Gloas beacon-vote shape on Ethereum's Gloas (ePBS) fork,
-                        // read from the consensus spec, rather than an SSV-internal fork.
-                        if self.spec.fork_name_at_slot::<E>(slot).gloas_enabled() {
+                        if self.gloas_enabled_at_slot(slot) {
                             self.pass_to_instance::<GloasBeaconVote>(id, wrapped)
                         } else {
                             self.pass_to_instance::<BeaconVote>(id, wrapped)
@@ -415,6 +445,8 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             self.proposer_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
             self.aggregator_committee_instances
+                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
+            self.envelope_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
     }
@@ -556,6 +588,26 @@ impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
             domain,
             Role::AggregatorCommittee,
             &DutyExecutor::Committee(id.committee),
+        )
+    }
+}
+
+impl<E: EthSpec> QbftDecidable<E> for EnvelopeConsensusData {
+    type Id = EnvelopeProposerInstanceId;
+
+    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
+        &manager.envelope_consensus_data_instances
+    }
+
+    fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
+        id.instance_height
+    }
+
+    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
+        MessageId::new(
+            domain,
+            Role::EnvelopeProposer,
+            &DutyExecutor::Validator(id.validator),
         )
     }
 }
