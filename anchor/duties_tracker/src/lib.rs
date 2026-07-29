@@ -110,6 +110,17 @@ impl Default for Duties {
     }
 }
 
+/// Whether a validator holds a duty at a slot, as one atomic verdict over the stored duty view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DutyAssignment {
+    /// A complete fetched view assigns the validator at this slot.
+    Assigned,
+    /// A complete fetched view proves the validator is not assigned at this slot.
+    NotAssigned,
+    /// The view cannot answer: no completed fetch for the slot's epoch.
+    Unknown,
+}
+
 pub trait DutiesProvider: Sync + Send + 'static {
     fn is_validator_in_sync_committee(
         &self,
@@ -122,4 +133,10 @@ pub trait DutiesProvider: Sync + Send + 'static {
     fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool;
 
     fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64;
+
+    fn proposer_assignment_at_slot(
+        &self,
+        slot: Slot,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> DutyAssignment;
 }

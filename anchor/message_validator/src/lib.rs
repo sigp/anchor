@@ -12,6 +12,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
+use duties_tracker::DutyAssignment;
 use fork::{Fork, ForkSchedule};
 pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
@@ -850,18 +851,18 @@ pub(crate) fn validate_beacon_duty(
     // locally, so a not-yet-fetched epoch is tolerated. No RANDAO tolerance: neither
     // ProposerPreferences nor EnvelopeProposer carry a RANDAO signature.
     if matches!(role, Role::ProposerPreferences | Role::EnvelopeProposer) {
-        // Non-committee roles always have one validator index
-        let validator_index = validation_context
-            .committee_info
-            .validator_indices
-            .first()
-            .copied()
-            .ok_or(ValidationFailure::UnexpectedFailure {
-                msg: "Unexpected error when getting first validator index".to_string(),
-            })?;
+        let validator_pubkey = match validation_context
+            .signed_ssv_message
+            .ssv_message()
+            .msg_id()
+            .duty_executor()
+        {
+            Some(DutyExecutor::Validator(public_key)) => public_key,
+            _ => return Err(ValidationFailure::UnknownValidator),
+        };
 
-        if duty_provider.is_epoch_known_for_proposers(epoch)
-            && !duty_provider.is_validator_proposer_at_slot(slot, validator_index)
+        if duty_provider.proposer_assignment_at_slot(slot, &validator_pubkey)
+            == DutyAssignment::NotAssigned
         {
             return Err(ValidationFailure::NoDuty);
         }
@@ -1212,7 +1213,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use bls::{Hash256, PublicKeyBytes};
-    use duties_tracker::DutiesProvider;
+    use duties_tracker::{DutiesProvider, DutyAssignment};
     use openssl::{
         hash::MessageDigest,
         pkey::{PKey, Private, Public},
@@ -1487,17 +1488,28 @@ mod tests {
         /// so existing tests keep the historical "validator is always proposer"
         /// behavior.
         pub(crate) validator_is_proposer: bool,
+        /// Value returned by `proposer_assignment_at_slot`, the pubkey-keyed
+        /// lookup used by the `ProposerPreferences` / `EnvelopeProposer` arm.
+        /// `DutyAssignment::Assigned` = assigned proposer at the slot,
+        /// `DutyAssignment::NotAssigned` = a fetched epoch proves the pubkey is
+        /// not the proposer at the slot, `DutyAssignment::Unknown` = the slot's
+        /// epoch is not fetched (unknown). Defaults to `DutyAssignment::Assigned`
+        /// so pre-existing tests keep the "assigned proposer" behavior; new tests
+        /// set it explicitly to drive the three cases.
+        pub(crate) proposer_assignment: DutyAssignment,
     }
 
-    // Manual `Default` (not derived) so the two proposer flags default to `true`,
-    // preserving the behavior all pre-existing tests relied on before these fields
-    // were added. New tests set them explicitly to drive the proposer-assignment arm.
+    // Manual `Default` (not derived) so the proposer flags default to their
+    // "assigned" values, preserving the behavior all pre-existing tests relied on
+    // before these fields were added. New tests set them explicitly to drive the
+    // proposer-assignment arm.
     impl Default for MockDutiesProvider {
         fn default() -> Self {
             Self {
                 voluntary_exit_duty_count: 0,
                 epoch_known_for_proposers: true,
                 validator_is_proposer: true,
+                proposer_assignment: DutyAssignment::Assigned,
             }
         }
     }
@@ -1525,6 +1537,14 @@ mod tests {
 
         fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
             self.voluntary_exit_duty_count
+        }
+
+        fn proposer_assignment_at_slot(
+            &self,
+            _slot: Slot,
+            _validator_pubkey: &PublicKeyBytes,
+        ) -> DutyAssignment {
+            self.proposer_assignment
         }
     }
 
