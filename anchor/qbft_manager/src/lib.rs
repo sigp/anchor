@@ -356,6 +356,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                             qbft_message,
                         };
 
+                        // Gate the Gloas beacon-vote shape on Ethereum's Gloas (ePBS) fork using Ethereum consensus spec.
                         if self.gloas_enabled_at_slot(slot) {
                             self.pass_to_instance::<GloasBeaconVote>(id, wrapped)
                         } else {
