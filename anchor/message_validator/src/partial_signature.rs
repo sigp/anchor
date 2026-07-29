@@ -3437,6 +3437,64 @@ mod tests {
         );
     }
 
+    /// Runs the full `EnvelopeProposer` (role 9) partial-signature pipeline, driving
+    /// `proposer_assignment_at_slot` DIRECTLY with `proposer_assignment` and allowing the caller
+    /// to supply the `committee_info`. Mirrors `run_proposer_preferences_with_assignment` for the
+    /// shared `Role::ProposerPreferences | Role::EnvelopeProposer` arm, which is keyed on the
+    /// message-id validator PUBKEY and does not consult `committee_info.validator_indices`.
+    fn run_envelope_proposer_with_assignment(
+        committee_info: crate::CommitteeInfo,
+        proposer_assignment: DutyAssignment,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let (_, private_key, map) = four_node_committee_and_keypair();
+        let signed_msg = create_signed_envelope_proposer_message(
+            OperatorId(1),
+            &private_key,
+            Slot::new(0),
+            Hash256::from([0x33; 32]),
+        );
+        let validation_context =
+            create_envelope_proposer_context(&signed_msg, &committee_info, &map, Slot::new(0));
+
+        validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider {
+                proposer_assignment,
+                ..Default::default()
+            }),
+        )
+    }
+
+    #[test]
+    fn test_envelope_proposer_assigned_pubkey_accepted_with_unresolved_local_index() {
+        // #1147: the shared `Role::ProposerPreferences | Role::EnvelopeProposer` arm is keyed on
+        // the message-id validator PUBKEY via `proposer_assignment_at_slot`, and no longer reads
+        // `committee_info.validator_indices`. A locally-unresolved validator index (empty
+        // `validator_indices`) must therefore NOT block an otherwise-assigned EnvelopeProposer
+        // (role 9) through the FULL partial-signature pipeline. The old index-based path would
+        // have failed to find a validator index on empty indices and rejected (UnexpectedFailure).
+
+        // Arrange: reuse the consistent role-9 committee + signing key, but override to NO resolved
+        // local validator indices, and a mock reporting the pubkey IS the assigned proposer.
+        let (committee_info, _, _) = four_node_committee_and_keypair();
+        let committee_info = crate::CommitteeInfo {
+            committee_members: committee_info.committee_members,
+            validator_indices: vec![],
+        };
+
+        // Act
+        let result =
+            run_envelope_proposer_with_assignment(committee_info, DutyAssignment::Assigned);
+
+        // Assert: accepted purely on the pubkey-keyed assignment, index resolution irrelevant.
+        assert!(
+            result.is_ok(),
+            "Expected assigned pubkey to be accepted despite an unresolved local validator \
+             index, got: {result:?}"
+        );
+    }
+
     #[test]
     fn test_proposer_preferences_assignment_some_true_accepted() {
         // #1142: `proposer_assignment_at_slot` == `Assigned` (assigned proposer) -> accepted.
