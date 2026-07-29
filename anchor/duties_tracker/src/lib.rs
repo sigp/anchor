@@ -110,6 +110,17 @@ impl Default for Duties {
     }
 }
 
+/// Whether a validator holds a duty at a slot, as one atomic verdict over the stored duty view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DutyAssignment {
+    /// A complete fetched view assigns the validator at this slot.
+    Assigned,
+    /// A complete fetched view proves the validator is not assigned at this slot.
+    NotAssigned,
+    /// The view cannot answer: no completed fetch for the slot's epoch.
+    Unknown,
+}
+
 pub trait DutiesProvider: Sync + Send + 'static {
     fn is_validator_in_sync_committee(
         &self,
@@ -127,5 +138,5 @@ pub trait DutiesProvider: Sync + Send + 'static {
         &self,
         slot: Slot,
         validator_pubkey: &PublicKeyBytes,
-    ) -> Option<bool>;
+    ) -> DutyAssignment;
 }

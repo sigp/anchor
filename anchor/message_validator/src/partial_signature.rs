@@ -344,6 +344,7 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use bls::{Hash256, Signature};
+    use duties_tracker::DutyAssignment;
     use fork::{Fork, ForkSchedule};
     use openssl::{
         hash::MessageDigest,
@@ -3327,9 +3328,13 @@ mod tests {
 
     /// Maps the legacy `is_epoch_known_for_proposers` / `is_validator_proposer_at_slot`
     /// knobs onto the `proposer_assignment_at_slot` return the arm now consumes:
-    /// unknown epoch -> `None` (tolerated), known epoch -> `Some(assigned?)`.
-    fn proposer_assignment_from_knobs(epoch_known: bool, is_proposer: bool) -> Option<bool> {
-        epoch_known.then_some(is_proposer)
+    /// unknown epoch -> `Unknown` (tolerated), known epoch -> `Assigned` / `NotAssigned`.
+    fn proposer_assignment_from_knobs(epoch_known: bool, is_proposer: bool) -> DutyAssignment {
+        match (epoch_known, is_proposer) {
+            (false, _) => DutyAssignment::Unknown,
+            (true, true) => DutyAssignment::Assigned,
+            (true, false) => DutyAssignment::NotAssigned,
+        }
     }
 
     #[test]
@@ -3381,7 +3386,7 @@ mod tests {
     /// introduced in #1142, which no longer consults `committee_info.validator_indices`.
     fn run_proposer_preferences_with_assignment(
         committee_info: crate::CommitteeInfo,
-        proposer_assignment: Option<bool>,
+        proposer_assignment: DutyAssignment,
     ) -> Result<ValidatedSSVMessage, ValidationFailure> {
         let (private_key, public_key) = generate_test_key_pair();
         let map =
@@ -3414,14 +3419,15 @@ mod tests {
         // failed to find a validator index and rejected the message.
 
         // Arrange: committee with members but NO resolved local validator indices, and a mock
-        // reporting the pubkey IS the assigned proposer at the slot (`Some(true)`).
+        // reporting the pubkey IS the assigned proposer at the slot (`Assigned`).
         let committee_info = crate::CommitteeInfo {
             committee_members: create_committee_info(FOUR_NODE_COMMITTEE).committee_members,
             validator_indices: vec![],
         };
 
         // Act
-        let result = run_proposer_preferences_with_assignment(committee_info, Some(true));
+        let result =
+            run_proposer_preferences_with_assignment(committee_info, DutyAssignment::Assigned);
 
         // Assert: accepted purely on the pubkey-keyed assignment, index resolution irrelevant.
         assert!(
@@ -3433,31 +3439,33 @@ mod tests {
 
     #[test]
     fn test_proposer_preferences_assignment_some_true_accepted() {
-        // #1142: `proposer_assignment_at_slot` == `Some(true)` (assigned proposer) -> accepted.
+        // #1142: `proposer_assignment_at_slot` == `Assigned` (assigned proposer) -> accepted.
         // Arrange
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         // Act
-        let result = run_proposer_preferences_with_assignment(committee_info, Some(true));
+        let result =
+            run_proposer_preferences_with_assignment(committee_info, DutyAssignment::Assigned);
         // Assert
         assert!(
             result.is_ok(),
-            "Expected `Some(true)` assignment to be accepted, got: {result:?}"
+            "Expected `Assigned` assignment to be accepted, got: {result:?}"
         );
     }
 
     #[test]
     fn test_proposer_preferences_assignment_some_false_no_duty_maps_to_ignore() {
-        // #1142: `proposer_assignment_at_slot` == `Some(false)` (fetched epoch proves the pubkey
+        // #1142: `proposer_assignment_at_slot` == `NotAssigned` (fetched epoch proves the pubkey
         // is NOT the proposer at this slot) -> `NoDuty`, which must map to `Ignore`.
         // Arrange
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         // Act
-        let result = run_proposer_preferences_with_assignment(committee_info, Some(false));
+        let result =
+            run_proposer_preferences_with_assignment(committee_info, DutyAssignment::NotAssigned);
         // Assert
         assert_validation_error(
             result,
             |failure| matches!(failure, ValidationFailure::NoDuty),
-            "NoDuty (Some(false): fetched epoch, pubkey not the assigned proposer)",
+            "NoDuty (NotAssigned: fetched epoch, pubkey not the assigned proposer)",
         );
         assert!(
             matches!(
@@ -3470,16 +3478,17 @@ mod tests {
 
     #[test]
     fn test_proposer_preferences_assignment_none_tolerated() {
-        // #1142: `proposer_assignment_at_slot` == `None` (slot's epoch not fetched / unknown) ->
-        // tolerated (accepted). Only `Some(false)` rejects.
+        // #1142: `proposer_assignment_at_slot` == `Unknown` (slot's epoch not fetched / unknown) ->
+        // tolerated (accepted). Only `NotAssigned` rejects.
         // Arrange
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         // Act
-        let result = run_proposer_preferences_with_assignment(committee_info, None);
+        let result =
+            run_proposer_preferences_with_assignment(committee_info, DutyAssignment::Unknown);
         // Assert
         assert!(
             result.is_ok(),
-            "Expected `None` (unfetched epoch) assignment to be tolerated (accepted), got: \
+            "Expected `Unknown` (unfetched epoch) assignment to be tolerated (accepted), got: \
              {result:?}"
         );
     }
@@ -3490,7 +3499,7 @@ mod tests {
         // is unchanged. It must decide purely on `is_validator_proposer_at_slot` (the index-keyed
         // lookup), independent of the new pubkey-keyed `proposer_assignment_at_slot`. We prove the
         // separation by driving the two lookups to OPPOSITE verdicts:
-        //   - `proposer_assignment = Some(true)` (the pubkey arm would ACCEPT), yet
+        //   - `proposer_assignment = DutyAssignment::Assigned` (the pubkey arm would ACCEPT), yet
         //   - `validator_is_proposer = false`  (the index arm must REJECT with `NoDuty`).
         // The Proposer path must reject, showing it never consulted the pubkey assignment.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -3518,12 +3527,12 @@ mod tests {
             false,
             Arc::new(MockDutiesProvider {
                 validator_is_proposer: false,
-                proposer_assignment: Some(true),
+                proposer_assignment: DutyAssignment::Assigned,
                 ..Default::default()
             }),
         );
 
-        // Assert: rejected by the index arm; the pubkey `Some(true)` did not rescue it.
+        // Assert: rejected by the index arm; the pubkey `Assigned` did not rescue it.
         assert_validation_error(
             result,
             |failure| matches!(failure, ValidationFailure::NoDuty),

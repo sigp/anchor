@@ -12,6 +12,7 @@ use std::{
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
+use duties_tracker::DutyAssignment;
 use fork::{Fork, ForkSchedule};
 pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
@@ -860,9 +861,9 @@ pub(crate) fn validate_beacon_duty(
             _ => return Err(ValidationFailure::UnknownValidator),
         };
 
-        // `NoDuty` only when a fetched, complete epoch view proves the pubkey is not the proposer
-        // at `slot`. `None` (epoch not fetched, unknown) and `Some(true)` (assigned) are accepted.
-        if let Some(false) = duty_provider.proposer_assignment_at_slot(slot, &validator_pubkey) {
+        if duty_provider.proposer_assignment_at_slot(slot, &validator_pubkey)
+            == DutyAssignment::NotAssigned
+        {
             return Err(ValidationFailure::NoDuty);
         }
     }
@@ -1212,7 +1213,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use bls::{Hash256, PublicKeyBytes};
-    use duties_tracker::DutiesProvider;
+    use duties_tracker::{DutiesProvider, DutyAssignment};
     use openssl::{
         hash::MessageDigest,
         pkey::{PKey, Private, Public},
@@ -1489,12 +1490,13 @@ mod tests {
         pub(crate) validator_is_proposer: bool,
         /// Value returned by `proposer_assignment_at_slot`, the pubkey-keyed
         /// lookup used by the `ProposerPreferences` / `EnvelopeProposer` arm.
-        /// `Some(true)` = assigned proposer at the slot, `Some(false)` = a
-        /// fetched epoch proves the pubkey is not the proposer at the slot,
-        /// `None` = the slot's epoch is not fetched (unknown). Defaults to
-        /// `Some(true)` so pre-existing tests keep the "assigned proposer"
-        /// behavior; new tests set it explicitly to drive the three cases.
-        pub(crate) proposer_assignment: Option<bool>,
+        /// `DutyAssignment::Assigned` = assigned proposer at the slot,
+        /// `DutyAssignment::NotAssigned` = a fetched epoch proves the pubkey is
+        /// not the proposer at the slot, `DutyAssignment::Unknown` = the slot's
+        /// epoch is not fetched (unknown). Defaults to `DutyAssignment::Assigned`
+        /// so pre-existing tests keep the "assigned proposer" behavior; new tests
+        /// set it explicitly to drive the three cases.
+        pub(crate) proposer_assignment: DutyAssignment,
     }
 
     // Manual `Default` (not derived) so the proposer flags default to their
@@ -1507,7 +1509,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 epoch_known_for_proposers: true,
                 validator_is_proposer: true,
-                proposer_assignment: Some(true),
+                proposer_assignment: DutyAssignment::Assigned,
             }
         }
     }
@@ -1541,7 +1543,7 @@ mod tests {
             &self,
             _slot: Slot,
             _validator_pubkey: &PublicKeyBytes,
-        ) -> Option<bool> {
+        ) -> DutyAssignment {
             self.proposer_assignment
         }
     }
