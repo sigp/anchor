@@ -386,16 +386,23 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     spec: Arc<ChainSpec>,
 }
 
+/// Decode and perform stateless structural validation of an outbound message.
+pub fn validate_outbound(message_data: &[u8]) -> Result<Slot, ValidationFailure> {
+    let signed_ssv_message = SignedSSVMessage::from_ssz_bytes(message_data)
+        .map_err(ValidationFailure::UndecodableMessageData)?;
+    validate_outbound_message(&signed_ssv_message)
+}
+
 /// Perform stateless structural validation of an outbound message and return its routing slot.
 ///
 /// This is not an authorization boundary. It deliberately excludes all network, duty, timing,
 /// fork-role, signature-verification, and validation-state checks. Outbound producers must enforce
 /// those invariants before constructing the message. Incoming messages continue through
 /// [`Validator::validate`], which owns gossip validation state.
-pub fn validate_outbound(message_data: &[u8]) -> Result<Slot, ValidationFailure> {
-    let signed_ssv_message = SignedSSVMessage::from_ssz_bytes(message_data)
-        .map_err(ValidationFailure::UndecodableMessageData)?;
-    validate_structure_and_role(&signed_ssv_message)?;
+pub fn validate_outbound_message(
+    signed_ssv_message: &SignedSSVMessage,
+) -> Result<Slot, ValidationFailure> {
+    validate_structure_and_role(signed_ssv_message)?;
     signed_ssv_message
         .ssv_message()
         .extract_slot()

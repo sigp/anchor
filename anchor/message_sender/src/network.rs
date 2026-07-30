@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use database::OwnOperatorId;
-use message_validator::validate_outbound;
+use message_validator::validate_outbound_message;
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Private},
@@ -131,9 +131,7 @@ impl<S: SlotClock + 'static> NetworkMessageSender<S> {
     }
 
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
-        let message_bytes = message.as_ssz_bytes();
-
-        let message_slot = match validate_outbound(&message_bytes) {
+        let message_slot = match validate_outbound_message(&message) {
             Ok(slot) => slot,
             Err(err) => {
                 error!(
@@ -147,6 +145,7 @@ impl<S: SlotClock + 'static> NetworkMessageSender<S> {
                 return;
             }
         };
+        let message_bytes = message.as_ssz_bytes();
 
         // Use subnet service for slot-based subnet calculation
         let subnet = match self
