@@ -446,10 +446,12 @@ async fn collector_loop_database_failure_closes_notifier_without_caching() {
     corrupt_database(&database, "DROP TABLE shares");
 
     let (tx, rx) = mpsc::unbounded_channel::<CollectorMessage<()>>();
+    let (_lifetime_guard, lifetime_end) = oneshot::channel();
     let collector = tokio::spawn(signature_collector(
         rx,
         SIGNING_ROOT,
         SharePubkeyLoader::new(database),
+        lifetime_end,
     ));
     let send = |kind| {
         tx.send(CollectorMessage {
@@ -488,4 +490,145 @@ async fn collector_loop_database_failure_closes_notifier_without_caching() {
         .expect("collector task should terminate promptly")
         .expect("collector task should not panic");
     assert_eq!(fallback_count(), count_before + 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guard_dropped_before_first_poll_exits_without_processing() {
+    let _metric_guard = METRIC_TEST_LOCK.lock().await;
+    let count_before = fallback_count();
+    let keys = split_random_master();
+    let validator_pubkey = keys.master.public_key().compress();
+    let loader = SharePubkeyLoader::new(database_with_share_keys(&keys, validator_pubkey));
+    let (tx, rx) = mpsc::unbounded_channel::<CollectorMessage<()>>();
+    let send = |kind| {
+        tx.send(CollectorMessage {
+            kind,
+            _drop_on_finish: (),
+        })
+        .expect("collector message should queue");
+    };
+
+    let (notify, result_rx) = oneshot::channel();
+    send(CollectorMessageKind::RegisterNotifier {
+        notify,
+        threshold: THRESHOLD,
+        validator_pubkey,
+    });
+    for (operator_id, secret_key) in &keys.shares[..THRESHOLD as usize] {
+        send(CollectorMessageKind::PartialSignature {
+            operator_id: *operator_id,
+            signature: Box::new(secret_key.sign(SIGNING_ROOT)),
+        });
+    }
+
+    let (lifetime_guard, lifetime_end) = oneshot::channel();
+    drop(lifetime_guard);
+    let collector = tokio::spawn(signature_collector(rx, SIGNING_ROOT, loader, lifetime_end));
+
+    let result = tokio::time::timeout(Duration::from_secs(5), result_rx)
+        .await
+        .expect("collector should close the notifier promptly");
+    assert!(
+        result.is_err(),
+        "an expired collector must not process an already-queued quorum"
+    );
+    tokio::time::timeout(Duration::from_secs(5), collector)
+        .await
+        .expect("expired collector task should terminate promptly")
+        .expect("expired collector task should not panic");
+    assert_eq!(fallback_count(), count_before);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn collector_map_removal_cancels_fallback_wait() {
+    let _metric_guard = METRIC_TEST_LOCK.lock().await;
+    let count_before = fallback_count();
+    let keys = split_random_master();
+    let validator_pubkey = keys.master.public_key().compress();
+    let loader = SharePubkeyLoader::new(database_with_share_keys(&keys, validator_pubkey));
+    let held_permit = Arc::clone(&loader.semaphore)
+        .acquire_owned()
+        .await
+        .expect("fallback semaphore should be open");
+
+    let (lifetime_guard, lifetime_end) = oneshot::channel();
+    let map = DashMap::new();
+    let key = (SIGNING_ROOT, ValidatorIndex(1));
+    let (entry_tx, _entry_rx) = mpsc::unbounded_channel::<CollectorMessage>();
+    map.insert(
+        key,
+        SignatureCollector {
+            _lifetime_guard: lifetime_guard,
+            sender: entry_tx,
+            for_slot: Slot::new(0),
+        },
+    );
+
+    let (tx, rx) = mpsc::unbounded_channel::<CollectorMessage<()>>();
+    let collector = tokio::spawn(signature_collector(
+        rx,
+        SIGNING_ROOT,
+        loader.clone(),
+        lifetime_end,
+    ));
+    let send = |kind| {
+        tx.send(CollectorMessage {
+            kind,
+            _drop_on_finish: (),
+        })
+        .expect("collector should accept messages while running");
+    };
+
+    let (notify, mut result_rx) = oneshot::channel();
+    send(CollectorMessageKind::RegisterNotifier {
+        notify,
+        threshold: THRESHOLD,
+        validator_pubkey,
+    });
+    for (operator_id, secret_key) in &keys.shares[..(THRESHOLD - 1) as usize] {
+        send(CollectorMessageKind::PartialSignature {
+            operator_id: *operator_id,
+            signature: Box::new(secret_key.sign(SIGNING_ROOT)),
+        });
+    }
+    send(CollectorMessageKind::PartialSignature {
+        operator_id: keys.shares[(THRESHOLD - 1) as usize].0,
+        signature: Box::new(keys.shares[(THRESHOLD - 1) as usize].1.sign(WRONG_ROOT)),
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fallback_count() == count_before {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("collector should enter reconstruction fallback");
+    assert_eq!(fallback_count(), count_before + 1);
+    assert!(!collector.is_finished());
+    assert!(matches!(
+        result_rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    assert_eq!(loader.semaphore.available_permits(), 0);
+
+    drop(map.remove(&key).expect("collector map entry should exist"));
+
+    let result = tokio::time::timeout(Duration::from_secs(5), result_rx)
+        .await
+        .expect("collector should close the notifier after map removal");
+    assert!(
+        result.is_err(),
+        "collector cancellation must not return a signature"
+    );
+    tokio::time::timeout(Duration::from_secs(5), collector)
+        .await
+        .expect("collector task should terminate after map removal")
+        .expect("collector task should not panic");
+    assert_eq!(loader.semaphore.available_permits(), 0);
+
+    drop(held_permit);
+    let _permit = loader
+        .semaphore
+        .try_acquire()
+        .expect("cancelled fallback should not retain a semaphore permit");
 }

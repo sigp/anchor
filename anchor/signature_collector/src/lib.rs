@@ -61,8 +61,12 @@ enum CreateMessageError {
     SSVMessage(#[from] SSVMessageError),
 }
 
-/// A handle to message the instance collecting a single specific signature
+/// A handle to message an instance collecting one specific signature.
+///
+/// The map entry also owns the corresponding collector task's lifetime.
 struct SignatureCollector {
+    /// Declared before `sender` so cancellation is visible before channel closure wakes the task.
+    _lifetime_guard: oneshot::Sender<()>,
     sender: UnboundedSender<CollectorMessage>,
     for_slot: Slot,
 }
@@ -136,7 +140,8 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
     }
 
     /// Sign a message and wait until the signature has been reconstructed.
-    /// Will timeout if the instance is cleaned up, see [`SIGNATURE_COLLECTOR_RETAIN_SLOTS`].
+    /// Returns [`CollectionError::QueueClosedError`] if the instance is cleaned up before
+    /// reconstruction, see [`SIGNATURE_COLLECTOR_RETAIN_SLOTS`].
     /// Check the fields of the parameter structs for more info.
     /// The rough idea behind the separation is that `metadata` will be the same across all calls if
     /// we sign for all validators in a committee, while `validator_signing_data` varies for each.
@@ -393,6 +398,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             Entry::Vacant(entry) => {
                 // this channel is effectively limited by the processor permit amount
                 let (tx, rx) = mpsc::unbounded_channel();
+                let (lifetime_guard, lifetime_end) = oneshot::channel();
                 let span = debug_span!(
                     "signature_collector",
                     ?slot,
@@ -400,13 +406,19 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     ?signing_root
                 );
                 entry.insert(SignatureCollector {
+                    _lifetime_guard: lifetime_guard,
                     sender: tx.clone(),
                     for_slot: slot,
                 });
                 let _ = self.processor.permitless.send_async(
                     Box::pin(
-                        signature_collector(rx, signing_root, self.share_pubkey_loader.clone())
-                            .instrument(span),
+                        signature_collector(
+                            rx,
+                            signing_root,
+                            self.share_pubkey_loader.clone(),
+                            lifetime_end,
+                        )
+                        .instrument(span),
                     ),
                     COLLECTOR_NAME,
                 );
@@ -583,11 +595,26 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
 
 /// The actual signature collector task, waiting for messages.
 ///
+/// Removing its manager map entry cancels this future and closes pending notifiers.
+async fn signature_collector<G: Send + 'static>(
+    rx: mpsc::UnboundedReceiver<CollectorMessage<G>>,
+    signing_root: Hash256,
+    share_pubkey_loader: SharePubkeyLoader,
+    lifetime_end: oneshot::Receiver<()>,
+) {
+    tokio::select! {
+        // Do not process queued messages after the map entry has already been removed.
+        biased;
+        _ = lifetime_end => {}
+        _ = signature_collector_loop(rx, signing_root, share_pubkey_loader) => {}
+    }
+}
+
 /// The recv loop is the only place that matches on [`CollectorMessageKind`];
 /// it dispatches each transport message to a typed method on
 /// [`SignatureCollectorState`] so the state machine never sees the channel
 /// shape (or the size-balancing `Box<Signature>` it carries).
-async fn signature_collector<G: Send + 'static>(
+async fn signature_collector_loop<G: Send + 'static>(
     mut rx: mpsc::UnboundedReceiver<CollectorMessage<G>>,
     signing_root: Hash256,
     share_pubkey_loader: SharePubkeyLoader,
