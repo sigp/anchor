@@ -562,7 +562,6 @@ impl Client {
                     network_tx: network_tx.clone(),
                     private_key: key.clone(),
                     operator_id: operator_id.clone(),
-                    validator: Some(message_validator.clone()),
                     is_synced: is_synced.clone(),
                     subnet_service: subnet_service.clone(),
                 },

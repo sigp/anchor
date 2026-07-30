@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use database::OwnOperatorId;
-use message_validator::{DutiesProvider, MessageAcceptance, TopicContext, Validator};
+use message_validator::validate_outbound;
 use openssl::{
     hash::MessageDigest,
     pkey::{PKey, Private},
@@ -15,7 +15,7 @@ use ssv_types::{
 use ssz::Encode;
 use subnet_service::SubnetService;
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
-use tracing::{debug, error, trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{Error, MessageCallback, MessageSender, SigningError};
 
@@ -23,30 +23,28 @@ const SIGNER_NAME: &str = "message_sign_and_send";
 const SENDER_NAME: &str = "message_send";
 
 /// Configuration for creating a NetworkMessageSender
-pub struct NetworkMessageSenderConfig<S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageSenderConfig<S: SlotClock> {
     pub processor: processor::Senders,
     /// Channel to send messages to the network. Tuple of (topic string, message bytes).
     /// Per SIP-43, the topic is determined by the message's slot.
     pub network_tx: mpsc::Sender<(String, Vec<u8>)>,
     pub private_key: Rsa<Private>,
     pub operator_id: OwnOperatorId,
-    pub validator: Option<Arc<Validator<S, D>>>,
     pub is_synced: watch::Receiver<bool>,
     pub subnet_service: Arc<SubnetService<S>>,
 }
 
-pub struct NetworkMessageSender<S: SlotClock, D: DutiesProvider> {
+pub struct NetworkMessageSender<S: SlotClock> {
     processor: processor::Senders,
     /// Channel to send messages to the network. Tuple of (topic string, message bytes).
     network_tx: mpsc::Sender<(String, Vec<u8>)>,
     private_key: PKey<Private>,
     operator_id: OwnOperatorId,
-    validator: Option<Arc<Validator<S, D>>>,
     is_synced: watch::Receiver<bool>,
     subnet_service: Arc<SubnetService<S>>,
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMessageSender<S, D>> {
+impl<S: SlotClock + 'static> MessageSender for Arc<NetworkMessageSender<S>> {
     fn sign_and_send(
         &self,
         message: UnsignedSSVMessage,
@@ -118,8 +116,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> MessageSender for Arc<NetworkMes
     }
 }
 
-impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
-    pub fn new(config: NetworkMessageSenderConfig<S, D>) -> Result<Arc<Self>, String> {
+impl<S: SlotClock + 'static> NetworkMessageSender<S> {
+    pub fn new(config: NetworkMessageSenderConfig<S>) -> Result<Arc<Self>, String> {
         let private_key = PKey::from_rsa(config.private_key)
             .map_err(|err| format!("Failed to create PKey from RSA: {err}"))?;
         Ok(Arc::new(Self {
@@ -127,7 +125,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
             network_tx: config.network_tx,
             private_key,
             operator_id: config.operator_id,
-            validator: config.validator,
             is_synced: config.is_synced,
             subnet_service: config.subnet_service,
         }))
@@ -136,32 +133,16 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
     fn do_send(&self, message: SignedSSVMessage, committee_id: CommitteeId) {
         let message_bytes = message.as_ssz_bytes();
 
-        // For outgoing messages, we use default TopicContext (no topic validation)
-        // since we're just doing a sanity check on our own message content
-        if let Some(validator) = self.validator.as_ref()
-            && let Err(err) = validator
-                .validate(&message_bytes, &TopicContext::default())
-                .as_result()
-        {
-            // `Reject` is more severe and can be punished by other peers. We should not have
-            // created this message ever, while `Ignore` can be triggered simply because the message
-            // is irrelevant by now.
-            if let MessageAcceptance::Reject = MessageAcceptance::from(err) {
-                warn!(?err, "Validation of outgoing message failed (Reject)");
-                debug!(msg = %message, "Failing message");
-            } else {
-                debug!(?err, "Validation of outgoing message failed (Ignore)");
-            }
-            return;
-        }
-
-        // Extract slot from message for slot-based topic routing (per SIP-43)
-        let message_slot = match message.ssv_message().extract_slot() {
-            Some(slot) => slot,
-            None => {
-                warn!(
+        let message_slot = match validate_outbound(&message_bytes) {
+            Ok(slot) => slot,
+            Err(err) => {
+                error!(
+                    ?err,
                     ?committee_id,
-                    "Cannot extract slot from message for topic routing"
+                    ssv_msg_id = ?message.ssv_message().msg_id(),
+                    msg_type = ?message.ssv_message().msg_type(),
+                    role = ?message.ssv_message().msg_id().role(),
+                    "Stateless validation of outgoing message failed"
                 );
                 return;
             }
