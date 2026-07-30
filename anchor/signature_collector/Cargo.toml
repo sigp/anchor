@@ -12,6 +12,7 @@ database = { workspace = true }
 ethereum_ssz = { workspace = true }
 fork = { workspace = true }
 message_sender = { workspace = true }
+metrics = { workspace = true }
 processor = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
@@ -21,4 +22,5 @@ tracing = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+database = { workspace = true, features = ["test-utils"] }
 rand = { workspace = true }
