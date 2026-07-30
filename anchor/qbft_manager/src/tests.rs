@@ -40,6 +40,7 @@ use super::{
 use crate::instance::qbft_instance;
 
 mod aggregator_tests;
+mod envelope_dispatch_tests;
 mod gloas_dispatch_tests;
 mod setup;
 mod timeout_tests;
@@ -960,116 +961,5 @@ mod manager_tests {
             "Should not return RoleNotActive after Boole fork, got: {:?}",
             result
         );
-    }
-
-    #[tokio::test]
-    async fn envelope_proposer_any_executor_decodes_as_validator_transient_role_not_active() {
-        // `MessageId::new` starts from a zeroed 56-byte buffer and writes the executor bytes
-        // in place: `DutyExecutor::Validator` fills bytes 8..56, `DutyExecutor::Committee` fills
-        // bytes 24..56. Because `PublicKeyBytes::empty()` and `CommitteeId([0; 32])` are both
-        // all-zero, each executor writes ONLY zeros into an already-zero buffer, so role 9
-        // (`Role::EnvelopeProposer`) encodes to the identical 56-byte `MessageId` regardless of
-        // the executor passed in.
-        //
-        // `MessageId::duty_executor` then selects the executor purely from the role, and role 9
-        // is hard-wired to the `Validator` arm (bytes 8..55). So `receive_data` always enters the
-        // `Some(DutyExecutor::Validator(_))` branch and hits the `Some(Role::EnvelopeProposer)`
-        // arm, which returns `QbftError::RoleNotActive` unconditionally (routing not wired,
-        // TODO #1122). A committee-executor `EnvelopeProposer` is therefore unconstructable, and
-        // the `Role::EnvelopeProposer` listing in the `DutyExecutor::Committee` arm is unreachable
-        // for role 9 — it exists only for match exhaustiveness, so its `InconsistentMessageId` can
-        // never fire here.
-        use fork::{Fork, ForkSchedule};
-        use message_sender::testing::MockMessageSender;
-        use ssv_types::{
-            RSA_SIGNATURE_SIZE,
-            consensus::{QbftMessage, QbftMessageType},
-            message::{MsgType, SSVMessage, SignedSSVMessage},
-        };
-        use ssz::Encode;
-
-        // Arrange: build the manager once. The fork/spec values are irrelevant here — the
-        // `Validator`/`EnvelopeProposer` arm returns before consulting either.
-        let setup = setup_test(1);
-        let fork_schedule = ForkSchedule::new(Fork::Boole, DomainType::default(), "test");
-        let config = processor::Config {
-            max_workers: 4,
-            queue_size: Default::default(),
-        };
-        let senders = processor::spawn(config, setup.executor);
-        let (network_tx, _network_rx) = mpsc::unbounded_channel();
-
-        let manager = QbftManager::<types::MainnetEthSpec, _>::new(
-            senders,
-            OperatorId(1).into(),
-            setup.clock,
-            Arc::new(MockMessageSender::new(network_tx, OperatorId(1))),
-            NonZeroU64::new(32).expect("slots_per_epoch is non-zero"),
-            Arc::new(fork_schedule),
-            Arc::new(types::ChainSpec::mainnet()),
-        )
-        .expect("Manager creation should succeed");
-
-        // Constructs an `EnvelopeProposer` message for the given executor, returning the signed
-        // message plus its `QbftMessage`. Avoids duplicating the construction block per executor.
-        let build = |executor: &DutyExecutor| -> (SignedSSVMessage, QbftMessage) {
-            let msg_id = MessageId::new(&DomainType([0; 4]), Role::EnvelopeProposer, executor);
-            let qbft_message = QbftMessage {
-                qbft_message_type: QbftMessageType::Proposal,
-                height: 100,
-                round: 1,
-                identifier: (&msg_id).into(),
-                root: Hash256::from([0u8; 32]),
-                data_round: 1,
-                round_change_justification: ssv_types::VariableList::empty(),
-                prepare_justification: ssv_types::VariableList::empty(),
-            };
-            let ssv_msg = SSVMessage::new(
-                MsgType::SSVConsensusMsgType,
-                msg_id,
-                qbft_message.as_ssz_bytes(),
-            )
-            .expect("SSVMessage creation should succeed");
-            let signed_msg = SignedSSVMessage::new(
-                vec![[0xAA; RSA_SIGNATURE_SIZE]],
-                vec![OperatorId(1)],
-                ssv_msg,
-                vec![],
-            )
-            .expect("SignedSSVMessage creation should succeed");
-            (signed_msg, qbft_message)
-        };
-
-        // Make the byte-identity invariant explicit: both executors encode to the same 56 bytes.
-        let validator_msg_id = MessageId::new(
-            &DomainType([0; 4]),
-            Role::EnvelopeProposer,
-            &DutyExecutor::Validator(bls::PublicKeyBytes::empty()),
-        );
-        let committee_msg_id = MessageId::new(
-            &DomainType([0; 4]),
-            Role::EnvelopeProposer,
-            &DutyExecutor::Committee(CommitteeId([0; 32])),
-        );
-        assert_eq!(
-            validator_msg_id.as_ref(),
-            committee_msg_id.as_ref(),
-            "validator- and committee-executor `EnvelopeProposer` must encode to the same 56 bytes for role 9"
-        );
-
-        // Act + Assert: both executor variants route through the same
-        // `Validator`/`EnvelopeProposer` arm and return transient `RoleNotActive` (routing
-        // not wired), never `InconsistentMessageId`.
-        for executor in [
-            DutyExecutor::Validator(bls::PublicKeyBytes::empty()),
-            DutyExecutor::Committee(CommitteeId([0; 32])),
-        ] {
-            let (signed_msg, qbft_message) = build(&executor);
-            let result = manager.receive_data(signed_msg, qbft_message);
-            assert!(
-                matches!(result, Err(QbftError::RoleNotActive)),
-                "`EnvelopeProposer` always decodes as `Validator` and must be transient `RoleNotActive`, got: {result:?}"
-            );
-        }
     }
 }

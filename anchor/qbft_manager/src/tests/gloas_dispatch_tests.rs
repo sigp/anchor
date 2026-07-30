@@ -22,11 +22,11 @@ use super::{setup::setup_test, *};
 // Slot picked well past any baseline-epoch boundary so the chosen Gloas schedule
 // dominates routing rather than any genesis edge case (`slot 100` mirrors the
 // existing aggregator dispatch test).
-const TEST_SLOT_HEIGHT: u64 = 100;
+pub(super) const TEST_SLOT_HEIGHT: u64 = 100;
 
 /// Build a `ChainSpec` whose Gloas fork activates at `gloas_fork_epoch`
 /// (`None` = "Gloas never happens").
-fn spec_with_gloas(gloas_fork_epoch: Option<u64>) -> Arc<ChainSpec> {
+pub(super) fn spec_with_gloas(gloas_fork_epoch: Option<u64>) -> Arc<ChainSpec> {
     let mut spec = ChainSpec::mainnet();
     spec.gloas_fork_epoch = gloas_fork_epoch.map(Epoch::new);
     Arc::new(spec)
@@ -37,7 +37,7 @@ fn spec_with_gloas(gloas_fork_epoch: Option<u64>) -> Arc<ChainSpec> {
 /// `aggregator_tests::test_aggregator_committee_rejected_before_boole`. The SSV
 /// `ForkSchedule` no longer drives committee routing (the Ethereum Gloas fork
 /// does), so a plain Alan-genesis schedule is used here.
-fn build_manager(
+pub(super) fn build_manager(
     setup: &super::setup::Setup,
     spec: Arc<ChainSpec>,
 ) -> Arc<QbftManager<types::MainnetEthSpec, ManualSlotClock>> {
