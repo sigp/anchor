@@ -1,20 +1,18 @@
 //! `Role::EnvelopeProposer` dispatch tests for the Ethereum Gloas (ePBS) fork.
 //!
-//! These exercise the Gloas-gated routing inside `QbftManager::receive_data`:
+//! These exercise the Gloas-gated routing inside `QbftManager::receive_network_message`:
 //! before Gloas an `EnvelopeProposer` message is rejected with `RoleNotActive`;
 //! at or after Gloas it spawns an `EnvelopeConsensusData` instance keyed by
 //! `EnvelopeProposerInstanceId`, leaving the `ProposerConsensusData` map
 //! untouched. As in `gloas_dispatch_tests`, `DashMap` entries are inserted
 //! synchronously inside `get_or_spawn_instance`, so map sizes are deterministic
-//! immediately after `receive_data` returns.
+//! immediately after `receive_network_message` returns.
 
-use bls::{PUBLIC_KEY_BYTES_LEN, PublicKeyBytes};
+use bls::PublicKeyBytes;
 use ssv_types::{
-    RSA_SIGNATURE_SIZE,
     consensus::{EnvelopeConsensusData, ProposerConsensusData, QbftMessage, QbftMessageType},
-    message::{MsgType, SSVMessage, SignedSSVMessage},
+    message::SignedSSVMessage,
 };
-use ssz::Encode;
 
 use super::{
     gloas_dispatch_tests::{TEST_SLOT_HEIGHT, build_manager, spec_with_gloas},
@@ -30,35 +28,12 @@ fn build_envelope_message(
     slot_height: u64,
     executor: &DutyExecutor,
 ) -> (SignedSSVMessage, QbftMessage) {
-    let msg_id = MessageId::new(&DomainType([0; 4]), Role::EnvelopeProposer, executor);
-
-    let qbft_message = QbftMessage {
-        qbft_message_type: QbftMessageType::Proposal,
-        height: slot_height,
-        round: 1,
-        identifier: (&msg_id).into(),
-        root: Hash256::from([0u8; 32]),
-        data_round: 1,
-        round_change_justification: ssv_types::VariableList::empty(),
-        prepare_justification: ssv_types::VariableList::empty(),
-    };
-
-    let ssv_msg = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        msg_id,
-        qbft_message.as_ssz_bytes(),
+    build_signed_consensus_pair(
+        Role::EnvelopeProposer,
+        executor,
+        QbftMessageType::Proposal,
+        slot_height,
     )
-    .expect("SSVMessage creation should succeed");
-
-    let signed_msg = SignedSSVMessage::new(
-        vec![[0xAA; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId(1)],
-        ssv_msg,
-        vec![],
-    )
-    .expect("SignedSSVMessage creation should succeed");
-
-    (signed_msg, qbft_message)
 }
 
 /// Before Gloas (here: never scheduled), an `EnvelopeProposer` message must be rejected with
@@ -72,7 +47,7 @@ fn build_envelope_message(
 /// the identical 56-byte `MessageId` regardless of the executor passed in.
 ///
 /// `MessageId::duty_executor` then selects the executor purely from the role, and role 9 is
-/// hard-wired to the `Validator` arm (bytes 8..56). So `receive_data` always enters the
+/// hard-wired to the `Validator` arm (bytes 8..56). The network receive path always enters the
 /// `Some(DutyExecutor::Validator(_))` branch and hits the `Some(Role::EnvelopeProposer)` arm,
 /// which checks `gloas_enabled_at_slot` and returns `QbftError::RoleNotActive` when Gloas is
 /// inactive. A committee-executor `EnvelopeProposer` is therefore unconstructable, and the
@@ -109,7 +84,11 @@ async fn envelope_proposer_rejected_before_gloas() {
         DutyExecutor::Committee(CommitteeId([0; 32])),
     ] {
         let (signed_msg, qbft_message) = build_envelope_message(TEST_SLOT_HEIGHT, &executor);
-        let result = manager.receive_data(signed_msg, qbft_message);
+        let result = manager.receive_network_message(
+            signed_msg,
+            qbft_message,
+            unexpected_proposer_duty_lookup,
+        );
         assert!(
             matches!(result, Err(QbftError::RoleNotActive)),
             "`EnvelopeProposer` always decodes as `Validator` and must be `RoleNotActive` pre-Gloas, got: {result:?}"
@@ -141,12 +120,12 @@ async fn envelope_proposer_routes_to_envelope_map_at_gloas() {
     );
 
     // Act
-    let result = manager.receive_data(signed_msg, qbft_message);
+    let result = manager.receive_network_message(signed_msg, qbft_message, assigned_proposer_duty);
 
     // Assert
     assert!(
         result.is_ok(),
-        "receive_data should succeed at Gloas, got: {result:?}"
+        "network receive should succeed at Gloas, got: {result:?}"
     );
     assert_eq!(
         manager.envelope_consensus_data_instances.len(),
@@ -176,7 +155,8 @@ async fn envelope_proposer_routes_at_gloas_activation_boundary() {
     // Act + Assert: the last pre-Gloas slot is rejected and inserts nothing.
     let last_pre_gloas = GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH - 1;
     let (signed_msg, qbft_message) = build_envelope_message(last_pre_gloas, &validator_executor);
-    let result = manager.receive_data(signed_msg, qbft_message);
+    let result =
+        manager.receive_network_message(signed_msg, qbft_message, unexpected_proposer_duty_lookup);
     assert!(
         matches!(result, Err(QbftError::RoleNotActive)),
         "the last pre-Gloas slot must be rejected with `RoleNotActive`, got: {result:?}"
@@ -190,7 +170,7 @@ async fn envelope_proposer_routes_at_gloas_activation_boundary() {
     // Act + Assert: the first Gloas slot routes and spawns an instance.
     let first_gloas = GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH;
     let (signed_msg, qbft_message) = build_envelope_message(first_gloas, &validator_executor);
-    let result = manager.receive_data(signed_msg, qbft_message);
+    let result = manager.receive_network_message(signed_msg, qbft_message, assigned_proposer_duty);
     assert!(
         result.is_ok(),
         "the first Gloas slot must route successfully, got: {result:?}"
@@ -211,8 +191,7 @@ async fn envelope_proposer_routes_at_gloas_activation_boundary() {
 fn envelope_proposer_message_id_is_validator_scoped() {
     // Arrange
     let domain = DomainType([0; 4]);
-    let validator_pubkey = PublicKeyBytes::deserialize(&[0xAB; PUBLIC_KEY_BYTES_LEN])
-        .expect("48-byte input is a valid PublicKeyBytes");
+    let validator_pubkey = super::validator_pubkey(0xAB);
     let instance_height: InstanceHeight = (TEST_SLOT_HEIGHT as usize).into();
     let envelope_id = EnvelopeProposerInstanceId {
         validator: validator_pubkey,

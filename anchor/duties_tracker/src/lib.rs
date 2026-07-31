@@ -88,8 +88,11 @@ type ProposerMap = HashMap<Epoch, Vec<ProposerData>>;
 
 #[derive(Debug)]
 pub struct Duties {
-    /// Maps an epoch to all *local* proposers in this epoch. Notably, this does not contain
-    /// proposals for any validators which are not registered locally.
+    /// Maps an epoch to the network-wide proposer duties returned by the beacon node.
+    ///
+    /// Entries are not filtered by Anchor's local validator registry. This coverage is required
+    /// for a missing pubkey and slot pair to be authoritative once the response is validated as
+    /// complete.
     pub proposers: RwLock<ProposerMap>,
     /// Map from validator index to sync committee duties.
     pub sync_duties: SyncCommitteePerPeriod,
@@ -127,10 +130,6 @@ pub trait DutiesProvider: Sync + Send + 'static {
         committee_period: u64,
         validator_index: ValidatorIndex,
     ) -> bool;
-
-    fn is_epoch_known_for_proposers(&self, epoch: Epoch) -> bool;
-
-    fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool;
 
     fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64;
 

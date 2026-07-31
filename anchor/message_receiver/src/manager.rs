@@ -6,8 +6,7 @@ use libp2p::{
     gossipsub::{Message, MessageAcceptance, MessageId},
 };
 use message_validator::{
-    DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationResult,
-    Validator,
+    DutiesProvider, ParsedTopic, ValidatedMessage, ValidatedSSVMessage, ValidationResult, Validator,
 };
 use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
@@ -72,7 +71,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
         propagation_source: PeerId,
         message_id: MessageId,
         message: Message,
-        topic_context: TopicContext,
+        parsed_topic: ParsedTopic,
     ) -> Result<(), crate::Error> {
         let receiver = self.clone();
         self.processor.urgent_consensus.send_blocking(
@@ -80,7 +79,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                 let span = debug_span!("message_receiver", msg=%message_id);
                 let _enter = span.enter();
 
-                let result = receiver.validator.validate(&message.data, &topic_context);
+                let result = receiver.validator.validate(&message.data, &parsed_topic);
 
                 let mut action = MessageAcceptance::from(&result);
 
@@ -180,10 +179,19 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
 
                 match ssv_message {
                     ValidatedSSVMessage::QbftMessage(qbft_message) => {
-                        if let Err(err) = receiver
-                            .qbft_manager
-                            .receive_data(signed_ssv_message, qbft_message)
-                        {
+                        // Re-query the proposer assignment immediately before dispatch so an
+                        // earlier validation observation cannot authorize later instance
+                        // allocation.
+                        let result = receiver.qbft_manager.receive_network_message(
+                            signed_ssv_message,
+                            qbft_message,
+                            |slot, validator_pubkey| {
+                                receiver
+                                    .validator
+                                    .proposer_assignment_at_slot(slot, validator_pubkey)
+                            },
+                        );
+                        if let Err(err) = result {
                             error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive QBFT message");
                         }
                     }

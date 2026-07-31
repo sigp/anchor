@@ -9,10 +9,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use bls::PublicKeyBytes;
 use dashmap::{DashMap, mapref::one::RefMut};
 use database::NetworkState;
-pub use duties_tracker::DutiesProvider;
-use duties_tracker::DutyAssignment;
+pub use duties_tracker::{DutiesProvider, DutyAssignment};
 use fork::{Fork, ForkSchedule};
 pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
@@ -32,7 +32,7 @@ use ssv_types::{
     partial_sig::PartialSignatureMessages,
 };
 use ssz::{Decode, DecodeError, Encode};
-use subnet_service::topic::ParsedTopic;
+pub use subnet_service::topic::ParsedTopic;
 use task_executor::TaskExecutor;
 use tokio::{sync::watch::Receiver, time::sleep};
 use tracing::{debug, trace};
@@ -326,33 +326,6 @@ impl ValidatedMessage {
     }
 }
 
-/// Context for topic-aware message validation.
-///
-/// This enum makes explicit whether topic validation should be performed:
-/// - `SkipValidation`: Used for tests where topic validation is not needed
-/// - `Validate`: Used for incoming network messages where topic validation is required
-///
-/// For incoming network messages, always use `TopicContext::Validate`. If topic parsing
-/// fails at the network layer, the message should be rejected immediately rather than
-/// passed to the validator with skip context.
-#[derive(Debug, Clone, Default)]
-pub enum TopicContext {
-    /// Skip topic validation entirely.
-    ///
-    /// Used for testing scenarios where topic context is irrelevant.
-    #[default]
-    SkipValidation,
-
-    /// Validate message against the parsed topic.
-    ///
-    /// Used for incoming network messages where we need to verify the message
-    /// is on the correct subnet for its content.
-    Validate {
-        /// The parsed topic information (subnet_id, fork).
-        parsed: ParsedTopic,
-    },
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("Processor error: {0}")]
@@ -386,19 +359,13 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     spec: Arc<ChainSpec>,
 }
 
-/// Decode and perform stateless structural validation of an outbound message.
-pub fn validate_outbound(message_data: &[u8]) -> Result<Slot, ValidationFailure> {
-    let signed_ssv_message = SignedSSVMessage::from_ssz_bytes(message_data)
-        .map_err(ValidationFailure::UndecodableMessageData)?;
-    validate_outbound_message(&signed_ssv_message)
-}
-
 /// Perform stateless structural validation of an outbound message and return its routing slot.
 ///
 /// This is not an authorization boundary. It deliberately excludes all network, duty, timing,
 /// fork-role, signature-verification, and validation-state checks. Outbound producers must enforce
 /// those invariants before constructing the message. Incoming messages continue through
-/// [`Validator::validate`], which owns gossip validation state.
+/// [`Validator::validate`], which owns gossip validation state. Kept in this crate rather than
+/// `ssv_types` so outbound and inbound validation share [`ValidationFailure`].
 pub fn validate_outbound_message(
     signed_ssv_message: &SignedSSVMessage,
 ) -> Result<Slot, ValidationFailure> {
@@ -454,16 +421,29 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         validator
     }
 
-    /// Validate a message with topic context for fork-aware validation.
+    /// Return the current proposer assignment from the same duty view used for validation.
     ///
-    /// The `topic_context` provides information about which topic the message was
-    /// received on, enabling validation of whether the message is on the correct
-    /// subnet for its committee based on the topic's fork.
-    pub fn validate(&self, message_data: &[u8], topic_context: &TopicContext) -> ValidationResult {
+    /// Message dispatch uses this immediately before QBFT allocation so it cannot accidentally
+    /// query a different provider from the one owned by this validator.
+    pub fn proposer_assignment_at_slot(
+        &self,
+        slot: Slot,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> DutyAssignment {
+        self.duties_provider
+            .proposer_assignment_at_slot(slot, validator_pubkey)
+    }
+
+    /// Validate a message against the parsed topic it arrived on, for fork-aware validation.
+    ///
+    /// The topic enables validation of whether the message is on the correct subnet for its
+    /// committee based on the topic's fork. If topic parsing fails at the network layer, the
+    /// message should be rejected there rather than passed to the validator.
+    pub fn validate(&self, message_data: &[u8], parsed_topic: &ParsedTopic) -> ValidationResult {
         match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
-                match self.validate_decoded_message(&signed_ssv_message, topic_context) {
+                match self.validate_decoded_message(&signed_ssv_message, parsed_topic) {
                     Ok(validated_message) => ValidationResult::Success(validated_message),
                     Err(failure) => {
                         ValidationResult::PostDecodeFailure(failure, signed_ssv_message)
@@ -479,7 +459,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     fn validate_decoded_message(
         &self,
         signed_ssv_message: &SignedSSVMessage,
-        topic_context: &TopicContext,
+        parsed_topic: &ParsedTopic,
     ) -> Result<ValidatedMessage, ValidationFailure> {
         let role = validate_structure_and_role(signed_ssv_message)?;
         let ssv_message = signed_ssv_message.ssv_message();
@@ -508,10 +488,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             | Role::PTCAttester
             | Role::ProposerPreferences
             | Role::EnvelopeProposer => {
-                let validator_pk = match ssv_message.msg_id().duty_executor() {
-                    Some(DutyExecutor::Validator(pk)) => pk,
-                    _ => return Err(ValidationFailure::UnknownValidator),
-                };
+                let validator_pk = validator_pubkey_from_message_id(ssv_message.msg_id())?;
 
                 network_state
                     .get_committee_info_by_validator_pk(&validator_pk)
@@ -522,7 +499,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         // Validate topic - message is on correct subnet and has correct domain for its committee
         let operator_ids: Vec<_> = committee_info.committee_members.iter().copied().collect();
         self.validate_topic_and_domain(
-            topic_context,
+            parsed_topic,
             committee_id,
             &operator_ids,
             ssv_message,
@@ -618,7 +595,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     ///
     /// # Arguments
     ///
-    /// * `topic_context` - The parsed topic information (subnet_id, fork)
+    /// * `parsed` - The parsed topic information (subnet_id, fork)
     /// * `committee_id` - The committee ID from the message
     /// * `operator_ids` - The operator IDs from the committee
     /// * `ssv_message` - The SSV message to validate (for slot extraction)
@@ -634,20 +611,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     /// * `Err(ValidationFailure::UnknownMessageSlot)` if the slot cannot be extracted
     fn validate_topic_and_domain(
         &self,
-        topic_context: &TopicContext,
+        parsed: &ParsedTopic,
         committee_id: Option<ssv_types::CommitteeId>,
         operator_ids: &[OperatorId],
         ssv_message: &ssv_types::message::SSVMessage,
         msg_id: &MessageId,
     ) -> Result<(), ValidationFailure> {
-        let parsed = match topic_context {
-            TopicContext::SkipValidation => {
-                trace!("Topic validation skipped");
-                return Ok(());
-            }
-            TopicContext::Validate { parsed } => parsed,
-        };
-
         // Extract slot from message for slot-based validation
         let message_slot = ssv_message
             .extract_slot()
@@ -826,66 +795,29 @@ fn verify_message_signatures(
     Ok(())
 }
 
-/// Validates if a validator is assigned to a specific duty
+fn validator_pubkey_from_message_id(
+    message_id: &MessageId,
+) -> Result<PublicKeyBytes, ValidationFailure> {
+    match message_id.duty_executor() {
+        Some(DutyExecutor::Validator(pubkey)) => Ok(pubkey),
+        _ => Err(ValidationFailure::UnknownValidator),
+    }
+}
+
+/// Validates if a validator is assigned to a specific duty.
 pub(crate) fn validate_beacon_duty(
     validation_context: &ValidationContext<impl SlotClock>,
     slot: Slot,
-    randao_msg: bool,
-    duty_provider: Arc<impl DutiesProvider>,
+    duty_provider: &impl DutiesProvider,
 ) -> Result<(), ValidationFailure> {
     let role = validation_context.role;
-    let epoch = slot.epoch(validation_context.slots_per_epoch);
-    // Rule: For a proposal duty message, check if the validator is assigned to it
-    if role == Role::Proposer {
-        // Tolerate missing duties for RANDAO signatures during the first slot of an epoch,
-        // while duties are still being fetched from the Beacon node.
-
-        let is_first_slot_of_epoch = epoch.start_slot(validation_context.slots_per_epoch) == slot;
-
-        if randao_msg
-            && is_first_slot_of_epoch
-            && validation_context
-                .slot_clock
-                .now()
-                .ok_or(ValidationFailure::UnexpectedFailure {
-                    msg: "Failed to get current time".to_string(),
-                })?
-                <= slot
-            && !duty_provider.is_epoch_known_for_proposers(epoch)
-        {
-            return Ok(());
-        }
-
-        // Non-committee roles always have one validator index
-        let validator_index = validation_context
-            .committee_info
-            .validator_indices
-            .first()
-            .copied()
-            .ok_or(ValidationFailure::UnexpectedFailure {
-                msg: "Unexpected error when getting first validator index".to_string(),
-            })?;
-
-        if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
-            return Err(ValidationFailure::NoDuty);
-        }
-    }
-
-    // Rule: For a proposer-preferences or envelope-proposer message, the validator must be the
-    // assigned proposer at the slot. Checked only once the slot-epoch's proposer duties are known
-    // locally, so a not-yet-fetched epoch is tolerated. No RANDAO tolerance: neither
-    // ProposerPreferences nor EnvelopeProposer carry a RANDAO signature.
-    if matches!(role, Role::ProposerPreferences | Role::EnvelopeProposer) {
-        let validator_pubkey = match validation_context
-            .signed_ssv_message
-            .ssv_message()
-            .msg_id()
-            .duty_executor()
-        {
-            Some(DutyExecutor::Validator(public_key)) => public_key,
-            _ => return Err(ValidationFailure::UnknownValidator),
-        };
-
+    // Only an authoritative negative view proves that a proposer-scoped message has no duty.
+    // Unknown QBFT allocation is gated again at dispatch. Accepted partial signatures retain the
+    // signature collector's existing resource bounds and cleanup behavior.
+    if role.is_proposer_scoped() {
+        let validator_pubkey = validator_pubkey_from_message_id(
+            validation_context.signed_ssv_message.ssv_message().msg_id(),
+        )?;
         if duty_provider.proposer_assignment_at_slot(slot, &validator_pubkey)
             == DutyAssignment::NotAssigned
         {
@@ -895,6 +827,7 @@ pub(crate) fn validate_beacon_duty(
 
     // Rule: For a sync committee duty message, check if the validator is assigned
     if role == Role::SyncCommittee {
+        let epoch = slot.epoch(validation_context.slots_per_epoch);
         let period =
             sync_committee_period(epoch, validation_context.epochs_per_sync_committee_period)?;
         let validator_index = validation_context
@@ -1092,7 +1025,7 @@ pub(crate) fn validate_duty_count(
     validation_context: &ValidationContext<impl SlotClock>,
     slot: Slot,
     signer_state: &mut OperatorState,
-    duty_provider: Arc<impl DutiesProvider>,
+    duty_provider: &impl DutiesProvider,
 ) -> Result<(), ValidationFailure> {
     if let Some(limit) = duty_limit(
         validation_context,
@@ -1130,20 +1063,13 @@ fn duty_limit(
     validation_context: &ValidationContext<impl SlotClock>,
     slot: Slot,
     validator_indices: &[ValidatorIndex],
-    duty_provider: Arc<impl DutiesProvider>,
+    duty_provider: &impl DutiesProvider,
 ) -> Result<Option<u64>, ValidationFailure> {
     match validation_context.role {
         Role::VoluntaryExit => {
-            // Extract the validator public key from the message ID
-            let pubkey = match validation_context
-                .signed_ssv_message
-                .ssv_message()
-                .msg_id()
-                .duty_executor()
-            {
-                Some(DutyExecutor::Validator(pubkey)) => pubkey,
-                _ => return Err(ValidationFailure::UnknownValidator),
-            };
+            let pubkey = validator_pubkey_from_message_id(
+                validation_context.signed_ssv_message.ssv_message().msg_id(),
+            )?;
             // Get the current voluntary exit duty count for this validator
             Ok(Some(
                 duty_provider.get_voluntary_exit_duty_count(slot, &pubkey),
@@ -1235,7 +1161,13 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use bls::{Hash256, PublicKeyBytes, Signature};
     use duties_tracker::{DutiesProvider, DutyAssignment};
@@ -1255,9 +1187,9 @@ mod tests {
         partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
     };
     use ssz::Encode;
-    use types::{Epoch, Slot};
+    use types::Slot;
 
-    use crate::{MessageAcceptance, ValidationFailure, hash_data, validate_outbound};
+    use crate::{MessageAcceptance, ValidationFailure, hash_data, validate_outbound_message};
 
     // Constants for committee sizes in tests to improve readability.
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
@@ -1293,7 +1225,7 @@ mod tests {
         );
 
         assert_eq!(
-            validate_outbound(&signed_consensus_message.as_ssz_bytes()),
+            validate_outbound_message(&signed_consensus_message),
             Ok(Slot::new(42))
         );
 
@@ -1315,18 +1247,13 @@ mod tests {
         );
 
         assert_eq!(
-            validate_outbound(&signed_partial_signature_message.as_ssz_bytes()),
+            validate_outbound_message(&signed_partial_signature_message),
             Ok(Slot::new(43))
         );
     }
 
     #[test]
-    fn validate_outbound_rejects_malformed_outer_and_nested_messages() {
-        assert!(matches!(
-            validate_outbound(&[]),
-            Err(ValidationFailure::UndecodableMessageData(_))
-        ));
-
+    fn validate_outbound_rejects_malformed_nested_messages() {
         for (msg_type, role) in [
             (MsgType::SSVConsensusMsgType, Role::Committee),
             (MsgType::SSVPartialSignatureMsgType, Role::Proposer),
@@ -1334,7 +1261,7 @@ mod tests {
             let signed_message =
                 signed_test_message(msg_type, create_message_id_for_test(role), vec![0x01]);
             assert_eq!(
-                validate_outbound(&signed_message.as_ssz_bytes()),
+                validate_outbound_message(&signed_message),
                 Err(ValidationFailure::UnknownMessageSlot)
             );
         }
@@ -1351,7 +1278,7 @@ mod tests {
             .expect("aggregation permits duplicate signers for validation tests");
 
         assert_eq!(
-            validate_outbound(&signed_message.as_ssz_bytes()),
+            validate_outbound_message(&signed_message),
             Err(ValidationFailure::DuplicatedSigner)
         );
     }
@@ -1362,16 +1289,13 @@ mod tests {
         invalid_message_id[4] = u8::MAX;
         let invalid_message_id = MessageId::from(invalid_message_id);
         let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
-            .with_identifier(invalid_message_id.clone())
+            .with_identifier(invalid_message_id)
             .build();
-        let signed_message = signed_test_message(
-            MsgType::SSVConsensusMsgType,
-            invalid_message_id,
-            qbft_message.as_ssz_bytes(),
-        );
+        let signed_message =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(1)], vec![], vec![]);
 
         assert_eq!(
-            validate_outbound(&signed_message.as_ssz_bytes()),
+            validate_outbound_message(&signed_message),
             Err(ValidationFailure::InvalidRole)
         );
     }
@@ -1620,15 +1544,7 @@ mod tests {
 
     pub struct MockDutiesProvider {
         pub(crate) voluntary_exit_duty_count: u64,
-        /// Value returned by `is_epoch_known_for_proposers`. Defaults to `true`
-        /// so existing tests keep the historical "epoch always known" behavior.
-        pub(crate) epoch_known_for_proposers: bool,
-        /// Value returned by `is_validator_proposer_at_slot`. Defaults to `true`
-        /// so existing tests keep the historical "validator is always proposer"
-        /// behavior.
-        pub(crate) validator_is_proposer: bool,
-        /// Value returned by `proposer_assignment_at_slot`, the pubkey-keyed
-        /// lookup used by the `ProposerPreferences` / `EnvelopeProposer` arm.
+        /// Value returned by the pubkey-keyed proposer assignment lookup.
         /// `DutyAssignment::Assigned` = assigned proposer at the slot,
         /// `DutyAssignment::NotAssigned` = a fetched epoch proves the pubkey is
         /// not the proposer at the slot, `DutyAssignment::Unknown` = the slot's
@@ -1636,19 +1552,43 @@ mod tests {
         /// so pre-existing tests keep the "assigned proposer" behavior; new tests
         /// set it explicitly to drive the three cases.
         pub(crate) proposer_assignment: DutyAssignment,
+        /// When set, every proposer-assignment query must match this (slot, pubkey) pair.
+        pub(crate) expected_proposer_query: Option<(Slot, PublicKeyBytes)>,
+        pub(crate) proposer_query_count: AtomicUsize,
     }
 
-    // Manual `Default` (not derived) so the proposer flags default to their
-    // "assigned" values, preserving the behavior all pre-existing tests relied on
-    // before these fields were added. New tests set them explicitly to drive the
-    // proposer-assignment arm.
+    impl MockDutiesProvider {
+        /// A provider that returns `proposer_assignment` while asserting each query matches
+        /// the expected (slot, pubkey) pair; verify call counts with [`Self::assert_query_count`].
+        pub(crate) fn expecting_proposer_query(
+            expected_slot: Slot,
+            expected_validator_pubkey: PublicKeyBytes,
+            proposer_assignment: DutyAssignment,
+        ) -> Self {
+            Self {
+                proposer_assignment,
+                expected_proposer_query: Some((expected_slot, expected_validator_pubkey)),
+                ..Default::default()
+            }
+        }
+
+        pub(crate) fn assert_query_count(&self, expected: usize) {
+            assert_eq!(
+                self.proposer_query_count.load(Ordering::Relaxed),
+                expected,
+                "unexpected proposer assignment query count"
+            );
+        }
+    }
+
+    // Default to an assigned proposer so existing tests retain their historical behavior.
     impl Default for MockDutiesProvider {
         fn default() -> Self {
             Self {
                 voluntary_exit_duty_count: 0,
-                epoch_known_for_proposers: true,
-                validator_is_proposer: true,
                 proposer_assignment: DutyAssignment::Assigned,
+                expected_proposer_query: None,
+                proposer_query_count: AtomicUsize::new(0),
             }
         }
     }
@@ -1662,29 +1602,70 @@ mod tests {
             true
         }
 
-        fn is_epoch_known_for_proposers(&self, _epoch: Epoch) -> bool {
-            self.epoch_known_for_proposers
-        }
-
-        fn is_validator_proposer_at_slot(
-            &self,
-            _slot: Slot,
-            _validator_index: ValidatorIndex,
-        ) -> bool {
-            self.validator_is_proposer
-        }
-
         fn get_voluntary_exit_duty_count(&self, _slot: Slot, _pubkey: &PublicKeyBytes) -> u64 {
             self.voluntary_exit_duty_count
         }
 
         fn proposer_assignment_at_slot(
             &self,
-            _slot: Slot,
-            _validator_pubkey: &PublicKeyBytes,
+            slot: Slot,
+            validator_pubkey: &PublicKeyBytes,
         ) -> DutyAssignment {
+            if let Some((expected_slot, expected_validator_pubkey)) = &self.expected_proposer_query
+            {
+                assert_eq!(slot, *expected_slot, "unexpected proposer duty slot");
+                assert_eq!(
+                    validator_pubkey, expected_validator_pubkey,
+                    "unexpected proposer duty validator pubkey"
+                );
+            }
+            self.proposer_query_count.fetch_add(1, Ordering::Relaxed);
             self.proposer_assignment
         }
+    }
+
+    /// Assert the outcome of a proposer-scoped validation driven by `assignment`:
+    /// `Assigned` and `Unknown` are accepted, `NotAssigned` fails with `NoDuty`.
+    pub(crate) fn assert_proposer_assignment_result(
+        result: Result<crate::ValidatedSSVMessage, ValidationFailure>,
+        assignment: DutyAssignment,
+        context: &str,
+    ) {
+        match assignment {
+            DutyAssignment::Assigned | DutyAssignment::Unknown => {
+                assert!(
+                    result.is_ok(),
+                    "{context}: expected acceptance, got {result:?}"
+                );
+            }
+            DutyAssignment::NotAssigned => assert_validation_error(
+                result,
+                |failure| matches!(failure, ValidationFailure::NoDuty),
+                context,
+            ),
+        }
+    }
+
+    pub(crate) fn nonzero_validator_pubkey(byte: u8) -> PublicKeyBytes {
+        assert_ne!(byte, 0, "test validator pubkey byte must be nonzero");
+        let validator_pubkey = PublicKeyBytes::deserialize(&[byte; bls::PUBLIC_KEY_BYTES_LEN])
+            .expect("48-byte input is a valid PublicKeyBytes");
+        assert_ne!(
+            validator_pubkey,
+            PublicKeyBytes::empty(),
+            "test validator pubkey must be nonzero"
+        );
+        validator_pubkey
+    }
+
+    /// Build the standard test `MessageId` for a validator-executor role, using the same
+    /// domain as [`create_message_id_for_test`].
+    pub(crate) fn validator_message_id(role: Role, validator_pubkey: PublicKeyBytes) -> MessageId {
+        MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            role,
+            &DutyExecutor::Validator(validator_pubkey),
+        )
     }
 
     // ---------------------------------------------------------------------

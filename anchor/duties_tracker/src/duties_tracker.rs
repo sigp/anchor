@@ -10,7 +10,7 @@ use task_executor::TaskExecutor;
 use thiserror::Error;
 use tokio::{sync::watch, time::sleep};
 use tracing::{debug, error, trace, warn};
-use types::{ChainSpec, Epoch, Slot};
+use types::{ChainSpec, Slot};
 
 use crate::{
     Duties, DutiesProvider, DutyAssignment, MembershipKey,
@@ -317,25 +317,6 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
             .is_validator_in_sync_committee(committee_period, validator_index.into())
     }
 
-    fn is_epoch_known_for_proposers(&self, epoch: Epoch) -> bool {
-        self.duties.proposers.read().contains_key(&epoch)
-    }
-
-    fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool {
-        let epoch = slot.epoch(self.slots_per_epoch);
-        let validator_index: u64 = validator_index.into();
-        self.duties
-            .proposers
-            .read()
-            .get(&epoch)
-            .map(|proposers| {
-                proposers.iter().any(|proposer_data| {
-                    proposer_data.slot == slot && proposer_data.validator_index == validator_index
-                })
-            })
-            .unwrap_or_default()
-    }
-
     fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64 {
         self.voluntary_exit_tracker.get_duty_count(slot, pubkey)
     }
@@ -469,7 +450,7 @@ mod tests {
     // ==================== proposer_assignment_at_slot ====================
 
     #[test]
-    fn test_proposer_assignment_at_slot_returns_some_true_for_assigned_pubkey() {
+    fn test_proposer_assignment_at_slot_returns_assigned_for_assigned_pubkey() {
         // Assigned pubkey AT its slot in a fetched epoch -> Assigned.
         let tracker = tracker_with_empty_network_state();
         let epoch = Epoch::new(0);
@@ -485,8 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_assignment_at_slot_returns_some_false_for_unassigned_pubkey_in_fetched_epoch()
-    {
+    fn test_proposer_assignment_returns_not_assigned_for_unassigned_pubkey() {
         // Different (unassigned) pubkey, same fetched epoch and slot -> NotAssigned.
         let tracker = tracker_with_empty_network_state();
         let epoch = Epoch::new(0);
@@ -503,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_assignment_at_slot_returns_some_false_for_assigned_pubkey_at_different_slot() {
+    fn test_proposer_assignment_at_slot_returns_not_assigned_at_different_slot() {
         // The assignment is bound to the exact slot: the assigned pubkey queried at a DIFFERENT
         // slot within the SAME fetched epoch must return NotAssigned (not Assigned). This is the
         // slot-bind case that guards against matching on pubkey alone.
@@ -526,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_assignment_at_slot_returns_none_for_unfetched_epoch() {
+    fn test_proposer_assignment_at_slot_returns_unknown_for_unfetched_epoch() {
         // A slot whose epoch has not been fetched -> Unknown, regardless of pubkey.
         let tracker = tracker_with_empty_network_state();
         let fetched_epoch = Epoch::new(0);

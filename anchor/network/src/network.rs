@@ -22,7 +22,7 @@ use libp2p::{
     swarm::{SwarmEvent, dial_opts::DialOpts},
     upnp::Event,
 };
-use message_receiver::{MessageReceiver, Outcome, TopicContext};
+use message_receiver::{MessageReceiver, Outcome};
 use prometheus_client::registry::Registry;
 use subnet_service::{SUBNET_COUNT, SubnetId, TopicEvent, topic};
 use task_executor::TaskExecutor;
@@ -319,23 +319,20 @@ impl<R: MessageReceiver> Network<R> {
             "Received SignedSSVMessage"
         );
 
-        // Build topic context for fork-aware validation.
+        // Parse the topic for fork-aware validation.
         // If we can't parse the topic, reject immediately - we only
         // subscribe to topics we create, so parsing should always succeed.
-        let topic_context = match topic::parse_topic(&message.topic) {
-            Some(parsed) => TopicContext::Validate { parsed },
-            None => {
-                warn!(
-                    topic = ?message.topic,
-                    "Received message on unparseable topic - this is a bug"
-                );
-                return;
-            }
+        let Some(parsed_topic) = topic::parse_topic(&message.topic) else {
+            warn!(
+                topic = ?message.topic,
+                "Received message on unparseable topic - this is a bug"
+            );
+            return;
         };
 
         if let Err(err) =
             self.message_receiver
-                .receive(propagation_source, message_id, message, topic_context)
+                .receive(propagation_source, message_id, message, parsed_topic)
         {
             error!(?err, "Unable to pass message to message receiver");
         }

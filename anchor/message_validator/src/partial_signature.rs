@@ -203,13 +203,7 @@ fn validate_partial_sig_messages_by_duty_logic(
         }
     }
 
-    let is_randao_msg = partial_signature_messages.kind == PartialSignatureKind::RandaoPartialSig;
-    validate_beacon_duty(
-        validation_context,
-        message_slot,
-        is_randao_msg,
-        duty_provider.clone(),
-    )?;
+    validate_beacon_duty(validation_context, message_slot, duty_provider.as_ref())?;
 
     // Check if we've seen messages for this slot already
     if let Some(signer_state) = operator_state.get_signer_state(&message_slot) {
@@ -234,7 +228,7 @@ fn validate_partial_sig_messages_by_duty_logic(
         validation_context,
         message_slot,
         operator_state,
-        duty_provider.clone(),
+        duty_provider.as_ref(),
     )?;
 
     // Process role-specific message count constraints
@@ -357,18 +351,20 @@ mod tests {
         OperatorId, RSA_SIGNATURE_SIZE, ValidatorIndex, VariableList,
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
+        msgid::MessageId,
         partial_sig::PartialSignatureMessage,
     };
     use ssz::Encode;
-    use types::{EthSpec, MainnetEthSpec, Slot};
+    use types::{ChainSpec, EthSpec, MainnetEthSpec, Slot};
 
     use super::*;
     use crate::{
         MessageAcceptance,
         tests::{
-            FOUR_NODE_COMMITTEE, MockDutiesProvider, assert_validation_error,
-            create_committee_info, create_message_id_for_test, create_operator_pub_keys,
-            generate_random_rsa_public_keys, spec_with_gloas,
+            FOUR_NODE_COMMITTEE, MockDutiesProvider, assert_proposer_assignment_result,
+            assert_validation_error, create_committee_info, create_message_id_for_test,
+            create_operator_pub_keys, generate_random_rsa_public_keys, nonzero_validator_pubkey,
+            spec_with_gloas, validator_message_id,
         },
     };
 
@@ -379,6 +375,8 @@ mod tests {
         pub different_message_signer: Option<OperatorId>,
         pub empty_messages: bool,
         pub validator_index: Option<ValidatorIndex>,
+        pub slot: Option<Slot>,
+        pub message_id: Option<MessageId>,
     }
 
     // Helper to create a partial signature message for testing
@@ -404,11 +402,13 @@ mod tests {
 
         let partial_sig_messages = PartialSignatureMessages {
             kind,
-            slot: Slot::new(0),
+            slot: options.slot.unwrap_or_default(),
             messages: VariableList::new(messages).unwrap(),
         };
 
-        let msg_id = create_message_id_for_test(role);
+        let msg_id = options
+            .message_id
+            .unwrap_or_else(|| create_message_id_for_test(role));
         let ssv_msg_data = partial_sig_messages.as_ssz_bytes();
         let ssv_msg = SSVMessage::new(MsgType::SSVPartialSignatureMsgType, msg_id, ssv_msg_data)
             .expect("SSVMessage should be created");
@@ -2074,27 +2074,16 @@ mod tests {
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
         current_slot: Slot,
     ) -> ValidationContext<'a, ManualSlotClock> {
-        let now = SystemTime::now();
-        let slot_clock = ManualSlotClock::new(
-            current_slot,
-            now.duration_since(UNIX_EPOCH).unwrap(),
-            Duration::from_secs(12),
-        );
-
-        ValidationContext {
-            signed_ssv_message: signed_msg,
+        create_role_context(
+            signed_msg,
             committee_info,
-            role: Role::EnvelopeProposer,
-            received_at: now,
-            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
-            epochs_per_sync_committee_period: 256,
-            sync_committee_size: 512,
-            slot_clock,
             operator_pub_keys,
-            fork_schedule: generate_fork_schedule(Fork::Boole),
+            current_slot,
+            Role::EnvelopeProposer,
+            Fork::Boole,
             // EnvelopeProposer only exists post-Gloas; activate from epoch 0.
-            spec: spec_with_gloas(Some(0)),
-        }
+            spec_with_gloas(Some(0)),
+        )
     }
 
     /// `EnvelopeProposer` only accepts the `PostConsensus` kind (the Gloas fork gate is
@@ -2337,6 +2326,39 @@ mod tests {
         SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
     }
 
+    /// Builds a `ValidationContext` for `role` with the standard test knobs and a 12-second
+    /// `ManualSlotClock` reading `current_slot` now.
+    fn create_role_context<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+        current_slot: Slot,
+        role: Role,
+        fork: Fork,
+        spec: Arc<ChainSpec>,
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        let now = SystemTime::now();
+        let slot_clock = ManualSlotClock::new(
+            current_slot,
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        ValidationContext {
+            signed_ssv_message: signed_msg,
+            committee_info,
+            role,
+            received_at: now,
+            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys,
+            fork_schedule: generate_fork_schedule(fork),
+            spec,
+        }
+    }
+
     /// Builds a ProposerPreferences validation context whose wall clock currently reads
     /// `current_slot`, with `received_at` pinned to the start of that slot. When the packet's
     /// envelope `proposal_slot` equals `current_slot` the message is exactly on time; when
@@ -2349,27 +2371,16 @@ mod tests {
         operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
         current_slot: Slot,
     ) -> ValidationContext<'a, ManualSlotClock> {
-        let now = SystemTime::now();
-        let slot_clock = ManualSlotClock::new(
-            current_slot,
-            now.duration_since(UNIX_EPOCH).unwrap(),
-            Duration::from_secs(12),
-        );
-
-        ValidationContext {
-            signed_ssv_message: signed_msg,
+        create_role_context(
+            signed_msg,
             committee_info,
-            role: Role::ProposerPreferences,
-            received_at: now,
-            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
-            epochs_per_sync_committee_period: 256,
-            sync_committee_size: 512,
-            slot_clock,
             operator_pub_keys,
-            fork_schedule: generate_fork_schedule(Fork::Boole),
+            current_slot,
+            Role::ProposerPreferences,
+            Fork::Boole,
             // ProposerPreferences only exists post-Gloas; activate from epoch 0.
-            spec: spec_with_gloas(Some(0)),
-        }
+            spec_with_gloas(Some(0)),
+        )
     }
 
     /// Slot duration used by the ProposerPreferences timing helpers/tests.
@@ -3286,107 +3297,95 @@ mod tests {
         );
     }
 
-    // ==================== ProposerPreferences proposer-assignment arm ====================
-    //
-    // `validate_beacon_duty` gained a `Role::ProposerPreferences` arm keyed on the envelope
-    // `proposal_slot`. It rejects with `NoDuty` (Ignore) only when the slot's epoch is known
-    // AND the validator is NOT the assigned proposer; an unknown epoch is tolerated (accepted),
-    // and no RANDAO tolerance applies. These three cases drive the mock's
-    // `is_epoch_known_for_proposers` / `is_validator_proposer_at_slot`.
-
-    /// Runs the full ProposerPreferences pipeline with a mock configured for the given
-    /// proposer-assignment knobs, returning the validation result.
-    fn run_proposer_preferences_with_duties(
-        epoch_known_for_proposers: bool,
-        validator_is_proposer: bool,
+    fn run_proposer_partial_signature_with_assignment(
+        kind: PartialSignatureKind,
+        slot: Slot,
+        proposer_assignment: DutyAssignment,
     ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let signed_msg = create_signed_proposer_preferences_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(1),
-            Hash256::from([0x33; 32]),
-        );
-        let validation_context =
-            create_proposer_preferences_context(&signed_msg, &committee_info, &map, Slot::new(1));
+        let (mut committee_info, private_key, operator_pub_keys) =
+            four_node_committee_and_keypair();
+        committee_info.validator_indices.clear();
 
-        validate_partial_signature_message(
+        let validator_pubkey = nonzero_validator_pubkey(0xAB);
+        let message_id = validator_message_id(Role::Proposer, validator_pubkey);
+        let (_, signed_message) = create_test_partial_signature(
+            Role::Proposer,
+            kind,
+            OperatorId(1),
+            PartialSigTestOptions {
+                slot: Some(slot),
+                message_id: Some(message_id),
+                ..Default::default()
+            },
+            Some(private_key),
+        );
+
+        let validation_context = create_role_context(
+            &signed_message,
+            &committee_info,
+            &operator_pub_keys,
+            slot,
+            Role::Proposer,
+            Fork::Alan,
+            spec_with_gloas(None),
+        );
+
+        let duty_provider = Arc::new(MockDutiesProvider::expecting_proposer_query(
+            slot,
+            validator_pubkey,
+            proposer_assignment,
+        ));
+        let result = validate_partial_signature_message(
             validation_context,
             &mut DutyState::new(64),
-            Arc::new(MockDutiesProvider {
-                // Map the two legacy knobs onto the pubkey-keyed lookup the arm now uses:
-                // an unfetched epoch is `None` (tolerated), a fetched epoch reports
-                // `Some(is the validator the assigned proposer)`.
-                proposer_assignment: proposer_assignment_from_knobs(
-                    epoch_known_for_proposers,
-                    validator_is_proposer,
-                ),
-                ..Default::default()
-            }),
-        )
+            duty_provider.clone(),
+        );
+        duty_provider.assert_query_count(1);
+        result
     }
 
-    /// Maps the legacy `is_epoch_known_for_proposers` / `is_validator_proposer_at_slot`
-    /// knobs onto the `proposer_assignment_at_slot` return the arm now consumes:
-    /// unknown epoch -> `Unknown` (tolerated), known epoch -> `Assigned` / `NotAssigned`.
-    fn proposer_assignment_from_knobs(epoch_known: bool, is_proposer: bool) -> DutyAssignment {
-        match (epoch_known, is_proposer) {
-            (false, _) => DutyAssignment::Unknown,
-            (true, true) => DutyAssignment::Assigned,
-            (true, false) => DutyAssignment::NotAssigned,
+    #[test]
+    fn proposer_partial_signatures_use_pubkey_assignment_without_validator_indices() {
+        for kind in [
+            PartialSignatureKind::RandaoPartialSig,
+            PartialSignatureKind::PostConsensus,
+        ] {
+            for assignment in [
+                DutyAssignment::Assigned,
+                DutyAssignment::Unknown,
+                DutyAssignment::NotAssigned,
+            ] {
+                let result =
+                    run_proposer_partial_signature_with_assignment(kind, Slot::new(1), assignment);
+                assert_proposer_assignment_result(
+                    result,
+                    assignment,
+                    &format!("proposer {kind:?} assignment"),
+                );
+            }
         }
     }
 
     #[test]
-    fn test_proposer_preferences_assigned_proposer_accepted() {
-        // Known epoch + validator IS the assigned proposer → accepted.
-        let result = run_proposer_preferences_with_duties(true, true);
-        assert!(
-            result.is_ok(),
-            "Expected assigned proposer to be accepted, got: {result:?}"
-        );
+    fn proposer_randao_unknown_policy_is_independent_of_epoch_boundary() {
+        for slot in [Slot::new(0), Slot::new(1)] {
+            let result = run_proposer_partial_signature_with_assignment(
+                PartialSignatureKind::RandaoPartialSig,
+                slot,
+                DutyAssignment::Unknown,
+            );
+            assert!(
+                result.is_ok(),
+                "Unknown proposer RANDAO should be accepted at slot {slot}, got {result:?}"
+            );
+        }
     }
 
-    #[test]
-    fn test_proposer_preferences_known_epoch_not_assigned_no_duty() {
-        // Known epoch + validator is NOT the assigned proposer → `NoDuty` (maps to Ignore).
-        let result = run_proposer_preferences_with_duties(true, false);
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::NoDuty),
-            "NoDuty (known epoch, validator not the assigned proposer)",
-        );
-        // Pin the Ignore mapping so a future reclassification of NoDuty is caught here.
-        // `MessageAcceptance` does not implement `PartialEq`, so match on the variant.
-        assert!(
-            matches!(
-                MessageAcceptance::from(&ValidationFailure::NoDuty),
-                MessageAcceptance::Ignore
-            ),
-            "NoDuty must map to Ignore"
-        );
-    }
+    // ==================== ProposerPreferences proposer-assignment arm ====================
 
-    #[test]
-    fn test_proposer_preferences_unknown_epoch_tolerated() {
-        // Unknown epoch → the assignment check is skipped and the message is accepted
-        // (tolerated while proposer duties for that epoch are not yet fetched). The
-        // not-assigned flag is irrelevant here because the `&&` short-circuits on the
-        // unknown epoch.
-        let result = run_proposer_preferences_with_duties(false, false);
-        assert!(
-            result.is_ok(),
-            "Expected unknown-epoch ProposerPreferences to be tolerated (accepted), got: {result:?}"
-        );
-    }
-
-    /// Runs the full ProposerPreferences pipeline, driving `proposer_assignment_at_slot`
-    /// DIRECTLY with `proposer_assignment` (rather than via the legacy knob mapping) and
-    /// allowing the caller to supply the `committee_info`. This pins the pubkey-keyed arm
-    /// introduced in #1142, which no longer consults `committee_info.validator_indices`.
+    /// Runs the full ProposerPreferences pipeline with the supplied assignment and committee info.
+    /// This pins the pubkey-keyed arm introduced in #1142, which no longer consults
+    /// `committee_info.validator_indices`.
     fn run_proposer_preferences_with_assignment(
         committee_info: crate::CommitteeInfo,
         proposer_assignment: DutyAssignment,
@@ -3440,11 +3439,9 @@ mod tests {
         );
     }
 
-    /// Runs the full `EnvelopeProposer` (role 9) partial-signature pipeline, driving
-    /// `proposer_assignment_at_slot` DIRECTLY with `proposer_assignment` and allowing the caller
-    /// to supply the `committee_info`. Mirrors `run_proposer_preferences_with_assignment` for the
-    /// shared `Role::ProposerPreferences | Role::EnvelopeProposer` arm, which is keyed on the
-    /// message-id validator PUBKEY and does not consult `committee_info.validator_indices`.
+    /// Runs the full `EnvelopeProposer` partial-signature pipeline with the supplied assignment and
+    /// committee info. Mirrors `run_proposer_preferences_with_assignment` for the shared
+    /// pubkey-keyed proposer-duty check.
     fn run_envelope_proposer_with_assignment(
         committee_info: crate::CommitteeInfo,
         proposer_assignment: DutyAssignment,
@@ -3499,7 +3496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_preferences_assignment_some_true_accepted() {
+    fn test_proposer_preferences_assigned_is_accepted() {
         // #1142: `proposer_assignment_at_slot` == `Assigned` (assigned proposer) -> accepted.
         // Arrange
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -3514,7 +3511,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_preferences_assignment_some_false_no_duty_maps_to_ignore() {
+    fn test_proposer_preferences_not_assigned_returns_no_duty() {
         // #1142: `proposer_assignment_at_slot` == `NotAssigned` (fetched epoch proves the pubkey
         // is NOT the proposer at this slot) -> `NoDuty`, which must map to `Ignore`.
         // Arrange
@@ -3538,7 +3535,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_preferences_assignment_none_tolerated() {
+    fn test_proposer_preferences_unknown_is_accepted() {
         // #1142: `proposer_assignment_at_slot` == `Unknown` (slot's epoch not fetched / unknown) ->
         // tolerated (accepted). Only `NotAssigned` rejects.
         // Arrange
@@ -3551,53 +3548,6 @@ mod tests {
             result.is_ok(),
             "Expected `Unknown` (unfetched epoch) assignment to be tolerated (accepted), got: \
              {result:?}"
-        );
-    }
-
-    #[test]
-    fn test_proposer_role_still_uses_index_path_not_pubkey_assignment() {
-        // Regression pin for #1142: the INDEX-based `Role::Proposer` arm of `validate_beacon_duty`
-        // is unchanged. It must decide purely on `is_validator_proposer_at_slot` (the index-keyed
-        // lookup), independent of the new pubkey-keyed `proposer_assignment_at_slot`. We prove the
-        // separation by driving the two lookups to OPPOSITE verdicts:
-        //   - `proposer_assignment = DutyAssignment::Assigned` (the pubkey arm would ACCEPT), yet
-        //   - `validator_is_proposer = false`  (the index arm must REJECT with `NoDuty`).
-        // The Proposer path must reject, showing it never consulted the pubkey assignment.
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (_, signed_msg) = create_test_partial_signature(
-            Role::Proposer,
-            PartialSignatureKind::PostConsensus,
-            OperatorId(1),
-            PartialSigTestOptions::default(),
-            None,
-        );
-        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
-        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
-        let validation_context = create_test_validation_context(
-            &signed_msg,
-            &committee_info,
-            Role::Proposer,
-            &map,
-            generate_fork_schedule(Fork::Alan),
-        );
-
-        // Act: `randao_msg = false` so the Proposer arm goes straight to the index check.
-        let result = validate_beacon_duty(
-            &validation_context,
-            Slot::new(0),
-            false,
-            Arc::new(MockDutiesProvider {
-                validator_is_proposer: false,
-                proposer_assignment: DutyAssignment::Assigned,
-                ..Default::default()
-            }),
-        );
-
-        // Assert: rejected by the index arm; the pubkey `Assigned` did not rescue it.
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::NoDuty),
-            "NoDuty (Role::Proposer index path unchanged, ignores pubkey assignment)",
         );
     }
 
@@ -3815,17 +3765,9 @@ mod tests {
 
     // ==================== EnvelopeProposer proposer-assignment arm ====================
     //
-    // `validate_beacon_duty`'s `Role::ProposerPreferences | Role::EnvelopeProposer` arm (keyed on
-    // the message's `slot`) rejects with `NoDuty` only when the slot's epoch is known AND the
-    // validator is NOT the assigned proposer; an unknown epoch is tolerated and no RANDAO
-    // tolerance applies.
-
-    /// Runs the `EnvelopeProposer` proposer-assignment arm of `validate_beacon_duty` with the
-    /// mock's two knobs, returning the result for the caller to assert on. `randao_msg` is always
-    /// false for `EnvelopeProposer` (no RANDAO tolerance applies).
+    // The assignment check rejects only `NotAssigned`. `Assigned` and `Unknown` continue.
     fn run_envelope_beacon_duty(
-        epoch_known: bool,
-        is_proposer: bool,
+        proposer_assignment: DutyAssignment,
     ) -> Result<(), ValidationFailure> {
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let signed_msg = create_signed_envelope_proposer_message(
@@ -3840,39 +3782,35 @@ mod tests {
         validate_beacon_duty(
             &validation_context,
             Slot::new(0),
-            false,
-            Arc::new(MockDutiesProvider {
-                proposer_assignment: proposer_assignment_from_knobs(epoch_known, is_proposer),
+            &MockDutiesProvider {
+                proposer_assignment,
                 ..Default::default()
-            }),
+            },
         )
     }
 
     #[test]
-    fn envelope_proposer_tolerates_unknown_proposer_epoch() {
-        // Before the epoch's proposer duties are fetched, tolerate (Ok), not drop as NoDuty.
-        let result = run_envelope_beacon_duty(false, false);
+    fn envelope_proposer_unknown_is_accepted() {
+        let result = run_envelope_beacon_duty(DutyAssignment::Unknown);
         assert!(
             result.is_ok(),
-            "unknown proposer epoch must be tolerated for EnvelopeProposer, got: {result:?}"
+            "Unknown assignment must be accepted for EnvelopeProposer, got: {result:?}"
         );
     }
 
     #[test]
-    fn envelope_proposer_known_epoch_non_proposer_is_no_duty() {
-        // Known epoch, not the assigned proposer -> reject with NoDuty.
-        let result = run_envelope_beacon_duty(true, false);
+    fn envelope_proposer_not_assigned_returns_no_duty() {
+        let result = run_envelope_beacon_duty(DutyAssignment::NotAssigned);
         assert_validation_error(
             result,
             |failure| matches!(failure, ValidationFailure::NoDuty),
-            "NoDuty (known epoch, validator not the assigned proposer)",
+            "NoDuty (NotAssigned proposer assignment)",
         );
     }
 
     #[test]
-    fn envelope_proposer_known_epoch_proposer_ok() {
-        // Known epoch and the assigned proposer -> accept.
-        let result = run_envelope_beacon_duty(true, true);
+    fn envelope_proposer_assigned_is_accepted() {
+        let result = run_envelope_beacon_duty(DutyAssignment::Assigned);
         assert!(
             result.is_ok(),
             "Expected assigned proposer to be accepted for EnvelopeProposer, got: {result:?}"

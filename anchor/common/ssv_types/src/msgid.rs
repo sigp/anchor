@@ -98,6 +98,21 @@ impl Role {
         self.max_round().is_some()
     }
 
+    /// Returns true if this role's duty is bound to a single validator's proposal slot, so the
+    /// proposer-duty assignment for that slot decides whether a message can have a duty at all.
+    pub fn is_proposer_scoped(self) -> bool {
+        match self {
+            Role::Proposer | Role::ProposerPreferences | Role::EnvelopeProposer => true,
+            Role::Committee
+            | Role::Aggregator
+            | Role::SyncCommittee
+            | Role::ValidatorRegistration
+            | Role::VoluntaryExit
+            | Role::PTCAttester
+            | Role::AggregatorCommittee => false,
+        }
+    }
+
     /// monotonicSlotRole reports whether a role's signer advances through slots one at a time, so a
     /// message for a slot below the signer's max is stale and must be rejected. False for
     /// committee roles (state is slot-keyed across many validators) and for proposer

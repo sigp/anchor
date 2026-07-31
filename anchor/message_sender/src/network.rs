@@ -134,12 +134,12 @@ impl<S: SlotClock + 'static> NetworkMessageSender<S> {
         let message_slot = match validate_outbound_message(&message) {
             Ok(slot) => slot,
             Err(err) => {
+                let ssv_message = message.ssv_message();
                 error!(
                     ?err,
                     ?committee_id,
-                    ssv_msg_id = ?message.ssv_message().msg_id(),
-                    msg_type = ?message.ssv_message().msg_type(),
-                    role = ?message.ssv_message().msg_id().role(),
+                    ssv_msg_id = ?ssv_message.msg_id(),
+                    msg_type = ?ssv_message.msg_type(),
                     "Stateless validation of outgoing message failed"
                 );
                 return;

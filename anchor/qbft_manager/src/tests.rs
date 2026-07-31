@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use duties_tracker::DutyAssignment;
 use fork::{Fork, ForkSchedule};
 use message_sender::testing::MockMessageSender;
 use processor::Senders;
@@ -37,13 +38,73 @@ use super::{
     CommitteeInstanceId, Completed, QbftDecidable, QbftError, QbftInitialization, QbftManager,
     QbftMessageKind, TimeoutMode, WrappedQbftMessage,
 };
-use crate::instance::qbft_instance;
+use crate::{InstanceAccess, instance::qbft_instance};
 
 mod aggregator_tests;
 mod envelope_dispatch_tests;
 mod gloas_dispatch_tests;
+mod receive_mode_tests;
 mod setup;
 mod timeout_tests;
+
+/// Build a distinct, non-zero test validator pubkey from a fill byte.
+///
+/// A zero byte is rejected: an all-zero key equals `PublicKeyBytes::empty()`, which makes
+/// wrong-key and executor round-trip assertions vacuous.
+fn validator_pubkey(byte: u8) -> bls::PublicKeyBytes {
+    assert_ne!(byte, 0, "test pubkeys must be non-zero");
+    bls::PublicKeyBytes::deserialize(&[byte; bls::PUBLIC_KEY_BYTES_LEN])
+        .expect("48-byte input is a valid PublicKeyBytes")
+}
+
+fn assigned_proposer_duty(_: Slot, _: &bls::PublicKeyBytes) -> DutyAssignment {
+    DutyAssignment::Assigned
+}
+
+fn unexpected_proposer_duty_lookup(_: Slot, _: &bls::PublicKeyBytes) -> DutyAssignment {
+    panic!("this role must not query proposer duties")
+}
+
+/// Build a signed consensus (`SignedSSVMessage`, `QbftMessage`) pair for `role` and `executor`
+/// at the given slot height, signed by `OperatorId(1)` with a dummy RSA signature.
+fn build_signed_consensus_pair(
+    role: Role,
+    executor: &DutyExecutor,
+    message_type: QbftMessageType,
+    height: u64,
+) -> (SignedSSVMessage, QbftMessage) {
+    use ssv_types::{
+        RSA_SIGNATURE_SIZE,
+        message::{MsgType, SSVMessage},
+    };
+    use ssz::Encode;
+
+    let msg_id = MessageId::new(&DomainType([0; 4]), role, executor);
+    let qbft_message = QbftMessage {
+        qbft_message_type: message_type,
+        height,
+        round: 1,
+        identifier: (&msg_id).into(),
+        root: Hash256::ZERO,
+        data_round: 1,
+        round_change_justification: ssv_types::VariableList::empty(),
+        prepare_justification: ssv_types::VariableList::empty(),
+    };
+    let ssv_msg = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        msg_id,
+        qbft_message.as_ssz_bytes(),
+    )
+    .expect("SSVMessage creation should succeed");
+    let signed_msg = SignedSSVMessage::new(
+        vec![[0xAA; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId(1)],
+        ssv_msg,
+        vec![],
+    )
+    .expect("SignedSSVMessage creation should succeed");
+    (signed_msg, qbft_message)
+}
 
 /// The time we wait at most for consensus results until the test times out. Note that this is not
 /// real time, but simulated time, if the test is started with `start_paused = true`
@@ -594,7 +655,11 @@ where
             }
 
             for message in &messages {
-                let _ = manager.pass_to_instance::<D>(data_id.clone(), message.clone());
+                let _ = manager.pass_to_instance::<D>(
+                    data_id.clone(),
+                    message.clone(),
+                    InstanceAccess::GetOrSpawn,
+                );
             }
         }
     }
@@ -886,15 +951,6 @@ mod manager_tests {
     /// Verifies the fork gating allows messages through when Boole is active.
     #[tokio::test]
     async fn test_aggregator_committee_accepted_after_boole() {
-        use fork::{Fork, ForkSchedule};
-        use message_sender::testing::MockMessageSender;
-        use ssv_types::{
-            RSA_SIGNATURE_SIZE,
-            consensus::{QbftMessage, QbftMessageType},
-            message::{MsgType, SSVMessage, SignedSSVMessage},
-        };
-        use ssz::Encode;
-
         let setup = setup_test(1);
 
         // Create fork schedule with Boole active at epoch 0
@@ -918,48 +974,20 @@ mod manager_tests {
         )
         .expect("Manager creation should succeed");
 
-        // Create an AggregatorCommittee message
-        let msg_id = MessageId::new(
-            &DomainType([0; 4]),
+        // Create an AggregatorCommittee message. Any slot works: Boole is active from epoch 0.
+        let (signed_msg, qbft_message) = build_signed_consensus_pair(
             Role::AggregatorCommittee,
             &DutyExecutor::Committee(CommitteeId([0; 32])),
+            QbftMessageType::Proposal,
+            100,
         );
 
-        let qbft_message = QbftMessage {
-            qbft_message_type: QbftMessageType::Proposal,
-            height: 100, // Any slot, Boole is active from epoch 0
-            round: 1,
-            identifier: (&msg_id).into(),
-            root: Hash256::from([0u8; 32]),
-            data_round: 1,
-            round_change_justification: ssv_types::VariableList::empty(),
-            prepare_justification: ssv_types::VariableList::empty(),
-        };
-
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVConsensusMsgType,
-            msg_id,
-            qbft_message.as_ssz_bytes(),
-        )
-        .expect("SSVMessage creation should succeed");
-
-        let signed_msg = SignedSSVMessage::new(
-            vec![[0xAA; RSA_SIGNATURE_SIZE]],
-            vec![OperatorId(1)],
-            ssv_msg,
-            vec![],
-        )
-        .expect("SignedSSVMessage creation should succeed");
-
-        // Call receive_data - should NOT return RoleNotActive
-        let result = manager.receive_data(signed_msg, qbft_message);
-
-        // It might return Ok or some other error (e.g., no instance running),
-        // but critically it should NOT be RoleNotActive
-        assert!(
-            !matches!(result, Err(QbftError::RoleNotActive)),
-            "Should not return RoleNotActive after Boole fork, got: {:?}",
-            result
+        let result = manager.receive_network_message(
+            signed_msg,
+            qbft_message,
+            unexpected_proposer_duty_lookup,
         );
+
+        result.expect("AggregatorCommittee should dispatch after Boole");
     }
 }

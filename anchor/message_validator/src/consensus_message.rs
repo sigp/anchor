@@ -449,14 +449,8 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
     }
 
     let msg_slot = Slot::new(consensus_message.height);
-    let randao_msg = false; // Default to false as in the Go code
 
-    validate_beacon_duty(
-        validation_context,
-        msg_slot,
-        randao_msg,
-        duty_provider.clone(),
-    )?;
+    validate_beacon_duty(validation_context, msg_slot, duty_provider.as_ref())?;
 
     // Rule: current slot(height) must be between duty's starting slot and:
     // - duty's starting slot + 34 (committee and aggregation)
@@ -470,7 +464,7 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
             validation_context,
             msg_slot,
             signer_state,
-            duty_provider.clone(),
+            duty_provider.as_ref(),
         )?;
     }
 
@@ -497,11 +491,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, MessageAcceptance, ValidatedSSVMessage,
-        duty_limit,
+        DutyAssignment, LATE_MESSAGE_MARGIN, LATE_SLOT_ALLOWANCE, MessageAcceptance,
+        ValidatedSSVMessage, duty_limit,
         tests::{
-            FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            create_operator_pub_keys, generate_random_rsa_public_keys,
+            FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, assert_proposer_assignment_result,
+            create_committee_info, create_operator_pub_keys, generate_random_rsa_public_keys,
+            nonzero_validator_pubkey, validator_message_id,
         },
         validate_ssv_message,
     };
@@ -553,6 +548,67 @@ mod tests {
             DomainType::default(),
             "testing",
         ))
+    }
+
+    fn proposer_consensus_context<'a>(
+        signed_message: &'a SignedSSVMessage,
+        committee_info: &'a CommitteeInfo,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        let now = SystemTime::now();
+        ValidationContext {
+            signed_ssv_message: signed_message,
+            committee_info,
+            role: Role::Proposer,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: ManualSlotClock::new(
+                Slot::new(1),
+                now.duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(12),
+            ),
+            operator_pub_keys,
+            fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
+        }
+    }
+
+    fn run_proposer_consensus_with_assignment(
+        assignment: DutyAssignment,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let mut committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        committee_info.validator_indices.clear();
+        let (private_key, public_key) = generate_test_key_pair();
+        let operator_pub_keys =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let validator_pubkey = nonzero_validator_pubkey(0xBC);
+        let message_id = validator_message_id(Role::Proposer, validator_pubkey);
+        let qbft_message = QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Prepare)
+            .with_identifier(message_id)
+            .build();
+        let signed_message = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(1)],
+            vec![],
+            vec![private_key],
+        );
+        let validation_context =
+            proposer_consensus_context(&signed_message, &committee_info, &operator_pub_keys);
+
+        let duty_provider = Arc::new(MockDutiesProvider::expecting_proposer_query(
+            Slot::new(1),
+            validator_pubkey,
+            assignment,
+        ));
+        let result = validate_consensus_message(
+            validation_context,
+            &mut DutyState::new(64),
+            duty_provider.clone(),
+        );
+        duty_provider.assert_query_count(1);
+        result
     }
 
     // ---------------------------------------------------------------------
@@ -614,6 +670,78 @@ mod tests {
         );
 
         assert_qbft_message_accepted(result, "Expected successful validation");
+    }
+
+    #[test]
+    fn proposer_qbft_uses_pubkey_assignment_without_validator_indices() {
+        for assignment in [
+            DutyAssignment::Assigned,
+            DutyAssignment::Unknown,
+            DutyAssignment::NotAssigned,
+        ] {
+            let result = run_proposer_consensus_with_assignment(assignment);
+            assert_proposer_assignment_result(result, assignment, "proposer QBFT assignment");
+        }
+    }
+
+    #[test]
+    fn unknown_proposer_decided_commit_replay_is_ignored() {
+        let mut committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        committee_info.validator_indices.clear();
+
+        let keypairs: Vec<_> = (0..3).map(|_| generate_test_key_pair()).collect();
+        let private_keys = keypairs
+            .iter()
+            .map(|(private_key, _)| private_key.clone())
+            .collect();
+        let public_keys = keypairs
+            .into_iter()
+            .map(|(_, public_key)| public_key)
+            .collect();
+        let operator_pub_keys =
+            create_operator_pub_keys(committee_info.committee_members.clone(), public_keys);
+
+        let validator_pubkey = nonzero_validator_pubkey(0xCD);
+        let message_id = MessageId::new(
+            &DomainType([0, 0, 0, 1]),
+            Role::Proposer,
+            &DutyExecutor::Validator(validator_pubkey),
+        );
+        let qbft_message = QbftMessageBuilder::new(Role::Proposer, QbftMessageType::Commit)
+            .with_identifier(message_id)
+            .build();
+        let signed_message = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(1), OperatorId(2), OperatorId(3)],
+            vec![],
+            private_keys,
+        );
+        let duty_provider = Arc::new(MockDutiesProvider::expecting_proposer_query(
+            Slot::new(1),
+            validator_pubkey,
+            DutyAssignment::Unknown,
+        ));
+        let mut duty_state = DutyState::new(64);
+
+        let first = validate_consensus_message(
+            proposer_consensus_context(&signed_message, &committee_info, &operator_pub_keys),
+            &mut duty_state,
+            duty_provider.clone(),
+        );
+        assert!(
+            first.is_ok(),
+            "first Unknown proposer decided commit should be accepted, got {first:?}"
+        );
+
+        let second = validate_consensus_message(
+            proposer_consensus_context(&signed_message, &committee_info, &operator_pub_keys),
+            &mut duty_state,
+            duty_provider.clone(),
+        );
+        let failure = second.expect_err("identical decided commit replay should fail");
+        assert_eq!(failure, ValidationFailure::DecidedWithSameSigners);
+        assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+        duty_provider.assert_query_count(1);
     }
 
     #[test]
@@ -1770,10 +1898,10 @@ mod tests {
 
         // Create a mock DutiesProvider that returns a fixed value for voluntary exits
         let expected_duty_count = 5;
-        let mock_duties_provider = Arc::new(MockDutiesProvider {
+        let mock_duties_provider = MockDutiesProvider {
             voluntary_exit_duty_count: expected_duty_count,
             ..Default::default()
-        });
+        };
 
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
@@ -1794,7 +1922,7 @@ mod tests {
 
         let slot = slot_clock.now().unwrap();
 
-        let result = duty_limit(&validation_context, slot, &[], mock_duties_provider);
+        let result = duty_limit(&validation_context, slot, &[], &mock_duties_provider);
 
         assert_eq!(result, Ok(Some(expected_duty_count)));
     }
@@ -1824,10 +1952,10 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
-        let mock_duties_provider = Arc::new(MockDutiesProvider {
+        let mock_duties_provider = MockDutiesProvider {
             voluntary_exit_duty_count: 0,
             ..Default::default()
-        });
+        };
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let validation_context = ValidationContext {
@@ -1855,14 +1983,14 @@ mod tests {
             &validation_context,
             slot,
             &one_validator,
-            mock_duties_provider.clone(),
+            &mock_duties_provider,
         );
         assert_eq!(result, Ok(Some(2)));
 
         // The cap does not scale with the slice length (guards against the old
         // cluster-wide `min(slots_per_epoch, V)` formula reappearing).
         let many = vec![ValidatorIndex(0); 100];
-        let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
+        let result = duty_limit(&validation_context, slot, &many, &mock_duties_provider);
         assert_eq!(result, Ok(Some(2)));
     }
 
@@ -1897,10 +2025,10 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
-        let mock_duties_provider = Arc::new(MockDutiesProvider {
+        let mock_duties_provider = MockDutiesProvider {
             voluntary_exit_duty_count: 0,
             ..Default::default()
-        });
+        };
         let map = create_operator_pub_keys(committee_info.committee_members.clone(), vec![]);
 
         let validation_context = ValidationContext {
@@ -1925,7 +2053,7 @@ mod tests {
             &validation_context,
             slot,
             &one_validator,
-            mock_duties_provider.clone(),
+            &mock_duties_provider,
         );
 
         // Assert
@@ -1934,7 +2062,7 @@ mod tests {
         // The limit is fixed at `slots_per_epoch` and does not scale with the slice
         // length.
         let many = vec![ValidatorIndex(0); 100];
-        let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
+        let result = duty_limit(&validation_context, slot, &many, &mock_duties_provider);
         assert_eq!(result, Ok(Some(SLOTS_PER_EPOCH)));
     }
 
@@ -1969,7 +2097,7 @@ mod tests {
         .expect("SignedSSVMessage should be created");
 
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let mock_duties_provider = Arc::new(MockDutiesProvider::default());
+        let mock_duties_provider = MockDutiesProvider::default();
         let map = HashMap::new();
 
         // Create fork schedule with Boole at epoch 0 (active from start).
@@ -2002,7 +2130,7 @@ mod tests {
             &validation_context,
             slot,
             &[ValidatorIndex(0)], // Single validator; irrelevant for EnvelopeProposer
-            mock_duties_provider.clone(),
+            &mock_duties_provider,
         );
 
         // Assert: Duty cap must equal slots_per_epoch and be independent of slice length.
@@ -2014,7 +2142,7 @@ mod tests {
 
         // Verify independence from slice length.
         let many = vec![ValidatorIndex(0); 100];
-        let result = duty_limit(&validation_context, slot, &many, mock_duties_provider);
+        let result = duty_limit(&validation_context, slot, &many, &mock_duties_provider);
         assert_eq!(
             result,
             Ok(Some(SLOTS_PER_EPOCH)),

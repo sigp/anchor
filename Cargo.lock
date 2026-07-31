@@ -6307,6 +6307,7 @@ dependencies = [
  "bls",
  "dashmap",
  "database",
+ "duties_tracker",
  "ethereum_ssz",
  "fork",
  "futures",

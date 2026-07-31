@@ -3,6 +3,7 @@ use std::{fmt::Debug, future::Future, hash::Hash, num::NonZeroU64, sync::Arc};
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
 use database::OwnOperatorId;
+use duties_tracker::DutyAssignment;
 use fork::{Fork, ForkSchedule};
 use message_sender::MessageSender;
 use processor::{Error::Queue, Senders, work::DropOnFinish};
@@ -119,6 +120,36 @@ pub enum QbftMessageKind<D: QbftData> {
     // deserialization we determine the message is for the qbft instance and decode it into a
     // wrapped qbft message consisting of the signed message and the qbft message
     NetworkMessage(WrappedQbftMessage),
+}
+
+/// Result of dispatching a network message to a QBFT instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QbftDispatchOutcome {
+    /// The processor accepted work that will try to send the message to the instance.
+    ///
+    /// The instance sender may close before that work runs, so this does not guarantee delivery
+    /// to the per-instance channel.
+    ProcessorEnqueued,
+    /// The duty view was unknown and no matching instance already existed.
+    DroppedMissingInstance,
+    /// The current duty view authoritatively excludes this validator and slot.
+    DroppedNotAssigned,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InstanceAccess {
+    GetOrSpawn,
+    ExistingOnly,
+}
+
+impl InstanceAccess {
+    fn for_proposer_assignment(assignment: DutyAssignment) -> Option<Self> {
+        match assignment {
+            DutyAssignment::Assigned => Some(Self::GetOrSpawn),
+            DutyAssignment::Unknown => Some(Self::ExistingOnly),
+            DutyAssignment::NotAssigned => None,
+        }
+    }
 }
 
 /// Represents the initialization data required to start a new QBFT instance.
@@ -284,29 +315,56 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         Ok(result_receiver.await?)
     }
 
-    /// Send a new network message to the instance
-    pub fn receive_data(
+    /// Dispatch a network message using the latest proposer-duty view.
+    ///
+    /// Proposer and fork-active envelope-proposer messages query the supplied assignment source
+    /// exactly once. Assigned messages may create an instance, Unknown messages require an
+    /// existing instance, and NotAssigned messages are dropped before map access. Other QBFT roles
+    /// retain their existing receive-or-spawn behavior and do not query proposer duties.
+    pub fn receive_network_message(
         &self,
         full_message: SignedSSVMessage,
         qbft_message: ssv_types::consensus::QbftMessage,
-    ) -> Result<(), QbftError> {
+        proposer_assignment_at_slot: impl FnOnce(Slot, &PublicKeyBytes) -> DutyAssignment,
+    ) -> Result<QbftDispatchOutcome, QbftError> {
         let msg_id = full_message.ssv_message().msg_id();
         let instance_height = (qbft_message.height as usize).into();
+        let slot = Slot::new(qbft_message.height);
 
         match msg_id.duty_executor() {
             Some(DutyExecutor::Validator(validator)) => {
-                let duty = match msg_id.role() {
-                    Some(Role::Proposer) => ValidatorDutyKind::Proposal,
-                    Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
-                    Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
+                let (duty, instance_access) = match msg_id.role() {
+                    Some(Role::Proposer) => {
+                        let Some(instance_access) =
+                            InstanceAccess::for_proposer_assignment(
+                                proposer_assignment_at_slot(slot, &validator),
+                            )
+                        else {
+                            return Ok(QbftDispatchOutcome::DroppedNotAssigned);
+                        };
+                        (ValidatorDutyKind::Proposal, instance_access)
+                    }
+                    Some(Role::Aggregator) => {
+                        (ValidatorDutyKind::Aggregator, InstanceAccess::GetOrSpawn)
+                    }
+                    Some(Role::SyncCommittee) => (
+                        ValidatorDutyKind::SyncCommitteeAggregator,
+                        InstanceAccess::GetOrSpawn,
+                    ),
                     Some(Role::EnvelopeProposer) => {
-                        let slot = types::Slot::new(qbft_message.height);
                         // Defense in depth behind `validate_role_for_fork`: envelope QBFT
                         // exists only post-Gloas.
                         if !self.gloas_enabled_at_slot(slot) {
                             warn!(%slot, "Ignoring EnvelopeProposer message before Gloas fork");
                             return Err(QbftError::RoleNotActive);
                         }
+                        let Some(instance_access) =
+                            InstanceAccess::for_proposer_assignment(
+                                proposer_assignment_at_slot(slot, &validator),
+                            )
+                        else {
+                            return Ok(QbftDispatchOutcome::DroppedNotAssigned);
+                        };
                         let id = EnvelopeProposerInstanceId {
                             validator,
                             instance_height,
@@ -317,6 +375,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                                 signed_message: full_message,
                                 qbft_message,
                             },
+                            instance_access,
                         );
                     }
                     // Committee roles use DutyExecutor::Committee, not Validator
@@ -341,12 +400,12 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                         signed_message: full_message,
                         qbft_message,
                     },
+                    instance_access,
                 )
             }
             Some(DutyExecutor::Committee(committee)) => {
                 match msg_id.role() {
                     Some(Role::Committee) => {
-                        let slot = types::Slot::new(qbft_message.height);
                         let id = CommitteeInstanceId {
                             committee,
                             instance_height,
@@ -358,14 +417,21 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
 
                         // Gate the Gloas beacon-vote shape on Ethereum's Gloas (ePBS) fork using Ethereum consensus spec.
                         if self.gloas_enabled_at_slot(slot) {
-                            self.pass_to_instance::<GloasBeaconVote>(id, wrapped)
+                            self.pass_to_instance::<GloasBeaconVote>(
+                                id,
+                                wrapped,
+                                InstanceAccess::GetOrSpawn,
+                            )
                         } else {
-                            self.pass_to_instance::<BeaconVote>(id, wrapped)
+                            self.pass_to_instance::<BeaconVote>(
+                                id,
+                                wrapped,
+                                InstanceAccess::GetOrSpawn,
+                            )
                         }
                     }
                     Some(Role::AggregatorCommittee) => {
                         // Route to aggregator committee instances with fork gating
-                        let slot = types::Slot::new(qbft_message.height);
                         let epoch = slot.epoch(E::slots_per_epoch());
 
                         // Fork gating: Reject before Boole
@@ -384,6 +450,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                                 signed_message: full_message,
                                 qbft_message,
                             },
+                            InstanceAccess::GetOrSpawn,
                         )
                     }
                     // Validator roles should use DutyExecutor::Validator, not
@@ -412,8 +479,18 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
         &self,
         id: D::Id,
         data: WrappedQbftMessage,
-    ) -> Result<(), QbftError> {
-        let sender = D::get_or_spawn_instance(self, id);
+        instance_access: InstanceAccess,
+    ) -> Result<QbftDispatchOutcome, QbftError> {
+        let sender = match instance_access {
+            InstanceAccess::GetOrSpawn => D::get_or_spawn_instance(self, id),
+            InstanceAccess::ExistingOnly => {
+                let Some(sender) = D::get_map(self).get(&id).map(|entry| entry.value().clone())
+                else {
+                    return Ok(QbftDispatchOutcome::DroppedMissingInstance);
+                };
+                sender
+            }
+        };
         self.processor.urgent_consensus.send_immediate(
             move |drop_on_finish: DropOnFinish| {
                 let _ = sender.send(QbftMessage {
@@ -423,7 +500,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             },
             QBFT_MESSAGE_NAME,
         )?;
-        Ok(())
+        Ok(QbftDispatchOutcome::ProcessorEnqueued)
     }
 
     // Long running cleaner that will remove instances that are no longer relevant
@@ -496,8 +573,8 @@ pub trait QbftDecidable<E: EthSpec>: QbftData<Hash = Hash256> + Send + Sync + 's
         match map.entry(id) {
             dashmap::Entry::Occupied(entry) => entry.get().clone(),
             dashmap::Entry::Vacant(entry) => {
-                // There is not an instance running yet, store the sender and spawn a new instance
-                // with the receiver
+                // There is no instance entry yet. Store the sender, then attempt to schedule the
+                // instance receiver.
                 let (tx, rx) = mpsc::unbounded_channel();
                 let span = debug_span!("qbft_instance", instance_id = ?entry.key());
                 let tx = entry.insert(tx);

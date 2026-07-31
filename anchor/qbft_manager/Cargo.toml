@@ -8,6 +8,7 @@ edition = { workspace = true }
 bls = { workspace = true }
 dashmap = { workspace = true }
 database = { workspace = true }
+duties_tracker = { workspace = true }
 ethereum_ssz = { workspace = true }
 fork = { workspace = true }
 message_sender = { workspace = true }

@@ -1,20 +1,18 @@
 //! `Role::Committee` dispatch tests for the Ethereum Gloas (ePBS) fork.
 //!
-//! These exercise the fork-gated routing inside `QbftManager::receive_data`: at
+//! These exercise the fork-gated routing inside `QbftManager::receive_network_message`: at
 //! or after the Ethereum Gloas fork (read from the `ChainSpec`) a committee
 //! message must spawn a `GloasBeaconVote` instance, before Gloas a `BeaconVote`
 //! instance. The `DashMap` entry is inserted synchronously inside
 //! `get_or_spawn_instance` before the processor task is even dispatched, so map
-//! sizes are deterministic immediately after `receive_data` returns.
+//! sizes are deterministic immediately after `receive_network_message` returns.
 
 use fork::ForkSchedule;
 use message_sender::testing::MockMessageSender;
 use ssv_types::{
-    RSA_SIGNATURE_SIZE,
     consensus::{QbftMessage, QbftMessageType},
-    message::{MsgType, SSVMessage, SignedSSVMessage},
+    message::SignedSSVMessage,
 };
-use ssz::Encode;
 use types::{ChainSpec, Epoch};
 
 use super::{setup::setup_test, *};
@@ -64,39 +62,12 @@ pub(super) fn build_manager(
 /// given slot height. The shape mirrors the aggregator dispatch test so the
 /// two tests stay aligned.
 fn build_committee_message(slot_height: u64) -> (SignedSSVMessage, QbftMessage) {
-    let msg_id = MessageId::new(
-        &DomainType([0; 4]),
+    build_signed_consensus_pair(
         Role::Committee,
         &DutyExecutor::Committee(CommitteeId([0; 32])),
-    );
-
-    let qbft_message = QbftMessage {
-        qbft_message_type: QbftMessageType::Proposal,
-        height: slot_height,
-        round: 1,
-        identifier: (&msg_id).into(),
-        root: Hash256::from([0u8; 32]),
-        data_round: 1,
-        round_change_justification: ssv_types::VariableList::empty(),
-        prepare_justification: ssv_types::VariableList::empty(),
-    };
-
-    let ssv_msg = SSVMessage::new(
-        MsgType::SSVConsensusMsgType,
-        msg_id,
-        qbft_message.as_ssz_bytes(),
+        QbftMessageType::Proposal,
+        slot_height,
     )
-    .expect("SSVMessage creation should succeed");
-
-    let signed_msg = SignedSSVMessage::new(
-        vec![[0xAA; RSA_SIGNATURE_SIZE]],
-        vec![OperatorId(1)],
-        ssv_msg,
-        vec![],
-    )
-    .expect("SignedSSVMessage creation should succeed");
-
-    (signed_msg, qbft_message)
 }
 
 /// With the Ethereum Gloas fork active from genesis, a `Role::Committee` message
@@ -110,13 +81,13 @@ async fn test_committee_message_routes_to_gloas_at_fork() {
     let (signed_msg, qbft_message) = build_committee_message(TEST_SLOT_HEIGHT);
 
     // Act
-    let result = manager.receive_data(signed_msg, qbft_message);
+    let result =
+        manager.receive_network_message(signed_msg, qbft_message, unexpected_proposer_duty_lookup);
 
     // Assert
     assert!(
         result.is_ok(),
-        "receive_data should succeed at Gloas, got: {:?}",
-        result
+        "network receive should succeed at Gloas, got: {result:?}"
     );
     assert_eq!(
         manager.gloas_beacon_vote_instances.len(),
@@ -141,13 +112,13 @@ async fn test_committee_message_routes_to_beacon_pre_gloas() {
     let (signed_msg, qbft_message) = build_committee_message(TEST_SLOT_HEIGHT);
 
     // Act
-    let result = manager.receive_data(signed_msg, qbft_message);
+    let result =
+        manager.receive_network_message(signed_msg, qbft_message, unexpected_proposer_duty_lookup);
 
     // Assert
     assert!(
         result.is_ok(),
-        "receive_data should succeed pre-Gloas, got: {:?}",
-        result
+        "network receive should succeed pre-Gloas, got: {result:?}"
     );
     assert_eq!(
         manager.beacon_vote_instances.len(),
@@ -175,14 +146,16 @@ async fn test_committee_message_routes_at_gloas_activation_boundary() {
     let last_pre_gloas = GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH - 1;
     let (signed, qbft) = build_committee_message(last_pre_gloas);
     manager
-        .receive_data(signed, qbft)
+        .receive_network_message(signed, qbft, unexpected_proposer_duty_lookup)
         .expect("pre-Gloas dispatch");
     assert_eq!(manager.beacon_vote_instances.len(), 1);
     assert_eq!(manager.gloas_beacon_vote_instances.len(), 0);
 
     let first_gloas = GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH;
     let (signed, qbft) = build_committee_message(first_gloas);
-    manager.receive_data(signed, qbft).expect("Gloas dispatch");
+    manager
+        .receive_network_message(signed, qbft, unexpected_proposer_duty_lookup)
+        .expect("Gloas dispatch");
     assert_eq!(manager.gloas_beacon_vote_instances.len(), 1);
     // BeaconVote map still holds the pre-Gloas instance.
     assert_eq!(manager.beacon_vote_instances.len(), 1);
