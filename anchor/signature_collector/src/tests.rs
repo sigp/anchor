@@ -404,17 +404,29 @@ impl BatchScenario {
     }
 }
 
-fn descriptor(entries: &[(u64, Hash256, usize)]) -> Vec<SyncSelectionProofDescriptor> {
+fn descriptor(entries: &[(u64, Hash256, usize)]) -> Vec<SyncCommitteeBatchEntry> {
     entries
         .iter()
         .map(
-            |(subnet_id, signing_root, position_count)| SyncSelectionProofDescriptor {
+            |(subnet_id, signing_root, multiplicity)| SyncCommitteeBatchEntry {
                 subnet_id: SyncSubnetId::new(*subnet_id),
                 signing_root: *signing_root,
-                position_count: *position_count,
+                multiplicity: *multiplicity,
             },
         )
         .collect()
+}
+
+fn batch_key(
+    metadata: &SignatureMetadata,
+    pubkey: PublicKeyBytes,
+) -> (SingleValidatorBatchPhase, Slot, PublicKeyBytes) {
+    (
+        SingleValidatorBatchPhase::from_kind(metadata.kind)
+            .expect("batch test metadata should use a supported phase"),
+        metadata.slot,
+        pubkey,
+    )
 }
 
 fn process_batch(
@@ -424,13 +436,36 @@ fn process_batch(
     validator_key: &SecretKey,
     validator_index: ValidatorIndex,
     subnet_id: SyncSubnetId,
-    descriptor: Vec<SyncSelectionProofDescriptor>,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
 ) -> Vec<PartialSignatureMessage> {
     let signing_root = descriptor
         .iter()
         .find(|entry| entry.subnet_id == subnet_id)
         .expect("callback subnet should be in its descriptor")
         .signing_root;
+    process_batch_for_root(
+        manager,
+        metadata,
+        pubkey,
+        validator_key,
+        validator_index,
+        subnet_id,
+        signing_root,
+        descriptor,
+    )
+}
+
+#[expect(clippy::too_many_arguments)]
+fn process_batch_for_root(
+    manager: &SignatureCollectorManager<ManualSlotClock>,
+    metadata: &SignatureMetadata,
+    pubkey: PublicKeyBytes,
+    validator_key: &SecretKey,
+    validator_index: ValidatorIndex,
+    subnet_id: SyncSubnetId,
+    signing_root: Hash256,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
+) -> Vec<PartialSignatureMessage> {
     let signing_data = ValidatorSigningData {
         root: signing_root,
         index: validator_index,
@@ -458,7 +493,7 @@ async fn sign_and_collect_batch(
     metadata: SignatureMetadata,
     validator_index: ValidatorIndex,
     subnet_id: SyncSubnetId,
-    descriptor: Vec<SyncSelectionProofDescriptor>,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
 ) -> Arc<Signature> {
     let signing_root = descriptor
         .iter()
@@ -493,6 +528,40 @@ async fn wait_until(mut predicate: impl FnMut() -> bool) {
     })
     .await
     .expect("condition should become true promptly");
+}
+
+async fn drain_batch_processor_work(manager: &SignatureCollectorManager<ManualSlotClock>) {
+    let (urgent_done_tx, urgent_done_rx) = oneshot::channel();
+    manager
+        .processor
+        .urgent_consensus
+        .send_blocking(
+            move || {
+                let _ = urgent_done_tx.send(());
+            },
+            "batch_test_urgent_barrier",
+        )
+        .expect("urgent barrier should enter the processor");
+    tokio::time::timeout(Duration::from_secs(5), urgent_done_rx)
+        .await
+        .expect("urgent barrier should run promptly")
+        .expect("urgent barrier should signal completion");
+
+    let (permitless_done_tx, permitless_done_rx) = oneshot::channel();
+    manager
+        .processor
+        .permitless
+        .send_immediate(
+            move |_drop_on_finish| {
+                let _ = permitless_done_tx.send(());
+            },
+            "batch_test_permitless_barrier",
+        )
+        .expect("permitless barrier should enter the processor");
+    tokio::time::timeout(Duration::from_secs(5), permitless_done_rx)
+        .await
+        .expect("permitless barrier should run promptly")
+        .expect("permitless barrier should signal completion");
 }
 
 async fn register_manager_notifier(
@@ -543,6 +612,7 @@ fn single_validator_batch_envelope_cases() {
             0,
             vec![root_0],
             vec![root_0],
+            PartialSignatureKind::ContributionProofs,
             "one position",
         ),
         (
@@ -550,6 +620,7 @@ fn single_validator_batch_envelope_cases() {
             0,
             vec![root_0, root_0],
             vec![root_0],
+            PartialSignatureKind::ContributionProofs,
             "same-subnet multiplicity",
         ),
         (
@@ -557,17 +628,27 @@ fn single_validator_batch_envelope_cases() {
             1,
             vec![root_0, root_0, root_1],
             vec![root_1, root_0],
+            PartialSignatureKind::ContributionProofs,
             "multiple subnets",
+        ),
+        (
+            descriptor(&[(0, root_0, 2), (1, root_1, 1)]),
+            0,
+            vec![root_0, root_0, root_1],
+            vec![root_0, root_1],
+            PartialSignatureKind::PostConsensus,
+            "post-consensus decided root multiset",
         ),
     ];
 
     for (
         case_index,
-        (descriptor, callback_subnet, expected_wire_roots, expected_injection_roots, label),
+        (descriptor, callback_subnet, expected_wire_roots, expected_injection_roots, kind, label),
     ) in cases.into_iter().enumerate()
     {
         let mut metadata = scenario.metadata.clone();
         metadata.slot += case_index as u64;
+        metadata.kind = kind;
         let unique_messages = process_batch(
             &scenario.manager,
             &metadata,
@@ -601,7 +682,7 @@ fn single_validator_batch_envelope_cases() {
         );
         let messages = PartialSignatureMessages::from_ssz_bytes(unsigned.ssv_message.data())
             .expect("captured batch should decode");
-        assert_eq!(messages.kind, PartialSignatureKind::ContributionProofs);
+        assert_eq!(messages.kind, kind, "{label}");
         assert_eq!(messages.slot, metadata.slot);
         assert_eq!(
             messages
@@ -615,14 +696,175 @@ fn single_validator_batch_envelope_cases() {
         assert!(messages.messages.iter().all(|message| {
             message.signer == TEST_OPERATOR_ID && message.validator_index == ValidatorIndex(42)
         }));
+        for (message, signing_root) in messages.messages.iter().zip(&expected_wire_roots) {
+            assert_eq!(
+                message.partial_signature,
+                scenario.validator_key.sign(*signing_root),
+                "{label}"
+            );
+        }
     }
-    assert_eq!(sender.attempts(), 3);
+    assert_eq!(sender.attempts(), 4);
+}
+
+#[test]
+fn post_consensus_uses_exact_roots_for_same_subnet_callbacks() {
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = PartialSignatureKind::PostConsensus;
+    let first_root = Hash256::repeat_byte(0x18);
+    let callback_root = Hash256::repeat_byte(0x19);
+    let descriptor = descriptor(&[(1, first_root, 1), (1, callback_root, 1)]);
+
+    let injections = process_batch_for_root(
+        &scenario.manager,
+        &scenario.metadata,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(1),
+        callback_root,
+        descriptor,
+    );
+
+    assert_eq!(
+        injections
+            .iter()
+            .map(|message| message.signing_root)
+            .collect::<Vec<_>>(),
+        vec![callback_root, first_root]
+    );
+    let sent = sender.messages();
+    assert_eq!(sent.len(), 1);
+    let messages = PartialSignatureMessages::from_ssz_bytes(sent[0].ssv_message.data())
+        .expect("post-consensus batch should decode");
+    assert_eq!(messages.kind, PartialSignatureKind::PostConsensus);
+    assert_eq!(messages.messages.len(), 2);
+    assert_eq!(messages.messages[0].signing_root, first_root);
+    assert_eq!(messages.messages[1].signing_root, callback_root);
+    assert_eq!(
+        messages.messages[0].partial_signature,
+        scenario.validator_key.sign(first_root)
+    );
+    assert_eq!(
+        messages.messages[1].partial_signature,
+        scenario.validator_key.sign(callback_root)
+    );
+}
+
+#[test]
+fn post_consensus_injects_one_message_for_one_root_on_multiple_subnets() {
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = PartialSignatureKind::PostConsensus;
+    let signing_root = Hash256::repeat_byte(0x1A);
+
+    let injections = process_batch(
+        &scenario.manager,
+        &scenario.metadata,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor(&[(0, signing_root, 1), (1, signing_root, 1)]),
+    );
+
+    assert_eq!(injections.len(), 1);
+    assert_eq!(injections[0].signing_root, signing_root);
+    let sent = sender.messages();
+    let messages = PartialSignatureMessages::from_ssz_bytes(sent[0].ssv_message.data())
+        .expect("post-consensus batch should decode");
+    assert_eq!(messages.kind, PartialSignatureKind::PostConsensus);
+    assert_eq!(messages.messages.len(), 2);
+    assert!(
+        messages
+            .messages
+            .iter()
+            .all(|message| message.signing_root == signing_root)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn first_callback_injects_all_roots_and_admitted_sibling_reinjects() {
+async fn post_consensus_impostor_sends_empty_batch_without_sibling_injection() {
     let sender = Arc::new(RecordingMessageSender::new(0));
-    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let mut scenario =
+        BatchScenario::new_with_max_workers(Arc::clone(&sender) as Arc<dyn MessageSender>, 1);
+    scenario.metadata.kind = PartialSignatureKind::PostConsensus;
+    let validator_index = ValidatorIndex(42);
+    let current_root = Hash256::repeat_byte(0x1B);
+    let sibling_root = Hash256::repeat_byte(0x1C);
+    let collector_key = (current_root, validator_index);
+    let sibling_collector_key = (sibling_root, validator_index);
+    let manager = Arc::clone(&scenario.manager);
+    let metadata = scenario.metadata.clone();
+    let validator_pubkey = scenario.validator_pubkey;
+
+    let task = tokio::spawn(async move {
+        manager
+            .sign_and_collect(
+                metadata,
+                SignatureRequester::SingleValidatorBatch {
+                    pubkey: validator_pubkey,
+                    subnet_id: SyncSubnetId::new(0),
+                    descriptor: descriptor(&[(0, current_root, 1), (1, sibling_root, 1)]),
+                },
+                ValidatorSigningData {
+                    root: current_root,
+                    index: validator_index,
+                    validator_pubkey,
+                    share: None,
+                },
+            )
+            .await
+    });
+
+    wait_until(|| sender.attempts() == 1).await;
+    drain_batch_processor_work(&scenario.manager).await;
+
+    let sent = sender.messages();
+    let messages = PartialSignatureMessages::from_ssz_bytes(sent[0].ssv_message.data())
+        .expect("impostor post-consensus batch should decode");
+    assert_eq!(messages.kind, PartialSignatureKind::PostConsensus);
+    assert_eq!(messages.slot, scenario.metadata.slot);
+    assert_eq!(messages.messages.len(), 2);
+    assert_eq!(
+        messages
+            .messages
+            .iter()
+            .map(|message| message.signing_root)
+            .collect::<Vec<_>>(),
+        vec![current_root, sibling_root]
+    );
+    assert!(
+        messages
+            .messages
+            .iter()
+            .all(|message| message.partial_signature == Signature::empty()
+                && message.signer == TEST_OPERATOR_ID
+                && message.validator_index == validator_index)
+    );
+    assert!(
+        scenario
+            .manager
+            .signature_collectors
+            .contains_key(&collector_key)
+    );
+    assert!(
+        !scenario
+            .manager
+            .signature_collectors
+            .contains_key(&sibling_collector_key),
+        "impostor mode must not inject an empty sibling share"
+    );
+
+    task.abort();
+    let _ = task.await;
+}
+
+async fn run_first_callback_injection_and_reinjection(kind: PartialSignatureKind) {
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = kind;
     let validator_index = ValidatorIndex(42);
     let root_0 = Hash256::repeat_byte(0x20);
     let root_1 = Hash256::repeat_byte(0x21);
@@ -686,10 +928,20 @@ async fn first_callback_injects_all_roots_and_admitted_sibling_reinjects() {
     );
 }
 
-#[test]
-fn failed_admission_stays_pending_and_sibling_retries() {
+#[tokio::test(flavor = "multi_thread")]
+async fn first_callback_injects_all_roots_and_admitted_sibling_reinjects() {
+    run_first_callback_injection_and_reinjection(PartialSignatureKind::ContributionProofs).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn post_consensus_first_callback_injects_all_roots_and_admitted_sibling_reinjects() {
+    run_first_callback_injection_and_reinjection(PartialSignatureKind::PostConsensus).await;
+}
+
+fn run_failed_admission_and_sibling_retry(kind: PartialSignatureKind) {
     let sender = Arc::new(RecordingMessageSender::new(1));
-    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = kind;
     let root_0 = Hash256::repeat_byte(0x30);
     let root_1 = Hash256::repeat_byte(0x31);
     let descriptor = descriptor(&[(0, root_0, 1), (1, root_1, 1)]);
@@ -709,7 +961,7 @@ fn failed_admission_stays_pending_and_sibling_retries() {
     let record = scenario
         .manager
         .single_validator_batches
-        .get(&(scenario.metadata.slot, scenario.validator_pubkey))
+        .get(&batch_key(&scenario.metadata, scenario.validator_pubkey))
         .expect("pending record should be retained");
     assert_eq!(*record.state.lock(), SingleValidatorBatchState::Pending);
     drop(record);
@@ -724,11 +976,30 @@ fn failed_admission_stays_pending_and_sibling_retries() {
         descriptor.clone(),
     );
     assert_eq!(sender.attempts(), 2);
-    assert_eq!(sender.messages().len(), 1);
+    let sent = sender.messages();
+    assert_eq!(sent.len(), 1);
+    let messages = PartialSignatureMessages::from_ssz_bytes(sent[0].ssv_message.data())
+        .expect("retried single-validator batch should decode");
+    assert_eq!(messages.kind, kind);
+    assert_eq!(messages.slot, scenario.metadata.slot);
+    assert_eq!(messages.messages.len(), 2);
+    assert_eq!(
+        messages
+            .messages
+            .iter()
+            .map(|message| message.signing_root)
+            .collect::<Vec<_>>(),
+        vec![root_0, root_1]
+    );
+    assert!(messages.messages.iter().all(|message| {
+        message.signer == TEST_OPERATOR_ID
+            && message.validator_index == ValidatorIndex(42)
+            && message.partial_signature == scenario.validator_key.sign(message.signing_root)
+    }));
     let record = scenario
         .manager
         .single_validator_batches
-        .get(&(scenario.metadata.slot, scenario.validator_pubkey))
+        .get(&batch_key(&scenario.metadata, scenario.validator_pubkey))
         .expect("admitted record should be retained");
     assert_eq!(*record.state.lock(), SingleValidatorBatchState::Admitted);
     drop(record);
@@ -743,13 +1014,53 @@ fn failed_admission_stays_pending_and_sibling_retries() {
         descriptor,
     );
     assert_eq!(admitted_injections.len(), 1);
+    assert_eq!(admitted_injections[0].signing_root, root_0);
     assert_eq!(sender.attempts(), 2);
 }
 
 #[test]
-fn concurrent_callbacks_produce_one_admitted_send() {
+fn failed_admission_stays_pending_and_sibling_retries() {
+    run_failed_admission_and_sibling_retry(PartialSignatureKind::ContributionProofs);
+}
+
+#[test]
+fn post_consensus_failed_admission_stays_pending_and_sibling_retries() {
+    run_failed_admission_and_sibling_retry(PartialSignatureKind::PostConsensus);
+}
+
+#[test]
+fn post_consensus_construction_failure_retains_pending_for_retry() {
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = PartialSignatureKind::PostConsensus;
+    let signing_root = Hash256::repeat_byte(0x38);
+    let oversized_multiplicity = PartialSignatureMessagesLen::USIZE + 1;
+
+    let injections = process_batch(
+        &scenario.manager,
+        &scenario.metadata,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor(&[(0, signing_root, oversized_multiplicity)]),
+    );
+
+    assert_eq!(injections.len(), 1);
+    assert_eq!(injections[0].signing_root, signing_root);
+    assert_eq!(sender.attempts(), 0);
+    let record = scenario
+        .manager
+        .single_validator_batches
+        .get(&batch_key(&scenario.metadata, scenario.validator_pubkey))
+        .expect("construction failure should retain the batch record");
+    assert_eq!(*record.state.lock(), SingleValidatorBatchState::Pending);
+}
+
+fn run_concurrent_callbacks(kind: PartialSignatureKind) {
     let (sender, first_attempt_entered) = BlockingMessageSender::new();
-    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = kind;
     let descriptor = descriptor(&[
         (0, Hash256::repeat_byte(0x40), 1),
         (1, Hash256::repeat_byte(0x41), 1),
@@ -778,6 +1089,25 @@ fn concurrent_callbacks_produce_one_admitted_send() {
     first_attempt_entered
         .recv_timeout(Duration::from_secs(5))
         .expect("first callback should enter sign_and_send");
+    let record = scenario
+        .manager
+        .single_validator_batches
+        .get(&batch_key(&scenario.metadata, scenario.validator_pubkey))
+        .expect("concurrent batch record should exist");
+    assert!(
+        record.state.try_lock().is_none(),
+        "the first callback should hold admission state while sending"
+    );
+    drop(record);
+    let (second_at_lock_tx, second_at_lock_rx) = std_mpsc::sync_channel(1);
+    *scenario
+        .manager
+        .single_validator_batch_before_state_lock
+        .lock() = Some(Box::new(move || {
+        second_at_lock_tx
+            .send(())
+            .expect("test should observe the sibling at the state lock");
+    }));
 
     let second = std::thread::spawn(move || {
         process_batch(
@@ -790,7 +1120,9 @@ fn concurrent_callbacks_produce_one_admitted_send() {
             descriptor_b,
         )
     });
-    std::thread::sleep(Duration::from_millis(50));
+    second_at_lock_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("sibling callback should reach the state lock during admission");
     assert_eq!(sender.attempts(), 1);
     sender.release();
 
@@ -816,10 +1148,20 @@ fn concurrent_callbacks_produce_one_admitted_send() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn mismatched_callbacks_suppress_publication_but_inject_current_share() {
-    let sender = Arc::new(RecordingMessageSender::new(0));
-    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+#[test]
+fn concurrent_callbacks_produce_one_admitted_send() {
+    run_concurrent_callbacks(PartialSignatureKind::ContributionProofs);
+}
+
+#[test]
+fn concurrent_post_consensus_callbacks_produce_one_admitted_send() {
+    run_concurrent_callbacks(PartialSignatureKind::PostConsensus);
+}
+
+async fn run_mismatched_callbacks(kind: PartialSignatureKind) {
+    let sender = Arc::new(RecordingMessageSender::new(usize::MAX));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = kind;
     let validator_index = ValidatorIndex(42);
     let root_0 = Hash256::repeat_byte(0x50);
     let root_1 = Hash256::repeat_byte(0x51);
@@ -835,6 +1177,15 @@ async fn mismatched_callbacks_suppress_publication_but_inject_current_share() {
     )
     .await;
     assert_eq!(sender.attempts(), 1);
+    let record_key = batch_key(&scenario.metadata, scenario.validator_pubkey);
+    let record = scenario
+        .manager
+        .single_validator_batches
+        .get(&record_key)
+        .expect("canonical pending record should be retained");
+    assert_eq!(*record.state.lock(), SingleValidatorBatchState::Pending);
+    assert_eq!(record.descriptor, canonical);
+    drop(record);
 
     let mismatched = descriptor(&[(1, root_1, 1)]);
     scenario.seed_remote_shares(root_1, validator_index);
@@ -867,7 +1218,7 @@ async fn mismatched_callbacks_suppress_publication_but_inject_current_share() {
         &scenario.validator_key,
         ValidatorIndex(43),
         SyncSubnetId::new(0),
-        canonical,
+        canonical.clone(),
     );
     let other_pubkey = SecretKey::random().public_key().compress();
     let pubkey_mismatch_injections = scenario.manager.process_single_validator_batch(
@@ -888,10 +1239,81 @@ async fn mismatched_callbacks_suppress_publication_but_inject_current_share() {
             validator_index,
         },
     );
+    let mut unsupported_kind = scenario.metadata.clone();
+    unsupported_kind.kind = PartialSignatureKind::RandaoPartialSig;
+    let unsupported_kind_injections = process_batch(
+        &scenario.manager,
+        &unsupported_kind,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        validator_index,
+        SyncSubnetId::new(0),
+        descriptor(&[(0, root_0, 1)]),
+    );
+    let mut wrong_role = scenario.metadata.clone();
+    wrong_role.role = Role::Aggregator;
+    let wrong_role_injections = process_batch(
+        &scenario.manager,
+        &wrong_role,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        validator_index,
+        SyncSubnetId::new(0),
+        descriptor(&[(0, root_0, 1)]),
+    );
     assert_eq!(committee_injections.len(), 1);
     assert_eq!(index_injections.len(), 1);
     assert_eq!(pubkey_mismatch_injections.len(), 1);
+    assert_eq!(unsupported_kind_injections.len(), 1);
+    assert_eq!(wrong_role_injections.len(), 1);
     assert_eq!(sender.attempts(), 1);
+    assert_eq!(scenario.manager.single_validator_batches.len(), 1);
+    let record = scenario
+        .manager
+        .single_validator_batches
+        .get(&record_key)
+        .expect("mismatches should preserve the canonical pending record");
+    assert_eq!(*record.state.lock(), SingleValidatorBatchState::Pending);
+    assert_eq!(record.descriptor, canonical);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mismatched_callbacks_suppress_publication_but_inject_current_share() {
+    run_mismatched_callbacks(PartialSignatureKind::ContributionProofs).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mismatched_post_consensus_callbacks_suppress_publication_but_inject_current_share() {
+    run_mismatched_callbacks(PartialSignatureKind::PostConsensus).await;
+}
+
+#[test]
+fn post_consensus_callback_root_must_be_in_the_descriptor() {
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = PartialSignatureKind::PostConsensus;
+    let descriptor_root = Hash256::repeat_byte(0x58);
+    let callback_root = Hash256::repeat_byte(0x59);
+
+    let injections = process_batch_for_root(
+        &scenario.manager,
+        &scenario.metadata,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        callback_root,
+        descriptor(&[(0, descriptor_root, 1)]),
+    );
+
+    assert_eq!(injections.len(), 1);
+    assert_eq!(injections[0].signing_root, callback_root);
+    assert_eq!(
+        injections[0].partial_signature,
+        scenario.validator_key.sign(callback_root)
+    );
+    assert_eq!(sender.attempts(), 0);
+    assert!(scenario.manager.single_validator_batches.is_empty());
 }
 
 #[test]
@@ -935,6 +1357,122 @@ fn validator_and_slot_batch_records_are_isolated() {
     assert_eq!(sender.attempts(), 3);
     assert_eq!(sender.messages().len(), 3);
     assert_eq!(scenario.manager.single_validator_batches.len(), 3);
+}
+
+#[test]
+fn contribution_proof_and_post_consensus_records_are_isolated() {
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let type_three_root = Hash256::repeat_byte(0x68);
+    let type_zero_root = Hash256::repeat_byte(0x69);
+    let mut post_consensus = scenario.metadata.clone();
+    post_consensus.kind = PartialSignatureKind::PostConsensus;
+
+    process_batch(
+        &scenario.manager,
+        &scenario.metadata,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor(&[(0, type_three_root, 1)]),
+    );
+    process_batch(
+        &scenario.manager,
+        &post_consensus,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor(&[(0, type_zero_root, 1)]),
+    );
+
+    assert_eq!(scenario.manager.single_validator_batches.len(), 2);
+    assert!(
+        scenario
+            .manager
+            .single_validator_batches
+            .contains_key(&batch_key(&scenario.metadata, scenario.validator_pubkey))
+    );
+    assert!(
+        scenario
+            .manager
+            .single_validator_batches
+            .contains_key(&batch_key(&post_consensus, scenario.validator_pubkey))
+    );
+    let kinds = sender
+        .messages()
+        .iter()
+        .map(|unsigned| {
+            PartialSignatureMessages::from_ssz_bytes(unsigned.ssv_message.data())
+                .expect("phase-isolated batch should decode")
+                .kind
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            PartialSignatureKind::ContributionProofs,
+            PartialSignatureKind::PostConsensus
+        ]
+    );
+}
+
+#[test]
+fn cleanup_removes_pending_and_admitted_records_from_both_phases() {
+    let sender = Arc::new(RecordingMessageSender::new(1));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let descriptor = descriptor(&[(0, Hash256::repeat_byte(0x70), 1)]);
+    let mut stale = scenario.metadata.clone();
+    stale.slot = BATCH_TEST_SLOT - 2;
+    let mut stale_post_consensus = stale.clone();
+    stale_post_consensus.kind = PartialSignatureKind::PostConsensus;
+    scenario.manager.slot_clock.set_slot(stale.slot.as_u64());
+
+    process_batch(
+        &scenario.manager,
+        &stale,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor.clone(),
+    );
+    process_batch(
+        &scenario.manager,
+        &stale_post_consensus,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor.clone(),
+    );
+    scenario
+        .manager
+        .slot_clock
+        .set_slot(BATCH_TEST_SLOT.as_u64());
+    process_batch(
+        &scenario.manager,
+        &scenario.metadata,
+        scenario.validator_pubkey,
+        &scenario.validator_key,
+        ValidatorIndex(42),
+        SyncSubnetId::new(0),
+        descriptor,
+    );
+    assert_eq!(scenario.manager.single_validator_batches.len(), 3);
+
+    scenario
+        .manager
+        .remove_stale_entries(BATCH_TEST_SLOT.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS));
+
+    assert_eq!(scenario.manager.single_validator_batches.len(), 1);
+    assert!(
+        scenario
+            .manager
+            .single_validator_batches
+            .contains_key(&batch_key(&scenario.metadata, scenario.validator_pubkey))
+    );
 }
 
 #[test]
@@ -990,17 +1528,17 @@ fn cleanup_removes_pending_and_admitted_batch_records() {
         scenario
             .manager
             .single_validator_batches
-            .contains_key(&(BATCH_TEST_SLOT, scenario.validator_pubkey))
+            .contains_key(&batch_key(&scenario.metadata, scenario.validator_pubkey))
     );
 }
 
-#[test]
-fn stale_callback_after_cleanup_does_not_recreate_or_publish_batch() {
+fn run_stale_callback_after_cleanup(kind: PartialSignatureKind) {
     let sender = Arc::new(RecordingMessageSender::new(0));
-    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = kind;
     let signing_root = Hash256::repeat_byte(0x71);
     let descriptor = descriptor(&[(0, signing_root, 1)]);
-    let batch_key = (scenario.metadata.slot, scenario.validator_pubkey);
+    let batch_key = batch_key(&scenario.metadata, scenario.validator_pubkey);
 
     let initial_injections = process_batch(
         &scenario.manager,
@@ -1082,16 +1620,26 @@ fn stale_callback_after_cleanup_does_not_recreate_or_publish_batch() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn stale_sign_and_collect_does_not_recreate_cleaned_collectors() {
+#[test]
+fn stale_callback_after_cleanup_does_not_recreate_or_publish_batch() {
+    run_stale_callback_after_cleanup(PartialSignatureKind::ContributionProofs);
+}
+
+#[test]
+fn stale_post_consensus_callback_after_cleanup_does_not_recreate_or_publish_batch() {
+    run_stale_callback_after_cleanup(PartialSignatureKind::PostConsensus);
+}
+
+async fn run_stale_sign_and_collect(kind: PartialSignatureKind) {
     let sender = Arc::new(RecordingMessageSender::new(0));
-    let scenario =
+    let mut scenario =
         BatchScenario::new_with_max_workers(Arc::clone(&sender) as Arc<dyn MessageSender>, 1);
+    scenario.metadata.kind = kind;
     let validator_index = ValidatorIndex(42);
     let signing_root = Hash256::repeat_byte(0x72);
     let descriptor = descriptor(&[(0, signing_root, 1)]);
     let collector_key = (signing_root, validator_index);
-    let batch_key = (scenario.metadata.slot, scenario.validator_pubkey);
+    let batch_key = batch_key(&scenario.metadata, scenario.validator_pubkey);
 
     drop(
         scenario
@@ -1138,39 +1686,7 @@ async fn stale_sign_and_collect_does_not_recreate_cleaned_collectors() {
     .expect("stale notifier should be dropped promptly");
     assert!(matches!(result, Err(CollectionError::QueueClosedError)));
 
-    let (urgent_done_tx, urgent_done_rx) = oneshot::channel();
-    scenario
-        .manager
-        .processor
-        .urgent_consensus
-        .send_blocking(
-            move || {
-                let _ = urgent_done_tx.send(());
-            },
-            "stale_batch_urgent_barrier",
-        )
-        .expect("urgent barrier should enter the processor");
-    tokio::time::timeout(Duration::from_secs(5), urgent_done_rx)
-        .await
-        .expect("urgent barrier should run promptly")
-        .expect("urgent barrier should signal completion");
-
-    let (permitless_done_tx, permitless_done_rx) = oneshot::channel();
-    scenario
-        .manager
-        .processor
-        .permitless
-        .send_immediate(
-            move |_drop_on_finish| {
-                let _ = permitless_done_tx.send(());
-            },
-            "stale_batch_permitless_barrier",
-        )
-        .expect("permitless barrier should enter the processor");
-    tokio::time::timeout(Duration::from_secs(5), permitless_done_rx)
-        .await
-        .expect("permitless barrier should run promptly")
-        .expect("permitless barrier should signal completion");
+    drain_batch_processor_work(&scenario.manager).await;
 
     assert_eq!(sender.attempts(), 0);
     assert!(
@@ -1185,6 +1701,16 @@ async fn stale_sign_and_collect_does_not_recreate_cleaned_collectors() {
             .single_validator_batches
             .contains_key(&batch_key)
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_sign_and_collect_does_not_recreate_cleaned_collectors() {
+    run_stale_sign_and_collect(PartialSignatureKind::ContributionProofs).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_post_consensus_sign_and_collect_does_not_recreate_cleaned_collectors() {
+    run_stale_sign_and_collect(PartialSignatureKind::PostConsensus).await;
 }
 
 #[tokio::test]
