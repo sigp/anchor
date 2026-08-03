@@ -85,6 +85,24 @@ struct QueryResult {
     result: Result<Vec<Enr>, discv5::QueryError>,
 }
 
+/// Returns `true` when the ENR has a valid main `domaintype` and either its main
+/// or optional `next_domaintype` matches the current domain.
+fn enr_matches_current_domain(enr: &Enr, current_domain: DomainType) -> bool {
+    let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") else {
+        trace!(?enr, "Rejecting ENR with missing domaintype");
+        return false;
+    };
+
+    // Some clients keep the main domain static across a fork and advertise the active
+    // post-fork domain as their next domain. The exact NodeInfo check remains authoritative
+    // for newly dialed peers and disconnects domain mismatches.
+    domain_type == current_domain.0
+        || matches!(
+            enr.get_decodable::<[u8; 4]>("next_domaintype"),
+            Some(Ok(next_domain_type)) if next_domain_type == current_domain.0
+        )
+}
+
 #[derive(Debug, Clone)]
 pub struct DiscoveredPeers {
     pub peers: Vec<Enr>,
@@ -467,12 +485,8 @@ impl Discovery {
         let lifecycle_rx = self.lifecycle_rx.clone();
 
         let domain_type_predicate = move |enr: &Enr| {
-            if let Some(Ok(domain_type)) = enr.get_decodable::<[u8; 4]>("domaintype") {
-                lifecycle_rx.borrow().current_fork_config().domain_type.0 == domain_type
-            } else {
-                trace!(?enr, "Rejecting ENR with missing domaintype");
-                false
-            }
+            let current_domain = lifecycle_rx.borrow().current_fork_config().domain_type;
+            enr_matches_current_domain(enr, current_domain)
         };
 
         // General predicate
@@ -768,5 +782,80 @@ pub fn subnet_predicate(subnets: Vec<SubnetId>) -> impl Fn(&Enr) -> bool + Send 
             );
         }
         predicate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOMAIN_A: DomainType = DomainType([0, 0, 0, 1]);
+    const DOMAIN_B: DomainType = DomainType([0, 0, 0, 2]);
+    const DOMAIN_C: DomainType = DomainType([0, 0, 0, 3]);
+    const MALFORMED_DOMAIN: [u8; 3] = [0, 0, 2];
+
+    fn test_enr(main_domain: Option<&[u8]>, next_domain: Option<&[u8]>) -> Enr {
+        let key = CombinedKey::generate_secp256k1();
+        let mut builder = Enr::builder();
+
+        if let Some(domain) = main_domain {
+            builder.add_value("domaintype", &Bytes::copy_from_slice(domain));
+        }
+        if let Some(domain) = next_domain {
+            builder.add_value("next_domaintype", &Bytes::copy_from_slice(domain));
+        }
+
+        builder.build(&key).expect("test ENR should build")
+    }
+
+    #[test]
+    fn test_enr_matches_current_domain_accepts_go_ssv_next_domain() {
+        let enr = test_enr(Some(&DOMAIN_A.0), Some(&DOMAIN_B.0));
+
+        assert!(enr_matches_current_domain(&enr, DOMAIN_B));
+    }
+
+    #[test]
+    fn test_enr_matches_current_domain_accepts_current_main_without_valid_next() {
+        let cases = [
+            (None, "missing next domain"),
+            (Some(DOMAIN_C.0.as_slice()), "non-matching next domain"),
+            (Some(MALFORMED_DOMAIN.as_slice()), "malformed next domain"),
+        ];
+
+        for (next_domain, description) in cases {
+            let enr = test_enr(Some(&DOMAIN_B.0), next_domain);
+
+            assert!(enr_matches_current_domain(&enr, DOMAIN_B), "{description}");
+        }
+    }
+
+    #[test]
+    fn test_enr_matches_current_domain_rejects_invalid_or_nonmatching_fields() {
+        let cases = [
+            (Some(DOMAIN_A.0.as_slice()), None, "missing next domain"),
+            (
+                Some(DOMAIN_A.0.as_slice()),
+                Some(DOMAIN_C.0.as_slice()),
+                "non-matching domains",
+            ),
+            (
+                Some(DOMAIN_A.0.as_slice()),
+                Some(MALFORMED_DOMAIN.as_slice()),
+                "malformed next domain",
+            ),
+            (None, Some(DOMAIN_B.0.as_slice()), "missing main domain"),
+            (
+                Some(MALFORMED_DOMAIN.as_slice()),
+                Some(DOMAIN_B.0.as_slice()),
+                "malformed main domain",
+            ),
+        ];
+
+        for (main_domain, next_domain, description) in cases {
+            let enr = test_enr(main_domain, next_domain);
+
+            assert!(!enr_matches_current_domain(&enr, DOMAIN_B), "{description}");
+        }
     }
 }
