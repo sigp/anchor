@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use duties_tracker::DutiesProvider;
+use libp2p::PeerId;
 use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
@@ -23,6 +24,7 @@ pub(crate) fn validate_partial_signature_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
+    received_from: Option<PeerId>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     // Decode message directly to PartialSignatureMessages
     let messages = match PartialSignatureMessages::from_ssz_bytes(
@@ -75,6 +77,7 @@ pub(crate) fn validate_partial_signature_message(
         &messages,
         signer,
         validation_context.slots_per_epoch,
+        received_from,
     )?;
 
     Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))

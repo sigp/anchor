@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+use libp2p::PeerId;
 use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
@@ -102,6 +103,7 @@ impl DutyState {
         partial_signature_messages: &PartialSignatureMessages,
         signer: &OperatorId,
         slots_per_epoch: u64,
+        received_from: Option<PeerId>,
     ) -> Result<(), ValidationFailure> {
         let operator_state = self.get_or_create_operator(signer);
         let message_slot = partial_signature_messages.slot;
@@ -132,12 +134,16 @@ impl DutyState {
                 .first()
                 .ok_or(ValidationFailure::NoPartialSignatureMessages)?
                 .signing_root;
-            // Duplicate identity takes precedence over capacity: an already-seen root is a
-            // Reject-class DuplicatedMessage even once the distinct-root set is full, whereas only
-            // a NEW root beyond the cap is the Ignore-class TooManyDistinctSigningRoots (SIP-94
-            // §7).
-            if signer_state.seen_preferences.contains(&root) {
-                return Err(ValidationFailure::DuplicatedMessage {
+            // Same-peer repeat is spam (Reject); a relay of a seen root from another peer, or of
+            // our own emission, is not (Ignore). Membership is checked before capacity so a
+            // same-peer repeat stays Reject even when the set is full.
+            if let Some(first_deliverer) = signer_state.seen_preferences.get(&root) {
+                if received_from.is_some() && *first_deliverer == received_from {
+                    return Err(ValidationFailure::DuplicatedMessage {
+                        got: format!("proposer-preferences root {root:?}"),
+                    });
+                }
+                return Err(ValidationFailure::RelayedDuplicateMessage {
                     got: format!("proposer-preferences root {root:?}"),
                 });
             }
@@ -149,7 +155,7 @@ impl DutyState {
                     ),
                 });
             }
-            signer_state.seen_preferences.insert(root);
+            signer_state.seen_preferences.insert(root, received_from);
         }
 
         // Record the partial signature (only once)
@@ -332,9 +338,10 @@ pub(crate) struct SignerState {
     pub(crate) proposal_hash: Option<[u8; 32]>,
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
-    /// Distinct ProposerPreferences signing roots already seen for this
-    /// (MessageId, operator, slot), used to reject exact-duplicate resends.
-    seen_preferences: HashSet<Hash256>,
+    /// Accepted ProposerPreferences signing roots for this (MessageId, operator, slot), each
+    /// mapped to its first deliverer (`None` = our own emission), to classify a repeat as a
+    /// same-peer duplicate (Reject) or a relay (Ignore).
+    seen_preferences: HashMap<Hash256, Option<PeerId>>,
 }
 
 impl SignerState {
@@ -346,7 +353,7 @@ impl SignerState {
             message_counts: MessageCounts::default(),
             proposal_hash: None,
             seen_signers: HashSet::new(),
-            seen_preferences: HashSet::new(),
+            seen_preferences: HashMap::new(),
         }
     }
 
