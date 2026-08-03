@@ -66,6 +66,7 @@ pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 
 pub(super) struct CapturedSignatureCall {
     pub(super) requester: SignatureRequester,
+    pub(super) validator_pubkey: PublicKeyBytes,
 }
 
 /// Mock that captures calls and returns a canned infinity signature.
@@ -78,11 +79,12 @@ impl SignatureCollecting for MockSignatureCollector {
         &self,
         _metadata: SignatureMetadata,
         requester: SignatureRequester,
-        _signing_data: ValidatorSigningData,
+        signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
-        self.captured
-            .lock()
-            .push(CapturedSignatureCall { requester });
+        self.captured.lock().push(CapturedSignatureCall {
+            requester,
+            validator_pubkey: signing_data.validator_pubkey,
+        });
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
     }

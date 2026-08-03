@@ -575,6 +575,7 @@ impl Client {
         let signature_collector = SignatureCollectorManager::new(
             processor_senders.clone(),
             operator_id.clone(),
+            database.clone(),
             fork_schedule.clone(),
             E::slots_per_epoch(),
             message_sender.clone(),
