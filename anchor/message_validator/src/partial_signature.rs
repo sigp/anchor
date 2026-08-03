@@ -600,6 +600,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -653,6 +654,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -696,6 +698,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -739,6 +742,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -782,6 +786,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -824,6 +829,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert!(
@@ -877,6 +883,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -926,6 +933,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert!(
@@ -978,6 +986,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert!(
@@ -1056,6 +1065,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         )
     }
 
@@ -1104,6 +1114,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -1216,6 +1227,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -1336,6 +1348,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -1374,6 +1387,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -1419,6 +1433,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -1470,6 +1485,7 @@ mod tests {
                 voluntary_exit_duty_count: 1,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -1552,7 +1568,7 @@ mod tests {
             .unwrap(),
         };
         duty_state
-            .update_for_partial_signature(&dummy_messages, &signer_id, 32)
+            .update_for_partial_signature(&dummy_messages, &signer_id, 32, None)
             .unwrap();
 
         // Now validate a message for slot 1 (which is "old")
@@ -1563,6 +1579,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Should succeed because AggregatorCommittee skips the slot advancement check
@@ -1649,6 +1666,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert!(
@@ -1718,6 +1736,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -1805,6 +1824,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -1950,6 +1970,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert!(result.is_ok(), "Expected ok but got: {result:?}");
@@ -1988,6 +2009,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -2175,6 +2197,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -2229,6 +2252,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert!(result.is_ok(), "Expected ok but got: {result:?}");
@@ -2264,6 +2288,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -2317,6 +2342,67 @@ mod tests {
                 signer: signer_id,
                 // ValidatorIndex(0) is in the test committee's validator_indices.
                 validator_index: ValidatorIndex(0),
+            }])
+            .unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::ProposerPreferences);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
+    }
+
+    /// Builds a ProposerPreferences packet whose RSA signature is produced with the WRONG key,
+    /// so it fails `verify_message_signature`. Everything else (role, slot, signing_root,
+    /// validator_index) is well-formed, so validation reaches — and fails at — the RSA check,
+    /// which sits AFTER semantics/duty logic but BEFORE `update_for_partial_signature`. Used to
+    /// prove a signature-invalid packet never poisons `seen_preferences`.
+    fn create_bad_signature_proposer_preferences_message(
+        signer_id: OperatorId,
+        wrong_key: &Rsa<Private>,
+        proposal_slot: Slot,
+        signing_root: Hash256,
+    ) -> SignedSSVMessage {
+        // Reuse the well-formed constructor, then swap in a signature from the wrong key.
+        create_signed_proposer_preferences_message(
+            signer_id,
+            wrong_key,
+            proposal_slot,
+            signing_root,
+        )
+    }
+
+    /// Builds a semantically-invalid ProposerPreferences packet: the `validator_index` is not in
+    /// the test committee's `validator_indices`, so `validate_partial_signature_message_semantics`
+    /// rejects it with `ValidatorIndexMismatch` — again BEFORE `update_for_partial_signature`.
+    /// Signed with `private_key` so the failure is purely the semantic one, not a signature error.
+    fn create_semantically_invalid_proposer_preferences_message(
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+        proposal_slot: Slot,
+        signing_root: Hash256,
+    ) -> SignedSSVMessage {
+        // ValidatorIndex(999) is absent from the four-node test committee's validator_indices.
+        const UNKNOWN_VALIDATOR_INDEX: ValidatorIndex = ValidatorIndex(999);
+
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::ProposerPreferences,
+            slot: proposal_slot,
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root,
+                signer: signer_id,
+                validator_index: UNKNOWN_VALIDATOR_INDEX,
             }])
             .unwrap(),
         };
@@ -2410,6 +2496,39 @@ mod tests {
     /// Start-of-slot time for a genesis-slot-0 clock: `genesis + slot * slot_duration`.
     fn proposer_preferences_slot_start(genesis: SystemTime, slot: u64) -> SystemTime {
         genesis + PROPOSER_PREFERENCES_SLOT_DURATION * (slot as u32)
+    }
+
+    // ==================== ProposerPreferences per-peer dedup helpers ====================
+
+    /// Deterministic seed bytes for the three distinct test peers. Each seed is a valid
+    /// secp256k1 secret key (any 32 non-zero bytes below the curve order qualifies), so the
+    /// derived `PeerId`s are stable across runs and pairwise distinct.
+    const PEER_A_SEED: [u8; 32] = [0x11; 32];
+    const PEER_B_SEED: [u8; 32] = [0x22; 32];
+    const PEER_C_SEED: [u8; 32] = [0x33; 32];
+
+    /// Derives a deterministic `PeerId` from fixed secret-key bytes via a secp256k1 keypair
+    /// (the only key type this build's `libp2p` features enable). Mirrors the production
+    /// `secp256k1::SecretKey::try_from_bytes` path in `network::keypair_utils`.
+    fn deterministic_peer_id(seed: [u8; 32]) -> PeerId {
+        use libp2p::identity::{Keypair, secp256k1};
+        let mut bytes = seed;
+        let secret = secp256k1::SecretKey::try_from_bytes(&mut bytes)
+            .expect("fixed seed must be a valid secp256k1 secret key");
+        let keypair: Keypair = secp256k1::Keypair::from(secret).into();
+        keypair.public().to_peer_id()
+    }
+
+    fn peer_a() -> PeerId {
+        deterministic_peer_id(PEER_A_SEED)
+    }
+
+    fn peer_b() -> PeerId {
+        deterministic_peer_id(PEER_B_SEED)
+    }
+
+    fn peer_c() -> PeerId {
+        deterministic_peer_id(PEER_C_SEED)
     }
 
     #[test]
@@ -2525,6 +2644,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -2557,6 +2677,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -2608,6 +2729,7 @@ mod tests {
             validation_context,
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -2655,6 +2777,7 @@ mod tests {
             validation_context,
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -2716,6 +2839,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -2770,6 +2894,7 @@ mod tests {
             validation_context,
             &mut DutyState::new(ring),
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert: accepted; specifically NOT rejected as early.
@@ -2807,6 +2932,7 @@ mod tests {
             validation_context,
             &mut DutyState::new(ring),
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -2863,6 +2989,7 @@ mod tests {
             validation_context,
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -2895,6 +3022,7 @@ mod tests {
             ctx,
             &mut DutyState::new(64),
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         assert_validation_error(
@@ -2933,6 +3061,7 @@ mod tests {
             context_a,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
         assert!(
             result_a.is_ok(),
@@ -2952,6 +3081,7 @@ mod tests {
             context_b,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert: the second distinct root is also accepted (NOT falsely rejected
@@ -2989,17 +3119,20 @@ mod tests {
             &map,
             proposal_slot,
         );
+        // The exact resend below must classify as a SAME-PEER duplicate (Reject), so both the
+        // first send and the duplicate come from the same peer.
         let result_first = validate_partial_signature_message(
             context_first,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            Some(peer_a()),
         );
         assert!(
             result_first.is_ok(),
             "Expected first packet to be accepted, got: {result_first:?}"
         );
 
-        // Second packet: EXACT-DUPLICATE root R at the SAME proposal_slot.
+        // Second packet: EXACT-DUPLICATE root R at the SAME proposal_slot from the SAME peer.
         let signed_dup = create_signed_proposer_preferences_message(
             signer_id,
             &private_key,
@@ -3012,6 +3145,7 @@ mod tests {
             context_dup,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            Some(peer_a()),
         );
 
         // Assert
@@ -3039,7 +3173,8 @@ mod tests {
         let proposal_slot = Slot::new(1);
         let mut duty_state = DutyState::new(64);
 
-        // Feed `CAP` distinct roots; all must be accepted.
+        // Feed `CAP` distinct roots; all must be accepted. The FIRST root is delivered by
+        // `peer_a` so the later same-peer resend of it classifies as a Reject-class duplicate.
         for i in 0..CAP {
             let mut root_bytes = [0u8; 32];
             root_bytes[0..8].copy_from_slice(&(i as u64).to_le_bytes());
@@ -3055,6 +3190,7 @@ mod tests {
                 context,
                 &mut duty_state,
                 Arc::new(MockDutiesProvider::default()),
+                Some(peer_a()),
             );
             assert!(
                 result.is_ok(),
@@ -3062,9 +3198,9 @@ mod tests {
             );
         }
 
-        // While the set is exactly full (CAP distinct roots), a resend of the FIRST already-seen
-        // root must be a Reject-class `DuplicatedMessage` — identity takes precedence over the cap,
-        // NOT the Ignore-class `TooManyDistinctSigningRoots`.
+        // While the set is exactly full (CAP distinct roots), a SAME-PEER resend of the FIRST
+        // already-seen root must be a Reject-class `DuplicatedMessage` — identity takes precedence
+        // over the cap, NOT the Ignore-class `TooManyDistinctSigningRoots`.
         let mut first_root_bytes = [0u8; 32];
         first_root_bytes[0..8].copy_from_slice(&0u64.to_le_bytes());
         let signed_dup = create_signed_proposer_preferences_message(
@@ -3079,6 +3215,7 @@ mod tests {
             context_dup,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            Some(peer_a()),
         );
         assert_validation_error(
             result_dup,
@@ -3112,6 +3249,7 @@ mod tests {
             context_over,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -3124,6 +3262,519 @@ mod tests {
                 )
             },
             "TooManyDistinctSigningRoots (ProposerPreferences distinct-root cap exceeded)",
+        );
+    }
+
+    // ============ ProposerPreferences per-peer dedup matrix (#1131) ============
+    //
+    // Each test below pins ONE acceptance criterion of the per-peer classification in
+    // `DutyState::update_for_partial_signature`:
+    //   - root present & stored-first-deliverer == received_from & received_from.is_some() ->
+    //     `DuplicatedMessage` (Reject)     [same peer resends]
+    //   - root present otherwise -> `RelayedDuplicateMessage` (Ignore) [another peer, or our own
+    //     `None` emission]
+    //   - root absent & set at cap -> `TooManyDistinctSigningRoots` (Ignore)
+    //   - otherwise insert + Accept
+    // Membership is checked before capacity, so identity always wins over the cap. The map is
+    // populated ONLY on accept (after RSA verify + semantics).
+
+    /// A shared `MessageId`/operator/proposal_slot keeps every packet in these tests targeting the
+    /// SAME `seen_preferences` set, so classification depends only on (root, received_from).
+    const DEDUP_SIGNER: OperatorId = OperatorId(1);
+
+    /// Signs, contextualizes, and validates one ProposerPreferences packet for `root` delivered by
+    /// `received_from`, against the shared `duty_state`. Centralizes the repeated construction so
+    /// each matrix test reads as a sequence of deliveries.
+    fn deliver_proposer_preference(
+        duty_state: &mut DutyState,
+        committee_info: &crate::CommitteeInfo,
+        map: &HashMap<OperatorId, Rsa<Public>>,
+        private_key: &Rsa<Private>,
+        proposal_slot: Slot,
+        root: Hash256,
+        received_from: Option<PeerId>,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let signed = create_signed_proposer_preferences_message(
+            DEDUP_SIGNER,
+            private_key,
+            proposal_slot,
+            root,
+        );
+        let context =
+            create_proposer_preferences_context(&signed, committee_info, map, proposal_slot);
+        validate_partial_signature_message(
+            context,
+            duty_state,
+            Arc::new(MockDutiesProvider::default()),
+            received_from,
+        )
+    }
+
+    /// Root-byte helper: distinct low byte -> distinct signing root, all other bytes zero.
+    fn dedup_root(tag: u8) -> Hash256 {
+        Hash256::from([tag; 32])
+    }
+
+    // ---- Criterion 1: first delivery from a peer is accepted. ----
+    #[test]
+    fn test_proposer_preferences_peer_a_first_root_accepted() {
+        // Arrange
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let mut duty_state = DutyState::new(64);
+
+        // Act: peer A delivers root R for the first time.
+        let result = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            dedup_root(0xA1),
+            Some(peer_a()),
+        );
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "Expected first delivery of root R from peer A to be accepted, got: {result:?}"
+        );
+    }
+
+    // ---- Criterion 2: same peer repeats the same root -> DuplicatedMessage (Reject). ----
+    #[test]
+    fn test_proposer_preferences_peer_a_repeat_root_rejected_as_duplicate() {
+        // Arrange
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let root = dedup_root(0xA2);
+        let mut duty_state = DutyState::new(64);
+
+        let first = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_a()),
+        );
+        assert!(
+            first.is_ok(),
+            "Setup: first delivery must be accepted, got: {first:?}"
+        );
+
+        // Act: peer A resends the SAME root R.
+        let repeat = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_a()),
+        );
+
+        // Assert: same-peer resend is spam -> DuplicatedMessage, which maps to Reject.
+        assert_validation_error(
+            repeat,
+            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
+            "DuplicatedMessage (peer A repeats its own root R)",
+        );
+        assert!(
+            matches!(
+                MessageAcceptance::from(&ValidationFailure::DuplicatedMessage {
+                    got: String::new()
+                }),
+                MessageAcceptance::Reject
+            ),
+            "DuplicatedMessage must map to Reject"
+        );
+    }
+
+    // ---- Criterion 3: a different peer relays a seen root -> RelayedDuplicateMessage (Ignore).
+    // ----
+    #[test]
+    fn test_proposer_preferences_peer_b_relay_root_ignored_as_relayed_duplicate() {
+        // Arrange
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let root = dedup_root(0xB3);
+        let mut duty_state = DutyState::new(64);
+
+        let first = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_a()),
+        );
+        assert!(
+            first.is_ok(),
+            "Setup: peer A delivery must be accepted, got: {first:?}"
+        );
+
+        // Act: peer B relays the SAME root R that peer A first delivered.
+        let relayed = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_b()),
+        );
+
+        // Assert: a different peer's relay of a seen root is not spam -> RelayedDuplicateMessage,
+        // which maps to Ignore (NOT Reject).
+        assert_validation_error(
+            relayed,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (peer B relays peer A's root R)",
+        );
+        assert!(
+            matches!(
+                MessageAcceptance::from(&ValidationFailure::RelayedDuplicateMessage {
+                    got: String::new()
+                }),
+                MessageAcceptance::Ignore
+            ),
+            "RelayedDuplicateMessage must map to Ignore"
+        );
+    }
+
+    // ---- Criterion 4: cap distinct roots accepted; one more -> TooManyDistinctSigningRoots. ----
+    #[test]
+    fn test_proposer_preferences_distinct_root_cap_then_over_cap_ignored() {
+        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST as CAP;
+
+        // Arrange
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let mut duty_state = DutyState::new(64);
+
+        // Act + Assert: CAP distinct roots, each from a distinct-enough delivery, all accepted.
+        for i in 0..CAP {
+            let result = deliver_proposer_preference(
+                &mut duty_state,
+                &committee_info,
+                &map,
+                &private_key,
+                proposal_slot,
+                dedup_root(i as u8),
+                Some(peer_a()),
+            );
+            assert!(
+                result.is_ok(),
+                "Expected distinct root #{i} (within cap {CAP}) to be accepted, got: {result:?}"
+            );
+        }
+
+        // Act: one MORE distinct root (never seen) exceeds the cap.
+        let over_cap = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            dedup_root(CAP as u8),
+            Some(peer_b()),
+        );
+
+        // Assert: over-cap distinct root -> TooManyDistinctSigningRoots (Ignore).
+        assert_validation_error(
+            over_cap,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyDistinctSigningRoots { .. }
+                )
+            },
+            "TooManyDistinctSigningRoots (5th distinct root exceeds cap of 4)",
+        );
+    }
+
+    // ---- Criterion 5: with cap full, identity classification still wins over the cap. ----
+    #[test]
+    fn test_proposer_preferences_full_cap_identity_precedes_capacity() {
+        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST as CAP;
+
+        // Arrange: fill the set to exactly CAP. Root 0 is delivered by peer A so its resend is a
+        // same-peer duplicate; peer B will later relay it.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let mut duty_state = DutyState::new(64);
+
+        for i in 0..CAP {
+            let result = deliver_proposer_preference(
+                &mut duty_state,
+                &committee_info,
+                &map,
+                &private_key,
+                proposal_slot,
+                dedup_root(i as u8),
+                Some(peer_a()),
+            );
+            assert!(
+                result.is_ok(),
+                "Setup: distinct root #{i} within cap {CAP} must be accepted, got: {result:?}"
+            );
+        }
+
+        // Act 1 + Assert: same-peer (A) resend of the already-seen root 0, while the set is FULL,
+        // is still DuplicatedMessage (Reject) — membership is checked before capacity.
+        let same_peer_repeat = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            dedup_root(0),
+            Some(peer_a()),
+        );
+        assert_validation_error(
+            same_peer_repeat,
+            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
+            "DuplicatedMessage (full cap: same-peer resend still Reject, identity beats capacity)",
+        );
+
+        // Act 2 + Assert: different-peer (B) relay of the already-seen root 0, while the set is
+        // FULL, is still RelayedDuplicateMessage (Ignore) — again membership beats capacity.
+        let relay_repeat = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            dedup_root(0),
+            Some(peer_b()),
+        );
+        assert_validation_error(
+            relay_repeat,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (full cap: different-peer relay still Ignore)",
+        );
+    }
+
+    // ---- Criterion 6: signature-invalid and semantics-invalid packets never poison the map. ----
+    #[test]
+    fn test_proposer_preferences_invalid_packets_do_not_poison_seen_preferences() {
+        // Arrange: `private_key`/`public_key` is the committee operator's real key. `wrong_key` is
+        // an unrelated key used to forge a signature that fails RSA verification.
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let (wrong_key, _wrong_public) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let root = dedup_root(0xC6);
+        let mut duty_state = DutyState::new(64);
+
+        // Act 1: an RSA-invalid packet for root R goes through the FULL validation path.
+        let bad_sig_msg = create_bad_signature_proposer_preferences_message(
+            DEDUP_SIGNER,
+            &wrong_key,
+            proposal_slot,
+            root,
+        );
+        let bad_sig_context =
+            create_proposer_preferences_context(&bad_sig_msg, &committee_info, &map, proposal_slot);
+        let bad_sig_result = validate_partial_signature_message(
+            bad_sig_context,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+            Some(peer_a()),
+        );
+        assert_validation_error(
+            bad_sig_result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::SignatureVerificationFailed { .. }
+                )
+            },
+            "SignatureVerificationFailed (forged signature for root R)",
+        );
+
+        // Act 2: a semantically-invalid packet (unknown validator_index) for the same root R.
+        let bad_semantics_msg = create_semantically_invalid_proposer_preferences_message(
+            DEDUP_SIGNER,
+            &private_key,
+            proposal_slot,
+            root,
+        );
+        let bad_semantics_context = create_proposer_preferences_context(
+            &bad_semantics_msg,
+            &committee_info,
+            &map,
+            proposal_slot,
+        );
+        let bad_semantics_result = validate_partial_signature_message(
+            bad_semantics_context,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+            Some(peer_a()),
+        );
+        assert_validation_error(
+            bad_semantics_result,
+            |failure| matches!(failure, ValidationFailure::ValidatorIndexMismatch),
+            "ValidatorIndexMismatch (unknown validator_index for root R)",
+        );
+
+        // Assert: neither invalid packet populated `seen_preferences`, so an honest first delivery
+        // of root R by peer A is ACCEPTED (not falsely classified as a duplicate).
+        let honest = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_a()),
+        );
+        assert!(
+            honest.is_ok(),
+            "Expected honest first delivery of root R after invalid packets to be accepted \
+             (map must not be poisoned), got: {honest:?}"
+        );
+    }
+
+    // ---- Criterion 7: own emission (`None`) is never Reject; relays/None repeats are Ignore. ----
+    #[test]
+    fn test_proposer_preferences_own_emission_then_relay_never_rejected() {
+        // Arrange
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let root = dedup_root(0xD7);
+        let mut duty_state = DutyState::new(64);
+
+        // Own emission: received_from = None stores the root with a `None` first-deliverer.
+        let own = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            None,
+        );
+        assert!(
+            own.is_ok(),
+            "Setup: own emission (None) must be accepted, got: {own:?}"
+        );
+
+        // Act 1: peer B relays the root we emitted. Stored first-deliverer is `None`, incoming is
+        // `Some(peer_b)`, so this is RelayedDuplicateMessage (Ignore) — crucially NOT Reject.
+        let relayed = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_b()),
+        );
+        assert_validation_error(
+            relayed,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (peer B relays our own emission — never Reject)",
+        );
+
+        // Act 2: a second own emission (None again) of the same root. `received_from.is_some()` is
+        // false, so the same-peer Reject branch cannot fire; this is also Ignore.
+        let own_again = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            None,
+        );
+        assert_validation_error(
+            own_again,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (None then None — own re-emission is never Reject)",
+        );
+    }
+
+    // ---- Criterion 8: double-relay by two distinct peers -> both Ignore. ----
+    #[test]
+    fn test_proposer_preferences_double_relay_both_ignored() {
+        // Arrange: peer A first delivers root R (accepted).
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let proposal_slot = Slot::new(1);
+        let root = dedup_root(0xE8);
+        let mut duty_state = DutyState::new(64);
+
+        let first = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_a()),
+        );
+        assert!(
+            first.is_ok(),
+            "Setup: peer A first delivery must be accepted, got: {first:?}"
+        );
+
+        // Act 1 + Assert: peer B relays R -> Ignore.
+        let relay_b = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_b()),
+        );
+        assert_validation_error(
+            relay_b,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (peer B relays root R)",
+        );
+
+        // Act 2 + Assert: peer C then relays R -> also Ignore. The stored first-deliverer remains
+        // peer A, so a third distinct peer is still a relayed duplicate, never Reject.
+        let relay_c = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            root,
+            Some(peer_c()),
+        );
+        assert_validation_error(
+            relay_c,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (peer C relays root R after peer B)",
         );
     }
 
@@ -3165,6 +3816,7 @@ mod tests {
             context_later,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
         assert!(
             result_later.is_ok(),
@@ -3189,6 +3841,7 @@ mod tests {
             context_earlier,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -3225,7 +3878,7 @@ mod tests {
             .unwrap(),
         };
         duty_state
-            .update_for_partial_signature(&dummy, &signer_id, SLOTS_PER_EPOCH_TEST)
+            .update_for_partial_signature(&dummy, &signer_id, SLOTS_PER_EPOCH_TEST, None)
             .unwrap();
 
         // Now an Aggregator message for an EARLIER slot (2) must be rejected.
@@ -3276,6 +3929,7 @@ mod tests {
             validation_context,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert
@@ -3326,6 +3980,7 @@ mod tests {
                 ),
                 ..Default::default()
             }),
+            None,
         )
     }
 
@@ -3410,6 +4065,7 @@ mod tests {
                 proposer_assignment,
                 ..Default::default()
             }),
+            None,
         )
     }
 
@@ -3466,6 +4122,7 @@ mod tests {
                 proposer_assignment,
                 ..Default::default()
             }),
+            None,
         )
     }
 
@@ -3644,11 +4301,14 @@ mod tests {
             Hash256::from([0xA1; 32]),
         );
         let ctx_s1 = create_proposer_preferences_context(&signed_s1, &committee_info, &map, slot_s);
+        // Deliver the first `0xA1` root from `peer_a` so the same-peer exact-duplicate resend
+        // below stays a Reject-class `DuplicatedMessage`.
         assert!(
             validate_partial_signature_message(
                 ctx_s1,
                 &mut duty_state,
                 Arc::new(MockDutiesProvider::default()),
+                Some(peer_a()),
             )
             .is_ok(),
             "Expected first root at slot S to be accepted"
@@ -3669,6 +4329,7 @@ mod tests {
                 ctx_far,
                 &mut duty_state,
                 Arc::new(MockDutiesProvider::default()),
+                None,
             )
             .is_ok(),
             "Expected root at far slot S + 2*spe to be accepted"
@@ -3687,6 +4348,7 @@ mod tests {
             ctx_s2,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert: accepted as a genuinely new distinct root (state preserved), not treated as
@@ -3711,6 +4373,7 @@ mod tests {
             ctx_dup,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            Some(peer_a()),
         );
         assert_validation_error(
             result_dup,
@@ -3751,6 +4414,7 @@ mod tests {
                 voluntary_exit_duty_count: 1,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert
@@ -3794,6 +4458,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         // Assert - Should be rejected after Boole
@@ -3946,6 +4611,7 @@ mod tests {
             partial_sig_context,
             &mut shared_duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         assert!(
@@ -4001,6 +4667,7 @@ mod tests {
             validation_context,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         // Assert: Must be rejected as SlotAlreadyAdvanced.
@@ -4035,7 +4702,7 @@ mod tests {
             PartialSignatureMessages::from_ssz_bytes(dummy_partial_sig.ssv_message().data())
                 .expect("dummy envelope message must decode");
         duty_state
-            .update_for_partial_signature(&messages, &OperatorId(1), SLOTS_PER_EPOCH_TEST)
+            .update_for_partial_signature(&messages, &OperatorId(1), SLOTS_PER_EPOCH_TEST, None)
             .expect("seeding partial-signature state must succeed");
 
         // Arrange: Consensus message at height 5 (lower than 10).
@@ -4108,6 +4775,7 @@ mod tests {
             first_context,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
         assert!(
             first_result.is_ok(),
@@ -4131,6 +4799,7 @@ mod tests {
             second_context,
             &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
+            None,
         );
 
         assert_validation_error(
