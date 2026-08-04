@@ -131,6 +131,8 @@ pub fn aggregator_committee_validation_error_code(err: AggregatorCommitteeValida
         E::SyncSubcommitteeUnusedIndex => AGG_COMM_SC_SUBNET_UNUSED,
         E::NoValidatorsAssigned => AGG_COMM_NO_VALIDATORS,
         E::AttestationDecodeError(_) => AGG_COMM_ATTESTATION_DECODE,
+        // Anchor-specific version binding (SIP-94 §2); no Go equivalent.
+        E::VersionMismatch { .. } => UNMAPPED_ERROR_CODE,
     }
 }
 

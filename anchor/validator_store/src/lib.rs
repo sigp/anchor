@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use bls::{PublicKeyBytes, SecretKey, Signature};
+use bls::{AggregateSignature, PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, BlockContentsTuple, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
@@ -47,7 +47,7 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        GloasBeaconVote, GloasBeaconVoteValidator, ProposerConsensusData,
+        ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator, ProposerConsensusData,
         ProposerConsensusDataValidator, QbftData, SelectionProofBatchId, ValidatorDuty,
     },
     msgid::Role,
@@ -63,14 +63,13 @@ use tokio::{
 };
 use tracing::{Instrument, Span, debug, error, field, info, info_span, trace, warn};
 use types::{
-    AbstractExecPayload, Address, AggregateAndProof, AggregateAndProofBase,
-    AggregateAndProofElectra, Attestation, AttestationBase, AttestationElectra, BeaconBlock,
-    BeaconBlockRef, BlindedPayload, ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch,
-    EthSpec, ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256,
-    PayloadAttestationData, PayloadAttestationMessage, ProposerPreferences, SelectionProof,
-    SignedAggregateAndProof, SignedBeaconBlock, SignedBlindedBeaconBlock,
-    SignedContributionAndProof, SignedExecutionPayloadEnvelope, SignedProposerPreferences,
-    SignedRoot, SignedValidatorRegistrationData, SignedVoluntaryExit, Slot, SlotData,
+    AbstractExecPayload, Address, AggregateAndProof, Attestation, BeaconBlock, BeaconBlockRef,
+    BlindedPayload, ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch, EthSpec,
+    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData,
+    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
+    SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
+    SignedExecutionPayloadEnvelope, SignedProposerPreferences, SignedRoot,
+    SignedValidatorRegistrationData, SignedVoluntaryExit, SingleAttestation, Slot, SlotData,
     SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
     SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
 };
@@ -123,6 +122,19 @@ struct DecidedVote {
     target: Checkpoint,
     decided_hash: Hash256,
     decided_index: Option<u64>,
+}
+
+/// A reconstructed committee attestation awaiting slashing protection.
+///
+/// `publishable` is false when the duty's `attester_index` or `committee_index` did not match
+/// Anchor's own metadata. Those indices are not part of the attestation signing root, so the
+/// signature is safe to produce (and must be: the committee's partial-signature batch size is
+/// exact, so no duty may be dropped before collection), but the malformed `SingleAttestation`
+/// is withheld from publication after its data is recorded in the slashing DB.
+struct AttestationCandidate {
+    attestation: SingleAttestation,
+    pubkey: PublicKeyBytes,
+    publishable: bool,
 }
 
 impl<T> SigningRequest<T> {
@@ -1044,10 +1056,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let signing_epoch = aggregate.aggregate.data().target.epoch;
             let (validator, cluster) = self.get_validator_and_cluster(aggregate.pubkey)?;
 
-            let version = match &aggregate.aggregate {
-                Attestation::Base(_) => ForkName::Base.into(),
-                Attestation::Electra(_) => ForkName::Electra.into(),
-            };
+            let version = DataVersion::for_attestation_shape(&aggregate.aggregate);
 
             let message = AggregateAndProof::from_attestation(
                 aggregate.aggregator_index,
@@ -1111,17 +1120,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Completed::Success(data) => data,
             };
 
-            let message = if ForkName::from(data.version) < ForkName::Electra {
-                AggregateAndProof::Base(
-                    AggregateAndProofBase::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|e| Error::SpecificError(SpecificError::InvalidQbftData(e)))?,
-                )
-            } else {
-                AggregateAndProof::Electra(
-                    AggregateAndProofElectra::from_ssz_bytes(&data.data_ssz)
-                        .map_err(|e| Error::SpecificError(SpecificError::InvalidQbftData(e)))?,
-                )
-            };
+            let message: AggregateAndProof<E> = data
+                .version
+                .decode_aggregate_and_proof(&data.data_ssz)
+                .map_err(|e| Error::SpecificError(e.into()))?;
 
             debug!(
                 aggregator_index = ?message.aggregator_index(),
@@ -1651,18 +1653,43 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         &self,
         committee_id: CommitteeId,
         cluster: Cluster,
-        attestations: Vec<(ValidatorMetadata, AttestationToSign<E>)>,
-    ) -> Result<Vec<(u64, Attestation<E>, PublicKeyBytes)>, Error> {
+        attestations: Vec<(ValidatorMetadata, AttestationToSign)>,
+    ) -> Result<Vec<AttestationCandidate>, Error> {
         // Early return and log error for empty attestations
         let Some((_, first_attestation)) = attestations.first() else {
             warn!("sign_committee_attestations called with empty attestations");
             return Ok(vec![]);
         };
-        let slot = first_attestation.attestation.data().slot;
+        let slot = first_attestation.data.slot;
 
         let voting_context_tx = self.get_voting_context(slot).await?;
         let validator_attestation_committees =
             self.get_attesting_validators_in_committee(&voting_context_tx, committee_id);
+
+        // The duty's identity fields are echoed back verbatim in the returned
+        // `SingleAttestation`, so pin them against our own metadata. Consensus never touches
+        // them (it only rewrites `att.data`), so the check can run up front; a mismatched duty
+        // still signs (see `AttestationCandidate`), it is only withheld from publication.
+        let mismatched_duties: HashSet<PublicKeyBytes> = attestations
+            .iter()
+            .filter_map(|(validator, att)| {
+                let expected_attester = validator.index.map(|idx| *idx as u64);
+                let expected_committee = validator_attestation_committees.get(&att.pubkey).copied();
+                let publishable = expected_attester == Some(att.attester_index)
+                    && expected_committee == Some(att.committee_index);
+                if !publishable {
+                    warn!(
+                        pubkey = ?att.pubkey,
+                        attester_index = att.attester_index,
+                        ?expected_attester,
+                        committee_index = att.committee_index,
+                        ?expected_committee,
+                        "Attestation duty identity mismatch, withholding from publication"
+                    );
+                }
+                (!publishable).then_some(att.pubkey)
+            })
+            .collect();
 
         let decided = self
             .decide_committee_vote(
@@ -1679,21 +1706,21 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         // Prepare all validators and apply consensus results upfront
         // (metadata already resolved by `group_by_committee`)
-        let prepared: Vec<SigningRequest<AttestationToSign<E>>> = attestations
+        let prepared: Vec<SigningRequest<AttestationToSign>> = attestations
             .into_iter()
             .map(|(validator, mut att)| {
                 // Apply consensus result to this attestation
-                att.attestation.data_mut().beacon_block_root = decided.block_root;
-                att.attestation.data_mut().source = decided.source;
-                att.attestation.data_mut().target = decided.target;
+                att.data.beacon_block_root = decided.block_root;
+                att.data.source = decided.source;
+                att.data.target = decided.target;
                 // Gloas: all operators sign over the single cluster-decided attestation index so
                 // signing roots match cluster-wide. Pre-Gloas (`None`) leaves the
                 // BN-supplied index untouched (`committee_index` pre-Electra, `0` at Electra+).
                 if let Some(index) = decided.decided_index {
-                    att.attestation.data_mut().index = index;
+                    att.data.index = index;
                 }
 
-                let signing_root = att.attestation.data().signing_root(domain_hash);
+                let signing_root = att.data.signing_root(domain_hash);
                 SigningRequest {
                     validator,
                     signing_root,
@@ -1732,19 +1759,17 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 }
             };
 
-            let AttestationToSign {
-                validator_index,
-                pubkey,
-                validator_committee_index,
-                mut attestation,
-            } = att;
-
-            if let Err(e) = attestation.add_signature(&signature, validator_committee_index) {
-                error!(error = ?e, ?pubkey, "Failed to add signature to attestation, skipping");
-                continue;
-            }
-
-            results.push((validator_index, attestation, pubkey));
+            results.push(AttestationCandidate {
+                publishable: !mismatched_duties.contains(&att.pubkey),
+                attestation: SingleAttestation {
+                    committee_index: att.committee_index,
+                    attester_index: att.attester_index,
+                    data: att.data,
+                    // A single-entry aggregate carrying the reconstructed threshold signature.
+                    signature: AggregateSignature::from(&signature),
+                },
+                pubkey: att.pubkey,
+            });
         }
 
         Ok(results)
@@ -1783,16 +1808,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .get(decided_aggregate_idx)
             .ok_or("Aggregate attestation bytes not found in decided data")?;
 
-        // Decode based on fork version
-        let decided_aggregate = if decided_data.version < DataVersion::from(ForkName::Electra) {
-            AttestationBase::from_ssz_bytes(decided_aggregate_bytes)
-                .map(Attestation::Base)
-                .map_err(|e| format!("Failed to decode decided aggregate: {e:?}"))?
-        } else {
-            AttestationElectra::from_ssz_bytes(decided_aggregate_bytes)
-                .map(Attestation::Electra)
-                .map_err(|e| format!("Failed to decode decided aggregate: {e:?}"))?
-        };
+        // Decode with the shape the decided version selects (Gloas merkleizes progressively,
+        // so the shape drives the signing root computed below).
+        let decided_aggregate: Attestation<E> = decided_data
+            .version
+            .decode_attestation(decided_aggregate_bytes)
+            .map_err(|e| format!("Failed to decode decided aggregate: {e}"))?;
 
         let decided_selection_proof =
             SelectionProof::from(decided_aggregator.selection_proof.clone());
@@ -1908,21 +1929,25 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
     /// Provide slashing protection for attestations, safely updating the slashing protection DB.
     ///
-    /// Returns a vec of safe attestations which have passed slashing protection. Unsafe
-    /// attestations will be dropped and result in warning logs.
+    /// Every candidate's data is recorded (when slashing protection is enabled), including
+    /// non-publishable ones, so the slashing DB reflects locally emitted partial signatures.
+    /// Returns only attestations that are both slash-safe and publishable; the rest are
+    /// dropped with warning logs.
     fn slashing_protection_attestations(
         &self,
-        attestations: Vec<(u64, Attestation<E>, PublicKeyBytes)>,
-    ) -> Result<Vec<(u64, Attestation<E>)>, Error> {
-        let mut safe_attestations = Vec::with_capacity(attestations.len());
-        let mut attestations_to_check = Vec::with_capacity(attestations.len());
+        candidates: Vec<AttestationCandidate>,
+    ) -> Result<Vec<SingleAttestation>, Error> {
+        let mut safe_attestations = Vec::with_capacity(candidates.len());
+        let mut attestations_to_check = Vec::with_capacity(candidates.len());
 
-        for (_, attestation, validator_pubkey) in &attestations {
-            let domain_hash =
-                self.get_domain(attestation.data().target.epoch, Domain::BeaconAttester);
+        for candidate in &candidates {
+            let domain_hash = self.get_domain(
+                candidate.attestation.data.target.epoch,
+                Domain::BeaconAttester,
+            );
             attestations_to_check.push((
-                attestation.data(),
-                validator_pubkey,
+                &candidate.attestation.data,
+                &candidate.pubkey,
                 domain_hash,
                 if self.disable_slashing_protection {
                     CheckSlashability::No
@@ -1944,15 +1969,21 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .map(convert_slashing_result)
             .collect();
 
-        for ((validator_index, attestation, validator_pubkey), slashing_status) in
-            attestations.into_iter().zip(results)
-        {
+        for (candidate, slashing_status) in candidates.into_iter().zip(results) {
             match slashing_status {
-                Ok(()) => {
-                    safe_attestations.push((validator_index, attestation));
+                Ok(()) if candidate.publishable => {
+                    safe_attestations.push(candidate.attestation);
                     validator_metrics::inc_counter_vec(
                         &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
                         &[validator_metrics::SUCCESS],
+                    );
+                }
+                Ok(()) => {
+                    // Identity mismatch was logged at assembly; the entry is now recorded in
+                    // the slashing DB but withheld from publication.
+                    validator_metrics::inc_counter_vec(
+                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
+                        &[metrics::OTHER_ERROR],
                     );
                 }
                 Err(Error::SameData) => {
@@ -1982,7 +2013,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Err(e) => {
                     error!(
                         error = ?e,
-                        public_key = ?validator_pubkey,
+                        public_key = ?candidate.pubkey,
                         "Unexpected error during slashing protection check"
                     );
                     validator_metrics::inc_counter_vec(
@@ -2535,6 +2566,8 @@ pub enum SpecificError {
     QbftError(QbftError),
     Timeout,
     InvalidQbftData(DecodeError),
+    /// Decided consensus data specified a fork with no pinned wire shape (fail closed)
+    UnsupportedForkData(ForkName),
     TooManySyncSubnetsToSign,
     NoDataAgreed,
     Metadata,
@@ -2602,6 +2635,15 @@ impl From<ArithError> for SpecificError {
 impl From<QbftError> for SpecificError {
     fn from(err: QbftError) -> SpecificError {
         SpecificError::QbftError(err)
+    }
+}
+
+impl From<ForkDecodeError> for SpecificError {
+    fn from(err: ForkDecodeError) -> SpecificError {
+        match err {
+            ForkDecodeError::Decode(e) => SpecificError::InvalidQbftData(e),
+            ForkDecodeError::UnsupportedFork(fork) => SpecificError::UnsupportedForkData(fork),
+        }
     }
 }
 
@@ -3440,8 +3482,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
     fn sign_attestations(
         self: &Arc<Self>,
-        attestations: Vec<AttestationToSign<E>>,
-    ) -> impl Stream<Item = Result<Vec<(u64, Attestation<Self::E>)>, Error>> + Send {
+        attestations: Vec<AttestationToSign>,
+    ) -> impl Stream<Item = Result<Vec<SingleAttestation>, Error>> + Send {
         if !*self.is_synced.borrow() {
             return Either::Left(stream::once(futures::future::ready(Err(
                 Error::SpecificError(SpecificError::NotSynced),
