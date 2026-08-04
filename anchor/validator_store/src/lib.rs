@@ -186,7 +186,7 @@ pub struct AnchorValidatorStore<
     // operator controls
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
-    /// See [`AnchorValidatorStore::await_proposer_delay`] for the semantics.
+    /// See [`await_proposer_delay`] for the semantics.
     proposer_delay: Duration,
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
@@ -260,6 +260,50 @@ impl ProposerDelayDecision {
     }
 }
 
+/// Holds this proposer duty until `proposer_delay` into its slot, recording the outcome either way,
+/// including the no-wait cases.
+///
+/// The delay is a *floor* from the start of the slot, not extra latency: a duty whose RANDAO
+/// pre-consensus already ran past it waits no longer. This matches go-ssv's `ProposerDelay`, so the
+/// same configured value yields the same request time on either client.
+///
+/// `elapsed` is passed in rather than re-read so the wait and
+/// [`metrics::RANDAO_REVEAL_COMPLETION_OFFSET`] share one measurement; operators are told to
+/// compare them. Missing slot timing fails open. When the delay *does* apply it knowingly spends
+/// proposal headroom, which is the trade the operator opted into.
+async fn await_proposer_delay(proposer_delay: Duration, elapsed: Option<Duration>) {
+    let decision = proposer_delay_decision_at(proposer_delay, elapsed);
+    let outcome = decision.as_str();
+
+    // Measure the real sleep, not the plan: both readings are documented as the wait applied.
+    let waited = match decision.wait() {
+        Some(planned) => {
+            let started = Instant::now();
+            sleep(planned).await;
+            started.elapsed()
+        }
+        None => Duration::ZERO,
+    };
+
+    Span::current().record("proposer_delay_outcome", outcome);
+    Span::current().record("proposer_delay_waited_ms", waited.as_millis() as u64);
+    metrics::observe_timer_vec(&metrics::PROPOSER_DELAY_APPLIED, &[outcome], waited);
+
+    if let ProposerDelayDecision::ClockUnavailable = decision {
+        warn!(
+            checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
+            outcome, "Slot clock unavailable, skipping configured proposer delay"
+        );
+    } else {
+        trace!(
+            checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
+            outcome,
+            waited_ms = waited.as_millis() as u64,
+            "Proposer delay evaluated"
+        );
+    }
+}
+
 impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidatorStore<T, E, C> {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
@@ -305,50 +349,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             is_synced,
             task_executor,
         })
-    }
-
-    /// Holds this proposer duty until `proposer_delay` into its slot, recording the outcome either
-    /// way, including the no-wait cases.
-    ///
-    /// The delay is a *floor* from the start of the slot, not extra latency: a duty whose RANDAO
-    /// pre-consensus already ran past it waits no longer. This matches go-ssv's `ProposerDelay`, so
-    /// the same configured value yields the same request time on either client.
-    ///
-    /// `elapsed` is passed in rather than re-read so the wait and
-    /// [`metrics::RANDAO_REVEAL_COMPLETION_OFFSET`] share one measurement; operators are told to
-    /// compare them. Missing slot timing fails open. When the delay *does* apply it knowingly
-    /// spends proposal headroom, which is the trade the operator opted into.
-    async fn await_proposer_delay(&self, elapsed: Option<Duration>) {
-        let decision = proposer_delay_decision_at(self.proposer_delay, elapsed);
-        let outcome = decision.as_str();
-
-        // Measure the real sleep, not the plan: both readings are documented as the wait applied.
-        let waited = match decision.wait() {
-            Some(planned) => {
-                let started = Instant::now();
-                sleep(planned).await;
-                started.elapsed()
-            }
-            None => Duration::ZERO,
-        };
-
-        Span::current().record("proposer_delay_outcome", outcome);
-        Span::current().record("proposer_delay_waited_ms", waited.as_millis() as u64);
-        metrics::observe_timer_vec(&metrics::PROPOSER_DELAY_APPLIED, &[outcome], waited);
-
-        if let ProposerDelayDecision::ClockUnavailable = decision {
-            warn!(
-                checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
-                outcome, "Slot clock unavailable, skipping configured proposer delay"
-            );
-        } else {
-            trace!(
-                checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
-                outcome,
-                waited_ms = waited.as_millis() as u64,
-                "Proposer delay evaluated"
-            );
-        }
     }
 
     fn get_validator_and_cluster(
@@ -2359,7 +2359,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
     /// Also holds until `--proposer-delay-ms` into the slot before returning, so it can block for
     /// as long as that setting allows. The reveal is a required parameter of the block request,
     /// so Lighthouse cannot ask earlier and this is the last point Anchor owns before it does.
-    /// See [`AnchorValidatorStore::await_proposer_delay`].
+    /// See `await_proposer_delay`.
     async fn randao_reveal(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -2430,7 +2430,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     "Proposer randao reveal reconstructed"
                 );
 
-                self.await_proposer_delay(randao_completed).await;
+                await_proposer_delay(self.proposer_delay, randao_completed).await;
 
                 Ok(signature)
             }
@@ -3422,6 +3422,35 @@ mod tests {
             proposer_delay_decision_at(Duration::from_millis(300), Some(Duration::MAX)),
             ProposerDelayDecision::TargetPassed
         );
+    }
+
+    /// Time is paused, so `sleep` advances the clock without spending any, and
+    /// [`tokio::time::Instant`] observes that same virtual clock. These assert the wait is actually
+    /// applied, which the decision tests above cannot: they only prove what was decided.
+    #[tokio::test(start_paused = true)]
+    async fn await_proposer_delay_sleeps_only_the_remainder() {
+        let started = Instant::now();
+        await_proposer_delay(Duration::from_millis(300), Some(Duration::from_millis(100))).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn await_proposer_delay_never_sleeps_without_a_wait() {
+        // Every no-wait decision must return promptly: an overdue duty, a missing clock, and the
+        // disabled default. A regression here would delay a proposal that has no time to spare.
+        for (delay_ms, elapsed) in [
+            (300, Some(Duration::from_millis(400))),
+            (300, None),
+            (0, Some(Duration::ZERO)),
+        ] {
+            let started = Instant::now();
+            await_proposer_delay(Duration::from_millis(delay_ms), elapsed).await;
+            assert_eq!(
+                started.elapsed(),
+                Duration::ZERO,
+                "delay={delay_ms}ms elapsed={elapsed:?} must not sleep"
+            );
+        }
     }
 
     #[test]
