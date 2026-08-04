@@ -279,6 +279,7 @@ impl ValidatorStoreTestHarness {
             30_000_000,
             None,
             false,
+            Duration::ZERO, // no proposer delay: tests assert timing-free behaviour
             false,
             is_synced_rx,
             executor,
