@@ -1,17 +1,19 @@
 name: docs
 
 on:
-  push:
-    branches:
-      - unstable
+  release:
+    types: [published]
+  workflow_dispatch:
 
+# All runs deploy to the same S3 bucket with --delete, so they must serialize,
+# and an in-flight sync must never be cancelled halfway through.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: docs-deploy
+  cancel-in-progress: false
 
 jobs:
   build-and-upload-to-s3:
-    if: github.repository_owner == 'sigp'
+    if: github.repository_owner == 'sigp' && !github.event.release.prerelease
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
