@@ -8,6 +8,9 @@ pub const BEACON_VOTE: &str = "beacon_vote";
 pub const SYNC_CONTRIBUTION_AND_PROOF: &str = "sync_contribution_and_proof";
 pub const TIMEOUT: &str = "timeout";
 pub const OTHER_ERROR: &str = "other_error";
+/// Signed and recorded in the slashing DB, but withheld from publication
+/// (e.g. attestation duty identity mismatch).
+pub const WITHHELD: &str = "withheld";
 pub const TRIGGER_HEAD_EVENT: &str = "head_event";
 pub const TRIGGER_TIMER: &str = "timer";
 

@@ -1984,7 +1984,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     // the slashing DB but withheld from publication.
                     validator_metrics::inc_counter_vec(
                         &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-                        &[metrics::OTHER_ERROR],
+                        &[metrics::WITHHELD],
                     );
                 }
                 Err(Error::SameData) => {
