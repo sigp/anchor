@@ -31,7 +31,7 @@ use tempfile::TempDir;
 use tokio::sync::watch;
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
-    Hash256, MainnetEthSpec, SelectionProof, Slot,
+    Hash256, MainnetEthSpec, SelectionProof, Slot, SyncSubnetId,
 };
 use validator_store::{AggregateToSign, AttestationToSign};
 
@@ -67,6 +67,7 @@ pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 pub(super) struct CapturedSignatureCall {
     pub(super) requester: SignatureRequester,
     pub(super) validator_pubkey: PublicKeyBytes,
+    pub(super) signing_root: Hash256,
 }
 
 /// Mock that captures calls and returns a canned infinity signature.
@@ -84,6 +85,7 @@ impl SignatureCollecting for MockSignatureCollector {
         self.captured.lock().push(CapturedSignatureCall {
             requester,
             validator_pubkey: signing_data.validator_pubkey,
+            signing_root: signing_data.root,
         });
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
@@ -180,6 +182,14 @@ pub(super) struct ValidatorStoreTestHarness {
 
 impl ValidatorStoreTestHarness {
     pub(super) fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
+        Self::new_with_fork(committee_setups, our_operator_id, Fork::Boole)
+    }
+
+    pub(super) fn new_with_fork(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        active_fork: Fork,
+    ) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = database::test_utils::generators::pubkey::random_rsa();
 
@@ -195,7 +205,7 @@ impl ValidatorStoreTestHarness {
         let (executor, exit_signal) = create_test_executor();
 
         let fork_schedule = Arc::new(ForkSchedule::new(
-            Fork::Boole,
+            active_fork,
             ssv_types::domain_type::DomainType::default(),
             "test",
         ));
@@ -292,6 +302,35 @@ impl ValidatorStoreTestHarness {
             _slashing_db_dir: slashing_db_dir,
             _exit_signal: exit_signal,
         }
+    }
+
+    pub(super) fn validator_metadata(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> ValidatorMetadata {
+        self.committee_setups[committee_idx].validators[validator_idx].clone()
+    }
+
+    pub(super) fn seed_sync_voting_assignments_for_slot(
+        &self,
+        slot: u64,
+        assignments: Vec<(ValidatorIndex, Vec<(SyncSubnetId, usize)>)>,
+    ) {
+        let sync_validators_by_subnet = assignments
+            .into_iter()
+            .map(|(validator_index, position_counts)| {
+                (validator_index, position_counts.into_iter().collect())
+            })
+            .collect();
+
+        self.validator_store
+            .update_voting_assignments(VotingAssignments {
+                slot: Slot::new(slot),
+                attesting_validators: Vec::new(),
+                attesting_committees: HashMap::new(),
+                sync_validators_by_subnet,
+            });
     }
 
     /// Seeds the `VotingContext` so `get_voting_context` returns immediately for `TEST_SLOT`.
