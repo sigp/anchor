@@ -3,7 +3,7 @@
 //! The default harness disables slashing protection (under `CheckSlashability::No` nothing is
 //! recorded), so these tests enable it. With protection enabled the harness registers every
 //! validator in the slashing DB, `slashing_protection_attestations` records every signed
-//! candidate, and only slash-safe (and publishable) attestations reach the returned batch.
+//! candidate, and slash-safe attestations reach the returned batch.
 use futures::StreamExt;
 use signature_collector::SignatureRequester;
 use slashing_protection::{CheckSlashability, NotSafe, Safe};
@@ -132,14 +132,14 @@ async fn slashing_protection_blocks_conflicting_attestation() {
     );
 }
 
-// ==================== Identity mismatch: publishable flag ====================
+// ==================== Identity mismatch: published and recorded ====================
 
 /// A duty whose `attester_index` does not match our own metadata still signs (dropping it before
-/// collection would stall the committee's exact-count partial-signature batch) and still reaches
-/// the slashing DB, but is withheld from the returned publication batch. The other validators'
-/// attestations are unaffected.
+/// collection would stall the committee's exact-count partial-signature batch), is recorded in
+/// the slashing DB, and IS returned for publication with the duty's identity fields echoed
+/// verbatim; the beacon node is the authority on identity fields.
 #[tokio::test(flavor = "multi_thread")]
-async fn identity_mismatch_recorded_in_slashing_db_but_withheld_from_publication() {
+async fn identity_mismatch_published_and_recorded_in_slashing_db() {
     // Arrange: validator 0 keeps its correct identity, validator 1's duty carries a wrong
     // attester_index.
     let harness = slashing_enabled_harness();
@@ -148,6 +148,7 @@ async fn identity_mismatch_recorded_in_slashing_db_but_withheld_from_publication
     let good_attester_index = good.attester_index;
     let mut bad = harness.create_attestation(0, 1);
     bad.attester_index += 100;
+    let bad_attester_index = bad.attester_index;
     let bad_pubkey = bad.pubkey;
 
     // Act
@@ -157,7 +158,7 @@ async fn identity_mismatch_recorded_in_slashing_db_but_withheld_from_publication
         .collect()
         .await;
 
-    // Assert: only the well-formed duty is returned for publication.
+    // Assert: both duties are returned for publication, identity fields echoed verbatim.
     assert_eq!(results.len(), 1, "expected one stream item per committee");
     let signed: Vec<SingleAttestation> = results
         .into_iter()
@@ -165,12 +166,20 @@ async fn identity_mismatch_recorded_in_slashing_db_but_withheld_from_publication
         .collect();
     assert_eq!(
         signed.len(),
-        1,
-        "the mismatched duty must be absent from the publication batch"
+        COMMITTEE_VALIDATOR_COUNT,
+        "the mismatched duty must be published alongside the well-formed one"
     );
-    assert_eq!(
-        signed[0].attester_index, good_attester_index,
+    assert!(
+        signed
+            .iter()
+            .any(|att| att.attester_index == good_attester_index),
         "the well-formed duty must be published normally"
+    );
+    assert!(
+        signed
+            .iter()
+            .any(|att| att.attester_index == bad_attester_index),
+        "the mismatched duty's attester_index must be echoed verbatim"
     );
 
     // Assert: the signature collector still sent for BOTH validators with the full committee
@@ -199,7 +208,7 @@ async fn identity_mismatch_recorded_in_slashing_db_but_withheld_from_publication
     }
     drop(captured);
 
-    // Assert: the mismatched validator's signed data WAS recorded in the slashing DB. The exact
+    // Assert: the mismatched validator's signed data was recorded in the slashing DB. The exact
     // data the production path signed is the seeded zero vote at TEST_SLOT (pre-Electra path
     // leaves data.index at 0), which equals the duty data `create_attestation` builds; probing it
     // again yields `SameData`, which only an existing identical record can produce.

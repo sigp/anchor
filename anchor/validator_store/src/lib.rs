@@ -124,19 +124,6 @@ struct DecidedVote {
     decided_index: Option<u64>,
 }
 
-/// A reconstructed committee attestation awaiting slashing protection.
-///
-/// `publishable` is false when the duty's `attester_index` or `committee_index` did not match
-/// Anchor's own metadata. Those indices are not part of the attestation signing root, so the
-/// signature is safe to produce (and must be: the committee's partial-signature batch size is
-/// exact, so no duty may be dropped before collection), but the malformed `SingleAttestation`
-/// is withheld from publication after its data is recorded in the slashing DB.
-struct AttestationCandidate {
-    attestation: SingleAttestation,
-    pubkey: PublicKeyBytes,
-    publishable: bool,
-}
-
 impl<T> SigningRequest<T> {
     /// Look up this validator's collected signature, consuming the request.
     ///
@@ -1655,7 +1642,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         committee_id: CommitteeId,
         cluster: Cluster,
         attestations: Vec<(ValidatorMetadata, AttestationToSign)>,
-    ) -> Result<Vec<AttestationCandidate>, Error> {
+    ) -> Result<Vec<(SingleAttestation, PublicKeyBytes)>, Error> {
         // Early return and log error for empty attestations
         let Some((_, first_attestation)) = attestations.first() else {
             warn!("sign_committee_attestations called with empty attestations");
@@ -1667,30 +1654,47 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let validator_attestation_committees =
             self.get_attesting_validators_in_committee(&voting_context_tx, committee_id);
 
-        // The duty's identity fields are echoed back verbatim in the returned
-        // `SingleAttestation`, so pin them against our own metadata. Consensus never touches
-        // them (it only rewrites `att.data`), so the check can run up front; a mismatched duty
-        // still signs (see `AttestationCandidate`), it is only withheld from publication.
-        let mismatched_duties: HashSet<PublicKeyBytes> = attestations
-            .iter()
-            .filter_map(|(validator, att)| {
-                let expected_attester = validator.index.map(|idx| *idx as u64);
-                let expected_committee = validator_attestation_committees.get(&att.pubkey).copied();
-                let publishable = expected_attester == Some(att.attester_index)
-                    && expected_committee == Some(att.committee_index);
-                if !publishable {
-                    warn!(
-                        pubkey = ?att.pubkey,
-                        attester_index = att.attester_index,
-                        ?expected_attester,
-                        committee_index = att.committee_index,
-                        ?expected_committee,
-                        "Attestation duty identity mismatch, withholding from publication"
-                    );
-                }
-                (!publishable).then_some(att.pubkey)
-            })
-            .collect();
+        // The duty's identity fields are echoed verbatim into the returned `SingleAttestation`
+        // and are not part of the signing root, so a divergence cannot produce an unsafe
+        // signature, and the beacon node validates the fields authoritatively at publication.
+        // Surface divergences anyway: the same slot-start snapshot feeds the preliminary
+        // slashing checks and the exact collector batch size, so a divergence means drifted
+        // inputs, not just a doomed publish. Attester mismatches warn because validator
+        // indices are permanent once assigned; committee drift is expected under a mid-slot
+        // dependent-root change and stays informational.
+        for (validator, att) in &attestations {
+            let expected_attester = validator.index.map(|idx| *idx as u64);
+            let expected_committee = validator_attestation_committees.get(&att.pubkey).copied();
+            let reason = if expected_attester != Some(att.attester_index) {
+                metrics::IDENTITY_MISMATCH_ATTESTER_INDEX
+            } else if expected_committee.is_none() {
+                metrics::IDENTITY_MISMATCH_MISSING_FROM_SNAPSHOT
+            } else if expected_committee != Some(att.committee_index) {
+                metrics::IDENTITY_MISMATCH_COMMITTEE_INDEX
+            } else {
+                continue;
+            };
+            metrics::inc_counter_vec(&metrics::ATTESTATION_DUTY_IDENTITY_MISMATCHES, &[reason]);
+            if reason == metrics::IDENTITY_MISMATCH_ATTESTER_INDEX {
+                warn!(
+                    pubkey = ?att.pubkey,
+                    attester_index = att.attester_index,
+                    ?expected_attester,
+                    committee_index = att.committee_index,
+                    ?expected_committee,
+                    reason,
+                    "Attestation duty identity differs from Anchor metadata, publishing anyway"
+                );
+            } else {
+                info!(
+                    pubkey = ?att.pubkey,
+                    committee_index = att.committee_index,
+                    ?expected_committee,
+                    reason,
+                    "Attestation duty identity differs from Anchor metadata, publishing anyway"
+                );
+            }
+        }
 
         let decided = self
             .decide_committee_vote(
@@ -1760,17 +1764,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 }
             };
 
-            results.push(AttestationCandidate {
-                publishable: !mismatched_duties.contains(&att.pubkey),
-                attestation: SingleAttestation {
+            results.push((
+                SingleAttestation {
                     committee_index: att.committee_index,
                     attester_index: att.attester_index,
                     data: att.data,
                     // A single-entry aggregate carrying the reconstructed threshold signature.
                     signature: AggregateSignature::from(&signature),
                 },
-                pubkey: att.pubkey,
-            });
+                att.pubkey,
+            ));
         }
 
         Ok(results)
@@ -1930,25 +1933,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
     /// Provide slashing protection for attestations, safely updating the slashing protection DB.
     ///
-    /// Every candidate's data is recorded (when slashing protection is enabled), including
-    /// non-publishable ones, so the slashing DB reflects locally emitted partial signatures.
-    /// Returns only attestations that are both slash-safe and publishable; the rest are
-    /// dropped with warning logs.
+    /// Every attestation's data is recorded (when slashing protection is enabled), so the
+    /// slashing DB reflects locally emitted partial signatures. Returns the attestations that
+    /// passed slashing protection; the rest are dropped with warning logs.
     fn slashing_protection_attestations(
         &self,
-        candidates: Vec<AttestationCandidate>,
+        attestations: Vec<(SingleAttestation, PublicKeyBytes)>,
     ) -> Result<Vec<SingleAttestation>, Error> {
-        let mut safe_attestations = Vec::with_capacity(candidates.len());
-        let mut attestations_to_check = Vec::with_capacity(candidates.len());
+        let mut safe_attestations = Vec::with_capacity(attestations.len());
+        let mut attestations_to_check = Vec::with_capacity(attestations.len());
 
-        for candidate in &candidates {
-            let domain_hash = self.get_domain(
-                candidate.attestation.data.target.epoch,
-                Domain::BeaconAttester,
-            );
+        for (attestation, pubkey) in &attestations {
+            let domain_hash =
+                self.get_domain(attestation.data.target.epoch, Domain::BeaconAttester);
             attestations_to_check.push((
-                &candidate.attestation.data,
-                &candidate.pubkey,
+                &attestation.data,
+                pubkey,
                 domain_hash,
                 if self.disable_slashing_protection {
                     CheckSlashability::No
@@ -1970,21 +1970,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .map(convert_slashing_result)
             .collect();
 
-        for (candidate, slashing_status) in candidates.into_iter().zip(results) {
+        for ((attestation, pubkey), slashing_status) in attestations.into_iter().zip(results) {
             match slashing_status {
-                Ok(()) if candidate.publishable => {
-                    safe_attestations.push(candidate.attestation);
+                Ok(()) => {
+                    safe_attestations.push(attestation);
                     validator_metrics::inc_counter_vec(
                         &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
                         &[validator_metrics::SUCCESS],
-                    );
-                }
-                Ok(()) => {
-                    // Identity mismatch was logged at assembly; the entry is now recorded in
-                    // the slashing DB but withheld from publication.
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_ATTESTATIONS_TOTAL,
-                        &[metrics::WITHHELD],
                     );
                 }
                 Err(Error::SameData) => {
@@ -2014,7 +2006,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 Err(e) => {
                     error!(
                         error = ?e,
-                        public_key = ?candidate.pubkey,
+                        public_key = ?pubkey,
                         "Unexpected error during slashing protection check"
                     );
                     validator_metrics::inc_counter_vec(

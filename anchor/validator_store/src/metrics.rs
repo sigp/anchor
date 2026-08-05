@@ -8,9 +8,6 @@ pub const BEACON_VOTE: &str = "beacon_vote";
 pub const SYNC_CONTRIBUTION_AND_PROOF: &str = "sync_contribution_and_proof";
 pub const TIMEOUT: &str = "timeout";
 pub const OTHER_ERROR: &str = "other_error";
-/// Signed and recorded in the slashing DB, but withheld from publication
-/// (e.g. attestation duty identity mismatch).
-pub const WITHHELD: &str = "withheld";
 pub const TRIGGER_HEAD_EVENT: &str = "head_event";
 pub const TRIGGER_TIMER: &str = "timer";
 
@@ -36,6 +33,26 @@ pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
             "anchor_signed_proposer_preferences_total",
             "Total count of ProposerPreferences signings",
             &["status"],
+        )
+    });
+
+/// The duty's `attester_index` differs from Anchor's stored validator index; indices are
+/// permanent once assigned, so this is never reorg drift.
+pub const IDENTITY_MISMATCH_ATTESTER_INDEX: &str = "attester_index";
+/// The duty's `committee_index` differs from the slot-start voting-assignments snapshot.
+pub const IDENTITY_MISMATCH_COMMITTEE_INDEX: &str = "committee_index";
+/// The duty's pubkey is absent from the slot-start attesting snapshot.
+pub const IDENTITY_MISMATCH_MISSING_FROM_SNAPSHOT: &str = "missing_from_snapshot";
+
+/// Attestation duties whose identity fields differ from Anchor's own metadata. Diagnostic
+/// only: the fields are not part of the signing root, publication proceeds, and the beacon
+/// node validates them authoritatively.
+pub static ATTESTATION_DUTY_IDENTITY_MISMATCHES: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_attestation_duty_identity_mismatches_total",
+            "Attestation duties whose identity fields differ from Anchor metadata, by reason",
+            &["reason"],
         )
     });
 
