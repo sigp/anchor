@@ -36,12 +36,13 @@ use qbft_manager::{
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
-    ValidatorSigningData,
+    SyncSelectionProofDescriptor, ValidatorSigningData,
 };
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, ValidatorIndex, ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, MAX_SYNC_COMMITTEE_POSITIONS,
+    ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
@@ -52,6 +53,7 @@ use ssv_types::{
     msgid::Role,
     partial_sig::PartialSignatureKind,
     try_to_variable_list,
+    typenum::Unsigned,
 };
 use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
@@ -467,6 +469,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .iter()
             .filter_map(|item| {
                 let index = item.validator.index?;
+                let collection_mode = collection_mode.clone();
                 Some(async move {
                     let result = self
                         .collect_signature(
@@ -559,6 +562,64 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .signing_root(domain)
     }
 
+    fn sync_selection_proof_descriptor(
+        &self,
+        slot: Slot,
+        callback_subnet: SyncSubnetId,
+        position_counts: &HashMap<SyncSubnetId, usize>,
+    ) -> Result<Vec<SyncSelectionProofDescriptor>, SyncSelectionProofAssignmentError> {
+        if position_counts.is_empty() {
+            return Err(SyncSelectionProofAssignmentError::Empty);
+        }
+        if !position_counts.contains_key(&callback_subnet) {
+            return Err(SyncSelectionProofAssignmentError::MissingCallbackSubnet {
+                subnet_id: callback_subnet,
+            });
+        }
+
+        let subnet_count = E::SyncCommitteeSubnetCount::to_u64();
+        if let Some(subnet_id) = position_counts
+            .keys()
+            .copied()
+            .filter(|subnet_id| u64::from(*subnet_id) >= subnet_count)
+            .min_by_key(|subnet_id| u64::from(*subnet_id))
+        {
+            return Err(SyncSelectionProofAssignmentError::OutOfRangeSubnet {
+                subnet_id,
+                subnet_count,
+            });
+        }
+
+        // Total the whole assignment before enforcing the cap. Accumulating while constructing the
+        // descriptor would report a partial sum that depends on `HashMap` iteration order.
+        let expanded_positions = position_counts
+            .values()
+            .copied()
+            .fold(0usize, usize::saturating_add);
+        if expanded_positions > MAX_SYNC_COMMITTEE_POSITIONS {
+            return Err(SyncSelectionProofAssignmentError::TooManyPositions {
+                count: expanded_positions,
+                max: MAX_SYNC_COMMITTEE_POSITIONS,
+            });
+        }
+
+        let mut descriptor = Vec::with_capacity(position_counts.len());
+        for (&subnet_id, &position_count) in position_counts {
+            descriptor.push(SyncSelectionProofDescriptor {
+                subnet_id,
+                signing_root: self.compute_sync_selection_root(slot, subnet_id.into()),
+                position_count,
+            });
+        }
+
+        // Numeric subnet order makes retries byte-identical. Since
+        // `subnet = position / subcommittee_size` is monotonic, ascending duty positions produce
+        // the same root order, and repeated positions within one subnet share a root. Receiver
+        // correctness remains multiset-based and does not depend on this order.
+        descriptor.sort_unstable_by_key(|entry| u64::from(entry.subnet_id));
+        Ok(descriptor)
+    }
+
     #[expect(clippy::too_many_arguments)]
     async fn collect_signature(
         &self,
@@ -588,6 +649,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let requester = match collection_mode {
                 CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
                     pubkey: validator.public_key,
+                },
+                CollectionMode::SingleValidatorBatch {
+                    subnet_id,
+                    descriptor,
+                } => SignatureRequester::SingleValidatorBatch {
+                    pubkey: validator.public_key,
+                    subnet_id,
+                    descriptor,
                 },
                 CollectionMode::Committee {
                     validator_partial_signature_batch_size,
@@ -1408,17 +1477,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let sig_futures: Vec<_> = prepared
             .iter()
-            .map(|req| async {
+            .map(|req| {
                 self.collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::AggregatorCommittee,
-                    collection_mode,
+                    collection_mode.clone(),
                     &req.validator,
                     &cluster,
                     req.signing_root,
                     slot,
                 )
-                .await
             })
             .collect();
 
@@ -2040,9 +2108,9 @@ pub struct VotingAssignments {
     pub attesting_validators: Vec<ValidatorIndex>,
     /// The pubkeys of attesting validators mapped to their attestation committee index.
     pub attesting_committees: HashMap<PublicKeyBytes, u64>,
-    /// Sync committee validators mapped to their subnet IDs.
-    /// A validator may participate in multiple subnets.
-    pub sync_validators_by_subnet: HashMap<ValidatorIndex, HashSet<SyncSubnetId>>,
+    /// Sync committee validators mapped to the number of original positions in each subnet.
+    /// A validator may participate in multiple subnets or occupy several positions in one subnet.
+    pub sync_validators_by_subnet: HashMap<ValidatorIndex, HashMap<SyncSubnetId, usize>>,
 }
 
 impl VotingAssignments {
@@ -2190,9 +2258,15 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
     selection_proof: SyncSelectionProof,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum CollectionMode {
     SingleValidator,
+    SingleValidatorBatch {
+        /// Subnet requested by the current Lighthouse callback.
+        subnet_id: SyncSubnetId,
+        /// Canonical descriptor for every unique subnet assigned to this validator and slot.
+        descriptor: Vec<SyncSelectionProofDescriptor>,
+    },
     Committee {
         /// The number of validator partial signatures this operator batches locally into the
         /// outgoing committee message for the round.
@@ -2200,6 +2274,22 @@ enum CollectionMode {
         /// Identifies which validator partial signatures belong in the same outgoing committee
         /// message.
         base_hash: Hash256,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncSelectionProofAssignmentError {
+    Empty,
+    MissingCallbackSubnet {
+        subnet_id: SyncSubnetId,
+    },
+    OutOfRangeSubnet {
+        subnet_id: SyncSubnetId,
+        subnet_count: u64,
+    },
+    TooManyPositions {
+        count: usize,
+        max: usize,
     },
 }
 
@@ -2245,6 +2335,11 @@ pub enum SpecificError {
     ValidatorNotInSyncCommittee {
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
+    },
+    InvalidSyncSelectionProofAssignment {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+        reason: SyncSelectionProofAssignmentError,
     },
     /// Pre-built consensus data not found for this committee (Boole+)
     ConsensusDataNotFound,
@@ -2949,20 +3044,43 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 )
                 .await?
             } else {
-                // Use the original single-validator path.
-                self.timeout_within_slot(
-                    slot,
-                    delay,
+                self.timeout_within_slot(slot, delay, async {
+                    let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
+                    // Anchor configures Lighthouse's sync selection-proof lookahead to one slot, so
+                    // this proof slot is current and its assignments are published at slot start.
+                    // A larger lookahead would make future proof slots wait for their assignments.
+                    let voting_assignments = self.get_voting_assignments(slot).await?;
+                    let position_counts = voting_assignments
+                        .sync_validators_by_subnet
+                        .get(&validator_index)
+                        .ok_or(SpecificError::ValidatorNotInSyncCommittee {
+                            validator_pubkey: *validator_pubkey,
+                            slot,
+                        })?;
+                    let descriptor = self
+                        .sync_selection_proof_descriptor(slot, subnet_id, position_counts)
+                        .map_err(
+                            |reason| SpecificError::InvalidSyncSelectionProofAssignment {
+                                validator_pubkey: *validator_pubkey,
+                                slot,
+                                reason,
+                            },
+                        )?;
+
                     self.collect_signature(
-                        PartialSignatureKind::ContributionProofs, // Original Alan-only enum
+                        PartialSignatureKind::ContributionProofs,
                         Role::SyncCommittee,
-                        CollectionMode::SingleValidator,
+                        CollectionMode::SingleValidatorBatch {
+                            subnet_id,
+                            descriptor,
+                        },
                         &validator,
                         &cluster,
                         signing_root,
                         slot,
-                    ),
-                )
+                    )
+                    .await
+                })
                 .await?
             };
 
@@ -3499,10 +3617,14 @@ mod tests {
             sync_validators_by_subnet: sync_validators_by_subnet
                 .into_iter()
                 .map(|(idx, subnets)| {
-                    (
-                        ValidatorIndex(idx),
-                        subnets.into_iter().map(SyncSubnetId::new).collect(),
-                    )
+                    let position_counts =
+                        subnets
+                            .into_iter()
+                            .fold(HashMap::new(), |mut counts, subnet_id| {
+                                *counts.entry(SyncSubnetId::new(subnet_id)).or_insert(0) += 1;
+                                counts
+                            });
+                    (ValidatorIndex(idx), position_counts)
                 })
                 .collect(),
         }
@@ -3603,6 +3725,27 @@ mod tests {
         // The difference highlights the counting patterns:
         // - Selection proofs need one proof per subnet per validator
         // - Voting messages need one message per validator regardless of subnets
+    }
+
+    #[test]
+    fn test_position_multiplicity_does_not_inflate_boole_counts() {
+        let voting_assignments = create_test_voting_assignments(vec![], vec![(1, vec![0, 0, 1])]);
+        let all_in_committee = |_: &ValidatorIndex| true;
+
+        assert_eq!(
+            voting_assignments.selection_proof_count_for_committee(all_in_committee),
+            2,
+            "Boole selection-proof batching counts unique subnet keys"
+        );
+        assert_eq!(
+            voting_assignments.voting_message_count_for_committee(all_in_committee),
+            1,
+            "voting-message batching counts the validator key once"
+        );
+        assert_eq!(
+            voting_assignments.sync_validators_by_subnet[&ValidatorIndex(1)],
+            HashMap::from([(SyncSubnetId::new(0), 2), (SyncSubnetId::new(1), 1)])
+        );
     }
 
     #[test]

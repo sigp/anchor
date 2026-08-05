@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use duties_tracker::DutiesProvider;
 use slot_clock::SlotClock;
 use ssv_types::{
-    OperatorId,
+    MAX_SYNC_COMMITTEE_POSITIONS, OperatorId,
     msgid::Role,
     partial_sig::{PartialSignatureKind, PartialSignatureMessages, PartialSignatureMessagesError},
 };
@@ -17,7 +17,7 @@ use crate::{
 };
 
 // Constants for validation rules
-const MAX_SIGNATURES_IN_SYNC_COMMITTEE: usize = 13;
+const MAX_SIGNATURES_IN_SYNC_COMMITTEE: usize = MAX_SYNC_COMMITTEE_POSITIONS;
 
 pub(crate) fn validate_partial_signature_message(
     validation_context: ValidationContext<impl SlotClock>,
@@ -977,13 +977,14 @@ mod tests {
     /// Returns the validation result for assertion in individual tests.
     fn validate_sync_committee_signature_count(
         message_count: usize,
+        kind: PartialSignatureKind,
     ) -> Result<ValidatedSSVMessage, ValidationFailure> {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
 
         let messages = create_partial_signature_messages_with_count(message_count);
 
         let partial_sig_messages = PartialSignatureMessages {
-            kind: PartialSignatureKind::PostConsensus,
+            kind,
             slot: Slot::new(0),
             messages: VariableList::new(messages).unwrap(),
         };
@@ -1090,7 +1091,8 @@ mod tests {
     #[test]
     fn test_sync_committee_accepts_multiple_signatures_within_limit() {
         // Test 3 signatures (well within the limit)
-        let result = validate_sync_committee_signature_count(3);
+        let result =
+            validate_sync_committee_signature_count(3, PartialSignatureKind::PostConsensus);
 
         assert!(
             result.is_ok(),
@@ -1100,9 +1102,9 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_committee_accepts_max_signatures() {
-        // Test exactly 13 signatures (at the limit)
-        let result = validate_sync_committee_signature_count(13);
+    fn contribution_proofs_accept_thirteen_repeated_validator_entries() {
+        let result =
+            validate_sync_committee_signature_count(13, PartialSignatureKind::ContributionProofs);
 
         assert!(
             result.is_ok(),
@@ -1112,9 +1114,9 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_committee_rejects_too_many_signatures() {
-        // Test 14 signatures (one over the limit)
-        let result = validate_sync_committee_signature_count(14);
+    fn contribution_proofs_reject_fourteen_repeated_validator_entries() {
+        let result =
+            validate_sync_committee_signature_count(14, PartialSignatureKind::ContributionProofs);
 
         assert_validation_error(
             result,
@@ -1131,7 +1133,8 @@ mod tests {
     #[test]
     fn test_sync_committee_accepts_single_signature() {
         // Test 1 signature (minimal case)
-        let result = validate_sync_committee_signature_count(1);
+        let result =
+            validate_sync_committee_signature_count(1, PartialSignatureKind::PostConsensus);
 
         assert!(
             result.is_ok(),

@@ -16,6 +16,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, ValidatorIndex, VariableList,
     consensus::{AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion},
+    typenum::Unsigned,
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
@@ -45,6 +46,7 @@ struct SyncAggregatorData {
 
 /// Map from SSV committee to its sync aggregators grouped by subnet.
 type SyncByCommitteeMap = HashMap<CommitteeId, Vec<(SyncSubnetId, SyncAggregatorData)>>;
+type SyncSubnetPositionCounts = HashMap<SyncSubnetId, usize>;
 
 /// Maximum time to wait for beacon node API calls to fetch aggregated attestations
 /// and sync contributions. After this timeout, we return whatever partial results
@@ -60,6 +62,39 @@ const BEACON_API_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 const WAD_SOFT_TIMEOUT: Duration = Duration::from_secs(1);
 const WAD_HARD_TIMEOUT: Duration = Duration::from_secs(3);
 const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Builds each validator's per-subnet position counts from raw sync committee positions.
+fn build_sync_validator_assignments<E, I, P>(
+    duties: I,
+) -> HashMap<ValidatorIndex, SyncSubnetPositionCounts>
+where
+    E: EthSpec,
+    I: IntoIterator<Item = (ValidatorIndex, P)>,
+    P: IntoIterator<Item = u64>,
+{
+    let mut positions_by_validator = HashMap::<ValidatorIndex, HashSet<u64>>::new();
+    for (validator_index, positions) in duties {
+        // Sync committee positions are unique indices. Unioning them prevents malformed repeated
+        // JSON duty records, including exact duplicate positions, from inflating multiplicity.
+        positions_by_validator
+            .entry(validator_index)
+            .or_default()
+            .extend(positions);
+    }
+
+    let subcommittee_size = E::SyncSubcommitteeSize::to_u64();
+    positions_by_validator
+        .into_iter()
+        .map(|(validator_index, positions)| {
+            let mut position_counts = SyncSubnetPositionCounts::new();
+            for position in positions {
+                let subnet_id = SyncSubnetId::new(position / subcommittee_size);
+                *position_counts.entry(subnet_id).or_default() += 1;
+            }
+            (validator_index, position_counts)
+        })
+        .collect()
+}
 
 #[derive(Debug)]
 struct AttestationScore {
@@ -344,29 +379,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .get_duties_for_slot::<E>(slot, &self.spec)
             .as_ref()
             .map(|sync_duties| {
-                let mut map = HashMap::<ValidatorIndex, HashSet<SyncSubnetId>>::new();
-                sync_duties
-                    .duties
-                    .iter()
-                    .filter_map(|duty| {
-                        SyncSubnetId::compute_subnets_for_sync_committee::<E>(
-                            &duty.validator_sync_committee_indices,
-                        )
-                        .map_err(|e| {
-                            tracing::warn!(
-                                "Failed to compute sync subnets for validator {}: {e:?}",
-                                duty.validator_index
-                            );
-                        })
-                        .ok()
-                        .map(|subnet_ids| {
-                            (ValidatorIndex(duty.validator_index as usize), subnet_ids)
-                        })
-                    })
-                    .for_each(|(validator_index, subnet_ids)| {
-                        map.entry(validator_index).or_default().extend(subnet_ids);
-                    });
-                map
+                build_sync_validator_assignments::<E, _, _>(sync_duties.duties.iter().map(|duty| {
+                    (
+                        ValidatorIndex(duty.validator_index as usize),
+                        duty.validator_sync_committee_indices.iter().copied(),
+                    )
+                }))
             })
             .unwrap_or_default();
 
@@ -1385,6 +1403,26 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════════════════════════
     // Test Helpers
     // ═══════════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn sync_assignments_union_repeated_duties_and_deduplicate_positions() {
+        let validator = ValidatorIndex(42);
+        let empty_validator = ValidatorIndex(43);
+        let assignments = build_sync_validator_assignments::<MainnetEthSpec, _, _>([
+            (validator, vec![0, 1]),
+            (validator, vec![1, 128]),
+            (empty_validator, vec![]),
+        ]);
+
+        assert_eq!(
+            assignments[&validator],
+            HashMap::from([(SyncSubnetId::new(0), 2), (SyncSubnetId::new(1), 1)])
+        );
+        assert!(
+            assignments[&empty_validator].is_empty(),
+            "a present empty duty must remain distinguishable from a missing validator"
+        );
+    }
 
     /// Create a test AssignedAggregator with specified validator_index and committee_index
     fn create_aggregator(validator_index: usize, committee_index: u64) -> AssignedAggregator {
