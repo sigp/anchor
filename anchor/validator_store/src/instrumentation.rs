@@ -33,10 +33,9 @@ pub mod checkpoints {
 /// effects in the caller: the log level and whether a reconstruction-failure metric is
 /// incremented at all.
 pub enum CollectionFailureClass {
-    /// The committee never reached the partial signature threshold. This surfaces as
-    /// `QueueClosedError` because the collector is evicted after
-    /// `SIGNATURE_COLLECTOR_RETAIN_SLOTS`, dropping the result channel while we await it, so it
-    /// cannot be distinguished from a genuine channel close.
+    /// The committee never reached the partial signature threshold: `CollectionTimeout` from a
+    /// bounded wait, or `QueueClosedError` from collector eviction after
+    /// `SIGNATURE_COLLECTOR_RETAIN_SLOTS` (indistinguishable from a genuine channel close).
     NoSignature,
     /// Local infrastructure failed while collecting or reconstructing the signature.
     Infra,
@@ -51,11 +50,8 @@ pub fn classify_collection_failure(error: &Error) -> CollectionFailureClass {
         // forces a conscious classification decision here at compile time.
         Error::SpecificError(SpecificError::SignatureCollectionFailed(collection_error)) => {
             match collection_error {
-                // `CollectionTimeout` is synthesized by `sign_proposer_preferences` when its
-                // bounded collection-wait deadline elapses; the collector itself never emits it. It
-                // shares the no-signature bucket with the `QueueClosedError` threshold-not-reached
-                // signal because a deadline elapse likewise means the threshold was not reached
-                // within the wait window.
+                // `CollectionTimeout` comes only from `collect_within`, never the collector; an
+                // elapsed bound likewise means the threshold was not reached.
                 CollectionError::QueueClosedError | CollectionError::CollectionTimeout => {
                     CollectionFailureClass::NoSignature
                 }
