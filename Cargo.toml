@@ -189,11 +189,11 @@ ethereum_ssz_derive = { git = "https://github.com/sigp/ethereum_ssz", rev = "205
 tree_hash = { git = "https://github.com/sigp/tree_hash", rev = "03d9fa474586c125f306dd7a00cf46284575a01f" }
 tree_hash_derive = { git = "https://github.com/sigp/tree_hash", rev = "03d9fa474586c125f306dd7a00cf46284575a01f" }
 
-libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
+libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
 
 [profile.maxperf]
 inherits = "release"

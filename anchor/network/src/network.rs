@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use fork::ForkLifecycle;
+use fork::{ForkLifecycle, ForkSchedule};
 use futures::StreamExt;
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
@@ -33,7 +33,7 @@ use types::{ChainSpec, EthSpec};
 
 use crate::{
     Config, Enr,
-    behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError},
+    behaviour::{AnchorBehaviour, AnchorBehaviourEvent, BehaviourError, Gossipsub},
     discovery::{DiscoveredPeers, Discovery, DiscoveryError},
     handshake,
     keypair_utils::load_private_key,
@@ -100,6 +100,7 @@ impl<R: MessageReceiver> Network<R> {
         outcome_rx: mpsc::Receiver<Outcome>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
+        fork_schedule: Arc<ForkSchedule>,
         mut lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
@@ -117,6 +118,7 @@ impl<R: MessageReceiver> Network<R> {
             config,
             &mut metrics_registry,
             &spec,
+            &fork_schedule,
             lifecycle_rx.clone(),
         )
         .await
@@ -722,7 +724,7 @@ impl<R: MessageReceiver> Network<R> {
         &mut self.swarm.behaviour_mut().peer_manager
     }
 
-    fn gossipsub(&mut self) -> &mut gossipsub::Behaviour {
+    fn gossipsub(&mut self) -> &mut Gossipsub {
         &mut self.swarm.behaviour_mut().gossipsub
     }
 

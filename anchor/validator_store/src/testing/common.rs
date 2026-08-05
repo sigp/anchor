@@ -145,6 +145,7 @@ pub(super) struct CapturedSignatureCall {
     /// Only the root is captured, not the full `ValidatorSigningData`, so the capture never
     /// holds key share material.
     pub(super) signing_root: Hash256,
+    pub(super) validator_pubkey: PublicKeyBytes,
 }
 
 /// Mock that captures calls and returns a canned infinity signature, or a configured failure, or
@@ -172,6 +173,7 @@ impl SignatureCollecting for MockSignatureCollector {
             requester,
             metadata,
             signing_root: signing_data.root,
+            validator_pubkey: signing_data.validator_pubkey,
         });
         if self.hang {
             // Never resolves, so the caller only unblocks via the production collection timeout.

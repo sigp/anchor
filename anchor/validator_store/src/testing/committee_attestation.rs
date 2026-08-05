@@ -34,6 +34,13 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
         committee_a.cluster.committee_id(),
         committee_b.cluster.committee_id(),
     );
+    let mut expected_validator_pubkeys = committee_a
+        .validators
+        .iter()
+        .chain(&committee_b.validators)
+        .map(|validator| validator.public_key)
+        .collect::<Vec<_>>();
+    expected_validator_pubkeys.sort_by_key(ToString::to_string);
     let harness = ValidatorStoreTestHarness::new(vec![committee_a, committee_b], our_operator_id);
     harness.seed_voting_context();
     let attestations = vec![
@@ -72,6 +79,15 @@ async fn sign_attestations_produces_one_stream_item_per_committee() {
         captured.len(),
         expected_total,
         "expected {expected_total} sign_and_collect calls"
+    );
+    let mut captured_validator_pubkeys = captured
+        .iter()
+        .map(|call| call.validator_pubkey)
+        .collect::<Vec<_>>();
+    captured_validator_pubkeys.sort_by_key(ToString::to_string);
+    assert_eq!(
+        captured_validator_pubkeys, expected_validator_pubkeys,
+        "signature collection should receive each validator master public key"
     );
     let batch_sizes: Vec<_> = captured
         .iter()

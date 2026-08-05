@@ -80,6 +80,9 @@ jobs:
               with:
                   token: ${{ steps.app-token.outputs.token }}
                   ref: ${{ github.event.pull_request.head.sha }}
+                  # Fork PR checkout is gated on the is_member check above,
+                  # so only org members' code ever reaches this step.
+                  allow-unsafe-pr-checkout: true
 
             - name: Configure AWS Credentials (OIDC)
               if: steps.check.outputs.is_member == 'true'
@@ -102,9 +105,20 @@ jobs:
                     echo "PROMPT_EOF"
                   } >> "$GITHUB_OUTPUT"
 
+            # Save the diff to a file the agent can page through with Read.
+            # Reading it via `gh pr diff` wastes agent turns: large diffs
+            # overflow the tool-output limit and the tight tool allowlist
+            # blocks saving the output to a file.
+            - name: Save PR diff
+              if: steps.check.outputs.is_member == 'true'
+              run: |
+                  gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }} > "${GITHUB_WORKSPACE}/.claude-pr-diff.txt"
+              env:
+                  GH_TOKEN: ${{ github.token }}
+
             - name: Run Claude Code Action
               if: steps.check.outputs.is_member == 'true'
-              timeout-minutes: 15
+              timeout-minutes: 25
               env:
                   ACTIONS_STEP_DEBUG: true
               uses: anthropics/claude-code-action@v1.0.127
@@ -114,6 +128,10 @@ jobs:
                   prompt: |
                       REPO: ${{ github.repository }}
                       PR NUMBER: ${{ github.event.pull_request.number }}
+
+                      The full unified diff of this PR is saved at .claude-pr-diff.txt in
+                      the repository root. Read it with the Read tool (use offset/limit to
+                      page through large diffs) instead of running `gh pr diff`.
 
                       You are an automated silent watchdog reviewer. Your job is to catch
                       real problems — NOT to provide a comprehensive review or commentary.
@@ -125,8 +143,8 @@ jobs:
 
                       ${{ steps.review-prompt.outputs.content }}
                   claude_args: |
-                      --max-turns 50
-                      --model us.anthropic.claude-opus-4-7
+                      --max-turns 80
+                      --model us.anthropic.claude-opus-4-8
                       --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Bash(git status:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git grep:*)"
 
             - name: Remove claude-recheck label if present

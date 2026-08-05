@@ -539,6 +539,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let signing_data = ValidatorSigningData {
             root: signing_root,
             index: validator.index.ok_or(SpecificError::MissingIndex)?,
+            validator_pubkey: validator.public_key,
             share: decrypted_key_share,
         };
 
