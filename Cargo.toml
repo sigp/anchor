@@ -178,11 +178,11 @@ unicode-normalization = "0.1.25"
 zeroize = "1.8.1"
 
 [patch.crates-io]
-libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
-libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "3563de5ed20e509885592b391aa816992eef55d4" }
+libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-swarm = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-tcp = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-yamux = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
 
 [profile.maxperf]
 inherits = "release"
