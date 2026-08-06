@@ -2373,7 +2373,8 @@ mod tests {
         proposal_slot: Slot,
         signing_root: Hash256,
     ) -> SignedSSVMessage {
-        // Reuse the well-formed constructor, then swap in a signature from the wrong key.
+        // Signs the whole packet with an unrelated key, so RSA verification fails against the
+        // registered key
         create_signed_proposer_preferences_message(
             signer_id,
             wrong_key,
@@ -3310,7 +3311,7 @@ mod tests {
         )
     }
 
-    /// Root-byte helper: distinct low byte -> distinct signing root, all other bytes zero.
+    /// Fills all 32 bytes with `tag`, so distinct tags give distinct signing roots.
     fn dedup_root(tag: u8) -> Hash256 {
         Hash256::from([tag; 32])
     }

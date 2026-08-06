@@ -138,6 +138,8 @@ impl DutyState {
             // our own emission, is not (Ignore). Membership is checked before capacity so a
             // same-peer repeat stays Reject even when the set is full.
             if let Some(first_deliverer) = signer_state.seen_preferences.get(&root) {
+                // `is_some()` guard: our own emission is stored as `None`, so without it a
+                // re-emission would match `None == None` and wrongly Reject itself.
                 if received_from.is_some() && *first_deliverer == received_from {
                     return Err(ValidationFailure::DuplicatedMessage {
                         got: format!("proposer-preferences root {root:?}"),
