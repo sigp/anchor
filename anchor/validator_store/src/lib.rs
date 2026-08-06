@@ -294,7 +294,9 @@ async fn await_proposer_delay(proposer_delay: Duration, elapsed: Option<Duration
     if let ProposerDelayDecision::ClockUnavailable = decision {
         warn!(
             checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
-            outcome, "Slot clock unavailable, skipping configured proposer delay"
+            outcome,
+            "Slot timing unreadable (clock unavailable or reported time before slot start), \
+             skipping configured proposer delay"
         );
     } else {
         trace!(

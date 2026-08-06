@@ -28,7 +28,7 @@ use ssz::Encode;
 use ssz_types::VariableList;
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
-use tokio::sync::watch;
+use tokio::{sync::watch, time::Instant};
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
     Hash256, MainnetEthSpec, SelectionProof, Slot, SyncSubnetId,
@@ -38,7 +38,7 @@ use validator_store::{AggregateToSign, AttestationToSign};
 use crate::{AggregationAssignments, AnchorValidatorStore, VotingAssignments, VotingContext};
 
 pub(super) const TEST_SLOT: u64 = 1;
-const SLOT_DURATION_SECS: u64 = 12;
+pub(super) const SLOT_DURATION_SECS: u64 = 12;
 
 // ==================== Mock consensus decider ====================
 
@@ -68,6 +68,8 @@ pub(super) struct CapturedSignatureCall {
     pub(super) requester: SignatureRequester,
     pub(super) validator_pubkey: PublicKeyBytes,
     pub(super) signing_root: Hash256,
+    /// When the call was made.
+    pub(super) captured_at: Instant,
 }
 
 /// Mock that captures calls and returns a canned infinity signature.
@@ -86,6 +88,7 @@ impl SignatureCollecting for MockSignatureCollector {
             requester,
             validator_pubkey: signing_data.validator_pubkey,
             signing_root: signing_data.root,
+            captured_at: Instant::now(),
         });
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
@@ -175,6 +178,9 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
+    /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
+    /// after construction.
+    pub(super) slot_clock: ManualSlotClock,
     pub(super) is_synced_tx: watch::Sender<bool>,
     _slashing_db_dir: TempDir,
     _exit_signal: async_channel::Sender<()>,
@@ -189,6 +195,34 @@ impl ValidatorStoreTestHarness {
         committee_setups: Vec<CommitteeSetup>,
         our_operator_id: OperatorId,
         active_fork: Fork,
+    ) -> Self {
+        // No proposer delay by default: most tests assert timing-free behaviour.
+        Self::new_with_options(
+            committee_setups,
+            our_operator_id,
+            active_fork,
+            Duration::ZERO,
+        )
+    }
+
+    pub(super) fn new_with_proposer_delay(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        proposer_delay: Duration,
+    ) -> Self {
+        Self::new_with_options(
+            committee_setups,
+            our_operator_id,
+            Fork::Boole,
+            proposer_delay,
+        )
+    }
+
+    fn new_with_options(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        active_fork: Fork,
+        proposer_delay: Duration,
     ) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = database::test_utils::generators::pubkey::random_rsa();
@@ -289,7 +323,7 @@ impl ValidatorStoreTestHarness {
             30_000_000,
             None,
             false,
-            Duration::ZERO, // no proposer delay: tests assert timing-free behaviour
+            proposer_delay,
             false,
             is_synced_rx,
             executor,
@@ -299,6 +333,7 @@ impl ValidatorStoreTestHarness {
             validator_store,
             committee_setups,
             captured_calls,
+            slot_clock,
             is_synced_tx,
             _slashing_db_dir: slashing_db_dir,
             _exit_signal: exit_signal,
