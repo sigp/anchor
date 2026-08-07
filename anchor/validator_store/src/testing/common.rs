@@ -319,6 +319,8 @@ pub(super) struct ValidatorStoreTestHarness {
     /// The spec the store was built with, exposed so tests can recompute signing domains
     /// without duplicating the store's fork-selection logic.
     pub(super) spec: Arc<ChainSpec>,
+    /// The harness clock, exposed so tests can move time to drive slot-age behavior.
+    pub(super) slot_clock: ManualSlotClock,
     /// Genesis validators root the store was built with (`Hash256::zero()`), needed alongside
     /// `spec` to recompute signing roots.
     pub(super) genesis_validators_root: Hash256,
@@ -455,6 +457,7 @@ impl ValidatorStoreTestHarness {
             captured_calls,
             is_synced_tx,
             spec,
+            slot_clock,
             genesis_validators_root,
             _slashing_db_dir: slashing_db_dir,
             _exit_signal: exit_signal,
@@ -669,6 +672,15 @@ impl ValidatorStoreTestHarness {
                 signature: AggregateSignature::infinity(),
             }),
         }
+    }
+
+    /// The public key of validator `validator_idx` in committee `committee_idx`.
+    pub(super) fn validator_pubkey(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> PublicKeyBytes {
+        self.committee_setups[committee_idx].validators[validator_idx].public_key
     }
 
     /// Builds an attestation duty for `TEST_SLOT` whose `data.index` is pre-set to `index`,

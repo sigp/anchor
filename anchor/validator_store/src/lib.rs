@@ -88,6 +88,18 @@ use crate::instrumentation::CollectionFailureClass;
 /// This acts as a maximum safe-guard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
+/// Number of slots a decided block root stays readable.
+const MAX_DECIDED_ROOT_AGE_SLOTS: u64 = 4;
+
+/// Key for the decided-block-root handoff store.
+///
+/// The store serves many validators, so the slot alone cannot identify a duty.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct DecidedBlockRootKey {
+    validator: PublicKeyBytes,
+    slot: Slot,
+}
+
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
     NonZeroUsize::new(3000).expect("3000 is non-zero");
 
@@ -185,6 +197,8 @@ pub struct AnchorValidatorStore<
 > {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
+    /// Beacon block roots decided by block QBFT, keyed `(validator, slot)`.
+    decided_block_roots: Mutex<HashMap<DecidedBlockRootKey, Hash256>>,
     signature_collector: Box<dyn SignatureCollecting>,
     consensus: Arc<C>,
     slashing_protection: Arc<SlashingDatabase>,
@@ -233,6 +247,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Arc::new(Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
+            decided_block_roots: Mutex::new(HashMap::new()),
             signature_collector,
             consensus,
             slashing_protection,
@@ -614,8 +629,107 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         };
 
         // Decode the decided data into a block we can sign
-        decode_decided_block(&completed_data)
-            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
+        let unsigned_block = decode_decided_block(&completed_data)
+            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))?;
+
+        // Record the decided root for later reads. This point is reached holding the consensus
+        // decided value and each operator's own local proposal. Every participating
+        // operator records the same root. Post-Gloas only.
+        if ForkName::from(completed_data.version) >= ForkName::Gloas
+            && let UnsignedBlock::Full(FullBlockContents::Block(block)) = &unsigned_block
+        {
+            self.record_decided_block_root(validator.public_key, slot, block.canonical_root())
+                .map_err(Error::SpecificError)?;
+        }
+
+        Ok(unsigned_block)
+    }
+
+    /// Record the block-QBFT-decided beacon block root for `(validator_pubkey, slot)`.
+    ///
+    /// First-write-wins. A repeat write of the same root is idempotent. A write of a different
+    /// root is a hard error that keeps the first root.
+    ///
+    /// Entries older than `MAX_DECIDED_ROOT_AGE_SLOTS` relative to the inserted slot are dropped
+    /// on insert. A write for an old slot cannot evict a newer entry. This eviction mechanism only
+    /// restricts the map from storing old roots.
+    fn record_decided_block_root(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+        root: Hash256,
+    ) -> Result<(), SpecificError> {
+        let key = DecidedBlockRootKey {
+            validator: validator_pubkey,
+            slot,
+        };
+
+        let mut decided_block_roots = self.decided_block_roots.lock();
+
+        // Addition on the stored side, so an early slot cannot underflow.
+        decided_block_roots
+            .retain(|stored_key, _| stored_key.slot + MAX_DECIDED_ROOT_AGE_SLOTS >= slot);
+
+        match decided_block_roots.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(root);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                if entry.get() == &root {
+                    Ok(())
+                } else {
+                    Err(SpecificError::DecidedRootConflict(Box::new(
+                        DecidedRootConflict {
+                            validator_pubkey,
+                            slot,
+                            existing_root: *entry.get(),
+                            new_root: root,
+                        },
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Read the decided beacon block root for `(validator_pubkey, slot)`.
+    ///
+    /// The current slot comes from `self.slot_clock`, never from the caller, so untrusted input
+    /// cannot bypass the staleness check.
+    ///
+    /// The staleness check runs before the lookup. Eviction alone cannot reject a stale entry:
+    /// with no later insert, an old entry stays in the map.
+    ///
+    /// Reads are non-destructive and return the root by value.
+    #[cfg_attr(not(test), expect(dead_code))] // no non-test caller yet
+    fn get_decided_block_root(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+    ) -> Result<Hash256, Error> {
+        let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+
+        if slot + MAX_DECIDED_ROOT_AGE_SLOTS < current_slot {
+            return Err(Error::SpecificError(SpecificError::DecidedRootStale {
+                validator_pubkey,
+                slot,
+                current_slot,
+            }));
+        }
+
+        self.decided_block_roots
+            .lock()
+            .get(&DecidedBlockRootKey {
+                validator: validator_pubkey,
+                slot,
+            })
+            .copied()
+            .ok_or(Error::SpecificError(
+                SpecificError::DecidedRootUnavailable {
+                    validator_pubkey,
+                    slot,
+                },
+            ))
     }
 
     async fn sign_abstract_block(
@@ -2527,6 +2641,16 @@ enum CollectionMode {
     },
 }
 
+/// Payload of `SpecificError::DecidedRootConflict`: the rejected write and the root it collided
+/// with.
+#[derive(Debug, Clone)]
+pub struct DecidedRootConflict {
+    pub validator_pubkey: PublicKeyBytes,
+    pub slot: Slot,
+    pub existing_root: Hash256,
+    pub new_root: Hash256,
+}
+
 #[derive(Debug, Clone)]
 pub enum SpecificError {
     Unsupported,
@@ -2585,6 +2709,20 @@ pub enum SpecificError {
     ContributionNotInConsensus(u64),
     /// This validator not found in consensus data (Boole+)
     ValidatorNotInConsensus(ValidatorIndex),
+    /// A conflict in the existing stored decided block root for one `(validator, slot)
+    /// and an attempt at storing an alternative in its place.
+    DecidedRootConflict(Box<DecidedRootConflict>),
+    /// No decided block root is stored for `(validator, slot)`.
+    DecidedRootUnavailable {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+    },
+    /// The requested slot is more than `MAX_DECIDED_ROOT_AGE_SLOTS` slots behind the current slot.
+    DecidedRootStale {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+        current_slot: Slot,
+    },
 }
 
 impl From<CollectionError> for SpecificError {
