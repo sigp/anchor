@@ -387,6 +387,50 @@ async fn insert_evicts_entries_older_than_the_age_window() {
     );
 }
 
+/// An insert at exactly `MAX_DECIDED_ROOT_AGE_SLOTS` past an entry keeps that entry. The
+/// eviction window matches the read window at the maximum slot number, so an insert cannot drop a
+/// root that a read at the same slot can still serve.
+#[tokio::test]
+async fn insert_keeps_entries_at_exactly_the_maximum_number_window() {
+    let validator_store_state = ValidatorStoreTestState::new(1);
+    let old_slot = Slot::new(RECORD_SLOT);
+    let maximum_slot_number = Slot::new(RECORD_SLOT + MAX_DECIDED_ROOT_AGE_SLOTS);
+    set_clock_to_slot(&validator_store_state.harness, RECORD_SLOT);
+    validator_store_state
+        .harness
+        .validator_store
+        .record_decided_block_root(
+            validator_store_state.pubkey,
+            old_slot,
+            validator_store_state.root,
+        )
+        .expect("recording a root into an empty store should succeed");
+
+    // Insert at exactly the edge of the number window.
+    validator_store_state
+        .harness
+        .validator_store
+        .record_decided_block_root(
+            validator_store_state.pubkey,
+            maximum_slot_number,
+            validator_store_state.other_root,
+        )
+        .expect("recording a root at the maximum slot number should succeed");
+
+    assert!(
+        validator_store_state
+            .harness
+            .validator_store
+            .decided_block_roots
+            .lock()
+            .contains_key(&DecidedBlockRootKey {
+                validator: validator_store_state.pubkey,
+                slot: old_slot,
+            }),
+        "an insert at exactly the maximum slot number must keep the older entry"
+    );
+}
+
 /// A late write for an old slot must not evict a newer live root. Eviction is referenced to the
 /// inserted slot, so for a small inserted slot every newer key survives.
 #[tokio::test]
