@@ -1484,10 +1484,10 @@ mod tests {
             DataVersion, MaxAggregatedAttestationBytes, QbftDataValidator,
         },
     };
-    use ssz::Encode;
+    use ssz::{Encode, ProgressiveBitList};
     use ssz_types::{BitList, BitVector};
     use types::{
-        AttestationBase, AttestationData, AttestationElectra, Checkpoint, Epoch, ForkName,
+        AttestationBase, AttestationData, AttestationGloas, Checkpoint, Epoch, ForkName,
         MainnetEthSpec, SelectionProof, Slot, SyncCommitteeContribution,
     };
 
@@ -1725,7 +1725,7 @@ mod tests {
         vote: &SlotVote,
         committee_index: usize,
     ) -> Attestation<MainnetEthSpec> {
-        let mut aggregation_bits = BitList::with_capacity(128).expect("valid capacity");
+        let mut aggregation_bits = ProgressiveBitList::with_capacity(128);
         aggregation_bits
             .set(committee_index, true)
             .expect("committee index fits aggregation bits");
@@ -1734,7 +1734,7 @@ mod tests {
             .set(committee_index, true)
             .expect("committee index fits committee bits");
 
-        Attestation::Electra(AttestationElectra {
+        Attestation::Gloas(AttestationGloas {
             aggregation_bits,
             data: AttestationData {
                 slot,

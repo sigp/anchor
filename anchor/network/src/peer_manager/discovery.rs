@@ -42,9 +42,9 @@ impl PeerDiscovery {
 
         // Update peer store with TCP and QUIC addresses (not plain UDP)
         for multiaddr in enr
-            .multiaddr_tcp()
+            .dialable_multiaddrs_tcp()
             .iter()
-            .chain(enr.multiaddr_quic().iter())
+            .chain(enr.dialable_multiaddrs_quic().iter())
         {
             peer_store.on_swarm_event(&FromSwarm::NewExternalAddrOfPeer(NewExternalAddrOfPeer {
                 peer_id: id,

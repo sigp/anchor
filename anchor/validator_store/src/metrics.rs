@@ -36,6 +36,26 @@ pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
         )
     });
 
+/// The duty's `attester_index` differs from Anchor's stored validator index; indices are
+/// permanent once assigned, so this is never reorg drift.
+pub const IDENTITY_MISMATCH_ATTESTER_INDEX: &str = "attester_index";
+/// The duty's `committee_index` differs from the slot-start voting-assignments snapshot.
+pub const IDENTITY_MISMATCH_COMMITTEE_INDEX: &str = "committee_index";
+/// The duty's pubkey is absent from the slot-start attesting snapshot.
+pub const IDENTITY_MISMATCH_MISSING_FROM_SNAPSHOT: &str = "missing_from_snapshot";
+
+/// Attestation duties whose identity fields differ from Anchor's own metadata. Diagnostic
+/// only: the fields are not part of the signing root, publication proceeds, and the beacon
+/// node validates them authoritatively.
+pub static ATTESTATION_DUTY_IDENTITY_MISMATCHES: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_attestation_duty_identity_mismatches_total",
+            "Attestation duties whose identity fields differ from Anchor metadata, by reason",
+            &["reason"],
+        )
+    });
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MetadataService metrics
 // ═══════════════════════════════════════════════════════════════════════════════
