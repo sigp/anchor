@@ -47,9 +47,17 @@ jobs:
 
       - name: Install Kurtosis
         run: |
-          KURTOSIS_VERSION=$(curl -s https://api.github.com/repos/kurtosis-tech/kurtosis-cli-release-artifacts/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          set -euo pipefail
+          # Resolve the latest tag from the github.com redirect rather than api.github.com.
+          # The REST API allows 60 unauthenticated requests/hour per IP and the shared runner
+          # egress IPs exhaust it, which silently yielded an empty version and broke the job.
+          KURTOSIS_VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --retry 3 --retry-all-errors \
+            https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/latest | sed 's#.*/tag/##')
+          case "${KURTOSIS_VERSION}" in
+            ''|*/*) echo "::error::Could not resolve latest Kurtosis version (got '${KURTOSIS_VERSION}')"; exit 1 ;;
+          esac
           echo "Installing Kurtosis version: ${KURTOSIS_VERSION}"
-          curl -L "https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/${KURTOSIS_VERSION}/kurtosis-cli_${KURTOSIS_VERSION}_linux_amd64.tar.gz" -o kurtosis.tar.gz
+          curl -fL --retry 3 --retry-all-errors "https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/${KURTOSIS_VERSION}/kurtosis-cli_${KURTOSIS_VERSION}_linux_amd64.tar.gz" -o kurtosis.tar.gz
           tar -xzf kurtosis.tar.gz
           sudo mv kurtosis /usr/local/bin/
           sudo chmod +x /usr/local/bin/kurtosis
