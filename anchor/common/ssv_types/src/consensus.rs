@@ -23,10 +23,11 @@ use typenum::{
     Pow, Prod, Sum, U2, U3, U4, U5, U11, U13, U23, U56, U64, U131, U308, U700, U852, U1000, U10000,
 };
 use types::{
-    AggregateAndProofBase, AggregateAndProofElectra, AttestationBase, AttestationData,
-    AttestationElectra, BeaconBlock, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex,
-    Domain, EthSpec, ExecutionPayloadEnvelope, ExecutionRequestsGloas, ForkName, Hash256,
-    SignedRoot, Slot, SyncCommitteeContribution, consts::gloas::BUILDER_INDEX_SELF_BUILD,
+    AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, AggregateAndProofGloas,
+    Attestation, AttestationBase, AttestationData, AttestationElectra, AttestationGloas,
+    BeaconBlock, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
+    ExecutionPayloadEnvelope, ExecutionRequestsGloas, ForkName, Hash256, SignedRoot, Slot,
+    SyncCommitteeContribution, consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 
 use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
@@ -327,7 +328,14 @@ impl QbftData for EnvelopeConsensusData {
 /// with its tree-hash root, preserving SSZ merkleization parity: the blinded envelope's root
 /// equals the full envelope's root, so a signature over the blinded signing root is valid for
 /// the full envelope.
+///
+/// EIP-7688 makes the full `ExecutionPayloadEnvelope` a progressive container, so this mirror
+/// must merkleize progressively too or the parity above breaks (SIP-94 §6).
 #[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
+#[tree_hash(
+    struct_behaviour = "progressive_container",
+    active_fields(1, 1, 1, 1, 1)
+)]
 pub struct BlindedExecutionPayloadEnvelope<E: EthSpec> {
     /// Tree-hash root of the full `payload` (`ExecutionPayloadGloas`).
     pub payload_root: Hash256,
@@ -442,11 +450,20 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         // is only used for `Proposer`.
         match value.duty.r#type {
             BEACON_ROLE_AGGREGATOR => {
-                if value.version < DataVersion(ForkName::Electra) {
-                    AggregateAndProofBase::<E>::from_ssz_bytes(&value.data_ssz)?;
-                } else {
-                    AggregateAndProofElectra::<E>::from_ssz_bytes(&value.data_ssz)?;
+                // SIP-94 §2: `version` is leader-supplied and selects the decode shape (and
+                // thus the signing-root merkleization), so bind it to our own candidate before
+                // decoding. The proposer branch pins `version` to the duty-slot fork in
+                // `validate_block_proposal` instead.
+                if value.version != our_value.version {
+                    return Err(DataValidationError::VersionMismatch {
+                        expected: ForkName::from(our_value.version),
+                        got: ForkName::from(value.version),
+                    });
                 }
+                value
+                    .version
+                    .decode_aggregate_and_proof::<E>(&value.data_ssz)
+                    .map_err(DataValidationError::ForkDecode)?;
             }
             BEACON_ROLE_PROPOSER => {
                 self.validate_block_proposal(value)?;
@@ -535,6 +552,8 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
 pub enum DataValidationError {
     #[error("Unable to decode ssz in ProposerConsensusData: {0:?}")]
     DecodeError(DecodeError),
+    #[error("Unable to decode consensus payload: {0}")]
+    ForkDecode(ForkDecodeError),
     #[error("Invalid duty type for QBFT: {0:?}")]
     InvalidDutyType(BeaconRole),
     #[error("Slot mismatches: expected {expected}, got {got}")]
@@ -665,7 +684,8 @@ pub struct AggregatorCommitteeConsensusData<E: EthSpec> {
     /// Committee indexes that have aggregated attestations
     pub aggregator_committee_indexes: VariableList<u64, MaxCommitteeIndexes>,
     /// Aggregated attestations as SSZ bytes, one per committee index
-    /// Using bytes because attestation type varies by fork (Base vs Electra)
+    /// Using bytes because the attestation wire shape varies by fork; `version` selects the
+    /// decode shape (see [`DataVersion::decode_attestation`])
     pub aggregated_attestations:
         VariableList<VariableList<u8, MaxAggregatedAttestationBytes>, MaxCommitteeIndexes>,
     /// Validators selected as sync committee contributors with their selection proofs
@@ -736,8 +756,10 @@ pub enum AggregatorCommitteeValidationError {
     SyncSubcommitteeUnusedIndex,
     #[error("No validators assigned")]
     NoValidatorsAssigned,
-    #[error("Failed to decode attestation: {0:?}")]
-    AttestationDecodeError(ssz::DecodeError),
+    #[error("Failed to decode attestation: {0}")]
+    AttestationDecodeError(ForkDecodeError),
+    #[error("Data version mismatch: expected {expected:?}, got {got:?}")]
+    VersionMismatch { expected: ForkName, got: ForkName },
 }
 
 /// Validator for AggregatorCommitteeConsensusData during QBFT consensus.
@@ -751,9 +773,22 @@ impl<E: EthSpec> QbftDataValidator<AggregatorCommitteeConsensusData<E>>
     fn validate(
         &self,
         value: &AggregatorCommitteeConsensusData<E>,
-        _our_value: &AggregatorCommitteeConsensusData<E>,
+        our_value: &AggregatorCommitteeConsensusData<E>,
     ) -> bool {
-        match self.do_validation(value) {
+        // SIP-94 §2: `version` is leader-supplied and selects the decode shape (and thus the
+        // signing-root merkleization), so bind it to our own candidate before any decoding.
+        // The check lives here, not in `do_validation`, because `do_validation` is the
+        // ssv-spec parity surface exercised directly by spec_tests; this binding is
+        // Anchor-specific and must stay out of that entry point.
+        let result = if value.version == our_value.version {
+            self.do_validation(value)
+        } else {
+            Err(AggregatorCommitteeValidationError::VersionMismatch {
+                expected: ForkName::from(our_value.version),
+                got: ForkName::from(value.version),
+            })
+        };
+        match result {
             Ok(_) => true,
             Err(err) => {
                 warn!(%err, "Operator proposed invalid aggregator committee consensus data");
@@ -836,13 +871,10 @@ impl<E: EthSpec> AggregatorCommitteeDataValidator<E> {
 
         // Ensure attestation objects are decoded correctly
         for att_bytes in value.aggregated_attestations.iter() {
-            if value.version >= DataVersion::from(ForkName::Electra) {
-                AttestationElectra::<E>::from_ssz_bytes(att_bytes)
-                    .map_err(AggregatorCommitteeValidationError::AttestationDecodeError)?;
-            } else {
-                AttestationBase::<E>::from_ssz_bytes(att_bytes)
-                    .map_err(AggregatorCommitteeValidationError::AttestationDecodeError)?;
-            }
+            value
+                .version
+                .decode_attestation::<E>(att_bytes)
+                .map_err(AggregatorCommitteeValidationError::AttestationDecodeError)?;
         }
 
         // Sync committee contributors validation
@@ -914,6 +946,7 @@ impl Encode for DataVersion {
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
             ForkName::Gloas => 8,
+            ForkName::Heze => 9,
         };
         num.ssz_append(buf)
     }
@@ -947,8 +980,97 @@ impl Decode for DataVersion {
             6 => ForkName::Electra,
             7 => ForkName::Fulu,
             8 => ForkName::Gloas,
+            9 => ForkName::Heze,
             _ => return Err(DecodeError::NoMatchingVariant),
         }))
+    }
+}
+
+/// Error from fork-aware decoding of consensus-data payload bytes.
+#[derive(Error, Debug)]
+pub enum ForkDecodeError {
+    #[error("unable to decode ssz: {0:?}")]
+    Decode(DecodeError),
+    #[error("no wire shape pinned for fork {0}")]
+    UnsupportedFork(ForkName),
+}
+
+/// The wire shape a fork selects for attestation-family containers.
+enum WireShape {
+    Base,
+    Electra,
+    Gloas,
+}
+
+impl DataVersion {
+    /// Map this version to its attestation-family wire shape.
+    ///
+    /// The single home of the fork-to-shape equivalence classes; both decode helpers below go
+    /// through it. The match is deliberately exhaustive: Heze has no wire shape pinned at the
+    /// current Lighthouse pin and fails closed until one is.
+    fn wire_shape(&self) -> Result<WireShape, ForkDecodeError> {
+        match self.0 {
+            ForkName::Base
+            | ForkName::Altair
+            | ForkName::Bellatrix
+            | ForkName::Capella
+            | ForkName::Deneb => Ok(WireShape::Base),
+            ForkName::Electra | ForkName::Fulu => Ok(WireShape::Electra),
+            ForkName::Gloas => Ok(WireShape::Gloas),
+            ForkName::Heze => Err(ForkDecodeError::UnsupportedFork(ForkName::Heze)),
+        }
+    }
+
+    /// The version to stamp on consensus data carrying this attestation, i.e. the inverse of
+    /// [`Self::decode_attestation`]'s shape selection (each shape's representative fork).
+    pub fn for_attestation_shape<E: EthSpec>(attestation: &Attestation<E>) -> Self {
+        match attestation {
+            Attestation::Base(_) => ForkName::Base.into(),
+            Attestation::Electra(_) => ForkName::Electra.into(),
+            Attestation::Gloas(_) => ForkName::Gloas.into(),
+        }
+    }
+
+    /// Decode an SSZ `Attestation` with the wire shape this version selects.
+    ///
+    /// EIP-7688 makes the Gloas shapes serialization-compatible with Electra's, so decoding
+    /// with the wrong shape can still succeed byte-for-byte; what changes is merkleization,
+    /// so the wrong shape yields wrong signing roots on identical bytes (SIP-94 §2).
+    pub fn decode_attestation<E: EthSpec>(
+        &self,
+        bytes: &[u8],
+    ) -> Result<Attestation<E>, ForkDecodeError> {
+        match self.wire_shape()? {
+            WireShape::Base => AttestationBase::from_ssz_bytes(bytes)
+                .map(Attestation::Base)
+                .map_err(ForkDecodeError::Decode),
+            WireShape::Electra => AttestationElectra::from_ssz_bytes(bytes)
+                .map(Attestation::Electra)
+                .map_err(ForkDecodeError::Decode),
+            WireShape::Gloas => AttestationGloas::from_ssz_bytes(bytes)
+                .map(Attestation::Gloas)
+                .map_err(ForkDecodeError::Decode),
+        }
+    }
+
+    /// Decode an SSZ `AggregateAndProof` with the wire shape this version selects.
+    ///
+    /// See [`Self::decode_attestation`] for the shape-selection rules.
+    pub fn decode_aggregate_and_proof<E: EthSpec>(
+        &self,
+        bytes: &[u8],
+    ) -> Result<AggregateAndProof<E>, ForkDecodeError> {
+        match self.wire_shape()? {
+            WireShape::Base => AggregateAndProofBase::from_ssz_bytes(bytes)
+                .map(AggregateAndProof::Base)
+                .map_err(ForkDecodeError::Decode),
+            WireShape::Electra => AggregateAndProofElectra::from_ssz_bytes(bytes)
+                .map(AggregateAndProof::Electra)
+                .map_err(ForkDecodeError::Decode),
+            WireShape::Gloas => AggregateAndProofGloas::from_ssz_bytes(bytes)
+                .map(AggregateAndProof::Gloas)
+                .map_err(ForkDecodeError::Decode),
+        }
     }
 }
 
@@ -967,6 +1089,7 @@ impl TreeHash for DataVersion {
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
             ForkName::Gloas => 8,
+            ForkName::Heze => 9,
         };
         num.tree_hash_packed_encoding()
     }
@@ -985,6 +1108,7 @@ impl TreeHash for DataVersion {
             ForkName::Electra => 6,
             ForkName::Fulu => 7,
             ForkName::Gloas => 8,
+            ForkName::Heze => 9,
         };
         num.tree_hash_root()
     }
@@ -1642,6 +1766,7 @@ mod tests {
 
     use bls::{AggregateSignature, FixedBytesExtended};
     use eth2::types::FullBlockContents;
+    use ssz::ProgressiveBitList;
     use ssz_types::{BitList, BitVector};
     use types::{
         BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, ExecutionPayloadGloas,
@@ -1736,17 +1861,8 @@ mod tests {
         let attestation = AttestationBase::<MainnetEthSpec> {
             aggregation_bits: BitList::with_capacity(128).unwrap(),
             data: AttestationData {
-                slot: Slot::new(1000),
                 index,
-                beacon_block_root: Hash256::zero(),
-                source: Checkpoint {
-                    epoch: Epoch::new(10),
-                    root: Hash256::zero(),
-                },
-                target: Checkpoint {
-                    epoch: Epoch::new(11),
-                    root: Hash256::zero(),
-                },
+                ..decode_test_attestation_data()
             },
             signature: AggregateSignature::infinity(),
         };
@@ -4066,6 +4182,406 @@ mod tests {
         assert!(
             validator.validate(&value, &value),
             "validate() must accept regardless of version and duty.r#type"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // DataVersion Fork-Aware Decode Helper Tests (EIP-7688 / SIP-94 §2)
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Forks whose attestation/aggregate wire shape is the Base one.
+    const BASE_SHAPE_FORKS: [ForkName; 5] = [
+        ForkName::Base,
+        ForkName::Altair,
+        ForkName::Bellatrix,
+        ForkName::Capella,
+        ForkName::Deneb,
+    ];
+    /// Forks whose attestation/aggregate wire shape is the Electra one.
+    const ELECTRA_SHAPE_FORKS: [ForkName; 2] = [ForkName::Electra, ForkName::Fulu];
+
+    /// Attestation data shared by the decode-helper fixtures.
+    fn decode_test_attestation_data() -> AttestationData {
+        AttestationData {
+            slot: Slot::new(1000),
+            index: 0,
+            beacon_block_root: Hash256::zero(),
+            source: Checkpoint {
+                epoch: Epoch::new(10),
+                root: Hash256::zero(),
+            },
+            target: Checkpoint {
+                epoch: Epoch::new(11),
+                root: Hash256::zero(),
+            },
+        }
+    }
+
+    /// Base-shaped attestation with one aggregation bit set.
+    fn base_shape_attestation() -> AttestationBase<MainnetEthSpec> {
+        let mut aggregation_bits = BitList::with_capacity(128).unwrap();
+        aggregation_bits.set(0, true).unwrap();
+        AttestationBase {
+            aggregation_bits,
+            data: decode_test_attestation_data(),
+            signature: AggregateSignature::infinity(),
+        }
+    }
+
+    /// Electra-shaped attestation with one aggregation bit and one committee bit set.
+    fn electra_shape_attestation() -> AttestationElectra<MainnetEthSpec> {
+        let mut aggregation_bits = BitList::with_capacity(128).unwrap();
+        aggregation_bits.set(0, true).unwrap();
+        let mut committee_bits = BitVector::default();
+        committee_bits.set(5, true).unwrap();
+        AttestationElectra {
+            aggregation_bits,
+            data: decode_test_attestation_data(),
+            signature: AggregateSignature::infinity(),
+            committee_bits,
+        }
+    }
+
+    /// Gloas-shaped attestation with one aggregation bit and one committee bit set.
+    fn gloas_shape_attestation() -> AttestationGloas<MainnetEthSpec> {
+        let mut aggregation_bits = ProgressiveBitList::with_capacity(128);
+        aggregation_bits.set(0, true).unwrap();
+        let mut committee_bits = BitVector::default();
+        committee_bits.set(5, true).unwrap();
+        AttestationGloas {
+            aggregation_bits,
+            data: decode_test_attestation_data(),
+            signature: AggregateSignature::infinity(),
+            committee_bits,
+        }
+    }
+
+    fn base_shape_aggregate_and_proof() -> AggregateAndProofBase<MainnetEthSpec> {
+        AggregateAndProofBase {
+            aggregator_index: 7,
+            aggregate: base_shape_attestation(),
+            selection_proof: Signature::empty(),
+        }
+    }
+
+    fn electra_shape_aggregate_and_proof() -> AggregateAndProofElectra<MainnetEthSpec> {
+        AggregateAndProofElectra {
+            aggregator_index: 7,
+            aggregate: electra_shape_attestation(),
+            selection_proof: Signature::empty(),
+        }
+    }
+
+    fn gloas_shape_aggregate_and_proof() -> AggregateAndProofGloas<MainnetEthSpec> {
+        AggregateAndProofGloas {
+            aggregator_index: 7,
+            aggregate: gloas_shape_attestation(),
+            selection_proof: Signature::empty(),
+        }
+    }
+
+    #[test]
+    fn decode_attestation_selects_base_shape_for_pre_electra_versions() {
+        let bytes = base_shape_attestation().as_ssz_bytes();
+        for fork in BASE_SHAPE_FORKS {
+            let decoded = DataVersion::from(fork)
+                .decode_attestation::<MainnetEthSpec>(&bytes)
+                .unwrap_or_else(|e| panic!("{fork} must decode the Base shape: {e:?}"));
+            assert!(
+                matches!(decoded, Attestation::Base(_)),
+                "{fork} must select the Base attestation shape"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_attestation_selects_electra_shape_for_electra_and_fulu() {
+        let bytes = electra_shape_attestation().as_ssz_bytes();
+        for fork in ELECTRA_SHAPE_FORKS {
+            let decoded = DataVersion::from(fork)
+                .decode_attestation::<MainnetEthSpec>(&bytes)
+                .unwrap_or_else(|e| panic!("{fork} must decode the Electra shape: {e:?}"));
+            assert!(
+                matches!(decoded, Attestation::Electra(_)),
+                "{fork} must select the Electra attestation shape"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_attestation_selects_gloas_shape_for_gloas() {
+        let bytes = gloas_shape_attestation().as_ssz_bytes();
+        let decoded = DataVersion::from(ForkName::Gloas)
+            .decode_attestation::<MainnetEthSpec>(&bytes)
+            .expect("Gloas must decode the Gloas shape");
+        assert!(
+            matches!(decoded, Attestation::Gloas(_)),
+            "Gloas must select the Gloas attestation shape"
+        );
+    }
+
+    #[test]
+    fn decode_attestation_fails_closed_for_heze() {
+        // Even well-formed bytes for the latest pinned shape must be rejected: Heze has no wire
+        // shape pinned at the current Lighthouse pin.
+        let bytes = gloas_shape_attestation().as_ssz_bytes();
+        let result = DataVersion::from(ForkName::Heze).decode_attestation::<MainnetEthSpec>(&bytes);
+        assert!(
+            matches!(
+                result,
+                Err(ForkDecodeError::UnsupportedFork(ForkName::Heze))
+            ),
+            "Heze must fail closed, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn decode_aggregate_and_proof_selects_base_shape_for_pre_electra_versions() {
+        let bytes = base_shape_aggregate_and_proof().as_ssz_bytes();
+        for fork in BASE_SHAPE_FORKS {
+            let decoded = DataVersion::from(fork)
+                .decode_aggregate_and_proof::<MainnetEthSpec>(&bytes)
+                .unwrap_or_else(|e| panic!("{fork} must decode the Base shape: {e:?}"));
+            assert!(
+                matches!(decoded, AggregateAndProof::Base(_)),
+                "{fork} must select the Base aggregate-and-proof shape"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_aggregate_and_proof_selects_electra_shape_for_electra_and_fulu() {
+        let bytes = electra_shape_aggregate_and_proof().as_ssz_bytes();
+        for fork in ELECTRA_SHAPE_FORKS {
+            let decoded = DataVersion::from(fork)
+                .decode_aggregate_and_proof::<MainnetEthSpec>(&bytes)
+                .unwrap_or_else(|e| panic!("{fork} must decode the Electra shape: {e:?}"));
+            assert!(
+                matches!(decoded, AggregateAndProof::Electra(_)),
+                "{fork} must select the Electra aggregate-and-proof shape"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_aggregate_and_proof_selects_gloas_shape_for_gloas() {
+        let bytes = gloas_shape_aggregate_and_proof().as_ssz_bytes();
+        let decoded = DataVersion::from(ForkName::Gloas)
+            .decode_aggregate_and_proof::<MainnetEthSpec>(&bytes)
+            .expect("Gloas must decode the Gloas shape");
+        assert!(
+            matches!(decoded, AggregateAndProof::Gloas(_)),
+            "Gloas must select the Gloas aggregate-and-proof shape"
+        );
+    }
+
+    #[test]
+    fn decode_aggregate_and_proof_fails_closed_for_heze() {
+        let bytes = gloas_shape_aggregate_and_proof().as_ssz_bytes();
+        let result =
+            DataVersion::from(ForkName::Heze).decode_aggregate_and_proof::<MainnetEthSpec>(&bytes);
+        assert!(
+            matches!(
+                result,
+                Err(ForkDecodeError::UnsupportedFork(ForkName::Heze))
+            ),
+            "Heze must fail closed, got {result:?}"
+        );
+    }
+
+    /// EIP-7495 makes progressive containers serialization-compatible with their positional
+    /// counterparts: the SAME Electra-shaped bytes decode successfully under BOTH the Electra
+    /// and the Gloas shape. What changes is merkleization (positional vs progressive), so the
+    /// two decoded values produce different tree hash roots on identical bytes. This is exactly
+    /// why `version` must select the decode shape (SIP-94 §2): decode success alone cannot
+    /// detect a shape mismatch.
+    #[test]
+    fn identical_attestation_bytes_decode_under_both_shapes_with_distinct_roots() {
+        let bytes = electra_shape_attestation().as_ssz_bytes();
+
+        let electra = DataVersion::from(ForkName::Electra)
+            .decode_attestation::<MainnetEthSpec>(&bytes)
+            .expect("Electra-shaped bytes must decode under the Electra shape");
+        let gloas = DataVersion::from(ForkName::Gloas)
+            .decode_attestation::<MainnetEthSpec>(&bytes)
+            .expect("EIP-7495: the same bytes must also decode under the Gloas shape");
+
+        assert!(matches!(electra, Attestation::Electra(_)));
+        assert!(matches!(gloas, Attestation::Gloas(_)));
+        // Serialization compatibility holds in both directions: both decodes re-encode to the
+        // original bytes.
+        assert_eq!(electra.as_ssz_bytes(), bytes);
+        assert_eq!(gloas.as_ssz_bytes(), bytes);
+        // Positional (Electra) vs progressive (Gloas) merkleization: the roots must differ.
+        assert_ne!(
+            electra.tree_hash_root(),
+            gloas.tree_hash_root(),
+            "identical bytes must merkleize differently under positional vs progressive shapes"
+        );
+    }
+
+    /// Same as the attestation root test, for `AggregateAndProof`: identical Electra-shaped
+    /// bytes decode under both shapes, but the signing root over the container differs, so an
+    /// operator decoding with the wrong shape would sign a root its peers reject.
+    #[test]
+    fn identical_aggregate_bytes_decode_under_both_shapes_with_distinct_signing_roots() {
+        let bytes = electra_shape_aggregate_and_proof().as_ssz_bytes();
+
+        let electra = DataVersion::from(ForkName::Electra)
+            .decode_aggregate_and_proof::<MainnetEthSpec>(&bytes)
+            .expect("Electra-shaped bytes must decode under the Electra shape");
+        let gloas = DataVersion::from(ForkName::Gloas)
+            .decode_aggregate_and_proof::<MainnetEthSpec>(&bytes)
+            .expect("EIP-7495: the same bytes must also decode under the Gloas shape");
+
+        assert!(matches!(electra, AggregateAndProof::Electra(_)));
+        assert!(matches!(gloas, AggregateAndProof::Gloas(_)));
+        assert_eq!(electra.as_ssz_bytes(), bytes);
+        assert_eq!(gloas.as_ssz_bytes(), bytes);
+        assert_ne!(
+            electra.tree_hash_root(),
+            gloas.tree_hash_root(),
+            "identical bytes must merkleize differently under positional vs progressive shapes"
+        );
+        let domain = Hash256::repeat_byte(0xD0);
+        assert_ne!(
+            electra.signing_root(domain),
+            gloas.signing_root(domain),
+            "the signing root over the container must differ between the two shapes"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // do_validation Aggregator-Branch Version Binding Tests (SIP-94 §2)
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Builds an aggregator-duty `ProposerConsensusData` stamped with `fork`, carrying
+    /// `data_ssz`. The duty slot is arbitrary: the aggregator branch binds `version` to our own
+    /// candidate, not to the fork schedule.
+    fn aggregator_consensus_data(fork: ForkName, data_ssz: Vec<u8>) -> ProposerConsensusData {
+        let mut duty = test_proposer_duty(Slot::new(1000));
+        duty.r#type = BEACON_ROLE_AGGREGATOR;
+        ProposerConsensusData {
+            duty,
+            version: DataVersion::from(fork),
+            data_ssz: VariableList::new(data_ssz).expect("aggregate bytes should fit in DataSSZ"),
+        }
+    }
+
+    #[test]
+    /// Tests that the aggregator branch rejects a value whose leader-supplied `version` differs
+    /// from our own candidate's, BEFORE any decoding: the value is well-formed for its claimed
+    /// version, so the rejection can only come from the version binding.
+    fn do_validation_rejects_aggregator_version_mismatch() {
+        let our_value = aggregator_consensus_data(
+            ForkName::Electra,
+            electra_shape_aggregate_and_proof().as_ssz_bytes(),
+        );
+        let value = aggregator_consensus_data(
+            ForkName::Deneb,
+            base_shape_aggregate_and_proof().as_ssz_bytes(),
+        );
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(ChainSpec::mainnet()), true);
+        let result = validator.do_validation(&value, &our_value);
+
+        assert_version_mismatch(result, ForkName::Electra, ForkName::Deneb);
+    }
+
+    #[test]
+    /// Tests that the aggregator branch accepts a value whose `version` matches our candidate's
+    /// and whose bytes decode under that version's shape.
+    fn do_validation_accepts_aggregator_matching_version() {
+        let our_value = aggregator_consensus_data(
+            ForkName::Electra,
+            electra_shape_aggregate_and_proof().as_ssz_bytes(),
+        );
+        let value = our_value.clone();
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(ChainSpec::mainnet()), true);
+        let result = validator.do_validation(&value, &our_value);
+
+        assert!(
+            result.is_ok(),
+            "matching aggregator version should validate, got {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    /// Tests that `AggregatorCommitteeDataValidator::validate` binds the leader-supplied
+    /// `version` to our own candidate's (SIP-94 §2): a value that is valid on its own terms is
+    /// still rejected when our candidate carries a different version.
+    fn aggregator_committee_validator_rejects_version_mismatch() {
+        let validator = create_aggregator_committee_validator();
+        // Same fixture as our Deneb-stamped candidate below, differing only in the stamped
+        // version and the matching (Electra-shaped) attestation bytes.
+        let electra_value = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
+            version: DataVersion::from(ForkName::Electra),
+            aggregated_attestations: VariableList::new(vec![
+                VariableList::new(electra_shape_attestation().as_ssz_bytes()).unwrap(),
+            ])
+            .unwrap(),
+            ..create_populated_consensus_data()
+        };
+        // Control: the value passes when our candidate carries the same version, so the
+        // rejection below can only come from the version binding.
+        assert!(
+            validator.validate(&electra_value, &electra_value),
+            "control: the value must be valid under a matching version"
+        );
+
+        // Our own candidate is stamped Deneb; the Electra-stamped value must be rejected.
+        let our_value = create_populated_consensus_data();
+        assert!(
+            !validator.validate(&electra_value, &our_value),
+            "validate() must return false when the value's version differs from our candidate's"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Max-Size Gloas Aggregate vs MaxAggregatedAttestationBytes
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// `MaxAggregatedAttestationBytes` (131,308) comes from go-ssv's `ssz-max:"64,131308"`
+    /// bound, derived pre-Gloas. A maximum-size Gloas aggregate (every committee bit set,
+    /// aggregation bits spanning every validator in the slot) must still fit, otherwise Gloas
+    /// aggregates could not be carried in `AggregatorCommitteeConsensusData`.
+    #[test]
+    fn max_size_gloas_aggregate_fits_aggregated_attestation_bound() {
+        use typenum::Unsigned;
+
+        let max_validators_per_slot = <MainnetEthSpec as EthSpec>::MaxValidatorsPerSlot::to_usize();
+        let max_committees_per_slot = <MainnetEthSpec as EthSpec>::MaxCommitteesPerSlot::to_usize();
+
+        let mut aggregation_bits = ProgressiveBitList::with_capacity(max_validators_per_slot);
+        for i in 0..max_validators_per_slot {
+            aggregation_bits.set(i, true).expect("bit within capacity");
+        }
+        let mut committee_bits = BitVector::default();
+        for i in 0..max_committees_per_slot {
+            committee_bits
+                .set(i, true)
+                .expect("committee bit within capacity");
+        }
+
+        let attestation = AttestationGloas::<MainnetEthSpec> {
+            aggregation_bits,
+            data: decode_test_attestation_data(),
+            signature: AggregateSignature::infinity(),
+            committee_bits,
+        };
+
+        let bytes = attestation.as_ssz_bytes();
+        let bound = MaxAggregatedAttestationBytes::to_usize();
+        assert!(
+            bytes.len() <= bound,
+            "max-size Gloas aggregate ({} bytes) must fit the {bound} byte bound",
+            bytes.len()
+        );
+        assert!(
+            VariableList::<u8, MaxAggregatedAttestationBytes>::new(bytes).is_ok(),
+            "max-size Gloas aggregate must fit the aggregated_attestations element type"
         );
     }
 }

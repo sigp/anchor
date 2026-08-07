@@ -4,13 +4,11 @@ use std::time::Duration;
 use futures::StreamExt;
 use signature_collector::SignatureRequester;
 use ssv_types::OperatorId;
-use types::{Attestation, MainnetEthSpec};
 use validator_store::ValidatorStore;
 
 use super::common::*;
 use crate::Error;
 
-type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
 const PRIMARY_COMMITTEE_VALIDATOR_COUNT: usize = 2;
 const SINGLE_VALIDATOR_COMMITTEE_VALIDATOR_COUNT: usize = 1;
 
@@ -167,6 +165,46 @@ async fn sign_attestations_failure_isolation() {
         second.is_err(),
         "stuck committee should not produce a result"
     );
+}
+
+/// Each returned `SingleAttestation` must echo the duty's identity fields (`attester_index` and
+/// `committee_index`) verbatim: the store signs only `data`, and Lighthouse's attestation service
+/// publishes the identity fields exactly as returned.
+#[tokio::test(flavor = "multi_thread")]
+async fn sign_attestations_echoes_duty_identity_fields() {
+    // Arrange
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(
+        &[OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)],
+        PRIMARY_COMMITTEE_VALIDATOR_COUNT,
+        0,
+    );
+    let harness = ValidatorStoreTestHarness::new(vec![committee], our_operator_id);
+    harness.seed_voting_context();
+    let attestations = vec![
+        harness.create_attestation(0, 0),
+        harness.create_attestation(0, 1),
+    ];
+    let expected_identities: Vec<(u64, u64)> = attestations
+        .iter()
+        .map(|duty| (duty.attester_index, duty.committee_index))
+        .collect();
+    // Precondition: the duties carry distinct identity pairs, so echoing is falsifiable.
+    assert_ne!(expected_identities[0], expected_identities[1]);
+
+    // Act
+    let signed = run_sign_attestations(&harness, attestations).await;
+
+    // Assert: one attestation per validator, each echoing its duty's identity fields.
+    assert_eq!(signed.len(), PRIMARY_COMMITTEE_VALIDATOR_COUNT);
+    for (attester_index, committee_index) in expected_identities {
+        assert!(
+            signed.iter().any(|att| att.attester_index == attester_index
+                && att.committee_index == committee_index),
+            "expected an attestation echoing attester_index {attester_index} and \
+             committee_index {committee_index}"
+        );
+    }
 }
 
 /// `sign_attestations` returns an immediate `NotSynced` error when not synced.
