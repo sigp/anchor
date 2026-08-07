@@ -264,6 +264,11 @@ Network Options:
                base + 3 per subnet, capped at 150)
 
 Payload Building Options:
+         --allow-dangerous-proposer-delay
+               Permit a --proposer-delay-ms above the safety threshold. Delays
+               this large significantly increase the risk of missed block
+               proposals. Only set this if you understand the trade-off.
+
          --builder-boost-factor <UINT64>
                Defines the boost factor, a percentage multiplier to apply to
                the builder's payload value when choosing between a builder
@@ -301,6 +306,17 @@ Payload Building Options:
          --prefer-builder-proposals
                If this flag is set, Anchor will always prefer blocks
                constructed by builders, regardless of payload value.
+
+         --proposer-delay-ms <MILLISECONDS>
+               Wait until this many milliseconds into the slot before
+               requesting a block for a proposer duty, giving builders longer
+               to bid for it. This is a minimum offset from the start of the
+               slot, not extra latency: if the RANDAO pre-consensus round
+               already finished later than this, no additional wait happens. A
+               recommended starting value is 300. Higher values increase the
+               risk of missing the block proposal.
+               
+               [default: 0]
 
          --strict-mfp
                Enable strict majority fork protection. When enabled, the node

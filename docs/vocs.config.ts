@@ -72,6 +72,7 @@ export default defineConfig({
             ]
           },
           { text: 'Metrics', link: '/metrics' },
+          { text: 'MEV Configuration', link: '/mev_configuration' },
           { text: 'Advanced Networking', link: '/advanced_networking' },
           { text: 'FAQs', link: '/faq' },
         ]
