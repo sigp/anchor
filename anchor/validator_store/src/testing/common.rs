@@ -30,10 +30,10 @@ use ssz::Encode;
 use ssz_types::VariableList;
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
-use tokio::sync::watch;
+use tokio::{sync::watch, time::Instant};
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
-    Hash256, MainnetEthSpec, SelectionProof, SingleAttestation, Slot,
+    Hash256, MainnetEthSpec, SelectionProof, SingleAttestation, Slot, SyncSubnetId,
 };
 use validator_store::{AggregateToSign, AttestationToSign, SyncMessageToSign, ValidatorStore};
 
@@ -42,7 +42,7 @@ use crate::{
 };
 
 pub(super) const TEST_SLOT: u64 = 1;
-const SLOT_DURATION_SECS: u64 = 12;
+pub(super) const SLOT_DURATION_SECS: u64 = 12;
 
 /// The raw item stream `sign_attestations` yields: one `Result` batch per committee.
 pub(super) type SignAttestationsResult = Vec<Result<Vec<SingleAttestation>, Error>>;
@@ -146,6 +146,8 @@ pub(super) struct CapturedSignatureCall {
     /// holds key share material.
     pub(super) signing_root: Hash256,
     pub(super) validator_pubkey: PublicKeyBytes,
+    /// When the call was made.
+    pub(super) captured_at: Instant,
 }
 
 /// Mock that captures calls and returns a canned infinity signature, or a configured failure, or
@@ -174,6 +176,7 @@ impl SignatureCollecting for MockSignatureCollector {
             metadata,
             signing_root: signing_data.root,
             validator_pubkey: signing_data.validator_pubkey,
+            captured_at: Instant::now(),
         });
         if self.hang {
             // Never resolves, so the caller only unblocks via the production collection timeout.
@@ -288,6 +291,12 @@ pub(super) struct HarnessOptions {
     /// When `Some`, the mock decides every `GloasBeaconVote` with this `attestation_data_index`,
     /// modeling a cluster-decided index that may differ from each operator's local seed.
     pub(super) forced_gloas_index: Option<u64>,
+    /// SSV fork the store's `ForkSchedule` reports as active. Defaults to `Boole`; tests that
+    /// exercise pre-Boole behaviour supply an earlier fork.
+    pub(super) active_fork: Fork,
+    /// Proposer delay wired into the store. Defaults to zero so most tests assert timing-free
+    /// behaviour.
+    pub(super) proposer_delay: Duration,
 }
 
 impl Default for HarnessOptions {
@@ -301,6 +310,8 @@ impl Default for HarnessOptions {
             disable_slashing_protection: true,
             spec: Arc::new(ChainSpec::mainnet()),
             forced_gloas_index: None,
+            active_fork: Fork::Boole,
+            proposer_delay: Duration::ZERO,
         }
     }
 }
@@ -340,6 +351,9 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
+    /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
+    /// after construction.
+    pub(super) slot_clock: ManualSlotClock,
     pub(super) is_synced_tx: watch::Sender<bool>,
     /// The spec the store was built with, exposed so tests can recompute signing domains
     /// without duplicating the store's fork-selection logic.
@@ -357,6 +371,36 @@ pub(super) struct ValidatorStoreTestHarness {
 impl ValidatorStoreTestHarness {
     pub(super) fn new(committee_setups: Vec<CommitteeSetup>, our_operator_id: OperatorId) -> Self {
         Self::new_with_options(committee_setups, our_operator_id, HarnessOptions::default())
+    }
+
+    pub(super) fn new_with_fork(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        active_fork: Fork,
+    ) -> Self {
+        Self::new_with_options(
+            committee_setups,
+            our_operator_id,
+            HarnessOptions {
+                active_fork,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub(super) fn new_with_proposer_delay(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        proposer_delay: Duration,
+    ) -> Self {
+        Self::new_with_options(
+            committee_setups,
+            our_operator_id,
+            HarnessOptions {
+                proposer_delay,
+                ..Default::default()
+            },
+        )
     }
 
     pub(super) fn new_with_options(
@@ -379,7 +423,7 @@ impl ValidatorStoreTestHarness {
         let (executor, exit_signal) = create_test_executor();
 
         let fork_schedule = Arc::new(ForkSchedule::new(
-            Fork::Boole,
+            options.active_fork,
             ssv_types::domain_type::DomainType::default(),
             "test",
         ));
@@ -484,6 +528,7 @@ impl ValidatorStoreTestHarness {
             30_000_000,
             None,
             false,
+            options.proposer_delay,
             false,
             is_synced_rx,
             executor,
@@ -493,6 +538,7 @@ impl ValidatorStoreTestHarness {
             validator_store,
             committee_setups,
             captured_calls,
+            slot_clock,
             is_synced_tx,
             spec,
             genesis_validators_root,
@@ -500,6 +546,35 @@ impl ValidatorStoreTestHarness {
             _slashing_db_dir: slashing_db_dir,
             _exit_signal: exit_signal,
         }
+    }
+
+    pub(super) fn validator_metadata(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> ValidatorMetadata {
+        self.committee_setups[committee_idx].validators[validator_idx].clone()
+    }
+
+    pub(super) fn seed_sync_voting_assignments_for_slot(
+        &self,
+        slot: u64,
+        assignments: Vec<(ValidatorIndex, Vec<(SyncSubnetId, usize)>)>,
+    ) {
+        let sync_validators_by_subnet = assignments
+            .into_iter()
+            .map(|(validator_index, position_counts)| {
+                (validator_index, position_counts.into_iter().collect())
+            })
+            .collect();
+
+        self.validator_store
+            .update_voting_assignments(VotingAssignments {
+                slot: Slot::new(slot),
+                attesting_validators: Vec::new(),
+                attesting_committees: HashMap::new(),
+                sync_validators_by_subnet,
+            });
     }
 
     /// Builds the `VotingAssignments` for `TEST_SLOT`, marking every validator in every committee

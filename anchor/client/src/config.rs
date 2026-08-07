@@ -1,7 +1,7 @@
 // use crate::{http_api, http_metrics};
 // use clap_utils::{flags::DISABLE_MALLOC_TUNING_FLAG, parse_optional, parse_required};
 
-use std::{net::IpAddr, path::PathBuf};
+use std::{net::IpAddr, path::PathBuf, time::Duration};
 
 use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
 use cli::{NetworkOptions, Node};
@@ -15,6 +15,46 @@ use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, warn};
+
+/// Proposer delay above which startup requires `--allow-dangerous-proposer-delay`.
+///
+/// Matches go-ssv's threshold so a value ported across clients meets the same gate. It is a policy
+/// threshold, not a measured ceiling: go-ssv derived theirs from their own latencies, not ours.
+const DANGEROUS_PROPOSER_DELAY_MS: u64 = 1_000;
+
+/// Hard maximum proposer delay, refused regardless of `--allow-dangerous-proposer-delay`.
+///
+/// A typo guard, not a safety ceiling: the delay bounds only when the block *request* starts, and
+/// nothing after it is bounded by a slot-anchored deadline. Values well under this can still miss
+/// proposals. What it rules out is an extra zero, such as `4000` typed as `40000`.
+const MAX_PROPOSER_DELAY_MS: u64 = 4_000;
+
+/// Refuses anything above [`MAX_PROPOSER_DELAY_MS`], and anything above
+/// [`DANGEROUS_PROPOSER_DELAY_MS`] unless the operator acknowledged the risk.
+fn proposer_delay_from_millis(millis: u64, allow_dangerous: bool) -> Result<Duration, String> {
+    if millis > MAX_PROPOSER_DELAY_MS {
+        return Err(format!(
+            "--proposer-delay-ms {millis} exceeds the {MAX_PROPOSER_DELAY_MS}ms maximum. That bound \
+             is a guard against mistyped values; it is not a safe upper limit."
+        ));
+    }
+    if millis > DANGEROUS_PROPOSER_DELAY_MS && !allow_dangerous {
+        return Err(format!(
+            "--proposer-delay-ms {millis} is above the {DANGEROUS_PROPOSER_DELAY_MS}ms safety \
+             threshold and significantly increases the risk of missed block proposals. To proceed, \
+             you must also use --allow-dangerous-proposer-delay."
+        ));
+    }
+    // Inert rather than unsafe, so warn instead of refusing: otherwise an operator who sets the
+    // flag but mistypes the delay gets a clean startup, no delay, and no explanation.
+    if allow_dangerous && millis <= DANGEROUS_PROPOSER_DELAY_MS {
+        warn!(
+            "--allow-dangerous-proposer-delay has no effect: it is only required above \
+             {DANGEROUS_PROPOSER_DELAY_MS}ms, and --proposer-delay-ms is {millis}."
+        );
+    }
+    Ok(Duration::from_millis(millis))
+}
 
 /// Stores the core configuration for this Anchor instance.
 #[derive(Clone)]
@@ -69,6 +109,9 @@ pub struct Config {
     pub builder_boost_factor: Option<u64>,
     /// Should external payloads always be preferred
     pub prefer_builder_proposals: bool,
+    /// Minimum offset from the start of the slot before a proposer duty requests its beacon block,
+    /// giving builders longer to bid for it. Zero disables the behaviour.
+    pub proposer_delay: Duration,
     /// Controls whether the latency measurement service is enabled
     pub disable_latency_measurement_service: bool,
     /// Enables the beacon head monitor that reacts to head updates from connected beacon nodes.
@@ -124,6 +167,7 @@ impl Config {
             impostor: None,
             builder_boost_factor: None,
             prefer_builder_proposals: false,
+            proposer_delay: Duration::ZERO,
             gas_limit: 36_000_000,
             disable_latency_measurement_service: false,
             enable_beacon_head_monitor: true,
@@ -238,6 +282,13 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
     }
 
     config.gas_limit = cli_args.payload_building_options.gas_limit;
+
+    config.proposer_delay = proposer_delay_from_millis(
+        cli_args.payload_building_options.proposer_delay_ms,
+        cli_args
+            .payload_building_options
+            .allow_dangerous_proposer_delay,
+    )?;
 
     // Http API server
     config.http_api.enabled = cli_args.http_api_options.http;
@@ -532,4 +583,58 @@ pub fn parse_listening_addresses(network: &NetworkOptions) -> Result<ListenAddre
     };
 
     Ok(listening_addresses)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proposer_delay_default_is_disabled() {
+        assert_eq!(proposer_delay_from_millis(0, false), Ok(Duration::ZERO));
+    }
+
+    #[test]
+    fn proposer_delay_below_the_threshold_needs_no_acknowledgement() {
+        // 300ms is the recommended starting value, and must work without extra flags.
+        assert_eq!(
+            proposer_delay_from_millis(300, false),
+            Ok(Duration::from_millis(300))
+        );
+        assert_eq!(
+            proposer_delay_from_millis(DANGEROUS_PROPOSER_DELAY_MS, false),
+            Ok(Duration::from_millis(DANGEROUS_PROPOSER_DELAY_MS)),
+            "the threshold itself is allowed; only values above it are gated"
+        );
+    }
+
+    #[test]
+    fn proposer_delay_above_the_threshold_is_refused_without_acknowledgement() {
+        let err = proposer_delay_from_millis(DANGEROUS_PROPOSER_DELAY_MS + 1, false)
+            .expect_err("should be refused");
+        assert!(
+            err.contains("--allow-dangerous-proposer-delay"),
+            "the error must name the flag that unblocks it, got: {err}"
+        );
+    }
+
+    #[test]
+    fn proposer_delay_above_the_threshold_is_allowed_once_acknowledged() {
+        assert_eq!(
+            proposer_delay_from_millis(DANGEROUS_PROPOSER_DELAY_MS + 1, true),
+            Ok(Duration::from_millis(DANGEROUS_PROPOSER_DELAY_MS + 1))
+        );
+    }
+
+    #[test]
+    fn proposer_delay_above_the_hard_bound_is_refused_even_when_acknowledged() {
+        // The acknowledgement flag accepts extra risk, not arbitrary nonsense.
+        let err = proposer_delay_from_millis(MAX_PROPOSER_DELAY_MS + 1, true)
+            .expect_err("should be refused regardless of acknowledgement");
+        assert!(
+            !err.contains("--allow-dangerous-proposer-delay"),
+            "must not suggest a flag that cannot help, got: {err}"
+        );
+        assert!(proposer_delay_from_millis(MAX_PROPOSER_DELAY_MS, true).is_ok());
+    }
 }

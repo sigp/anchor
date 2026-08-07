@@ -5,4 +5,6 @@ mod committee_attestation;
 mod committee_attestation_gloas;
 mod committee_attestation_slashing;
 mod payload_attestation;
+mod proposer_delay;
 mod proposer_preferences;
+mod sync_selection_proof;

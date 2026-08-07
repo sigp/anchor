@@ -36,13 +36,13 @@ use qbft_manager::{
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
-    ValidatorSigningData,
+    SyncSelectionProofDescriptor, ValidatorSigningData,
 };
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
 use ssv_types::{
-    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, ValidatorIndex,
-    ValidatorMetadata,
+    Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, MAX_SYNC_COMMITTEE_POSITIONS,
+    OperatorId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
@@ -53,6 +53,7 @@ use ssv_types::{
     msgid::Role,
     partial_sig::PartialSignatureKind,
     try_to_variable_list,
+    typenum::Unsigned,
 };
 use ssz::{Decode, DecodeError, Encode};
 use task_executor::TaskExecutor;
@@ -204,9 +205,124 @@ pub struct AnchorValidatorStore<
     // operator controls
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
+    /// See [`await_proposer_delay`] for the semantics.
+    proposer_delay: Duration,
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
+}
+
+/// How far into `slot` the clock currently is, or `None` if the clock cannot answer.
+///
+/// Measured against the slot *named*, so the result is comparable to a delay target defined against
+/// that same slot. [`determine_slot_elapsed_ms`] is not usable here: it is relative to the current
+/// slot and wraps modulo the slot duration, so a duty that overran would read as a fresh one and
+/// re-arm the delay.
+fn elapsed_in_slot(slot_clock: &impl SlotClock, slot: Slot) -> Option<Duration> {
+    let start = slot_clock.start_of(slot)?;
+    // Both are durations since the UNIX epoch. `None` also covers a clock reporting a time before
+    // the slot began, which fails open like any other unreadable clock.
+    slot_clock.now_duration()?.checked_sub(start)
+}
+
+/// Outcome of evaluating the configured proposer delay for one proposer duty.
+///
+/// The no-wait cases are kept distinct because they are the operator's diagnostic: "off", "the
+/// floor did not bite", and "no clock" otherwise all render as a flat zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProposerDelayDecision {
+    Disabled,
+    /// Configured, but the target offset had already passed.
+    TargetPassed,
+    Waited(Duration),
+    /// Skipped: the clock could not say how far into the slot we are.
+    ClockUnavailable,
+}
+
+/// Decides the proposer delay from timings alone, so the policy is testable without a store.
+///
+/// `elapsed` comes from [`elapsed_in_slot`]; `None` fails open.
+fn proposer_delay_decision_at(
+    proposer_delay: Duration,
+    elapsed: Option<Duration>,
+) -> ProposerDelayDecision {
+    if proposer_delay.is_zero() {
+        return ProposerDelayDecision::Disabled;
+    }
+    let Some(elapsed) = elapsed else {
+        return ProposerDelayDecision::ClockUnavailable;
+    };
+    match proposer_delay.checked_sub(elapsed) {
+        Some(remaining) if !remaining.is_zero() => ProposerDelayDecision::Waited(remaining),
+        _ => ProposerDelayDecision::TargetPassed,
+    }
+}
+
+impl ProposerDelayDecision {
+    fn wait(self) -> Option<Duration> {
+        match self {
+            ProposerDelayDecision::Waited(duration) => Some(duration),
+            ProposerDelayDecision::Disabled
+            | ProposerDelayDecision::TargetPassed
+            | ProposerDelayDecision::ClockUnavailable => None,
+        }
+    }
+
+    /// Low-cardinality label for metrics and spans.
+    fn as_str(self) -> &'static str {
+        match self {
+            ProposerDelayDecision::Disabled => "disabled",
+            ProposerDelayDecision::TargetPassed => "target_passed",
+            ProposerDelayDecision::Waited(_) => "waited",
+            ProposerDelayDecision::ClockUnavailable => "clock_unavailable",
+        }
+    }
+}
+
+/// Holds this proposer duty until `proposer_delay` into its slot, recording the outcome either way,
+/// including the no-wait cases.
+///
+/// The delay is a *floor* from the start of the slot, not extra latency: a duty whose RANDAO
+/// pre-consensus already ran past it waits no longer. This matches go-ssv's `ProposerDelay`, so the
+/// same configured value yields the same request time on either client.
+///
+/// `elapsed` is passed in rather than re-read so the wait and
+/// [`metrics::RANDAO_REVEAL_COMPLETION_OFFSET`] share one measurement; operators are told to
+/// compare them. Missing slot timing fails open. When the delay *does* apply it knowingly spends
+/// proposal headroom, which is the trade the operator opted into.
+async fn await_proposer_delay(proposer_delay: Duration, elapsed: Option<Duration>) {
+    let decision = proposer_delay_decision_at(proposer_delay, elapsed);
+    let outcome = decision.as_str();
+
+    // Measure the real sleep, not the plan: both readings are documented as the wait applied.
+    let waited = match decision.wait() {
+        Some(planned) => {
+            let started = Instant::now();
+            sleep(planned).await;
+            started.elapsed()
+        }
+        None => Duration::ZERO,
+    };
+
+    Span::current().record("proposer_delay_outcome", outcome);
+    Span::current().record("proposer_delay_waited_ms", waited.as_millis() as u64);
+    metrics::observe_timer_vec(&metrics::PROPOSER_DELAY_APPLIED, &[outcome], waited);
+
+    if let ProposerDelayDecision::ClockUnavailable = decision {
+        warn!(
+            checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
+            outcome,
+            "Slot timing unreadable (clock unavailable or reported time before slot start), \
+             skipping configured proposer delay"
+        );
+    } else {
+        trace!(
+            checkpoint = instrumentation::checkpoints::PROPOSER_DELAY_APPLIED,
+            outcome,
+            waited_ms = waited.as_millis() as u64,
+            "Proposer delay evaluated"
+        );
+    }
 }
 
 impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidatorStore<T, E, C> {
@@ -225,6 +341,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         gas_limit: u64,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
+        proposer_delay: Duration,
         strict_mfp: bool,
         is_synced: watch::Receiver<bool>,
         task_executor: TaskExecutor,
@@ -248,6 +365,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             gas_limit,
             builder_boost_factor,
             prefer_builder_proposals,
+            proposer_delay,
             strict_mfp,
             is_synced,
             task_executor,
@@ -370,6 +488,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .iter()
             .filter_map(|item| {
                 let index = item.validator.index?;
+                let collection_mode = collection_mode.clone();
                 Some(async move {
                     let result = self
                         .collect_signature(
@@ -462,6 +581,64 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .signing_root(domain)
     }
 
+    fn sync_selection_proof_descriptor(
+        &self,
+        slot: Slot,
+        callback_subnet: SyncSubnetId,
+        position_counts: &HashMap<SyncSubnetId, usize>,
+    ) -> Result<Vec<SyncSelectionProofDescriptor>, SyncSelectionProofAssignmentError> {
+        if position_counts.is_empty() {
+            return Err(SyncSelectionProofAssignmentError::Empty);
+        }
+        if !position_counts.contains_key(&callback_subnet) {
+            return Err(SyncSelectionProofAssignmentError::MissingCallbackSubnet {
+                subnet_id: callback_subnet,
+            });
+        }
+
+        let subnet_count = E::SyncCommitteeSubnetCount::to_u64();
+        if let Some(subnet_id) = position_counts
+            .keys()
+            .copied()
+            .filter(|subnet_id| u64::from(*subnet_id) >= subnet_count)
+            .min_by_key(|subnet_id| u64::from(*subnet_id))
+        {
+            return Err(SyncSelectionProofAssignmentError::OutOfRangeSubnet {
+                subnet_id,
+                subnet_count,
+            });
+        }
+
+        // Total the whole assignment before enforcing the cap. Accumulating while constructing the
+        // descriptor would report a partial sum that depends on `HashMap` iteration order.
+        let expanded_positions = position_counts
+            .values()
+            .copied()
+            .fold(0usize, usize::saturating_add);
+        if expanded_positions > MAX_SYNC_COMMITTEE_POSITIONS {
+            return Err(SyncSelectionProofAssignmentError::TooManyPositions {
+                count: expanded_positions,
+                max: MAX_SYNC_COMMITTEE_POSITIONS,
+            });
+        }
+
+        let mut descriptor = Vec::with_capacity(position_counts.len());
+        for (&subnet_id, &position_count) in position_counts {
+            descriptor.push(SyncSelectionProofDescriptor {
+                subnet_id,
+                signing_root: self.compute_sync_selection_root(slot, subnet_id.into()),
+                position_count,
+            });
+        }
+
+        // Numeric subnet order makes retries byte-identical. Since
+        // `subnet = position / subcommittee_size` is monotonic, ascending duty positions produce
+        // the same root order, and repeated positions within one subnet share a root. Receiver
+        // correctness remains multiset-based and does not depend on this order.
+        descriptor.sort_unstable_by_key(|entry| u64::from(entry.subnet_id));
+        Ok(descriptor)
+    }
+
     #[expect(clippy::too_many_arguments)]
     async fn collect_signature(
         &self,
@@ -491,6 +668,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let requester = match collection_mode {
                 CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
                     pubkey: validator.public_key,
+                },
+                CollectionMode::SingleValidatorBatch {
+                    subnet_id,
+                    descriptor,
+                } => SignatureRequester::SingleValidatorBatch {
+                    pubkey: validator.public_key,
+                    subnet_id,
+                    descriptor,
                 },
                 CollectionMode::Committee {
                     validator_partial_signature_batch_size,
@@ -1407,17 +1592,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let sig_futures: Vec<_> = prepared
             .iter()
-            .map(|req| async {
+            .map(|req| {
                 self.collect_signature(
                     PartialSignatureKind::PostConsensus,
                     Role::AggregatorCommittee,
-                    collection_mode,
+                    collection_mode.clone(),
                     &req.validator,
                     &cluster,
                     req.signing_root,
                     slot,
                 )
-                .await
             })
             .collect();
 
@@ -2388,9 +2572,9 @@ pub struct VotingAssignments {
     pub attesting_validators: Vec<ValidatorIndex>,
     /// The pubkeys of attesting validators mapped to their attestation committee index.
     pub attesting_committees: HashMap<PublicKeyBytes, u64>,
-    /// Sync committee validators mapped to their subnet IDs.
-    /// A validator may participate in multiple subnets.
-    pub sync_validators_by_subnet: HashMap<ValidatorIndex, HashSet<SyncSubnetId>>,
+    /// Sync committee validators mapped to the number of original positions in each subnet.
+    /// A validator may participate in multiple subnets or occupy several positions in one subnet.
+    pub sync_validators_by_subnet: HashMap<ValidatorIndex, HashMap<SyncSubnetId, usize>>,
 }
 
 impl VotingAssignments {
@@ -2538,9 +2722,15 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
     selection_proof: SyncSelectionProof,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum CollectionMode {
     SingleValidator,
+    SingleValidatorBatch {
+        /// Subnet requested by the current Lighthouse callback.
+        subnet_id: SyncSubnetId,
+        /// Canonical descriptor for every unique subnet assigned to this validator and slot.
+        descriptor: Vec<SyncSelectionProofDescriptor>,
+    },
     Committee {
         /// The number of validator partial signatures this operator batches locally into the
         /// outgoing committee message for the round.
@@ -2548,6 +2738,22 @@ enum CollectionMode {
         /// Identifies which validator partial signatures belong in the same outgoing committee
         /// message.
         base_hash: Hash256,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncSelectionProofAssignmentError {
+    Empty,
+    MissingCallbackSubnet {
+        subnet_id: SyncSubnetId,
+    },
+    OutOfRangeSubnet {
+        subnet_id: SyncSubnetId,
+        subnet_count: u64,
+    },
+    TooManyPositions {
+        count: usize,
+        max: usize,
     },
 }
 
@@ -2595,6 +2801,11 @@ pub enum SpecificError {
     ValidatorNotInSyncCommittee {
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
+    },
+    InvalidSyncSelectionProofAssignment {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+        reason: SyncSelectionProofAssignmentError,
     },
     /// Pre-built consensus data not found for this committee (Boole+)
     ConsensusDataNotFound,
@@ -2720,6 +2931,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self.builder_boost_factor
     }
 
+    /// Runs RANDAO pre-consensus and reconstructs the reveal for this proposer duty.
+    ///
+    /// Also holds until `--proposer-delay-ms` into the slot before returning, so it can block for
+    /// as long as that setting allows. The reveal is a required parameter of the block request,
+    /// so Lighthouse cannot ask earlier and this is the last point Anchor owns before it does.
+    /// See `await_proposer_delay`.
     async fn randao_reveal(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -2728,8 +2945,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let span = info_span!(
             "proposer_randao_reveal",
             cluster_size = field::Empty,
-            clock_slot = field::Empty,
+            // Includes any proposer delay, and wraps like every other `slot_elapsed_ms` here.
+            // `randao_completed_ms` is pre-consensus alone, and does not wrap.
             slot_elapsed_ms = field::Empty,
+            clock_slot = field::Empty,
+            randao_completed_ms = field::Empty,
+            proposer_delay_outcome = field::Empty,
+            proposer_delay_waited_ms = field::Empty,
             signing_epoch = signing_epoch.as_u64(),
             failure_reason = field::Empty,
             outcome = field::Empty,
@@ -2757,16 +2979,37 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 let cluster_size = cluster.cluster_members.len();
                 Span::current().record("cluster_size", cluster_size);
 
-                self.collect_signature(
-                    PartialSignatureKind::RandaoPartialSig,
-                    Role::Proposer,
-                    CollectionMode::SingleValidator,
-                    &validator,
-                    &cluster,
-                    signing_root,
-                    clock_slot,
-                )
-                .await
+                let signature = self
+                    .collect_signature(
+                        PartialSignatureKind::RandaoPartialSig,
+                        Role::Proposer,
+                        CollectionMode::SingleValidator,
+                        &validator,
+                        &cluster,
+                        signing_root,
+                        clock_slot,
+                    )
+                    .await?;
+
+                // Taken before any wait, so it is not polluted by our own delay. This is what tells
+                // an operator whether a configured delay can ever bite.
+                let randao_completed = elapsed_in_slot(&self.slot_clock, clock_slot);
+                Span::current().record(
+                    "randao_completed_ms",
+                    randao_completed.map(|elapsed| elapsed.as_millis() as u64),
+                );
+                if let Some(elapsed) = randao_completed {
+                    metrics::observe_duration(&metrics::RANDAO_REVEAL_COMPLETION_OFFSET, elapsed);
+                }
+                trace!(
+                    checkpoint = instrumentation::checkpoints::RANDAO_REVEAL_RECONSTRUCTED,
+                    randao_completed_ms = randao_completed.map(|e| e.as_millis() as u64),
+                    "Proposer randao reveal reconstructed"
+                );
+
+                await_proposer_delay(self.proposer_delay, randao_completed).await;
+
+                Ok(signature)
             }
             .await;
 
@@ -3283,20 +3526,43 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 )
                 .await?
             } else {
-                // Use the original single-validator path.
-                self.timeout_within_slot(
-                    slot,
-                    delay,
+                self.timeout_within_slot(slot, delay, async {
+                    let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
+                    // Anchor configures Lighthouse's sync selection-proof lookahead to one slot, so
+                    // this proof slot is current and its assignments are published at slot start.
+                    // A larger lookahead would make future proof slots wait for their assignments.
+                    let voting_assignments = self.get_voting_assignments(slot).await?;
+                    let position_counts = voting_assignments
+                        .sync_validators_by_subnet
+                        .get(&validator_index)
+                        .ok_or(SpecificError::ValidatorNotInSyncCommittee {
+                            validator_pubkey: *validator_pubkey,
+                            slot,
+                        })?;
+                    let descriptor = self
+                        .sync_selection_proof_descriptor(slot, subnet_id, position_counts)
+                        .map_err(
+                            |reason| SpecificError::InvalidSyncSelectionProofAssignment {
+                                validator_pubkey: *validator_pubkey,
+                                slot,
+                                reason,
+                            },
+                        )?;
+
                     self.collect_signature(
-                        PartialSignatureKind::ContributionProofs, // Original Alan-only enum
+                        PartialSignatureKind::ContributionProofs,
                         Role::SyncCommittee,
-                        CollectionMode::SingleValidator,
+                        CollectionMode::SingleValidatorBatch {
+                            subnet_id,
+                            descriptor,
+                        },
                         &validator,
                         &cluster,
                         signing_root,
                         slot,
-                    ),
-                )
+                    )
+                    .await
+                })
                 .await?
             };
 
@@ -3760,6 +4026,159 @@ mod testing;
 mod tests {
     use super::*;
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Proposer delay
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    /// Decision for `delay_ms` when pre-consensus finished `elapsed_ms` into the slot.
+    fn decision_at(delay_ms: u64, elapsed_ms: u64) -> ProposerDelayDecision {
+        proposer_delay_decision_at(
+            Duration::from_millis(delay_ms),
+            Some(Duration::from_millis(elapsed_ms)),
+        )
+    }
+
+    #[test]
+    fn elapsed_in_slot_does_not_wrap_when_a_duty_overruns() {
+        const SLOT_DURATION: Duration = Duration::from_secs(12);
+        let clock =
+            slot_clock::ManualSlotClock::new(Slot::new(0), Duration::from_secs(0), SLOT_DURATION);
+        let duty_slot = Slot::new(100);
+        clock.set_slot(duty_slot.as_u64());
+
+        assert_eq!(elapsed_in_slot(&clock, duty_slot), Some(Duration::ZERO));
+        clock.advance_time(Duration::from_millis(300));
+        assert_eq!(
+            elapsed_in_slot(&clock, duty_slot),
+            Some(Duration::from_millis(300))
+        );
+
+        // Past the end of the duty's slot the offset must keep growing; a shrinking one would
+        // re-arm the floor. `determine_slot_elapsed_ms` reports this same instant as a fresh 300ms.
+        clock.advance_time(SLOT_DURATION);
+        assert_eq!(
+            elapsed_in_slot(&clock, duty_slot),
+            Some(SLOT_DURATION + Duration::from_millis(300))
+        );
+        assert_eq!(determine_slot_elapsed_ms(&clock), Some(300));
+    }
+
+    #[test]
+    fn proposer_delay_zero_is_disabled() {
+        // Must stay distinguishable from "configured but did not bite".
+        assert_eq!(decision_at(0, 0), ProposerDelayDecision::Disabled);
+        assert_eq!(decision_at(0, 5_000), ProposerDelayDecision::Disabled);
+    }
+
+    #[test]
+    fn proposer_delay_waits_out_the_remainder_only() {
+        // Finished 100ms in with a 300ms floor leaves 200ms: an offset, not 300ms of added latency.
+        assert_eq!(
+            decision_at(300, 100),
+            ProposerDelayDecision::Waited(Duration::from_millis(200))
+        );
+        assert_eq!(
+            decision_at(300, 0),
+            ProposerDelayDecision::Waited(Duration::from_millis(300))
+        );
+    }
+
+    #[test]
+    fn proposer_delay_does_not_wait_once_the_target_has_passed() {
+        // A late duty must not be delayed further.
+        assert_eq!(decision_at(300, 301), ProposerDelayDecision::TargetPassed);
+        assert_eq!(decision_at(300, 4_000), ProposerDelayDecision::TargetPassed);
+    }
+
+    #[test]
+    fn proposer_delay_target_boundary_is_not_a_wait() {
+        // Guards against a zero-length sleep being reported as a wait.
+        assert_eq!(decision_at(300, 300), ProposerDelayDecision::TargetPassed);
+    }
+
+    #[test]
+    fn proposer_delay_fails_open_without_a_clock() {
+        // An unavailable clock must never block a proposal.
+        assert_eq!(
+            proposer_delay_decision_at(Duration::from_millis(300), None),
+            ProposerDelayDecision::ClockUnavailable
+        );
+    }
+
+    #[test]
+    fn proposer_delay_handles_a_duty_that_overran_its_slot() {
+        // A duty longer than a full slot arrives as a large elapsed value, and must read as
+        // "already past the target", never as a fresh duty with time to spare.
+        assert_eq!(
+            decision_at(300, 12_100),
+            ProposerDelayDecision::TargetPassed
+        );
+        assert_eq!(
+            proposer_delay_decision_at(Duration::from_millis(300), Some(Duration::MAX)),
+            ProposerDelayDecision::TargetPassed
+        );
+    }
+
+    /// Time is paused, so `sleep` advances the clock without spending any, and
+    /// [`tokio::time::Instant`] observes that same virtual clock. These assert the wait is actually
+    /// applied, which the decision tests above cannot: they only prove what was decided.
+    #[tokio::test(start_paused = true)]
+    async fn await_proposer_delay_sleeps_only_the_remainder() {
+        let started = Instant::now();
+        await_proposer_delay(Duration::from_millis(300), Some(Duration::from_millis(100))).await;
+        assert_eq!(started.elapsed(), Duration::from_millis(200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn await_proposer_delay_never_sleeps_without_a_wait() {
+        // Every no-wait decision must return promptly: an overdue duty, a missing clock, and the
+        // disabled default. A regression here would delay a proposal that has no time to spare.
+        for (delay_ms, elapsed) in [
+            (300, Some(Duration::from_millis(400))),
+            (300, None),
+            (0, Some(Duration::ZERO)),
+        ] {
+            let started = Instant::now();
+            await_proposer_delay(Duration::from_millis(delay_ms), elapsed).await;
+            assert_eq!(
+                started.elapsed(),
+                Duration::ZERO,
+                "delay={delay_ms}ms elapsed={elapsed:?} must not sleep"
+            );
+        }
+    }
+
+    #[test]
+    fn proposer_delay_outcome_labels_are_stable() {
+        // These label values are a dashboard contract, and they are documented by name in
+        // docs/docs/pages/mev_configuration.mdx. Renaming one silently breaks operator queries,
+        // and duplicating one silently merges two metric series.
+        assert_eq!(ProposerDelayDecision::Disabled.as_str(), "disabled");
+        assert_eq!(
+            ProposerDelayDecision::TargetPassed.as_str(),
+            "target_passed"
+        );
+        assert_eq!(
+            ProposerDelayDecision::Waited(Duration::from_millis(1)).as_str(),
+            "waited"
+        );
+        assert_eq!(
+            ProposerDelayDecision::ClockUnavailable.as_str(),
+            "clock_unavailable"
+        );
+    }
+
+    #[test]
+    fn proposer_delay_only_waited_yields_a_wait() {
+        assert_eq!(
+            ProposerDelayDecision::Waited(Duration::from_millis(200)).wait(),
+            Some(Duration::from_millis(200))
+        );
+        assert!(ProposerDelayDecision::Disabled.wait().is_none());
+        assert!(ProposerDelayDecision::TargetPassed.wait().is_none());
+        assert!(ProposerDelayDecision::ClockUnavailable.wait().is_none());
+    }
+
     /// Creates a test `VotingAssignments` with the given parameters.
     fn create_test_voting_assignments(
         attesting_validators: Vec<usize>,
@@ -3775,10 +4194,14 @@ mod tests {
             sync_validators_by_subnet: sync_validators_by_subnet
                 .into_iter()
                 .map(|(idx, subnets)| {
-                    (
-                        ValidatorIndex(idx),
-                        subnets.into_iter().map(SyncSubnetId::new).collect(),
-                    )
+                    let position_counts =
+                        subnets
+                            .into_iter()
+                            .fold(HashMap::new(), |mut counts, subnet_id| {
+                                *counts.entry(SyncSubnetId::new(subnet_id)).or_insert(0) += 1;
+                                counts
+                            });
+                    (ValidatorIndex(idx), position_counts)
                 })
                 .collect(),
         }
@@ -3879,6 +4302,27 @@ mod tests {
         // The difference highlights the counting patterns:
         // - Selection proofs need one proof per subnet per validator
         // - Voting messages need one message per validator regardless of subnets
+    }
+
+    #[test]
+    fn test_position_multiplicity_does_not_inflate_boole_counts() {
+        let voting_assignments = create_test_voting_assignments(vec![], vec![(1, vec![0, 0, 1])]);
+        let all_in_committee = |_: &ValidatorIndex| true;
+
+        assert_eq!(
+            voting_assignments.selection_proof_count_for_committee(all_in_committee),
+            2,
+            "Boole selection-proof batching counts unique subnet keys"
+        );
+        assert_eq!(
+            voting_assignments.voting_message_count_for_committee(all_in_committee),
+            1,
+            "voting-message batching counts the validator key once"
+        );
+        assert_eq!(
+            voting_assignments.sync_validators_by_subnet[&ValidatorIndex(1)],
+            HashMap::from([(SyncSubnetId::new(0), 2), (SyncSubnetId::new(1), 1)])
+        );
     }
 
     #[test]

@@ -15,6 +15,7 @@ use dashmap::{DashMap, Entry};
 use database::{NetworkDatabase, OwnOperatorId};
 use fork::ForkSchedule;
 use message_sender::MessageSender;
+use parking_lot::Mutex;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
 use ssv_types::typenum::Unsigned;
@@ -42,7 +43,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{Instrument, debug_span, error, trace, warn};
-use types::{Hash256, Slot};
+use types::{Hash256, Slot, SyncSubnetId};
 
 const COLLECTOR_NAME: &str = "signature_collector";
 const COLLECTOR_MESSAGE_NAME: &str = "signature_collector_message";
@@ -79,6 +80,33 @@ struct CommitteePartialSignatureBatch {
     for_slot: Slot,
 }
 
+/// One unique pre-Boole sync selection proof root and its original position multiplicity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncSelectionProofDescriptor {
+    /// Unique sync committee subnet represented by this entry.
+    pub subnet_id: SyncSubnetId,
+    /// Ethereum signing root for the subnet's selection proof.
+    pub signing_root: Hash256,
+    /// Number of original sync committee positions that map to this subnet and root.
+    pub position_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SingleValidatorBatchState {
+    Pending,
+    Admitted,
+}
+
+/// Canonical outgoing pre-Boole sync selection proof batch for one validator and slot.
+struct SingleValidatorBatchRecord {
+    validator_index: ValidatorIndex,
+    committee_id: CommitteeId,
+    descriptor: Vec<SyncSelectionProofDescriptor>,
+    /// The guard may cover only bounded synchronous signing, SSZ construction, and admission-only
+    /// `sign_and_send`. Never await or perform a blocking channel send while holding it.
+    state: Mutex<SingleValidatorBatchState>,
+}
+
 pub struct SignatureCollectorManager<S: SlotClock> {
     /// The handle to the processor, for queueing messages to the instances.
     processor: Senders,
@@ -101,6 +129,9 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     /// Note that this hash may differ from the actual signing root.
     committee_partial_signature_batches:
         DashMap<(Hash256, CommitteeId), CommitteePartialSignatureBatch>,
+    /// Pre-Boole batches keyed independently from root-specific collectors. Pending and admitted
+    /// records, including records created by detached callback work, are removed by slot cleanup.
+    single_validator_batches: DashMap<(Slot, PublicKeyBytes), Arc<SingleValidatorBatchRecord>>,
 }
 
 impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
@@ -123,6 +154,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             message_sender,
             signature_collectors: DashMap::new(),
             committee_partial_signature_batches: DashMap::new(),
+            single_validator_batches: DashMap::new(),
         });
 
         manager
@@ -139,9 +171,16 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         self.fork_schedule.active_fork_config(epoch).domain_type
     }
 
+    fn is_stale_slot(&self, slot: Slot) -> bool {
+        self.slot_clock.now().is_some_and(|current_slot| {
+            slot < current_slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS)
+        })
+    }
+
     /// Sign a message and wait until the signature has been reconstructed.
-    /// Returns [`CollectionError::QueueClosedError`] if the instance is cleaned up before
-    /// reconstruction, see [`SIGNATURE_COLLECTOR_RETAIN_SLOTS`].
+    /// Returns [`CollectionError::QueueClosedError`] if a single-validator batch request is already
+    /// outside the cleanup window or if an instance is cleaned up before reconstruction, see
+    /// [`SIGNATURE_COLLECTOR_RETAIN_SLOTS`].
     /// Check the fields of the parameter structs for more info.
     /// The rough idea behind the separation is that `metadata` will be the same across all calls if
     /// we sign for all validators in a committee, while `validator_signing_data` varies for each.
@@ -168,9 +207,16 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         // first, register notifier with preexisting or newly spawned instance
         let cloned_metadata = metadata.clone();
         let validator_pubkey = validator_signing_data.validator_pubkey;
+        let is_single_validator_batch =
+            matches!(&requester, SignatureRequester::SingleValidatorBatch { .. });
         let manager = self.clone();
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {
+                // Batch work can outlive its caller. Do not recreate a root collector after the
+                // slot cleanup window.
+                if is_single_validator_batch && manager.is_stale_slot(cloned_metadata.slot) {
+                    return;
+                }
                 let sender = manager.get_or_spawn(
                     validator_signing_data.root,
                     validator_signing_data.index,
@@ -208,13 +254,14 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                     signer,
                     validator_index: validator_signing_data.index,
                 };
-                match requester {
+                let messages_to_inject = match requester {
                     SignatureRequester::SingleValidator { pubkey } => {
                         // we do not have to wait for other partial signatures - send the message
                         // immediately.
+                        let messages = vec![message];
                         let msg = match manager.create_message(
                             &metadata,
-                            vec![message.clone()],
+                            messages.clone(),
                             &DutyExecutor::Validator(pubkey),
                         ) {
                             Ok(msg) => msg,
@@ -231,7 +278,20 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         {
                             error!(?err, "Failed to send validator partial signature");
                         }
+                        messages
                     }
+                    SignatureRequester::SingleValidatorBatch {
+                        pubkey,
+                        subnet_id,
+                        descriptor,
+                    } => manager.process_single_validator_batch(
+                        &metadata,
+                        pubkey,
+                        subnet_id,
+                        descriptor,
+                        &validator_signing_data,
+                        message,
+                    ),
                     SignatureRequester::Committee {
                         validator_partial_signature_batch_size,
                         base_hash,
@@ -291,13 +351,22 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                                 error!(?err, "Failed to send committee partial signatures");
                             }
                         }
+                        vec![message]
                     }
-                }
+                };
 
                 // Finally, make the local instance aware of the partial signature, if it is a real
                 // signature.
                 if validator_signing_data.share.is_some() {
-                    let _ = manager.receive_partial_signature(message, metadata.slot);
+                    // An eager send attempt contributes every unique root. Some sibling collectors
+                    // may reach quorum before their callbacks register. The collector loop retries
+                    // reconstruction after registration, so those late notifiers resolve without
+                    // another share. The current root is first so queue pressure cannot let sibling
+                    // injection consume its admission opportunity. Admission state is unlocked
+                    // before any of these queue writes.
+                    for message in messages_to_inject {
+                        let _ = manager.receive_partial_signature(message, metadata.slot);
+                    }
                 }
             },
             SIGNER_NAME,
@@ -306,6 +375,213 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         // We resolve the collector future - if we are lucky, the signature is even already done
         // because we received enough shares before this fn was even called.
         Ok(result_rx.await?)
+    }
+
+    /// Builds and attempts the canonical pre-Boole selection-proof batch for one callback.
+    ///
+    /// Returns the unique real messages this callback should inject after the record lock is
+    /// released. An attempted send returns all descriptor roots, an admitted sibling or an
+    /// inconsistent callback returns only the current root, and stale work returns no messages.
+    fn process_single_validator_batch(
+        &self,
+        metadata: &SignatureMetadata,
+        pubkey: PublicKeyBytes,
+        subnet_id: SyncSubnetId,
+        descriptor: Vec<SyncSelectionProofDescriptor>,
+        validator_signing_data: &ValidatorSigningData,
+        current_message: PartialSignatureMessage,
+    ) -> Vec<PartialSignatureMessage> {
+        // Detached processor work can outlive slot cleanup. Do not recreate batch or root
+        // collectors after the retention window.
+        if self.is_stale_slot(metadata.slot) {
+            return Vec::new();
+        }
+
+        if pubkey != validator_signing_data.validator_pubkey {
+            error!(
+                reason = "validator_pubkey_mismatch",
+                slot = %metadata.slot,
+                requester_pubkey = ?pubkey,
+                signing_data_pubkey = ?validator_signing_data.validator_pubkey,
+                callback_subnet = ?subnet_id,
+                "Suppressing single-validator batch publication for inconsistent callback"
+            );
+            return vec![current_message];
+        }
+        if !descriptor.iter().any(|entry| {
+            entry.subnet_id == subnet_id
+                && entry.signing_root == validator_signing_data.root
+                && entry.signing_root == current_message.signing_root
+        }) {
+            error!(
+                reason = "descriptor_mismatch",
+                slot = %metadata.slot,
+                ?pubkey,
+                callback_subnet = ?subnet_id,
+                callback_root = ?current_message.signing_root,
+                callback_descriptor = ?descriptor,
+                "Suppressing single-validator batch publication for inconsistent callback"
+            );
+            return vec![current_message];
+        }
+
+        let record = match self.single_validator_batches.entry((metadata.slot, pubkey)) {
+            Entry::Occupied(entry) => Arc::clone(entry.get()),
+            Entry::Vacant(entry) => {
+                let record = Arc::new(SingleValidatorBatchRecord {
+                    validator_index: current_message.validator_index,
+                    committee_id: metadata.committee_id,
+                    descriptor: descriptor.clone(),
+                    state: Mutex::new(SingleValidatorBatchState::Pending),
+                });
+                entry.insert(Arc::clone(&record));
+                record
+            }
+        };
+
+        if record.committee_id != metadata.committee_id {
+            error!(
+                reason = "committee_id_mismatch",
+                slot = %metadata.slot,
+                ?pubkey,
+                callback_subnet = ?subnet_id,
+                recorded_committee_id = ?record.committee_id,
+                callback_committee_id = ?metadata.committee_id,
+                "Suppressing single-validator batch publication for inconsistent callback"
+            );
+            return vec![current_message];
+        }
+        if record.validator_index != current_message.validator_index {
+            error!(
+                reason = "validator_index_mismatch",
+                slot = %metadata.slot,
+                ?pubkey,
+                callback_subnet = ?subnet_id,
+                recorded_validator_index = ?record.validator_index,
+                callback_validator_index = ?current_message.validator_index,
+                "Suppressing single-validator batch publication for inconsistent callback"
+            );
+            return vec![current_message];
+        }
+        if record.descriptor != descriptor {
+            error!(
+                reason = "descriptor_mismatch",
+                slot = %metadata.slot,
+                ?pubkey,
+                callback_subnet = ?subnet_id,
+                recorded_descriptor = ?record.descriptor,
+                callback_descriptor = ?descriptor,
+                "Suppressing single-validator batch publication for inconsistent callback"
+            );
+            return vec![current_message];
+        }
+
+        let mut state = record.state.lock();
+        if *state == SingleValidatorBatchState::Admitted {
+            trace!(
+                slot = %metadata.slot,
+                validator_index = ?record.validator_index,
+                callback_subnet = ?subnet_id,
+                "Single-validator partial signature batch already admitted"
+            );
+            drop(state);
+            return vec![current_message];
+        }
+
+        let unique_messages = record
+            .descriptor
+            .iter()
+            .map(|entry| {
+                let partial_signature = if entry.subnet_id == subnet_id {
+                    current_message.partial_signature.clone()
+                } else if let Some(share) = &validator_signing_data.share {
+                    share.sign(entry.signing_root)
+                } else {
+                    Signature::empty()
+                };
+                PartialSignatureMessage {
+                    partial_signature,
+                    signing_root: entry.signing_root,
+                    signer: current_message.signer,
+                    validator_index: current_message.validator_index,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut injection_messages = Vec::with_capacity(unique_messages.len());
+        injection_messages.push(current_message);
+        injection_messages.extend(
+            record
+                .descriptor
+                .iter()
+                .zip(&unique_messages)
+                .filter(|(entry, _)| entry.subnet_id != subnet_id)
+                .map(|(_, message)| message.clone()),
+        );
+
+        let expanded_positions = record
+            .descriptor
+            .iter()
+            .map(|entry| entry.position_count)
+            .sum();
+        let mut expanded_messages = Vec::with_capacity(expanded_positions);
+        for (entry, message) in record.descriptor.iter().zip(&unique_messages) {
+            expanded_messages.extend(std::iter::repeat_n(message.clone(), entry.position_count));
+        }
+
+        let outgoing = match self.create_message(
+            metadata,
+            expanded_messages,
+            &DutyExecutor::Validator(pubkey),
+        ) {
+            Ok(message) => message,
+            Err(err) => {
+                error!(
+                    %err,
+                    slot = %metadata.slot,
+                    committee_id = ?metadata.committee_id,
+                    validator_index = ?record.validator_index,
+                    callback_subnet = ?subnet_id,
+                    unique_roots = record.descriptor.len(),
+                    expanded_positions,
+                    "Failed to construct single-validator partial signature batch"
+                );
+                drop(state);
+                return injection_messages;
+            }
+        };
+
+        match self
+            .message_sender
+            .sign_and_send(outgoing, metadata.committee_id, None)
+        {
+            Ok(()) => {
+                *state = SingleValidatorBatchState::Admitted;
+                trace!(
+                    slot = %metadata.slot,
+                    validator_index = ?record.validator_index,
+                    callback_subnet = ?subnet_id,
+                    unique_roots = record.descriptor.len(),
+                    expanded_positions,
+                    "Admitted single-validator partial signature batch"
+                );
+            }
+            Err(err) => {
+                error!(
+                    ?err,
+                    slot = %metadata.slot,
+                    committee_id = ?metadata.committee_id,
+                    validator_index = ?record.validator_index,
+                    callback_subnet = ?subnet_id,
+                    unique_roots = record.descriptor.len(),
+                    expanded_positions,
+                    batch_state = "pending",
+                    "Failed to admit single-validator partial signature batch for sending"
+                );
+            }
+        }
+        drop(state);
+        injection_messages
     }
 
     fn create_message(
@@ -432,6 +708,15 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         }
     }
 
+    fn remove_stale_entries(&self, cutoff: Slot) {
+        self.signature_collectors
+            .retain(|_, collector| collector.for_slot >= cutoff);
+        self.committee_partial_signature_batches
+            .retain(|_, batch| batch.for_slot >= cutoff);
+        self.single_validator_batches
+            .retain(|(slot, _), _| *slot >= cutoff);
+    }
+
     async fn cleaner(self: Arc<Self>) {
         let slot_clock = &self.slot_clock;
         while !self.processor.permitless.is_closed() {
@@ -445,10 +730,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                 continue;
             };
             let cutoff = slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS);
-            self.signature_collectors
-                .retain(|_, collector| collector.for_slot >= cutoff);
-            self.committee_partial_signature_batches
-                .retain(|_, batch| batch.for_slot >= cutoff);
+            self.remove_stale_entries(cutoff);
         }
     }
 }
@@ -484,6 +766,15 @@ pub enum SignatureRequester {
     SingleValidator {
         /// The public key of the validator. Used in the created network message.
         pubkey: PublicKeyBytes,
+    },
+    /// Pre-Boole sync selection proofs for one validator are sent in one expanded envelope.
+    SingleValidatorBatch {
+        /// Public key used by the validator-scoped message ID and batch identity.
+        pubkey: PublicKeyBytes,
+        /// Subnet requested by this callback.
+        subnet_id: SyncSubnetId,
+        /// Canonical descriptor for every unique subnet assigned to this validator and slot.
+        descriptor: Vec<SyncSelectionProofDescriptor>,
     },
     /// The local operator is signing for multiple validators in one committee round.
     /// We batch those validator partial signatures into a single outgoing committee message instead

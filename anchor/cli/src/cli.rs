@@ -505,6 +505,29 @@ pub struct PayloadBuildingOptions {
         display_order = 0
     )]
     pub prefer_builder_proposals: bool,
+
+    #[clap(
+        long,
+        value_name = "MILLISECONDS",
+        default_value_t = 0,
+        help = "Wait until this many milliseconds into the slot before requesting a block for a \
+                proposer duty, giving builders longer to bid for it. This is a minimum offset from \
+                the start of the slot, not extra latency: if the RANDAO pre-consensus round \
+                already finished later than this, no additional wait happens. A recommended \
+                starting value is 300. Higher values increase the risk of missing the block \
+                proposal.",
+        display_order = 0
+    )]
+    pub proposer_delay_ms: u64,
+
+    #[clap(
+        long,
+        help = "Permit a --proposer-delay-ms above the safety threshold. Delays this large \
+                significantly increase the risk of missed block proposals. Only set this if you \
+                understand the trade-off.",
+        display_order = 0
+    )]
+    pub allow_dangerous_proposer_delay: bool,
 }
 
 #[derive(Parser, Clone, Debug)]
