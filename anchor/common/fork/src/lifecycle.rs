@@ -1,13 +1,13 @@
 //! Fork lifecycle state management.
 //!
 //! Provides [`ForkLifecycle`] for tracking the current fork transition state
-//! across all components via a `tokio::sync::watch` channel. The
-//! [`ForkMonitor`](crate::monitor) is the sole writer (sender); all other
-//! components hold receivers.
+//! across all components via a `tokio::sync::watch` channel. The fork monitor
+//! task ([`monitor::spawn`](crate::monitor::spawn)) is the sole writer
+//! (sender); all other components hold receivers.
 
 use crate::ForkConfig;
 
-/// Fork lifecycle state. Updated only by ForkMonitor.
+/// Fork lifecycle state. Updated only by the fork monitor task.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ForkLifecycle {
     /// Operating on a single fork. No transition in progress.

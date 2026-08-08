@@ -37,5 +37,6 @@ version = { workspace = true }
 [dev-dependencies]
 libp2p-swarm-test = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
 message_receiver = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 tracing-subscriber = { workspace = true }
