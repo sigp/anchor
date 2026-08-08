@@ -837,6 +837,48 @@ mod tests {
             .expect("run must not panic when the lifecycle sender is dropped");
     }
 
+    /// The database arm binds `changed()` with a name rather than `_`, so a dropped
+    /// database sender stops the service instead of leaving the arm permanently ready
+    /// and spinning the loop.
+    #[tokio::test]
+    async fn run_stops_cleanly_when_database_sender_is_dropped() {
+        // Arrange: keep the database arm enabled (subscribe_all_subnets = false) so the
+        // dropped sender reaches it, and own the run task's join handle.
+        let temp_dir = TempDir::new().expect("should create temp directory for test database");
+        let db_path = temp_dir.path().join("subnet_service_db_drop.db");
+        let db = NetworkDatabase::new_as_impostor(&db_path, &OWN_OPERATOR_ID, TEST_NETWORK)
+            .expect("should build test database");
+        let (fork_schedule, alan_config, _boole_config) = test_fork_schedule();
+        let (_lifecycle_tx, lifecycle_rx) = watch::channel(ForkLifecycle::Normal {
+            current: alan_config,
+        });
+        let (tx, _topic_event_rx) = mpsc::channel(SUBNET_COUNT);
+        let service = Arc::new(crate::SubnetService {
+            tx,
+            db: db.watch(),
+            subscribe_all_subnets: false,
+            disable_gossipsub_topic_scoring: true,
+            slot_clock: Arc::new(ManualSlotClock::new(
+                Slot::new(0),
+                Duration::from_secs(0),
+                Duration::from_secs(12),
+            )),
+            chain_spec: Arc::new(ChainSpec::minimal()),
+            router: TopicRouter::new(fork_schedule, MinimalEthSpec::slots_per_epoch()),
+        });
+        let handle = tokio::spawn(service.clone().run::<MinimalEthSpec>(lifecycle_rx));
+
+        // Act: an empty database emits no startup subscriptions, so the loop is already
+        // parked in the select when the sender drops.
+        drop(db);
+
+        // Assert: the task returns rather than spinning, and does not panic.
+        timeout(EVENT_TIMEOUT, handle)
+            .await
+            .expect("run should return after the database sender is dropped")
+            .expect("run must not panic when the database sender is dropped");
+    }
+
     #[tokio::test]
     async fn liquidating_cluster_unsubscribes_its_subnet() {
         // Arrange
