@@ -65,6 +65,7 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
 pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 
 pub(super) struct CapturedSignatureCall {
+    pub(super) metadata: SignatureMetadata,
     pub(super) requester: SignatureRequester,
     pub(super) validator_pubkey: PublicKeyBytes,
     pub(super) signing_root: Hash256,
@@ -80,11 +81,12 @@ struct MockSignatureCollector {
 impl SignatureCollecting for MockSignatureCollector {
     fn sign_and_collect(
         &self,
-        _metadata: SignatureMetadata,
+        metadata: SignatureMetadata,
         requester: SignatureRequester,
         signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
         self.captured.lock().push(CapturedSignatureCall {
+            metadata,
             requester,
             validator_pubkey: signing_data.validator_pubkey,
             signing_root: signing_data.root,
