@@ -525,6 +525,33 @@ async fn decided_worklist_is_signed_without_any_callback() {
     assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
 }
 
+/// Republishing assignments for a slot must not register a second execution.
+///
+/// Registration is the single writer that makes "exactly one committee message per
+/// `(committee, slot)`" true. If a republish overwrote the entry it would spawn a second QBFT
+/// round and a second set of detached signing tasks while the first set kept running, putting two
+/// post-consensus messages on the wire for one slot, which peers reject with a gossip penalty.
+#[tokio::test(flavor = "multi_thread")]
+async fn republished_assignments_do_not_resubmit() {
+    // Arrange: let the first publish fully submit its worklist.
+    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
+    let decided = fixture.seed_mixed_decided_value();
+    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
+
+    // Act: publish the same slot again.
+    fixture.seed_mixed_decided_value();
+
+    // Assert: still exactly one submission of the worklist, not two.
+    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
+    let calls = committee_calls(&fixture.harness);
+    assert_eq!(
+        distinct_roots(&calls).len(),
+        MIXED_WORKLIST_SIZE,
+        "a republish must not resubmit the worklist"
+    );
+    assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
+}
+
 /// Both callbacks read the same execution: neither re-runs consensus nor duplicates signatures,
 /// and each returns only its own items.
 #[tokio::test(flavor = "multi_thread")]

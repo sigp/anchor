@@ -245,11 +245,12 @@ pub struct AnchorValidatorStore<
     task_executor: TaskExecutor,
     /// Once-only post-consensus signing executions for `AggregatorCommittee` duties (Boole+).
     ///
-    /// One entry per `(committee, slot)`. The first Lighthouse callback (aggregate or
-    /// contribution class) spawns the execution as a detached task; concurrent and later
-    /// callbacks of either class join the same `Shared` future, so the complete decided
-    /// worklist is signed and batched exactly once no matter which callbacks fire, in what
-    /// order, or whether their futures are dropped.
+    /// One entry per `(committee, slot)`, registered by the slot pipeline in
+    /// [`Self::update_aggregation_assignments`] before those assignments are published, and only
+    /// when the entry is vacant. That registration is the single writer, so the complete decided
+    /// worklist is signed and batched exactly once no matter which Lighthouse callbacks fire, in
+    /// what order, or whether their futures are dropped. Callbacks only read this map as a
+    /// detached `Shared` future; they never start work.
     aggregator_post_consensus:
         Mutex<HashMap<(CommitteeId, Slot), AggregatorPostConsensusShared<E>>>,
 }

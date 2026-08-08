@@ -119,14 +119,21 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
         executions.retain(|(_, execution_slot), _| *execution_slot >= cutoff);
 
         for (&committee_id, decided_data) in &assignments.consensus_data_by_ssv_committee {
-            let store = Arc::clone(self);
-            let decided_data = Arc::clone(decided_data);
-            let execution = self.spawn_shared("aggregator_post_consensus", async move {
-                store
-                    .run_aggregator_post_consensus(committee_id, slot, decided_data)
-                    .await
-            });
-            executions.insert((committee_id, slot), execution);
+            // Vacant-only, so registration is idempotent. Overwriting would spawn a second QBFT
+            // round and a second set of detached signing tasks while the first set kept running,
+            // putting two committee messages on the wire for one slot, which peers reject with a
+            // gossip penalty. The slot pipeline publishes once per slot today, but that is a
+            // property of another module's timing loop; keeping this vacant-only makes
+            // exactly-once hold here regardless of how often it is called.
+            if let Entry::Vacant(vacant) = executions.entry((committee_id, slot)) {
+                let store = Arc::clone(self);
+                let decided_data = Arc::clone(decided_data);
+                vacant.insert(self.spawn_shared("aggregator_post_consensus", async move {
+                    store
+                        .run_aggregator_post_consensus(committee_id, slot, decided_data)
+                        .await
+                }));
+            }
         }
     }
 
