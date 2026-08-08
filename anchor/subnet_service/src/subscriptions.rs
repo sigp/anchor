@@ -99,7 +99,14 @@ impl<S: SlotClock> SubnetService<S> {
         loop {
             let delay = calculate_duration_to_next_epoch::<E>(&*self.slot_clock);
             tokio::select! {
-                _ = db.changed(), if !self.subscribe_all_subnets => {
+                result = db.changed(), if !self.subscribe_all_subnets => {
+                    // A dropped database sender makes `changed()` return
+                    // immediately and forever, so binding it with `_` would
+                    // spin this arm rather than disable it.
+                    if result.is_err() {
+                        warn!("Database channel closed; stopping subnet service");
+                        return;
+                    }
                     self.handle_subnet_changes::<E>(&mut service_state).await;
                 }
                 _ = sleep(delay), if !self.disable_gossipsub_topic_scoring => {
