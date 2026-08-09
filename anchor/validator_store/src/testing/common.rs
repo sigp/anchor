@@ -358,8 +358,6 @@ pub(super) struct ValidatorStoreTestHarness {
     /// The spec the store was built with, exposed so tests can recompute signing domains
     /// without duplicating the store's fork-selection logic.
     pub(super) spec: Arc<ChainSpec>,
-    /// The harness clock, exposed so tests can move time to drive slot-age behavior.
-    pub(super) slot_clock: ManualSlotClock,
     /// Genesis validators root the store was built with (`Hash256::zero()`), needed alongside
     /// `spec` to recompute signing roots.
     pub(super) genesis_validators_root: Hash256,
@@ -543,7 +541,6 @@ impl ValidatorStoreTestHarness {
             slot_clock,
             is_synced_tx,
             spec,
-            slot_clock,
             genesis_validators_root,
             slashing_protection,
             _slashing_db_dir: slashing_db_dir,
