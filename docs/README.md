@@ -65,6 +65,14 @@ To preview the built site:
 npm run preview
 ```
 
+## Deployment
+
+The live site ([anchor.sigmaprime.io](https://anchor.sigmaprime.io)) is deployed by the
+`docs` GitHub workflow when a release is published, so the published docs always match the
+latest released binary. Docs merged to `unstable` do not go live until the next release.
+For an out-of-band redeploy (e.g. a docs fix cherry-picked to `stable`), run the workflow
+manually: `gh workflow run docs.yml --ref stable`.
+
 ## Contributing
 
 ### Adding New Pages

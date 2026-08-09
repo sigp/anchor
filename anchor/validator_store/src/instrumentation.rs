@@ -12,6 +12,10 @@ pub fn outcome_from_result<T>(result: &Result<T, Error>) -> &'static str {
 
 pub mod checkpoints {
     pub const RANDAO_REVEAL_ENTERED: &str = "randao_reveal_entered";
+    /// Reveal reconstructed, before any proposer delay. [`RANDAO_REVEAL_COMPLETED`] fires after it
+    /// and so includes the wait.
+    pub const RANDAO_REVEAL_RECONSTRUCTED: &str = "randao_reveal_reconstructed";
+    pub const PROPOSER_DELAY_APPLIED: &str = "proposer_delay_applied";
     pub const RANDAO_REVEAL_COMPLETED: &str = "randao_reveal_completed";
     pub const RANDAO_REVEAL_FAILED: &str = "randao_reveal_failed";
     pub const DUTY_ENTRY: &str = "duty_entry";

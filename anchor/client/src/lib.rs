@@ -648,6 +648,7 @@ impl Client {
             config.gas_limit,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
+            config.proposer_delay,
             config.strict_mfp,
             is_synced.clone(),
             executor.clone(),

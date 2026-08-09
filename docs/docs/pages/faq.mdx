@@ -104,9 +104,11 @@ you may consider increasing the peer count using `--target-peers`.
 
 ## How to enable MEV on Anchor?
 
-To enable MEV on Anchor, use the flag `--builder-proposals`. 
+Anchor needs no flag: it always creates validator registrations. To actually use external builders,
+configure the builder or MEV-Boost connection on your beacon node. The `--builder-proposals` flag
+that used to gate this is deprecated and ignored, and will be removed.
 
-If the node is selected to be a leader during a proposal, it will request for mev blocks. If the node is not a leader during a proposal, Anchor will sign MEV blocks proposed by other nodes regardless of whether this flag is set.
+See [MEV Configuration](/mev_configuration) for tuning, including `--proposer-delay-ms`.
 
 <div id="sync" />
 

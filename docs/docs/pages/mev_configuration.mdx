@@ -1,0 +1,54 @@
+# MEV Configuration
+
+MEV needs no flag. Anchor always creates validator registrations, so relays know about your
+validators by default. To use external builders, configure the builder or MEV-Boost connection on
+your beacon node.
+
+`--proposer-delay-ms` tunes *when* Anchor asks for a block. Asking later gives builders more time to
+bid, at the cost of leaving less of the slot for everything that follows.
+
+## How the delay works
+
+The value is an **offset from the start of the slot, not added latency**. Set `300` and Anchor
+requests the block 300ms into the slot. It does not add 300ms to whatever it would have done
+otherwise.
+
+Anchor has preparation work to do first. If that runs past your target, the request goes out as soon
+as it is ready and there is no wait, so a duty that is already late is never delayed further. That
+also means the setting can legitimately do nothing on a slow cluster, which the metrics below will
+tell you.
+
+In a cluster, **every** operator holding a share requests its own candidate block and consensus
+picks between them, so set and monitor this fleet-wide rather than on a single node.
+
+## Choosing a value
+
+| Value | Behaviour |
+| --- | --- |
+| `0` | Disabled. The default. |
+| `300` | Recommended starting value, matching the SSV node. |
+| above `1000` | Refused unless you also pass `--allow-dangerous-proposer-delay`. |
+| above `4000` | Refused outright. The acknowledgement flag does not override it. |
+
+```bash
+anchor node --proposer-delay-ms 300
+```
+
+**The higher the value, the higher the chance of missing a block proposal**, since consensus,
+signing, and publication all still have to fit into the slot afterwards. Neither limit above is a
+safe maximum; both are guard rails.
+
+## Watching what it does
+
+- `anchor_randao_reveal_completion_offset_seconds` is how far into the slot pre-consensus finished,
+  measured before any delay. Consistently larger than your configured value means the delay never
+  bites.
+- `anchor_proposer_delay_applied_seconds` is the wait actually applied, labelled `disabled`,
+  `target_passed`, `waited`, or `clock_unavailable`. Non-waiting outcomes record zero, so a flat
+  zero line means the delay is not biting rather than that the metric is missing.
+
+## Coming from an SSV node
+
+Same semantics as the SSV node's `ProposerDelay`, so an existing value carries over directly. The
+SSV node reads it from a config file or the `PROPOSER_DELAY` environment variable; Anchor takes a
+command line flag in milliseconds, so `ProposerDelay: 300ms` becomes `--proposer-delay-ms 300`.

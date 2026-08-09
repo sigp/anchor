@@ -1,17 +1,19 @@
 name: docs
 
 on:
-  push:
-    branches:
-      - unstable
+  release:
+    types: [published]
+  workflow_dispatch:
 
+# All runs deploy to the same S3 bucket with --delete, so they must serialize,
+# and an in-flight sync must never be cancelled halfway through.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: docs-deploy
+  cancel-in-progress: false
 
 jobs:
   build-and-upload-to-s3:
-    if: github.repository_owner == 'sigp'
+    if: github.repository_owner == 'sigp' && !github.event.release.prerelease
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -23,17 +25,23 @@ jobs:
           cache: 'npm'
           cache-dependency-path: docs/package-lock.json
 
+      # Step timeouts on the network-bound steps keep a hang from holding the
+      # docs-deploy concurrency group (default job timeout is 6h). Deliberately
+      # no job-level timeout: it could cancel the S3 sync mid-run.
       - name: Install dependencies
         run: npm ci
         working-directory: docs
+        timeout-minutes: 10
 
       - name: Install Playwright browsers
         run: npx playwright install
         working-directory: docs
+        timeout-minutes: 10
 
       - name: Sync version and GitHub stars
         run: npm run sync-version
         working-directory: docs
+        timeout-minutes: 10
 
       - name: Build vocs
         run: npm run build
