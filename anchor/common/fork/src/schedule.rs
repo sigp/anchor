@@ -3,7 +3,7 @@
 //! This module provides the `ForkSchedule` type for managing fork activations
 //! and determining which fork is active at a given epoch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ssv_types::domain_type::DomainType;
 use types::Epoch;
@@ -133,6 +133,7 @@ impl ForkSchedule {
     /// - Alan fork is missing from configs
     /// - Alan fork is not at epoch 0
     /// - Fork epochs are not in chronological order
+    /// - Fork domain types are not unique
     pub fn from_fork_configs(
         raw_configs: BTreeMap<Fork, (Epoch, DomainType)>,
         network_name: &str,
@@ -151,7 +152,8 @@ impl ForkSchedule {
         // Validate chronological ordering - earlier forks must have < epochs
         // The exception is epoch 0, which may schedule multiple forks (to enable them at genesis)
         let mut prev_epoch: Option<u64> = None;
-        for (fork, (epoch, _)) in &raw_configs {
+        let mut domains = HashMap::new();
+        for (fork, (epoch, domain_type)) in &raw_configs {
             if let Some(prev) = prev_epoch
                 && epoch.as_u64() <= prev
                 && epoch.as_u64() != 0
@@ -161,6 +163,15 @@ impl ForkSchedule {
                     epoch.as_u64()
                 ));
             }
+
+            if let Some(previous_fork) = domains.get(domain_type) {
+                return Err(format!(
+                    "Fork {fork} reuses domain {} already assigned to fork {previous_fork}",
+                    String::from(*domain_type)
+                ));
+            }
+            domains.insert(*domain_type, *fork);
+
             prev_epoch = Some(epoch.as_u64());
         }
 
@@ -346,6 +357,34 @@ mod tests {
         let result = ForkSchedule::from_fork_configs(configs, TEST_NETWORK);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must be at epoch 0"));
+    }
+
+    #[test]
+    fn test_from_fork_configs_rejects_duplicate_domains() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(100), BASELINE_DOMAIN));
+
+        let error = ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+            .expect_err("fork domains must be unique");
+        assert_eq!(
+            error,
+            "Fork boole reuses domain 00000001 already assigned to fork alan"
+        );
+    }
+
+    #[test]
+    fn test_from_fork_configs_rejects_duplicate_domains_at_epoch_zero() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(0), BASELINE_DOMAIN));
+
+        let error = ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+            .expect_err("fork domains must be unique");
+        assert_eq!(
+            error,
+            "Fork boole reuses domain 00000001 already assigned to fork alan"
+        );
     }
 
     #[test]

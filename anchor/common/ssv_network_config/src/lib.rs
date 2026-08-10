@@ -354,6 +354,30 @@ boole:
     }
 
     #[test]
+    fn test_load_rejects_duplicate_fork_domains() {
+        // Arrange
+        let yaml = format!(
+            r#"
+boole:
+  epoch: {}
+  domain_type: "00000001"
+"#,
+            LARGE_BOOLE_EPOCH
+        );
+        let dir = create_test_config_dir(Some(&yaml));
+
+        // Act
+        let error = SsvNetworkConfig::load(dir.path().to_path_buf())
+            .expect_err("fork domains must be unique");
+
+        // Assert
+        assert_eq!(
+            error,
+            "Fork boole reuses domain 00000001 already assigned to fork alan"
+        );
+    }
+
+    #[test]
     fn test_load_with_empty_fork_schedule_only_has_alan() {
         // Arrange
         let dir = create_test_config_dir(Some("{}"));
