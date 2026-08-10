@@ -202,7 +202,7 @@ fn read<T: FromStr>(file: &Path) -> Result<T, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{collections::HashMap, io::Write};
 
     use fork::ALAN_TOPIC_PREFIX;
     use tempfile::TempDir;
@@ -313,6 +313,30 @@ mod tests {
                 network,
                 expected_name
             );
+        }
+    }
+
+    #[test]
+    fn test_builtin_network_fork_domains_are_globally_unique() {
+        let mut domains = HashMap::new();
+
+        for network in [MAINNET, HOLESKY, HOODI] {
+            let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
+
+            for &fork in Fork::all() {
+                let Some(domain_type) = config.fork_schedule.domain_type(fork) else {
+                    continue;
+                };
+
+                if let Some((previous_network, previous_fork)) = domains.get(&domain_type) {
+                    panic!(
+                        "Domain {} is shared by {previous_network}/{previous_fork} and \
+                         {network}/{fork}; built-in network fork domains must be globally unique",
+                        String::from(domain_type)
+                    );
+                }
+                domains.insert(domain_type, (network, fork));
+            }
         }
     }
 

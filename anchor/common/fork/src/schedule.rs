@@ -96,7 +96,11 @@ pub struct ForkSchedule {
 }
 
 impl ForkSchedule {
-    /// Create a new fork schedule with the given fork active from epoch 0.
+    /// Create a fork schedule with every fork up to `fork` active from epoch 0.
+    ///
+    /// Every included fork uses `baseline_domain_type`. This constructor is intended for
+    /// Alan-only network defaults and test schedules. Explicit production fork schedules should
+    /// use [`Self::from_fork_configs`] so ordering and domain uniqueness are validated.
     pub fn new(fork: Fork, baseline_domain_type: DomainType, network_name: &str) -> Self {
         let mut configs = BTreeMap::new();
         for fork in Fork::all().iter().take_while(|&f| f <= &fork) {
