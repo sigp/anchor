@@ -2607,6 +2607,12 @@ pub enum SpecificError {
     ContributionNotInConsensus(u64),
     /// This validator not found in consensus data (Boole+)
     ValidatorNotInConsensus(ValidatorIndex),
+    /// Duty data names a slot more than one slot ahead of the local clock. Only a broken or
+    /// hostile beacon node produces this.
+    SlotTooFarAhead {
+        data_slot: Slot,
+        current_slot: Slot,
+    },
 }
 
 impl From<CollectionError> for SpecificError {
@@ -3543,6 +3549,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             .slot_clock
             .now_duration()
             .ok_or(SpecificError::SlotClock)?;
+
+        // `data.slot` also sizes that bound, so an unchecked far-future value from a broken or
+        // hostile beacon node would re-open the unbounded wait (and peers reject future-slot PTC
+        // partials outright). One slot of headroom covers boundary clock skew.
+        let current_slot = self
+            .slot_clock
+            .slot_of(now)
+            .ok_or(SpecificError::SlotClock)?;
+        if data.slot > current_slot + 1 {
+            return Err(SpecificError::SlotTooFarAhead {
+                data_slot: data.slot,
+                current_slot,
+            }
+            .into());
+        }
+
         let slot_end = self
             .slot_clock
             .start_of(data.slot + 1)

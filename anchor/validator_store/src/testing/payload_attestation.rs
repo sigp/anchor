@@ -418,6 +418,121 @@ async fn sign_payload_attestation_after_slot_end_fails_fast() {
     );
 }
 
+/// A duty slot more than one slot ahead of the local clock is rejected with `SlotTooFarAhead`
+/// before any collection starts: `data.slot` sizes the slot-end deadline, so an unchecked
+/// far-future value from a broken or hostile beacon node would re-open the unbounded wait the
+/// deadline exists to prevent.
+#[tokio::test(start_paused = true)]
+async fn sign_payload_attestation_far_future_slot_rejected() {
+    // Arrange
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+    let pubkey = committee.validators[0].public_key;
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            // A regression that starts a collection surfaces as CollectionTimeout (in virtual
+            // time) instead of SlotTooFarAhead, failing the error assertion.
+            collector_hangs: true,
+            disable_slashing_protection: true,
+            ..Default::default()
+        },
+    );
+    // Two slots ahead of the harness clock's position in `TEST_SLOT`: just past the one-slot
+    // headroom.
+    let data = PayloadAttestationData {
+        slot: Slot::new(TEST_SLOT + 2),
+        ..create_payload_attestation_data()
+    };
+
+    // Act
+    let result = harness
+        .validator_store
+        .sign_payload_attestation(pubkey, data)
+        .await;
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(SpecificError::SlotTooFarAhead {
+                data_slot,
+                current_slot,
+            })) if data_slot == Slot::new(TEST_SLOT + 2) && current_slot == Slot::new(TEST_SLOT)
+        ),
+        "expected SlotTooFarAhead for a duty slot past the headroom, got: {result:?}"
+    );
+    assert!(
+        harness.captured_calls.lock().is_empty(),
+        "no collection may start for a far-future duty slot"
+    );
+}
+
+/// The headroom boundary: a duty slot exactly one slot ahead is still accepted, so the
+/// far-future rejection cannot silently tighten into rejecting the next slot. The deadline then
+/// extends to that slot's end, which the elapsed-time assertion pins.
+#[tokio::test(start_paused = true)]
+async fn sign_payload_attestation_next_slot_within_headroom_accepted() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+
+    // Arrange
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+    let pubkey = committee.validators[0].public_key;
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            // Captures the call, then never resolves.
+            collector_hangs: true,
+            disable_slashing_protection: true,
+            ..Default::default()
+        },
+    );
+    let data = PayloadAttestationData {
+        slot: Slot::new(TEST_SLOT + 1),
+        ..create_payload_attestation_data()
+    };
+    // The remainder of `TEST_SLOT` plus all of the duty slot `TEST_SLOT + 1`.
+    let expected_wait =
+        Duration::from_secs(2 * SLOT_DURATION_SECS - CLOCK_OFFSET_INTO_TEST_SLOT_SECS);
+
+    // Act
+    let started_at = Instant::now();
+    let result = tokio::time::timeout(
+        HANG_GUARD,
+        harness
+            .validator_store
+            .sign_payload_attestation(pubkey, data),
+    )
+    .await
+    .expect("the production slot-end deadline must return the call, and it never did");
+    let elapsed = started_at.elapsed();
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(
+                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout)
+            ))
+        ),
+        "a next-slot duty must pass the headroom check and time out at its slot end, \
+         got: {result:?}"
+    );
+    assert_eq!(
+        elapsed, expected_wait,
+        "the wait must end exactly at the end of the next-slot duty's slot"
+    );
+    let captured = harness.captured_calls.lock();
+    assert_eq!(
+        captured.len(),
+        1,
+        "a next-slot duty within the headroom must start a collection"
+    );
+}
+
 // ==================== Slashing-protection tests ====================
 
 /// `sign_payload_attestation` succeeds with slashing protection enabled, proving the path never
