@@ -99,15 +99,30 @@ impl<S: SlotClock> SubnetService<S> {
         loop {
             let delay = calculate_duration_to_next_epoch::<E>(&*self.slot_clock);
             tokio::select! {
-                _ = db.changed(), if !self.subscribe_all_subnets => {
+                result = db.changed(), if !self.subscribe_all_subnets => {
+                    // A dropped database sender makes `changed()` return
+                    // immediately and forever, so binding it with `_` would
+                    // spin this arm rather than disable it.
+                    if result.is_err() {
+                        warn!("Database channel closed; stopping subnet service");
+                        return;
+                    }
                     self.handle_subnet_changes::<E>(&mut service_state).await;
                 }
                 _ = sleep(delay), if !self.disable_gossipsub_topic_scoring => {
                     self.send_scoring_rate_updates::<E>(&service_state).await;
                 }
-                Ok(()) = lifecycle_rx.changed() => {
+                result = lifecycle_rx.changed() => {
+                    // The fork monitor only drops the sender after requesting a
+                    // client shutdown (or during teardown). Stop the service
+                    // instead of pattern-disabling the arm, which could leave
+                    // the select with no enabled branches and panic.
+                    if result.is_err() {
+                        warn!("Fork lifecycle channel closed; stopping subnet service");
+                        return;
+                    }
                     let new_lifecycle = lifecycle_rx.borrow_and_update().clone();
-                    self.on_lifecycle_transition(new_lifecycle, &mut service_state).await;
+                    self.on_lifecycle_transition::<E>(new_lifecycle, &mut service_state).await;
                     self.handle_subnet_changes::<E>(&mut service_state).await;
                 }
             }
@@ -122,7 +137,18 @@ impl<S: SlotClock> SubnetService<S> {
     /// - WarmUp/Normal → GracePeriod: update fork_to_score, insert current fork
     /// - GracePeriod → Normal: remove & unsubscribe previous fork
     /// - GracePeriod → WarmUp: remove previous + insert upcoming (overlapping transition)
-    async fn on_lifecycle_transition(&self, new: ForkLifecycle, service_state: &mut ServiceState) {
+    ///
+    /// A fork activation (a `fork_to_score` change) also installs scoring
+    /// parameters for the new current fork's already-subscribed topics
+    /// immediately: they were subscribed rate-less during WarmUp, and the
+    /// epoch timer would leave them unscored (no P4 penalty) until the next
+    /// epoch boundary.
+    async fn on_lifecycle_transition<E: EthSpec>(
+        &self,
+        new: ForkLifecycle,
+        service_state: &mut ServiceState,
+    ) {
+        let fork_to_score_changed = service_state.fork_to_score != new.current_fork_config().fork;
         service_state.fork_to_score = new.current_fork_config().fork;
         let removed = match new {
             ForkLifecycle::Normal { current } => service_state.set_subscribed_forks([current]),
@@ -144,6 +170,9 @@ impl<S: SlotClock> SubnetService<S> {
                 error!("Failed to unsubscribe from fork: {:?}", err);
             }
         }
+        if fork_to_score_changed && !self.disable_gossipsub_topic_scoring {
+            self.send_scoring_rate_updates::<E>(service_state).await;
+        }
     }
 
     async fn initial_service_state<E: EthSpec>(
@@ -157,7 +186,7 @@ impl<S: SlotClock> SubnetService<S> {
         };
 
         let initial_lifecycle = lifecycle_rx.borrow_and_update().clone();
-        self.on_lifecycle_transition(initial_lifecycle, &mut service_state)
+        self.on_lifecycle_transition::<E>(initial_lifecycle, &mut service_state)
             .await;
 
         self.handle_subnet_changes::<E>(&mut service_state).await;
@@ -319,10 +348,10 @@ mod tests {
         time::timeout,
     };
     use types::{
-        ChainSpec, Epoch, MinimalEthSpec, Slot, test_utils::generate_deterministic_keypair,
+        ChainSpec, Epoch, EthSpec, MinimalEthSpec, Slot, test_utils::generate_deterministic_keypair,
     };
 
-    use crate::{SUBNET_COUNT, SubnetId, TopicEvent, start_subnet_service};
+    use crate::{SUBNET_COUNT, SubnetId, TopicEvent, TopicRouter, start_subnet_service};
 
     const TEST_NETWORK: &str = "test";
     const ALAN_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
@@ -373,6 +402,14 @@ mod tests {
         /// `subnet_message_rate` returns `None` when scoring is disabled.
         fn new_normal_on_alan_with_scoring() -> Self {
             Self::new_with_flags(normal_on_alan, false, false)
+        }
+
+        /// All-subnet subscriptions with gossipsub topic scoring enabled, so lifecycle
+        /// transitions also exercise the scoring rate updates a fork activation triggers.
+        fn new_with_scoring(
+            initial_lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) -> Self {
+            Self::new_with_flags(initial_lifecycle, true, false)
         }
 
         /// Build a service with an initial lifecycle and ready-to-assert event receiver.
@@ -597,7 +634,131 @@ mod tests {
         // Assert
         // WarmUp(Alan->Boole) and GracePeriod(current=Boole, previous=Alan) track the same fork
         // set, so no subscribe/unsubscribe topic events should be emitted for this
-        // transition.
+        // transition. This harness also disables topic scoring, so the fork activation emits
+        // no rate updates either.
+        harness.assert_no_additional_events().await;
+    }
+
+    /// A fork activation must not leave the new current fork's topics unscored until the next
+    /// epoch boundary: they were subscribed rate-less during WarmUp, so the transition itself
+    /// has to install their scoring parameters.
+    #[tokio::test]
+    async fn warmup_to_grace_period_with_scoring_rescores_current_fork_topics() {
+        // Arrange
+        let mut harness = TestHarness::new_with_scoring(warmup_from_alan_to_boole);
+        harness.consume_startup_events(SUBNET_COUNT * 2).await;
+
+        // Act: no epoch boundary is crossed, only the lifecycle transition.
+        harness.transition_to_grace_period_current_boole_previous_alan();
+        let events = harness.recv_transition_events(SUBNET_COUNT).await;
+
+        // Assert: every Boole topic is rescored, and the fork set is unchanged so nothing is
+        // subscribed or unsubscribed.
+        assert_all_events_match(&events, "Boole rate update event", is_boole_rate_update);
+        harness.assert_no_additional_events().await;
+    }
+
+    /// Restarting into `Normal` and then receiving `GracePeriod` skips the WarmUp step, so
+    /// this transition subscribes the Boole topics for the first time. The activation rescore
+    /// runs before those subscriptions exist and therefore emits nothing; the subscribes
+    /// themselves carry the rates, so every topic is scored without duplicate rate updates.
+    #[tokio::test]
+    async fn normal_to_grace_period_with_scoring_subscribes_current_fork_topics_with_rates() {
+        // Arrange
+        let mut harness = TestHarness::new_with_scoring(normal_on_alan);
+        harness.consume_startup_events(SUBNET_COUNT).await;
+
+        // Act
+        harness.transition_to_grace_period_current_boole_previous_alan();
+        let events = harness.recv_transition_events(SUBNET_COUNT).await;
+
+        // Assert: every event is a Boole subscribe that already carries a rate, and no
+        // separate rate updates follow.
+        assert_all_events_match(&events, "Boole subscribe event", is_boole_subscribe);
+        for (index, event) in events.iter().enumerate() {
+            let TopicEvent::Subscribe { message_rate, .. } = event else {
+                unreachable!("asserted above that every event is a subscribe");
+            };
+            assert!(
+                message_rate.is_some(),
+                "Boole subscribe at index {index} should carry a message rate when scoring is enabled"
+            );
+        }
+        harness.assert_no_additional_events().await;
+    }
+
+    /// A restart can miss the grace period entirely: WarmUp is followed directly by
+    /// `Normal{current: Boole}`. The removal of the previous fork emits its unsubscribes
+    /// first (`on_lifecycle_transition` handles removals before the rescore), and because
+    /// `fork_to_score` flips to Boole, the Boole topics subscribed rate-less during WarmUp
+    /// are rescored in the same transition. The subnet diff afterwards adds nothing because
+    /// the Boole set is already complete.
+    #[tokio::test]
+    async fn warmup_to_normal_with_scoring_unsubscribes_previous_and_rescores_current_fork() {
+        // Arrange
+        let mut harness = TestHarness::new_with_scoring(warmup_from_alan_to_boole);
+        harness.consume_startup_events(SUBNET_COUNT * 2).await;
+
+        // Act: skip the grace period, jumping straight to Normal on Boole.
+        harness.transition_to_normal_on_boole();
+        let events = harness.recv_transition_events(SUBNET_COUNT * 2).await;
+
+        // Assert: all Alan unsubscribes first, then a rate update for every Boole topic.
+        let (unsubscribes, rate_updates) = events.split_at(SUBNET_COUNT);
+        assert_all_events_match(unsubscribes, "Alan unsubscribe event", is_alan_unsubscribe);
+        assert_all_events_match(
+            rate_updates,
+            "Boole rate update event",
+            is_boole_rate_update,
+        );
+        harness.assert_no_additional_events().await;
+    }
+
+    /// A service that starts directly in `GracePeriod{current: Boole}` (a restart after the
+    /// fork activated) runs the activation rescore path during startup, but at that point no
+    /// topics are subscribed yet, so the rescore emits nothing. Startup therefore emits only
+    /// the initial subscribes for both tracked forks, and the subscribes for the fork being
+    /// scored already carry message rates, so no topic is left unscored.
+    #[tokio::test]
+    async fn initial_grace_period_with_scoring_emits_rated_subscribes_and_no_rate_updates() {
+        // Arrange
+        let mut harness = TestHarness::new_with_scoring(grace_period_current_boole_previous_alan);
+
+        // Act: capture everything startup emits.
+        let events = harness.recv_transition_events(SUBNET_COUNT * 2).await;
+
+        // Assert: every startup event is a subscribe; the startup rescore ran against an
+        // empty subscription set, so no separate rate updates appear.
+        assert_all_events_match(&events, "subscribe event", is_subscribe_event);
+        let alan_subscribes = events
+            .iter()
+            .filter(|event| is_alan_subscribe(event))
+            .count();
+        let boole_subscribes = events
+            .iter()
+            .filter(|event| is_boole_subscribe(event))
+            .count();
+        assert_eq!(alan_subscribes, SUBNET_COUNT);
+        assert_eq!(boole_subscribes, SUBNET_COUNT);
+
+        // Assert: Boole is the fork being scored, so its subscribes carry rates; Alan is the
+        // graced-out previous fork, so its subscribes are rate-less.
+        for (index, event) in events.iter().enumerate() {
+            let TopicEvent::Subscribe { message_rate, .. } = event else {
+                unreachable!("asserted above that every event is a subscribe");
+            };
+            if is_boole_subscribe(event) {
+                assert!(
+                    message_rate.is_some(),
+                    "Boole subscribe at index {index} should carry a message rate"
+                );
+            } else {
+                assert!(
+                    message_rate.is_none(),
+                    "Alan subscribe at index {index} should not carry a message rate"
+                );
+            }
+        }
         harness.assert_no_additional_events().await;
     }
 
@@ -623,6 +784,99 @@ mod tests {
         assert_eq!(alan_subscribes, SUBNET_COUNT);
         assert_eq!(boole_subscribes, SUBNET_COUNT);
         harness.assert_no_additional_events().await;
+    }
+
+    /// Dropping the lifecycle sender must stop the run loop cleanly. With
+    /// `subscribe_all_subnets` disabling the db arm and `disable_gossipsub_topic_scoring`
+    /// disabling the epoch timer, the lifecycle arm is the only live select branch, so its
+    /// `Err` result is the loop's only exit; without that handling the select would have no
+    /// enabled branches left and panic.
+    #[tokio::test]
+    async fn run_stops_cleanly_when_lifecycle_sender_is_dropped() {
+        // Arrange: build the service directly so the test owns the run task's join handle.
+        let temp_dir = TempDir::new().expect("should create temp directory for test database");
+        let db_path = temp_dir.path().join("subnet_service_sender_drop.db");
+        let db = NetworkDatabase::new_as_impostor(&db_path, &OWN_OPERATOR_ID, TEST_NETWORK)
+            .expect("should build test database");
+        let (fork_schedule, alan_config, _boole_config) = test_fork_schedule();
+        let (lifecycle_tx, lifecycle_rx) = watch::channel(ForkLifecycle::Normal {
+            current: alan_config,
+        });
+        let (tx, mut topic_event_rx) = mpsc::channel(SUBNET_COUNT);
+        let service = Arc::new(crate::SubnetService {
+            tx,
+            db: db.watch(),
+            subscribe_all_subnets: true,
+            disable_gossipsub_topic_scoring: true,
+            slot_clock: Arc::new(ManualSlotClock::new(
+                Slot::new(0),
+                Duration::from_secs(0),
+                Duration::from_secs(12),
+            )),
+            chain_spec: Arc::new(ChainSpec::minimal()),
+            router: TopicRouter::new(fork_schedule, MinimalEthSpec::slots_per_epoch()),
+        });
+        let handle = tokio::spawn(service.clone().run::<MinimalEthSpec>(lifecycle_rx));
+
+        // Drain the startup subscribes so the loop is parked in the select.
+        for _ in 0..SUBNET_COUNT {
+            timeout(EVENT_TIMEOUT, topic_event_rx.recv())
+                .await
+                .expect("timed out waiting for startup subscribe")
+                .expect("topic event channel closed unexpectedly");
+        }
+
+        // Act
+        drop(lifecycle_tx);
+
+        // Assert: the task returns, and returns cleanly (a panic would surface as a
+        // JoinError).
+        timeout(EVENT_TIMEOUT, handle)
+            .await
+            .expect("run should return after the lifecycle sender is dropped")
+            .expect("run must not panic when the lifecycle sender is dropped");
+    }
+
+    /// The database arm binds `changed()` with a name rather than `_`, so a dropped
+    /// database sender stops the service instead of leaving the arm permanently ready
+    /// and spinning the loop.
+    #[tokio::test]
+    async fn run_stops_cleanly_when_database_sender_is_dropped() {
+        // Arrange: keep the database arm enabled (subscribe_all_subnets = false) so the
+        // dropped sender reaches it, and own the run task's join handle.
+        let temp_dir = TempDir::new().expect("should create temp directory for test database");
+        let db_path = temp_dir.path().join("subnet_service_db_drop.db");
+        let db = NetworkDatabase::new_as_impostor(&db_path, &OWN_OPERATOR_ID, TEST_NETWORK)
+            .expect("should build test database");
+        let (fork_schedule, alan_config, _boole_config) = test_fork_schedule();
+        let (_lifecycle_tx, lifecycle_rx) = watch::channel(ForkLifecycle::Normal {
+            current: alan_config,
+        });
+        let (tx, _topic_event_rx) = mpsc::channel(SUBNET_COUNT);
+        let service = Arc::new(crate::SubnetService {
+            tx,
+            db: db.watch(),
+            subscribe_all_subnets: false,
+            disable_gossipsub_topic_scoring: true,
+            slot_clock: Arc::new(ManualSlotClock::new(
+                Slot::new(0),
+                Duration::from_secs(0),
+                Duration::from_secs(12),
+            )),
+            chain_spec: Arc::new(ChainSpec::minimal()),
+            router: TopicRouter::new(fork_schedule, MinimalEthSpec::slots_per_epoch()),
+        });
+        let handle = tokio::spawn(service.clone().run::<MinimalEthSpec>(lifecycle_rx));
+
+        // Act: an empty database emits no startup subscriptions, so the loop is already
+        // parked in the select when the sender drops.
+        drop(db);
+
+        // Assert: the task returns rather than spinning, and does not panic.
+        timeout(EVENT_TIMEOUT, handle)
+            .await
+            .expect("run should return after the database sender is dropped")
+            .expect("run must not panic when the database sender is dropped");
     }
 
     #[tokio::test]
@@ -854,6 +1108,13 @@ mod tests {
         matches!(
             event,
             TopicEvent::Subscribe { topic, .. } if topic.starts_with(boole_topic_prefix())
+        )
+    }
+
+    fn is_boole_rate_update(event: &TopicEvent) -> bool {
+        matches!(
+            event,
+            TopicEvent::RateUpdate { topic, .. } if topic.starts_with(boole_topic_prefix())
         )
     }
 
