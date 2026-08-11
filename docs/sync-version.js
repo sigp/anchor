@@ -87,15 +87,17 @@ async function updateVersionAndStatsInFiles(version, stats) {
   const installationPath = join(__dirname, 'docs/pages/installation.mdx');
   let installationContent = readFileSync(installationPath, 'utf8');
   
-  // Replace download URL versions
+  // Replace download URL versions. The filename version pattern must not have an
+  // optional -suffix group: it would greedily swallow the architecture component
+  // (anchor-v1.1.0-x86_64-... -> anchor-v1.2.0-...).
   installationContent = installationContent.replace(
-    /wget https:\/\/github\.com\/sigp\/anchor\/releases\/download\/v[\d.]+(?:-[\w.]+)?\/anchor-v[\d.]+(?:-[\w.]+)?-/g,
+    /wget https:\/\/github\.com\/sigp\/anchor\/releases\/download\/v[\d.]+(?:-[\w.]+)?\/anchor-v[\d.]+-/g,
     `wget https://github.com/sigp/anchor/releases/download/${vVersion}/anchor-${vVersion}-`
   );
-  
+
   // Replace tar extraction versions
   installationContent = installationContent.replace(
-    /tar -xvf anchor-v[\d.]+(?:-[\w.]+)?-/g,
+    /tar -xvf anchor-v[\d.]+-/g,
     `tar -xvf anchor-${vVersion}-`
   );
   

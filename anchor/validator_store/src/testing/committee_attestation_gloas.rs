@@ -18,15 +18,12 @@ use ssv_types::{
     consensus::{BeaconVote, GloasBeaconVote, QbftData},
 };
 use types::{
-    Attestation, AttestationData, ChainSpec, Checkpoint, Domain, Epoch, EthSpec, Hash256,
-    MainnetEthSpec, SignedRoot, Slot,
+    AttestationData, ChainSpec, Checkpoint, Domain, Epoch, EthSpec, Hash256, MainnetEthSpec,
+    SignedRoot, Slot,
 };
 use validator_store::ValidatorStore;
 
 use super::common::*;
-use crate::Error;
-
-type SignAttestationsResult = Vec<Result<Vec<(u64, Attestation<MainnetEthSpec>)>, Error>>;
 
 const COMMITTEE_OPERATORS: [OperatorId; 4] =
     [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
@@ -66,22 +63,6 @@ fn expected_attester_signing_root(
     data.signing_root(domain)
 }
 
-/// Drives `sign_attestations` to completion and unwraps every committee batch.
-async fn run_sign_attestations(
-    harness: &ValidatorStoreTestHarness,
-    attestations: Vec<validator_store::AttestationToSign<MainnetEthSpec>>,
-) -> Vec<(u64, Attestation<MainnetEthSpec>)> {
-    let results: SignAttestationsResult = harness
-        .validator_store
-        .sign_attestations(attestations)
-        .collect()
-        .await;
-    results
-        .into_iter()
-        .flat_map(|batch| batch.expect("committee batch should succeed"))
-        .collect()
-}
-
 // ==================== Gloas: decided index applied ====================
 
 /// At Gloas, the single cluster-decided `attestation_data_index` must be written onto every
@@ -116,10 +97,9 @@ async fn gloas_decided_index_applied_to_every_validator_attestation() {
         COMMITTEE_VALIDATOR_COUNT,
         "expected one signed attestation per validator"
     );
-    for (_, attestation) in &signed {
+    for attestation in &signed {
         assert_eq!(
-            attestation.data().index,
-            DECIDED_INDEX,
+            attestation.data.index, DECIDED_INDEX,
             "Gloas must apply the cluster-decided index to data.index, not the local seed"
         );
     }
@@ -213,13 +193,11 @@ async fn gloas_all_operators_converge_on_decided_index_signing_root() {
         "the converged root must be the root computed over the decided index"
     );
     assert_eq!(
-        signed_a[0].1.data().index,
-        DECIDED_INDEX,
+        signed_a[0].data.index, DECIDED_INDEX,
         "operator A must sign the decided index"
     );
     assert_eq!(
-        signed_b[0].1.data().index,
-        DECIDED_INDEX,
+        signed_b[0].data.index, DECIDED_INDEX,
         "operator B must sign the decided index"
     );
 }
@@ -253,10 +231,9 @@ async fn pre_gloas_electra_attestation_index_is_zero_and_untouched() {
 
     // Assert: index stays 0 (Electra+ BN-supplied value), never overwritten.
     assert_eq!(signed.len(), COMMITTEE_VALIDATOR_COUNT);
-    for (_, attestation) in &signed {
+    for attestation in &signed {
         assert_eq!(
-            attestation.data().index,
-            0,
+            attestation.data.index, 0,
             "pre-Gloas Electra attestation index must remain 0 and untouched"
         );
     }
@@ -312,7 +289,7 @@ async fn pre_gloas_pre_electra_attestation_index_equals_committee_index() {
         harness.create_attestation_with_index(0, 1, committee_index),
     ];
     for attestation in &attestations {
-        let duty_data = attestation.attestation.data();
+        let duty_data = &attestation.data;
         assert_ne!(duty_data.beacon_block_root, voting_block_root);
         assert_ne!(duty_data.source, voting_source);
         assert_ne!(duty_data.target, voting_target);
@@ -323,15 +300,14 @@ async fn pre_gloas_pre_electra_attestation_index_equals_committee_index() {
 
     // Assert: the BN-supplied committee index survives unchanged.
     assert_eq!(signed.len(), COMMITTEE_VALIDATOR_COUNT);
-    for (_, attestation) in &signed {
+    for attestation in &signed {
         assert_eq!(
-            attestation.data().index,
-            committee_index,
+            attestation.data.index, committee_index,
             "pre-Electra attestation index must equal the BN committee index, untouched"
         );
-        assert_eq!(attestation.data().beacon_block_root, voting_block_root);
-        assert_eq!(attestation.data().source, voting_source);
-        assert_eq!(attestation.data().target, voting_target);
+        assert_eq!(attestation.data.beacon_block_root, voting_block_root);
+        assert_eq!(attestation.data.source, voting_source);
+        assert_eq!(attestation.data.target, voting_target);
     }
 
     // Assert: consensus and signing use the shared voting-context vote, while retaining the
@@ -415,9 +391,9 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
 
     // Act: drive the attestation path, capture its committee base hash + committee id.
     let duty = harness.create_attestation(0, 0);
-    assert_ne!(duty.attestation.data().beacon_block_root, voting_block_root);
-    assert_ne!(duty.attestation.data().source, voting_source);
-    assert_ne!(duty.attestation.data().target, voting_target);
+    assert_ne!(duty.data.beacon_block_root, voting_block_root);
+    assert_ne!(duty.data.source, voting_source);
+    assert_ne!(duty.data.target, voting_target);
     let attestation_signed = run_sign_attestations(&harness, vec![duty]).await;
     let (attestation_base_hash, attestation_committee_id, _) = committee_call_data(&harness);
 
@@ -436,7 +412,7 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
     // Assert: the attestation path applies all decided voting-context fields, not the incoming
     // duty's fields. The mock changes only the index, preserving the remaining seed fields.
     assert_eq!(attestation_signed.len(), 1);
-    let signed_data = attestation_signed[0].1.data();
+    let signed_data = &attestation_signed[0].data;
     assert_eq!(signed_data.beacon_block_root, voting_block_root);
     assert_eq!(signed_data.source, voting_source);
     assert_eq!(signed_data.target, voting_target);

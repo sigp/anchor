@@ -26,6 +26,13 @@ pub use types::{Epoch, Slot};
 pub const RSA_SIGNATURE_SIZE: usize = 256;
 pub const MAX_SIGNATURES: usize = 13;
 
+/// Maximum sync committee positions a validator may occupy in one slot, and therefore the maximum
+/// number of inner partial signature messages in a pre-Boole sync committee message.
+///
+/// Numerically equal to [`MAX_SIGNATURES`] but unrelated to it. `MAX_SIGNATURES` bounds operators
+/// per SSV committee, while this constant bounds Ethereum sync committee positions.
+pub const MAX_SYNC_COMMITTEE_POSITIONS: usize = 13;
+
 /// Maximum Byzantine/faulty members a committee of `members` can tolerate:
 /// `f = ⌊(N − 1) / 3⌋`. Returns 0 for empty committees.
 pub fn get_f(members: usize) -> usize {

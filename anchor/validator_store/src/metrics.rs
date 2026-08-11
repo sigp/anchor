@@ -36,6 +36,58 @@ pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
         )
     });
 
+/// The duty's `attester_index` differs from Anchor's stored validator index; indices are
+/// permanent once assigned, so this is never reorg drift.
+pub const IDENTITY_MISMATCH_ATTESTER_INDEX: &str = "attester_index";
+/// The duty's `committee_index` differs from the slot-start voting-assignments snapshot.
+pub const IDENTITY_MISMATCH_COMMITTEE_INDEX: &str = "committee_index";
+/// The duty's pubkey is absent from the slot-start attesting snapshot.
+pub const IDENTITY_MISMATCH_MISSING_FROM_SNAPSHOT: &str = "missing_from_snapshot";
+
+/// Attestation duties whose identity fields differ from Anchor's own metadata. Diagnostic
+/// only: the fields are not part of the signing root, publication proceeds, and the beacon
+/// node validates them authoritatively.
+pub static ATTESTATION_DUTY_IDENTITY_MISMATCHES: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_attestation_duty_identity_mismatches_total",
+            "Attestation duties whose identity fields differ from Anchor metadata, by reason",
+            &["reason"],
+        )
+    });
+
+/// Offset into the slot at which RANDAO pre-consensus finished, before any proposer delay.
+///
+/// The input for tuning `--proposer-delay-ms`, which only bites when pre-consensus completes before
+/// the target. Buckets cover the sub-second range where that is decided, and run past a full slot
+/// so an overrun stays resolvable.
+pub static RANDAO_REVEAL_COMPLETION_OFFSET: LazyLock<Result<Histogram>> = LazyLock::new(|| {
+    try_create_histogram_with_buckets(
+        "anchor_randao_reveal_completion_offset_seconds",
+        "Time into slot (seconds) when RANDAO pre-consensus completed, before any proposer delay",
+        Ok(vec![
+            0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0, 12.0, 16.0, 24.0,
+        ]),
+    )
+});
+
+/// Wait applied by the proposer delay, labelled `disabled`, `target_passed`, `waited`, or
+/// `clock_unavailable`.
+///
+/// Recorded after the sleep, so it is the wait taken rather than the one planned. Non-waiting
+/// outcomes record zero rather than nothing, so a flat zero is distinguishable from a missing
+/// metric. Buckets run to the configured hard maximum.
+pub static PROPOSER_DELAY_APPLIED: LazyLock<Result<HistogramVec>> = LazyLock::new(|| {
+    try_create_histogram_vec_with_buckets(
+        "anchor_proposer_delay_applied_seconds",
+        "Wait applied before requesting a beacon block, by proposer delay outcome",
+        Ok(vec![
+            0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0,
+        ]),
+        &["outcome"],
+    )
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MetadataService metrics
 // ═══════════════════════════════════════════════════════════════════════════════
