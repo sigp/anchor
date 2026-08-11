@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
-use eth2::types::ProposerData;
+use eth2::types::{DutiesResponse, ProposerData};
 use parking_lot::RwLock;
 use ssv_types::ValidatorIndex;
-use types::{Epoch, Slot};
+use thiserror::Error;
+use types::{Epoch, Hash256, Slot};
 
 pub mod duties_tracker;
 pub mod voluntary_exit_tracker;
@@ -84,12 +85,99 @@ impl SyncCommitteePerPeriod {
     }
 }
 
-type ProposerMap = HashMap<Epoch, Vec<ProposerData>>;
+type ProposerMap = HashMap<Epoch, ProposerSchedule>;
+
+/// A proposer schedule validated as complete for one epoch (one duty per slot),
+/// retained with the v2 response metadata used for refresh decisions and diagnostics.
+#[derive(Debug, Clone)]
+pub struct ProposerSchedule {
+    dependent_root: Hash256,
+    execution_optimistic: Option<bool>,
+    duties: Vec<ProposerData>,
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum ProposerScheduleError {
+    #[error("expected {expected} proposer duties, got {actual}")]
+    WrongLength { expected: usize, actual: usize },
+    #[error("duty slot {0} is outside epoch {1}")]
+    SlotOutOfEpoch(Slot, Epoch),
+    #[error("slot {0} has more than one proposer duty")]
+    DuplicateSlot(Slot),
+}
+
+impl ProposerSchedule {
+    /// Validate a v2 proposer-duties `response` as a complete schedule for `epoch`.
+    pub fn from_response(
+        epoch: Epoch,
+        slots_per_epoch: u64,
+        response: DutiesResponse<Vec<ProposerData>>,
+    ) -> Result<Self, ProposerScheduleError> {
+        let expected = slots_per_epoch as usize;
+        if response.data.len() != expected {
+            return Err(ProposerScheduleError::WrongLength {
+                expected,
+                actual: response.data.len(),
+            });
+        }
+
+        let start_slot = epoch.start_slot(slots_per_epoch).as_u64();
+        let mut seen = vec![false; expected];
+        for duty in &response.data {
+            let offset = duty
+                .slot
+                .as_u64()
+                .checked_sub(start_slot)
+                .filter(|offset| *offset < slots_per_epoch)
+                .ok_or(ProposerScheduleError::SlotOutOfEpoch(duty.slot, epoch))?
+                as usize;
+            if seen[offset] {
+                return Err(ProposerScheduleError::DuplicateSlot(duty.slot));
+            }
+            seen[offset] = true;
+        }
+
+        Ok(Self {
+            dependent_root: response.dependent_root,
+            execution_optimistic: response.execution_optimistic,
+            duties: response.data,
+        })
+    }
+
+    pub fn duties(&self) -> &[ProposerData] {
+        &self.duties
+    }
+
+    pub fn dependent_root(&self) -> Hash256 {
+        self.dependent_root
+    }
+
+    pub fn execution_optimistic(&self) -> Option<bool> {
+        self.execution_optimistic
+    }
+}
+
+#[cfg(test)]
+impl ProposerSchedule {
+    /// Build a schedule from raw duties WITHOUT the completeness/validity checks that
+    /// `from_response` enforces. Test-only: lets `proposer_assignment_at_slot` tests seed
+    /// deliberately partial schedules that could never come from a validated response.
+    pub(crate) fn from_duties_unchecked(duties: Vec<ProposerData>) -> Self {
+        // Brings `Hash256::zero()` (a `FixedBytesExtended` method) into scope for this
+        // test-only constructor without adding a non-test import to the crate.
+        use bls::FixedBytesExtended;
+        Self {
+            dependent_root: Hash256::zero(),
+            execution_optimistic: None,
+            duties,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Duties {
-    /// Maps an epoch to all *local* proposers in this epoch. Notably, this does not contain
-    /// proposals for any validators which are not registered locally.
+    /// Maps an epoch to its validated complete proposer schedule (the full schedule for
+    /// every validator, not filtered by the local registry).
     pub proposers: RwLock<ProposerMap>,
     /// Map from validator index to sync committee duties.
     pub sync_duties: SyncCommitteePerPeriod,
