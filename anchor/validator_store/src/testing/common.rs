@@ -785,6 +785,15 @@ impl ValidatorStoreTestHarness {
         }
     }
 
+    /// The public key of validator `validator_idx` in committee `committee_idx`.
+    pub(super) fn validator_pubkey(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> PublicKeyBytes {
+        self.committee_setups[committee_idx].validators[validator_idx].public_key
+    }
+
     /// Builds an attestation duty for `TEST_SLOT` whose `data.index` is pre-set to `index`,
     /// modeling a BN-supplied attestation index (e.g. the committee index pre-Electra). Lets
     /// tests assert whether the signing path leaves that index untouched or overwrites it.
