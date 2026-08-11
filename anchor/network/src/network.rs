@@ -8,7 +8,7 @@ use std::{
 };
 
 use fork::{ForkLifecycle, ForkSchedule};
-use futures::StreamExt;
+use futures::{StreamExt, channel::mpsc::Sender as ShutdownSender};
 use libp2p::{
     Multiaddr, PeerId, Swarm, SwarmBuilder, TransportError,
     core::{
@@ -25,7 +25,7 @@ use libp2p::{
 use message_receiver::{MessageReceiver, Outcome, TopicContext};
 use prometheus_client::registry::Registry;
 use subnet_service::{SUBNET_COUNT, SubnetId, TopicEvent, topic};
-use task_executor::TaskExecutor;
+use task_executor::{ShutdownReason, TaskExecutor};
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, trace, warn};
@@ -65,6 +65,24 @@ pub enum NetworkError {
 
     #[error("DNS transport config error: {0}")]
     DnsTransport(std::io::Error),
+
+    #[error("ENR reconciliation error: {0}")]
+    EnrReconcile(String),
+}
+
+/// Bring the local ENR's `domaintype` in line with the current lifecycle.
+///
+/// A fork may have activated while `Discovery::new` awaited discv5 startup and bootnode
+/// requests, after it had already built the ENR from the older lifecycle. This reads the
+/// lifecycle without marking it seen: if a change is pending, the run loop's `changed()`
+/// arm re-applies it, which `update_enr_domain_type` turns into a no-op when the ENR
+/// already matches.
+fn reconcile_enr_domain(
+    behaviour: &mut AnchorBehaviour,
+    lifecycle_rx: &watch::Receiver<ForkLifecycle>,
+) -> Result<(), String> {
+    let domain = lifecycle_rx.borrow().current_fork_config().domain_type;
+    behaviour.discovery.update_enr_domain_type(domain)
 }
 
 pub struct Network<R: MessageReceiver> {
@@ -83,9 +101,9 @@ pub struct Network<R: MessageReceiver> {
     /// Receiver for fork lifecycle state changes.
     /// Used to update ENR domain type on fork activation.
     lifecycle_rx: watch::Receiver<ForkLifecycle>,
-    /// Previous lifecycle state, used to detect actual domain type changes
-    /// and avoid redundant ENR updates.
-    prev_lifecycle: ForkLifecycle,
+    /// Requests a client-wide shutdown when the network cannot keep its
+    /// advertised state consistent with the fork lifecycle (fail closed).
+    shutdown_tx: ShutdownSender<ShutdownReason>,
 }
 
 impl<R: MessageReceiver> Network<R> {
@@ -101,7 +119,7 @@ impl<R: MessageReceiver> Network<R> {
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
         fork_schedule: Arc<ForkSchedule>,
-        mut lifecycle_rx: watch::Receiver<ForkLifecycle>,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
     ) -> Result<Network<R>, Box<NetworkError>> {
         let local_keypair: Keypair = load_private_key(&config.network_dir.key_file());
 
@@ -113,7 +131,7 @@ impl<R: MessageReceiver> Network<R> {
 
         let mut metrics_registry = Registry::default();
 
-        let behaviour = AnchorBehaviour::new::<E>(
+        let mut behaviour = AnchorBehaviour::new::<E>(
             local_keypair.clone(),
             config,
             &mut metrics_registry,
@@ -126,7 +144,12 @@ impl<R: MessageReceiver> Network<R> {
 
         let peer_id = local_keypair.public().to_peer_id();
 
-        let prev_lifecycle = lifecycle_rx.borrow_and_update().clone();
+        // Failing to reconcile would return a network that advertises a domain
+        // known to disagree with its lifecycle, so it fails construction instead.
+        reconcile_enr_domain(&mut behaviour, &lifecycle_rx)
+            .map_err(|e| Box::new(NetworkError::EnrReconcile(e)))?;
+
+        let shutdown_tx = executor.shutdown_sender();
         let mut network = Network {
             swarm: build_swarm(
                 executor.clone(),
@@ -145,7 +168,7 @@ impl<R: MessageReceiver> Network<R> {
             is_dynamic_target_peers,
             subnet_subscription_counts: HashMap::new(),
             lifecycle_rx,
-            prev_lifecycle,
+            shutdown_tx,
         };
 
         info!(%peer_id, "Network starting");
@@ -201,9 +224,9 @@ impl<R: MessageReceiver> Network<R> {
                 }
 
                 Ok(()) = self.lifecycle_rx.changed() => {
-                    let new = self.lifecycle_rx.borrow_and_update().clone();
-                    self.apply_fork_transition(&new);
-                    self.prev_lifecycle = new;
+                    if let ControlFlow::Break(()) = self.on_lifecycle_changed() {
+                        return;
+                    }
                 }
             }
         }
@@ -430,25 +453,36 @@ impl<R: MessageReceiver> Network<R> {
         }
     }
 
-    /// Handle fork lifecycle state changes.
+    /// Handle a fork lifecycle state change.
     ///
-    /// Only updates the ENR when the domain type actually changes between
-    /// lifecycle states. Transition logging is owned by the fork monitor.
-    fn apply_fork_transition(&mut self, new: &ForkLifecycle) {
-        let prev_domain = self.prev_lifecycle.current_fork_config().domain_type;
-        let new_domain = new.current_fork_config().domain_type;
+    /// Brings the ENR domain in line with the new lifecycle;
+    /// `update_enr_domain_type` no-ops when the ENR already matches, and logs
+    /// when it actually changes. Transition logging is owned by the fork
+    /// monitor. On failure the ENR disagrees with the lifecycle and never
+    /// recovers on its own (the next lifecycle change keeps the same domain),
+    /// so fail closed: request a client-wide shutdown and stop the network
+    /// loop instead of continuing with a stale ENR.
+    fn on_lifecycle_changed(&mut self) -> ControlFlow<()> {
+        let domain = self
+            .lifecycle_rx
+            .borrow_and_update()
+            .current_fork_config()
+            .domain_type;
 
-        // Only update ENR when the domain type actually changed.
-        if new_domain != prev_domain {
-            info!(
-                ?prev_domain,
-                ?new_domain,
-                "Updating ENR domain type after fork transition"
-            );
-            if let Err(e) = self.discovery().update_enr_domain_type(new_domain) {
-                error!(?e, "Failed to update ENR domain type after fork transition");
+        if let Err(e) = self.discovery().update_enr_domain_type(domain) {
+            error!(error = %e, "Failed to update ENR for fork transition; requesting client shutdown");
+            if let Err(e) = self.shutdown_tx.try_send(ShutdownReason::Failure(
+                "Network: failed to update ENR for fork transition",
+            )) && !e.is_full()
+            {
+                // A full channel means a shutdown is already pending; a closed
+                // one means there is no receiver left to act, which we can only
+                // surface in logs.
+                error!("Failed to deliver shutdown request: channel closed");
             }
+            return ControlFlow::Break(());
         }
+        ControlFlow::Continue(())
     }
 
     fn on_new_listen_addr(&mut self, listener_id: ListenerId, address: Multiaddr) {
@@ -922,4 +956,415 @@ fn build_swarm(
         .build();
 
     Ok(swarm)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use fork::{Fork, ForkConfig, ForkLifecycle};
+    use global_config::data_dir::DataDir;
+    use network_utils::listen_addr::{ListenAddr, ListenAddress};
+    use ssv_types::domain_type::DomainType;
+    use subnet_service::topic::create_topic;
+    use task_executor::test_utils::TestRuntime;
+    use tempfile::TempDir;
+    use types::{ChainSpec, Epoch, MinimalEthSpec};
+
+    use super::*;
+
+    const TEST_NETWORK: &str = "test";
+    const ALAN_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
+    const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
+    const BOOLE_FORK_EPOCH: u64 = 100;
+    /// Arbitrary subnet used by the topic scoring test.
+    const TEST_SUBNET: u64 = 7;
+    /// Any finite, non-negative rate; the scoring parameters derived from it are what matters.
+    const TEST_MESSAGE_RATE: f64 = 1.5;
+    /// Channel capacities: the tests drive the handlers directly, so nothing is queued.
+    const TEST_CHANNEL_CAPACITY: usize = 1;
+
+    /// A `MessageReceiver` that never sees a message, because these tests drive the network's
+    /// handlers directly instead of gossiping.
+    struct UnusedMessageReceiver;
+
+    impl MessageReceiver for UnusedMessageReceiver {
+        fn receive(
+            &self,
+            _propagation_source: PeerId,
+            _message_id: gossipsub::MessageId,
+            _message: gossipsub::Message,
+            _topic_context: TopicContext,
+        ) -> Result<(), message_receiver::Error> {
+            unreachable!("these tests do not deliver gossip messages")
+        }
+    }
+
+    fn test_fork_schedule() -> (Arc<ForkSchedule>, ForkConfig, ForkConfig) {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), ALAN_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(BOOLE_FORK_EPOCH), BOOLE_DOMAIN));
+        let schedule = Arc::new(
+            ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+                .expect("test fork schedule should be valid"),
+        );
+        let alan_config = schedule
+            .config(Fork::Alan)
+            .cloned()
+            .expect("Alan config should exist");
+        let boole_config = schedule
+            .config(Fork::Boole)
+            .cloned()
+            .expect("Boole config should exist");
+        (schedule, alan_config, boole_config)
+    }
+
+    /// A config that binds ephemeral ports and starts neither discv5 nor UPnP, so the network
+    /// can be constructed in a unit test without touching the outside world.
+    fn test_config(network_dir: global_config::data_dir::NetworkDir) -> Config {
+        let mut config = Config::new(network_dir);
+        config.listen_addresses = ListenAddress::V4(ListenAddr {
+            addr: std::net::Ipv4Addr::LOCALHOST,
+            disc_port: 0,
+            quic_port: 0,
+            tcp_port: 0,
+        });
+        config.disable_discovery = true;
+        config.disable_quic_support = true;
+        config.upnp_enabled = false;
+        config
+    }
+
+    /// A bare `AnchorBehaviour` plus its lifecycle channel, standing in for the interval
+    /// inside `try_new` between building the behaviour and reconciling the ENR.
+    struct TestBehaviour {
+        behaviour: AnchorBehaviour,
+        lifecycle_tx: watch::Sender<ForkLifecycle>,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
+        alan_config: ForkConfig,
+        boole_config: ForkConfig,
+        // Keep this last so it drops after the behaviour and its ENR file.
+        _temp_dir: TempDir,
+    }
+
+    impl TestBehaviour {
+        async fn new(
+            initial_lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) -> Self {
+            let temp_dir = TempDir::new().expect("should create temp directory for network dir");
+            let data_dir =
+                DataDir::new(temp_dir.path().to_path_buf()).expect("should create data dir");
+            let config = test_config(data_dir.network_dir());
+
+            let (fork_schedule, alan_config, boole_config) = test_fork_schedule();
+            let (lifecycle_tx, lifecycle_rx) =
+                watch::channel(initial_lifecycle(&alan_config, &boole_config));
+
+            let behaviour = AnchorBehaviour::new::<MinimalEthSpec>(
+                Keypair::generate_secp256k1(),
+                &config,
+                &mut Registry::default(),
+                &ChainSpec::minimal(),
+                &fork_schedule,
+                lifecycle_rx.clone(),
+            )
+            .await
+            .expect("test behaviour should build");
+
+            Self {
+                behaviour,
+                lifecycle_tx,
+                lifecycle_rx,
+                alan_config,
+                boole_config,
+                _temp_dir: temp_dir,
+            }
+        }
+
+        fn send_lifecycle(
+            &self,
+            lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) {
+            self.lifecycle_tx
+                .send(lifecycle(&self.alan_config, &self.boole_config))
+                .expect("the behaviour should still hold a lifecycle receiver");
+        }
+
+        fn enr_domain_type(&self) -> [u8; 4] {
+            self.behaviour
+                .discovery
+                .local_enr()
+                .get_decodable::<[u8; 4]>("domaintype")
+                .expect("local ENR should carry a domaintype")
+                .expect("domaintype should decode as four bytes")
+        }
+
+        /// The local ENR's sequence number, which only advances when the record is rewritten.
+        fn enr_seq(&self) -> u64 {
+            self.behaviour.discovery.local_enr().seq()
+        }
+    }
+
+    /// A live `Network` plus the handles a test needs to drive it.
+    struct TestNetwork {
+        network: Network<UnusedMessageReceiver>,
+        lifecycle_tx: watch::Sender<ForkLifecycle>,
+        alan_config: ForkConfig,
+        boole_config: ForkConfig,
+        _runtime: TestRuntime,
+        // Keep this last so it drops after the network and its ENR file.
+        _temp_dir: TempDir,
+    }
+
+    impl TestNetwork {
+        async fn new(
+            initial_lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) -> Self {
+            let temp_dir = TempDir::new().expect("should create temp directory for network dir");
+            let data_dir =
+                DataDir::new(temp_dir.path().to_path_buf()).expect("should create data dir");
+            let config = test_config(data_dir.network_dir());
+
+            let (fork_schedule, alan_config, boole_config) = test_fork_schedule();
+            let (lifecycle_tx, lifecycle_rx) =
+                watch::channel(initial_lifecycle(&alan_config, &boole_config));
+
+            let (_topic_event_tx, topic_event_rx) = mpsc::channel(TEST_CHANNEL_CAPACITY);
+            let (_message_tx, message_rx) = mpsc::channel(TEST_CHANNEL_CAPACITY);
+            let (_outcome_tx, outcome_rx) = mpsc::channel(TEST_CHANNEL_CAPACITY);
+
+            let runtime = TestRuntime::default();
+            let network = Network::try_new::<MinimalEthSpec>(
+                &config,
+                topic_event_rx,
+                message_rx,
+                Arc::new(UnusedMessageReceiver),
+                outcome_rx,
+                runtime.task_executor.clone(),
+                Arc::new(ChainSpec::minimal()),
+                fork_schedule,
+                lifecycle_rx,
+            )
+            .await
+            .expect("test network should build");
+
+            Self {
+                network,
+                lifecycle_tx,
+                alan_config,
+                boole_config,
+                _runtime: runtime,
+                _temp_dir: temp_dir,
+            }
+        }
+
+        fn send_lifecycle(
+            &self,
+            lifecycle: impl FnOnce(&ForkConfig, &ForkConfig) -> ForkLifecycle,
+        ) {
+            self.lifecycle_tx
+                .send(lifecycle(&self.alan_config, &self.boole_config))
+                .expect("network should still hold the lifecycle receiver");
+        }
+
+        /// The `domaintype` currently advertised in the local ENR.
+        fn enr_domain_type(&mut self) -> [u8; 4] {
+            self.network
+                .discovery()
+                .local_enr()
+                .get_decodable::<[u8; 4]>("domaintype")
+                .expect("local ENR should carry a domaintype")
+                .expect("domaintype should decode as four bytes")
+        }
+
+        /// The local ENR's sequence number, which only advances when the record is rewritten.
+        fn enr_seq(&mut self) -> u64 {
+            self.network.discovery().local_enr().seq()
+        }
+    }
+
+    fn normal_on_alan(alan_config: &ForkConfig, _boole_config: &ForkConfig) -> ForkLifecycle {
+        ForkLifecycle::Normal {
+            current: alan_config.clone(),
+        }
+    }
+
+    fn grace_period_current_boole_previous_alan(
+        alan_config: &ForkConfig,
+        boole_config: &ForkConfig,
+    ) -> ForkLifecycle {
+        ForkLifecycle::GracePeriod {
+            current: boole_config.clone(),
+            previous: alan_config.clone(),
+        }
+    }
+
+    fn normal_on_boole(_alan_config: &ForkConfig, boole_config: &ForkConfig) -> ForkLifecycle {
+        ForkLifecycle::Normal {
+            current: boole_config.clone(),
+        }
+    }
+
+    // ==================== ENR domain reconciliation tests ====================
+
+    #[tokio::test]
+    async fn test_try_new_advertises_the_current_lifecycle_domain() {
+        // Arrange and act
+        let mut network = TestNetwork::new(normal_on_alan).await;
+
+        // Assert
+        assert_eq!(network.enr_domain_type(), ALAN_DOMAIN.0);
+    }
+
+    #[tokio::test]
+    async fn test_try_new_advertises_the_domain_of_a_fork_already_active_at_startup() {
+        // Arrange and act
+        let mut network = TestNetwork::new(grace_period_current_boole_previous_alan).await;
+
+        // Assert
+        assert_eq!(network.enr_domain_type(), BOOLE_DOMAIN.0);
+    }
+
+    /// The race the reconcile exists for: `Discovery::new` snapshots the lifecycle and builds
+    /// the ENR from it, then awaits discv5 startup and bootnode requests. A fork activating
+    /// during those awaits reaches the watch channel but not the ENR, so without the
+    /// reconcile the node would advertise the old domain until the run loop first polls the
+    /// channel.
+    #[tokio::test]
+    async fn test_reconcile_picks_up_a_fork_that_activated_during_behaviour_construction() {
+        // Arrange: the ENR Discovery built has only ever seen Alan.
+        let mut fixture = TestBehaviour::new(normal_on_alan).await;
+        assert_eq!(fixture.enr_domain_type(), ALAN_DOMAIN.0);
+
+        // Act: the fork activates in the window `try_new` owns, after the behaviour exists.
+        fixture.send_lifecycle(grace_period_current_boole_previous_alan);
+        reconcile_enr_domain(&mut fixture.behaviour, &fixture.lifecycle_rx)
+            .expect("reconcile should update the ENR");
+
+        // Assert
+        assert_eq!(fixture.enr_domain_type(), BOOLE_DOMAIN.0);
+        assert!(
+            fixture.lifecycle_rx.has_changed().expect("sender is alive"),
+            "the reconcile must not mark the change seen; it stays pending for the run loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lifecycle_change_updates_the_advertised_enr_domain() {
+        // Arrange
+        let mut network = TestNetwork::new(normal_on_alan).await;
+        assert_eq!(network.enr_domain_type(), ALAN_DOMAIN.0);
+
+        // Act
+        network.send_lifecycle(grace_period_current_boole_previous_alan);
+        let control_flow = network.network.on_lifecycle_changed();
+
+        // Assert
+        assert_eq!(control_flow, ControlFlow::Continue(()));
+        assert_eq!(network.enr_domain_type(), BOOLE_DOMAIN.0);
+    }
+
+    /// Most lifecycle transitions keep the current fork, and rewriting the ENR for them would
+    /// burn sequence numbers and re-broadcast an unchanged record for nothing.
+    #[tokio::test]
+    async fn test_lifecycle_change_within_a_fork_leaves_the_enr_untouched() {
+        // Arrange: reach Boole, so the following transition keeps the same domain.
+        let mut network = TestNetwork::new(normal_on_alan).await;
+        network.send_lifecycle(grace_period_current_boole_previous_alan);
+        assert_eq!(
+            network.network.on_lifecycle_changed(),
+            ControlFlow::Continue(())
+        );
+        let seq_after_activation = network.enr_seq();
+
+        // Act: GracePeriod(Boole) -> Normal(Boole) ends the grace window, same domain.
+        network.send_lifecycle(normal_on_boole);
+        let control_flow = network.network.on_lifecycle_changed();
+
+        // Assert
+        assert_eq!(control_flow, ControlFlow::Continue(()));
+        assert_eq!(network.enr_domain_type(), BOOLE_DOMAIN.0);
+        assert_eq!(
+            network.enr_seq(),
+            seq_after_activation,
+            "an unchanged domain must not rewrite the ENR"
+        );
+    }
+
+    /// `reconcile_enr_domain` reads the lifecycle without marking it seen, so a change that
+    /// landed before the reconcile stays pending and the run loop re-applies it later. That
+    /// re-application must be harmless: the ENR already matches, so applying the same
+    /// lifecycle again must not rewrite the record.
+    #[tokio::test]
+    async fn test_reconcile_leaves_a_pending_change_pending_and_reapplication_is_a_no_op() {
+        // Arrange: a fork activates before the reconcile runs.
+        let mut fixture = TestBehaviour::new(normal_on_alan).await;
+        fixture.send_lifecycle(grace_period_current_boole_previous_alan);
+
+        // Act
+        reconcile_enr_domain(&mut fixture.behaviour, &fixture.lifecycle_rx)
+            .expect("reconcile should update the ENR");
+
+        // Assert: the ENR is already correct and the change is still pending for the run loop.
+        assert_eq!(fixture.enr_domain_type(), BOOLE_DOMAIN.0);
+        assert!(
+            fixture.lifecycle_rx.has_changed().expect("sender is alive"),
+            "a change published before the reconcile must stay pending for the run loop"
+        );
+
+        // Act and assert: re-applying the already-matching lifecycle leaves the ENR untouched.
+        let seq_after_reconcile = fixture.enr_seq();
+        reconcile_enr_domain(&mut fixture.behaviour, &fixture.lifecycle_rx)
+            .expect("re-applying an already-matching lifecycle should succeed");
+        assert_eq!(
+            fixture.enr_seq(),
+            seq_after_reconcile,
+            "re-applying an unchanged domain must not rewrite the ENR"
+        );
+    }
+
+    // ==================== Topic scoring tests ====================
+
+    /// Topics subscribed rate-less during WarmUp are scored by a later `RateUpdate`, so that
+    /// event has to install their gossipsub scoring parameters.
+    #[tokio::test]
+    async fn test_rate_update_installs_topic_score_params() {
+        // Arrange
+        let mut network = TestNetwork::new(normal_on_alan).await;
+        let topic = create_topic(
+            &Fork::Boole.topic_prefix(TEST_NETWORK),
+            SubnetId::new(TEST_SUBNET),
+        );
+        let ident_topic = IdentTopic::new(&topic);
+        assert!(
+            network
+                .network
+                .swarm
+                .behaviour()
+                .gossipsub
+                .get_topic_params(&ident_topic)
+                .is_none(),
+            "the topic should be unscored before the rate update"
+        );
+
+        // Act
+        network
+            .network
+            .on_topic_event::<MinimalEthSpec>(TopicEvent::RateUpdate {
+                topic,
+                message_rate: TEST_MESSAGE_RATE,
+            });
+
+        // Assert
+        assert!(
+            network
+                .network
+                .swarm
+                .behaviour()
+                .gossipsub
+                .get_topic_params(&ident_topic)
+                .is_some(),
+            "the rate update should have installed topic score parameters"
+        );
+    }
 }

@@ -3303,6 +3303,7 @@ checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 name = "fork"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "serde",
  "slot_clock",
  "ssv_types",
@@ -5403,6 +5404,7 @@ dependencies = [
  "ssz_types",
  "subnet_service",
  "task_executor",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

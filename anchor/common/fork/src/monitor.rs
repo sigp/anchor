@@ -1,292 +1,315 @@
 //! Fork transition monitoring.
 //!
-//! This module provides a standalone task that monitors and logs fork transitions,
-//! giving operators visibility into:
-//! - Current active fork at startup
-//! - Entering the preparation window before a fork
-//! - Fork activation when it occurs
+//! A standalone task derives the fork lifecycle from every fresh slot-clock
+//! observation via [`ForkSchedule::lifecycle_at`] and publishes changes on a
+//! watch channel. Because published state is always a pure function of the
+//! observed slot, transitions land at exact slot boundaries, a jump across
+//! several boundaries publishes only the state for the current slot, and a
+//! restart in any window re-derives the same state.
 //!
-//! The monitor pre-computes all fork transition points at creation time from the
-//! deterministic fork schedule. The `run()` method simply sleeps until each
-//! transition slot and sends the corresponding lifecycle update.
-//!
-//! The monitor exits automatically when all scheduled forks have activated.
+//! Sleeps are bounded to one slot so wall-clock corrections are noticed
+//! promptly. Clock failures fail closed by requesting a client-wide shutdown,
+//! as does a backwards clock that crosses a lifecycle boundary: published
+//! state (ENR, handshake, scoring) cannot be rolled back. Both guards live as
+//! long as the process but no longer: the highest observed slot is not
+//! persisted, so a restart with a still-rolled-back clock re-derives and
+//! re-advertises the earlier lifecycle without error.
 
 use std::{sync::Arc, time::Duration};
 
+use futures::channel::mpsc::Sender;
 use slot_clock::SlotClock;
-use task_executor::TaskExecutor;
+use task_executor::{ShutdownReason, TaskExecutor};
 use tokio::sync::watch;
-use tracing::{debug, error, info};
+use tracing::{error, info, warn};
 use types::{Epoch, Slot};
 
 use crate::{FORK_PREPARATION_EPOCHS, Fork, ForkLifecycle, ForkSchedule, SUBSEQUENT_WINDOW_SLOTS};
 
-/// A pre-computed fork transition at a specific slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ScheduledTransition {
-    slot: Slot,
-    lifecycle: ForkLifecycle,
-}
-
-/// Pre-computed fork monitor with all transition points determined at creation.
+/// Classification of a fresh slot observation against the highest slot seen.
 ///
-/// The full transition timeline is deterministic from the fork schedule, so all
-/// `(slot, ForkLifecycle)` pairs are computed up front. The `run()` method becomes
-/// a simple sleep-and-send loop.
-pub(crate) struct ForkMonitor {
-    /// Lifecycle to send immediately
-    initial: ForkLifecycle,
-    /// Future transitions sorted by slot.
-    transitions: Vec<ScheduledTransition>,
+/// Pure decision logic for the monitor's backwards-clock policy: all effects
+/// (publishing, warning, shutdown) live in [`run`].
+#[derive(Debug, PartialEq, Eq)]
+enum ClockObservation {
+    /// The clock moved forward or held steady.
+    Advanced,
+    /// The clock moved backwards, but the lifecycle derived for the observed
+    /// slot matches the published one; tolerated with a warning.
+    BackwardsWithinWindow,
+    /// The clock moved backwards across a lifecycle boundary. Published state
+    /// cannot be rolled back, so the node must fail closed.
+    BackwardsAcrossBoundary,
 }
 
-impl ForkMonitor {
-    /// Create a new fork monitor by pre-computing all transition points.
-    ///
-    /// For each non-genesis fork (epoch > 0), three transitions are generated:
-    /// - `WarmUp` at the preparation window start (`fork_epoch - 1` epochs)
-    /// - `GracePeriod` at fork activation (`fork_epoch`)
-    /// - `Normal` after the grace period (`fork_epoch + SUBSEQUENT_WINDOW_SLOTS` slots)
-    ///
-    /// All transitions are sorted by slot, then split at `current_slot`:
-    /// - The last transition at or before `current_slot` becomes the initial state.
-    /// - Remaining future transitions are stored for the run loop.
-    ///
-    /// This handles all restart scenarios uniformly — whether the node starts
-    /// before any fork, during a warm-up window, during a grace period, or
-    /// after all forks have activated.
-    fn new(schedule: &ForkSchedule, current_slot: Slot, slots_per_epoch: u64) -> Self {
-        let current_epoch = current_slot.epoch(slots_per_epoch);
-        let current_fork_config = schedule.active_fork_config(current_epoch);
-        info!(fork = %current_fork_config.fork, epoch = %current_epoch, "Fork monitor started");
+/// Classify `now` against the highest slot observed so far.
+fn classify_observation(
+    schedule: &ForkSchedule,
+    slots_per_epoch: u64,
+    highest_observed_slot: Slot,
+    now: Slot,
+) -> ClockObservation {
+    if now >= highest_observed_slot {
+        ClockObservation::Advanced
+    } else if schedule.lifecycle_at(now, slots_per_epoch)
+        == schedule.lifecycle_at(highest_observed_slot, slots_per_epoch)
+    {
+        ClockObservation::BackwardsWithinWindow
+    } else {
+        ClockObservation::BackwardsAcrossBoundary
+    }
+}
 
-        // Step 1: Generate all transitions for every non-genesis fork.
-        //
-        // Each fork produces three transitions at deterministic slots:
-        //   prep_slot ──────> activation ──────> grace_end
-        //   [WarmUp]          [GracePeriod]      [Normal]
-        let mut all_transitions: Vec<ScheduledTransition> = Vec::new();
-
-        for &fork in Fork::all() {
-            let Some(fork_config) = schedule.config(fork) else {
-                continue;
-            };
-            let fork_epoch = fork_config.epoch.as_u64();
-            // Genesis forks (epoch 0) are active from the start — no transitions needed.
-            if fork_epoch == 0 {
-                continue;
-            }
-
-            // The fork active just before this one (safe: fork_epoch > 0).
-            let prev_fork = schedule.active_fork_config(Epoch::new(fork_epoch - 1));
-
-            // Compute the three transition slots for this fork.
-            let prep_slot = fork_epoch.saturating_sub(FORK_PREPARATION_EPOCHS) * slots_per_epoch;
-            let activation = fork_epoch * slots_per_epoch;
-            let grace_end = activation + SUBSEQUENT_WINDOW_SLOTS;
-
-            // Guard: the previous fork's grace period must not overlap this fork's warmup.
-            let prev_activation = prev_fork.epoch.as_u64() * slots_per_epoch;
-            let prev_grace_end = prev_activation + SUBSEQUENT_WINDOW_SLOTS;
-            if prev_activation != 0 && prev_grace_end > prep_slot {
-                error!("Fork preparation overlaps with previous's grace period");
-            }
-
-            // WarmUp: dual-subscribe to current + upcoming fork topics.
-            all_transitions.push(ScheduledTransition {
-                slot: Slot::new(prep_slot),
-                lifecycle: ForkLifecycle::WarmUp {
-                    current: prev_fork.clone(),
-                    upcoming: fork_config.clone(),
-                },
-            });
-            // GracePeriod: fork activates, keep old subscriptions for late messages.
-            all_transitions.push(ScheduledTransition {
-                slot: Slot::new(activation),
-                lifecycle: ForkLifecycle::GracePeriod {
-                    current: fork_config.clone(),
-                    previous: prev_fork.clone(),
-                },
-            });
-            // Normal: grace period ends, drop old fork subscriptions.
-            all_transitions.push(ScheduledTransition {
-                slot: Slot::new(grace_end),
-                lifecycle: ForkLifecycle::Normal {
-                    current: fork_config.clone(),
-                },
-            });
-        }
-
-        // Step 2: Sort by slot, then partition into past and future at current_slot.
-        //
-        // The half-open split [past: slot <= current] [future: slot > current] means:
-        // - A transition exactly at current_slot is considered "already happened".
-        // - The last past transition determines what state we should be in right now.
-        // - If no transitions are past, we're in Normal (pre-fork or genesis-only).
-        //
-        // Example: Boole at epoch 100, restart at activation + 5:
-        //   past:   [WarmUp@ep99, GracePeriod@ep100]  → initial = GracePeriod
-        //   future: [Normal@ep100+32slots]             → run loop sends this later
-        all_transitions.sort_by_key(|t| t.slot);
-        let split = all_transitions.partition_point(|t| t.slot <= current_slot);
-
-        let initial = if split > 0 {
-            all_transitions[split - 1].lifecycle.clone()
-        } else {
-            ForkLifecycle::Normal {
-                current: current_fork_config.clone(),
-            }
+/// Log an error when any fork's preparation window overlaps the previous fork's grace
+/// period. `ForkSchedule::lifecycle_at` resolves such an overlap in favor of
+/// `WarmUp`, which drops the previous fork's topics early; schedules should
+/// keep forks at least `FORK_PREPARATION_EPOCHS` plus the subsequent window
+/// apart.
+fn error_on_overlapping_windows(schedule: &ForkSchedule, slots_per_epoch: u64) {
+    for &fork in Fork::all() {
+        let Some(config) = schedule.config(fork) else {
+            continue;
         };
-
-        let transitions = all_transitions.split_off(split);
-
-        // Log upcoming fork.
-        if let Some((fork, fork_epoch)) = schedule.next_fork_after(current_epoch) {
-            info!(
+        let fork_epoch = config.epoch.as_u64();
+        if fork_epoch == 0 {
+            continue;
+        }
+        let previous = schedule.active_fork_config(Epoch::new(fork_epoch - 1));
+        let previous_activation_slot = previous.epoch.as_u64() * slots_per_epoch;
+        if previous_activation_slot == 0 {
+            continue;
+        }
+        let previous_grace_end = previous_activation_slot + SUBSEQUENT_WINDOW_SLOTS;
+        let preparation_start =
+            fork_epoch.saturating_sub(FORK_PREPARATION_EPOCHS) * slots_per_epoch;
+        if previous_grace_end > preparation_start {
+            error!(
                 fork = %fork,
-                fork_epoch = %fork_epoch,
-                epochs_until = fork_epoch.as_u64().saturating_sub(current_epoch.as_u64()),
-                "Fork scheduled"
+                previous_fork = %previous.fork,
+                "Fork preparation window overlaps the previous fork's grace period"
             );
         }
+    }
+}
 
-        Self {
-            initial,
-            transitions,
+/// Log the operator-facing message for a published lifecycle.
+fn log_transition(lifecycle: &ForkLifecycle) {
+    match lifecycle {
+        ForkLifecycle::WarmUp {
+            current, upcoming, ..
+        } => {
+            info!(
+                current_fork = %current.fork,
+                upcoming_fork = %upcoming.fork,
+                "Entering fork preparation window"
+            );
+        }
+        ForkLifecycle::GracePeriod {
+            current, previous, ..
+        } => {
+            info!(
+                previous_fork = %previous.fork,
+                new_fork = %current.fork,
+                "Fork activated"
+            );
+        }
+        ForkLifecycle::Normal { current, .. } => {
+            info!(
+                current_fork = %current.fork,
+                grace_window_slots = SUBSEQUENT_WINDOW_SLOTS,
+                "Fork transition grace period ended"
+            );
         }
     }
 }
 
-/// Sleep until just before the target slot.
-///
-/// Wakes up 1 slot before the target to ensure we're ready.
-/// This accounts for potential timing variations.
-async fn sleep_until_slot<S: SlotClock>(slot_clock: &S, target_slot: u64, seconds_per_slot: u64) {
-    let Some(current_slot) = slot_clock.now() else {
-        return;
-    };
-
-    // Wake up 1 slot before the target
-    let buffer_slots = 1;
-    let wake_slot = target_slot.saturating_sub(buffer_slots);
-
-    if current_slot.as_u64() >= wake_slot {
-        return; // Already at or past the target
+/// Request a client-wide shutdown. A stale fork lifecycle silently corrupts
+/// networking, scoring, and ENR state, so clock failures must stop the node
+/// rather than leave only the monitor task dead.
+fn request_shutdown(shutdown_tx: &mut Sender<ShutdownReason>, reason: &'static str) {
+    error!(reason, "Fork monitor failed; requesting client shutdown");
+    if let Err(e) = shutdown_tx.try_send(ShutdownReason::Failure(reason))
+        && !e.is_full()
+    {
+        // A full channel means a shutdown is already pending; a closed one means
+        // there is no receiver left to act, which we can only surface in logs.
+        error!("Failed to deliver shutdown request: channel closed");
     }
-
-    let slots_to_wait = wake_slot - current_slot.as_u64();
-    let sleep_duration = Duration::from_secs(slots_to_wait * seconds_per_slot);
-
-    tokio::time::sleep(sleep_duration).await;
 }
 
 /// Run the fork monitor.
 ///
 /// This is the core async logic, separated from `spawn` for testability.
 ///
-/// Pre-computes all transition points from the fork schedule, then sleeps
-/// until each transition slot and sends the corresponding lifecycle update.
-///
-/// When fork transitions occur, [`ForkLifecycle`] updates are sent through the channel:
-/// - `WarmUp`: When entering the preparation window (time to dual-subscribe)
-/// - `GracePeriod`: When the fork activates (update ENR, but keep old subscriptions)
-/// - `Normal`: When the grace period ends (time to unsubscribe old topics)
+/// Each iteration takes a fresh slot-clock observation, derives the lifecycle
+/// for it, and publishes it if it changed, so a transition is never published
+/// before its slot and a jump across several boundaries publishes only the
+/// final state. An unreadable clock, or one that rolls back across a
+/// lifecycle boundary, requests a client-wide shutdown (fail closed). The
+/// loop never exits on its own; it is cancelled with the client.
 async fn run<S: SlotClock>(
-    monitor: ForkMonitor,
+    schedule: Arc<ForkSchedule>,
+    slots_per_epoch: u64,
     slot_clock: S,
-    seconds_per_slot: u64,
+    initial_slot: Slot,
     lifecycle_tx: watch::Sender<ForkLifecycle>,
+    mut shutdown_tx: Sender<ShutdownReason>,
 ) {
-    for transition in monitor.transitions {
-        sleep_until_slot(&slot_clock, transition.slot.as_u64(), seconds_per_slot).await;
+    let mut highest_observed_slot = initial_slot;
+    let mut boundary_unavailable_streak = 0u32;
 
-        match &transition.lifecycle {
-            ForkLifecycle::WarmUp {
-                current, upcoming, ..
-            } => {
-                info!(
-                    current_fork = %current.fork,
-                    upcoming_fork = %upcoming.fork,
-                    "Entering fork preparation window"
+    loop {
+        let Some(now) = slot_clock.now() else {
+            request_shutdown(&mut shutdown_tx, "Fork monitor: slot clock unreadable");
+            return;
+        };
+
+        match classify_observation(&schedule, slots_per_epoch, highest_observed_slot, now) {
+            ClockObservation::Advanced => highest_observed_slot = now,
+            ClockObservation::BackwardsWithinWindow => {
+                warn!(
+                    observed_slot = %now,
+                    highest_observed_slot = %highest_observed_slot,
+                    "Slot clock moved backwards within the current fork lifecycle window"
                 );
             }
-            ForkLifecycle::GracePeriod {
-                current, previous, ..
-            } => {
-                info!(
-                    previous_fork = %previous.fork,
-                    new_fork = %current.fork,
-                    "Fork activated"
+            ClockObservation::BackwardsAcrossBoundary => {
+                error!(
+                    observed_slot = %now,
+                    highest_observed_slot = %highest_observed_slot,
+                    "Slot clock rolled back across a published fork transition"
                 );
-            }
-            ForkLifecycle::Normal { current, .. } => {
-                info!(
-                    current_fork = %current.fork,
-                    grace_window_slots = SUBSEQUENT_WINDOW_SLOTS,
-                    "Fork transition grace period ended"
+                request_shutdown(
+                    &mut shutdown_tx,
+                    "Fork monitor: clock rolled back across a published fork transition",
                 );
+                return;
             }
         }
 
-        let _ = lifecycle_tx.send(transition.lifecycle);
+        // Publish from the highest observed slot so published state never
+        // regresses, even while a within-window backwards clock is tolerated.
+        let lifecycle = schedule.lifecycle_at(highest_observed_slot, slots_per_epoch);
+        let changed = lifecycle_tx.send_if_modified(|current| {
+            if *current == lifecycle {
+                false
+            } else {
+                *current = lifecycle.clone();
+                true
+            }
+        });
+        if changed {
+            log_transition(&lifecycle);
+        }
+
+        // Target the boundary after `now` rather than a second clock reading.
+        // `duration_to_slot` re-reads the clock, so `None` means the boundary
+        // already passed: re-observe at once. Consecutive `None`s instead pace
+        // at one slot, so a clock that never yields a boundary cannot spin.
+        // The cap bounds a sleep computed against a wall clock stepped far back.
+        let one_slot = slot_clock.slot_duration();
+        let sleep_duration = match slot_clock.duration_to_slot(now + 1) {
+            Some(until_boundary) => {
+                boundary_unavailable_streak = 0;
+                until_boundary.min(one_slot)
+            }
+            None => {
+                boundary_unavailable_streak += 1;
+                if boundary_unavailable_streak > 1 {
+                    one_slot
+                } else {
+                    Duration::ZERO
+                }
+            }
+        };
+        tokio::time::sleep(sleep_duration).await;
     }
 }
 
 /// Spawns a standalone task that monitors and logs fork transitions.
 ///
-/// The monitor will exit automatically when all scheduled forks have activated,
-/// or immediately if no forks are scheduled.
-///
-/// When fork transitions occur, the new [`ForkLifecycle`] state is sent through
-/// the watch channel so all receivers see the update immediately.
+/// The task derives the lifecycle from the slot clock once per slot for the
+/// node's lifetime and publishes changes through the returned watch channel,
+/// so all receivers see updates immediately.
 pub fn spawn<S: SlotClock + 'static>(
     fork_schedule: Arc<ForkSchedule>,
     slot_clock: S,
     slots_per_epoch: u64,
-    seconds_per_slot: u64,
     executor: TaskExecutor,
 ) -> Result<watch::Receiver<ForkLifecycle>, String> {
     let Some(current_slot) = slot_clock.now() else {
         return Err("Fork monitor: unable to determine current slot".to_string());
     };
+    let current_epoch = current_slot.epoch(slots_per_epoch);
+    let initial = fork_schedule.lifecycle_at(current_slot, slots_per_epoch);
+    info!(
+        fork = %initial.current_fork_config().fork,
+        epoch = %current_epoch,
+        "Fork monitor started"
+    );
+    if let Some((fork, fork_epoch)) = fork_schedule.next_fork_after(current_epoch) {
+        info!(
+            fork = %fork,
+            fork_epoch = %fork_epoch,
+            epochs_until = fork_epoch.as_u64().saturating_sub(current_epoch.as_u64()),
+            "Fork scheduled"
+        );
+    }
+    error_on_overlapping_windows(&fork_schedule, slots_per_epoch);
 
-    let monitor = ForkMonitor::new(&fork_schedule, current_slot, slots_per_epoch);
-
-    let (lifecycle_tx, lifecycle_rx) = watch::channel(monitor.initial.clone());
-
+    let (lifecycle_tx, lifecycle_rx) = watch::channel(initial);
+    let shutdown_tx = executor.shutdown_sender();
     executor.spawn(
-        async move {
-            run(monitor, slot_clock, seconds_per_slot, lifecycle_tx).await;
-
-            debug!("No more forks scheduled, fork monitor exiting")
-        },
+        run(
+            fork_schedule,
+            slots_per_epoch,
+            slot_clock,
+            current_slot,
+            lifecycle_tx,
+            shutdown_tx,
+        ),
         "fork_monitor",
     );
 
     Ok(lifecycle_rx)
 }
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicU64, Ordering},
+        time::Duration,
+    };
 
+    use futures::channel::mpsc::{Receiver, channel};
     use slot_clock::ManualSlotClock;
     use ssv_types::domain_type::DomainType;
-    use types::{ChainSpec, EthSpec, MinimalEthSpec, Slot};
+    use task_executor::test_utils::TestRuntime;
 
     use super::*;
-    use crate::{FORK_PREPARATION_EPOCHS, ForkConfig};
+    use crate::ForkConfig;
 
-    // Epoch constants for ForkMonitor tests
-    const BOOLE_FORK_EPOCH: u64 = 100;
-    const CURRENT_EPOCH: u64 = 50;
-    const PREPARATION_EPOCH: u64 = BOOLE_FORK_EPOCH - FORK_PREPARATION_EPOCHS;
-    const AFTER_FORK_EPOCH: u64 = 150;
+    /// Slots per epoch for these tests. `run` and `lifecycle_at` take this as a plain
+    /// parameter, so a small value keeps the transition slots close together.
+    const TEST_SLOTS_PER_EPOCH: u64 = 8;
+    /// The Boole activation epoch used by most tests.
+    const BOOLE_FORK_EPOCH: u64 = 2;
+    /// First slot of the warm-up window: `FORK_PREPARATION_EPOCHS` before activation.
+    const PREPARATION_START_SLOT: u64 =
+        (BOOLE_FORK_EPOCH - FORK_PREPARATION_EPOCHS) * TEST_SLOTS_PER_EPOCH;
+    /// First slot of the grace period: the Boole activation slot.
+    const ACTIVATION_SLOT: u64 = BOOLE_FORK_EPOCH * TEST_SLOTS_PER_EPOCH;
+    /// First slot after the grace period: back to `Normal`, now on Boole.
+    const GRACE_END_SLOT: u64 = ACTIVATION_SLOT + SUBSEQUENT_WINDOW_SLOTS;
 
-    // Epoch constants for async activation sequence test
-    const ASYNC_BOOLE_FORK_EPOCH: u64 = 10;
-    const ASYNC_START_EPOCH: u64 = 8;
+    /// Slot duration for the async loop tests, small enough to keep virtual time short.
+    const TEST_SLOT_DURATION: Duration = Duration::from_secs(1);
+    /// A slot duration that is not a whole number of seconds, used to catch truncation to
+    /// second precision anywhere in the sleep calculation.
+    const FRACTIONAL_SLOT_DURATION: Duration = Duration::from_millis(1_500);
+    /// The time to a slot boundary as reported by a clock that stepped behind genesis: far
+    /// longer than a slot, and far longer than the monitor may sleep for.
+    const UNUSABLE_SLEEP: Duration = Duration::from_secs(3_600);
 
     // Test network name
     const TEST_NETWORK: &str = "test";
@@ -294,16 +317,6 @@ mod tests {
     // Test domain types
     const TEST_BASELINE_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
     const TEST_BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
-
-    /// Get slots per epoch from minimal spec (faster tests).
-    fn slots_per_epoch() -> u64 {
-        MinimalEthSpec::slots_per_epoch()
-    }
-
-    /// Get seconds per slot from minimal spec.
-    fn seconds_per_slot() -> u64 {
-        ChainSpec::minimal().get_slot_duration().as_secs()
-    }
 
     fn make_schedule_with_boole(boole_epoch: u64) -> Arc<ForkSchedule> {
         let mut configs = BTreeMap::new();
@@ -323,515 +336,880 @@ mod tests {
         ))
     }
 
-    /// Create a ManualSlotClock at the given epoch.
-    fn clock_at_epoch(epoch: u64) -> ManualSlotClock {
-        let clock = ManualSlotClock::new(
-            Slot::new(0),
-            Duration::from_secs(0),
-            Duration::from_secs(seconds_per_slot()),
-        );
-        clock.set_slot(epoch * slots_per_epoch());
+    /// Create a ManualSlotClock at the given slot, with genesis at the UNIX epoch so slot
+    /// starts and virtual Tokio time share an origin.
+    fn clock_at_slot(slot: u64) -> ManualSlotClock {
+        let clock = ManualSlotClock::new(Slot::new(0), Duration::ZERO, TEST_SLOT_DURATION);
+        clock.set_slot(slot);
         clock
     }
 
-    /// Duration of one epoch.
-    fn epoch_duration() -> Duration {
-        Duration::from_secs(slots_per_epoch() * seconds_per_slot())
+    /// A clock whose current slot is readable but whose reported time to any slot boundary is
+    /// unusable.
+    ///
+    /// This is the shape `SystemTimeSlotClock` takes when it steps behind genesis between two
+    /// reads: `now()` still answers from the first reading, while `duration_to_slot` takes its
+    /// own wall-clock reading and reports the whole remaining time until genesis instead of
+    /// the time to the requested boundary. The over-long report proves the `min(one_slot)` cap
+    /// engages.
+    #[derive(Clone)]
+    struct UnusableNextSlotClock {
+        inner: ManualSlotClock,
     }
 
-    /// Create a test watch channel for lifecycle, returning the sender.
-    /// The receiver is dropped since ForkMonitor tests verify fields directly.
-    fn test_lifecycle_tx() -> watch::Sender<ForkLifecycle> {
-        let (tx, _rx) = watch::channel(ForkLifecycle::Normal {
-            current: ForkConfig::new(Fork::Alan, Epoch::new(0), TEST_BASELINE_DOMAIN),
-        });
-        tx
-    }
-
-    /// Convert epoch to slot for testing.
-    fn epoch_to_slot(epoch: u64) -> Slot {
-        Slot::new(epoch * slots_per_epoch())
-    }
-
-    // ==================== ForkMonitor initialization tests ====================
-
-    #[test]
-    fn test_new_with_scheduled_fork_has_transitions() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
-
-        // Assert: initial is Normal{Alan}, with 3 future transitions
-        assert!(
-            matches!(&monitor.initial, ForkLifecycle::Normal { current } if current.fork == Fork::Alan)
-        );
-        assert_eq!(
-            monitor.transitions.len(),
-            3,
-            "Expected WarmUp, GracePeriod, Normal"
-        );
-        assert!(matches!(
-            &monitor.transitions[0].lifecycle,
-            ForkLifecycle::WarmUp { .. }
-        ));
-        assert!(matches!(
-            &monitor.transitions[1].lifecycle,
-            ForkLifecycle::GracePeriod { .. }
-        ));
-        assert!(matches!(
-            &monitor.transitions[2].lifecycle,
-            ForkLifecycle::Normal { .. }
-        ));
-    }
-
-    #[test]
-    fn test_new_without_future_forks_has_no_transitions() {
-        // Arrange
-        let schedule = make_schedule_no_future_forks();
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
-
-        // Assert
-        assert!(monitor.transitions.is_empty());
-        assert!(
-            matches!(&monitor.initial, ForkLifecycle::Normal { current } if current.fork == Fork::Alan)
-        );
-    }
-
-    #[test]
-    fn test_new_in_preparation_window_emits_initial_warmup() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-
-        // Act
-        let monitor = ForkMonitor::new(
-            &schedule,
-            epoch_to_slot(PREPARATION_EPOCH),
-            slots_per_epoch(),
-        );
-
-        // Assert: initial is WarmUp (past prep slot), 2 future transitions
-        assert!(
-            matches!(
-                &monitor.initial,
-                ForkLifecycle::WarmUp { upcoming, .. } if upcoming.fork == Fork::Boole
-            ),
-            "Should emit WarmUp when starting in preparation window"
-        );
-        assert_eq!(
-            monitor.transitions.len(),
-            2,
-            "Expected GracePeriod + Normal"
-        );
-        assert!(matches!(
-            &monitor.transitions[0].lifecycle,
-            ForkLifecycle::GracePeriod { .. }
-        ));
-        assert!(matches!(
-            &monitor.transitions[1].lifecycle,
-            ForkLifecycle::Normal { .. }
-        ));
-    }
-
-    #[test]
-    fn test_new_restart_at_exact_prep_slot_emits_warmup() {
-        // Arrange: Start exactly at the preparation slot (lower boundary of warm-up window)
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let spe = slots_per_epoch();
-        let prep_slot = Slot::new(PREPARATION_EPOCH * spe);
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, prep_slot, spe);
-
-        // Assert: initial is WarmUp{Alan, Boole} (exact prep slot is "already happened")
-        assert!(
-            matches!(
-                &monitor.initial,
-                ForkLifecycle::WarmUp { current, upcoming }
-                    if current.fork == Fork::Alan && upcoming.fork == Fork::Boole
-            ),
-            "Should emit WarmUp when restarting at exact preparation slot"
-        );
-
-        // Assert: 2 future transitions remain (GracePeriod + Normal)
-        assert_eq!(
-            monitor.transitions.len(),
-            2,
-            "Expected GracePeriod + Normal"
-        );
-    }
-
-    #[test]
-    fn test_new_after_all_forks_activated_no_transitions() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-
-        // Act
-        let monitor = ForkMonitor::new(
-            &schedule,
-            epoch_to_slot(AFTER_FORK_EPOCH),
-            slots_per_epoch(),
-        );
-
-        // Assert: Boole already active, no transitions to process
-        assert!(monitor.transitions.is_empty());
-        assert!(
-            matches!(&monitor.initial, ForkLifecycle::Normal { current, .. } if current.fork == Fork::Boole)
-        );
-    }
-
-    #[test]
-    fn test_new_restart_during_grace_period_emits_grace_period() {
-        // Arrange: Start 1 slot after fork activation — inside the grace period window.
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let grace_slot = Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + 1);
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, grace_slot, slots_per_epoch());
-
-        // Assert: Restart during grace period emits GracePeriod{Boole, Alan}
-        assert!(
-            matches!(
-                &monitor.initial,
-                ForkLifecycle::GracePeriod { current, previous }
-                    if current.fork == Fork::Boole && previous.fork == Fork::Alan
-            ),
-            "Should emit GracePeriod when restarting inside the grace window"
-        );
-
-        // Assert: Exactly 1 scheduled transition — Normal at grace end
-        assert_eq!(
-            monitor.transitions.len(),
-            1,
-            "Expected exactly 1 transition (Normal at grace end)"
-        );
-        assert!(
-            matches!(
-                &monitor.transitions[0].lifecycle,
-                ForkLifecycle::Normal { current } if current.fork == Fork::Boole
-            ),
-            "Scheduled transition should be Normal{{Boole}}"
-        );
-        assert_eq!(
-            monitor.transitions[0].slot,
-            Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + SUBSEQUENT_WINDOW_SLOTS),
-            "Normal transition should be scheduled at grace end slot"
-        );
-    }
-
-    #[test]
-    fn test_new_restart_at_exact_activation_emits_grace_period() {
-        // Arrange: Start exactly at the fork activation slot (lower boundary of grace window).
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let activation_slot = Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch());
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, activation_slot, slots_per_epoch());
-
-        // Assert: Restart at exact activation emits GracePeriod{Boole, Alan}
-        assert!(
-            matches!(
-                &monitor.initial,
-                ForkLifecycle::GracePeriod { current, previous }
-                    if current.fork == Fork::Boole && previous.fork == Fork::Alan
-            ),
-            "Should emit GracePeriod when restarting at exact activation slot"
-        );
-        assert_eq!(
-            monitor.transitions.len(),
-            1,
-            "Expected exactly 1 transition (Normal at grace end)"
-        );
-    }
-
-    #[test]
-    fn test_new_restart_at_grace_end_emits_normal() {
-        // Arrange: Start exactly at grace end slot — grace period has expired.
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let grace_end_slot =
-            Slot::new(BOOLE_FORK_EPOCH * slots_per_epoch() + SUBSEQUENT_WINDOW_SLOTS);
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, grace_end_slot, slots_per_epoch());
-
-        // Assert: Grace period expired, initial is Normal{Boole}
-        assert!(
-            matches!(
-                &monitor.initial,
-                ForkLifecycle::Normal { current } if current.fork == Fork::Boole
-            ),
-            "Should emit Normal when starting at or after grace end slot"
-        );
-
-        // Assert: No transitions remaining
-        assert!(
-            monitor.transitions.is_empty(),
-            "No transitions should be scheduled after grace period ends"
-        );
-    }
-
-    // ==================== Transition slot verification tests ====================
-
-    #[test]
-    fn test_transitions_warmup_at_correct_slot() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let expected_slot = (BOOLE_FORK_EPOCH - FORK_PREPARATION_EPOCHS) * slots_per_epoch();
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
-
-        // Assert
-        assert_eq!(monitor.transitions[0].slot, Slot::new(expected_slot));
-        assert!(matches!(
-            &monitor.transitions[0].lifecycle,
-            ForkLifecycle::WarmUp { current, upcoming }
-                if current.fork == Fork::Alan
-                    && upcoming.fork == Fork::Boole
-                    && current.domain_type == TEST_BASELINE_DOMAIN
-        ));
-    }
-
-    #[test]
-    fn test_transitions_grace_period_at_correct_slot() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let expected_slot = BOOLE_FORK_EPOCH * slots_per_epoch();
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
-
-        // Assert
-        assert_eq!(monitor.transitions[1].slot, Slot::new(expected_slot));
-        assert!(matches!(
-            &monitor.transitions[1].lifecycle,
-            ForkLifecycle::GracePeriod { current, previous }
-                if current.fork == Fork::Boole
-                    && previous.fork == Fork::Alan
-                    && current.domain_type == TEST_BOOLE_DOMAIN
-        ));
-    }
-
-    #[test]
-    fn test_transitions_normal_at_correct_slot() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let expected_slot = BOOLE_FORK_EPOCH * slots_per_epoch() + SUBSEQUENT_WINDOW_SLOTS;
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
-
-        // Assert
-        assert_eq!(monitor.transitions[2].slot, Slot::new(expected_slot));
-        assert!(matches!(
-            &monitor.transitions[2].lifecycle,
-            ForkLifecycle::Normal { current }
-                if current.fork == Fork::Boole
-                    && current.domain_type == TEST_BOOLE_DOMAIN
-        ));
-    }
-
-    #[test]
-    fn test_full_transition_sequence() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let spe = slots_per_epoch();
-        let prep_slot = (BOOLE_FORK_EPOCH - FORK_PREPARATION_EPOCHS) * spe;
-        let activation_slot = BOOLE_FORK_EPOCH * spe;
-        let grace_end_slot = activation_slot + SUBSEQUENT_WINDOW_SLOTS;
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), spe);
-
-        // Assert: All 3 transitions in correct order with correct slots
-        assert_eq!(monitor.transitions.len(), 3);
-
-        assert_eq!(monitor.transitions[0].slot, Slot::new(prep_slot));
-        assert!(matches!(
-            &monitor.transitions[0].lifecycle,
-            ForkLifecycle::WarmUp { .. }
-        ));
-
-        assert_eq!(monitor.transitions[1].slot, Slot::new(activation_slot));
-        assert!(matches!(
-            &monitor.transitions[1].lifecycle,
-            ForkLifecycle::GracePeriod { .. }
-        ));
-
-        assert_eq!(monitor.transitions[2].slot, Slot::new(grace_end_slot));
-        assert!(matches!(
-            &monitor.transitions[2].lifecycle,
-            ForkLifecycle::Normal { .. }
-        ));
-    }
-
-    // ==================== Edge case tests ====================
-
-    #[test]
-    fn test_epoch_zero_forks_produce_no_transitions() {
-        // Arrange: Both Alan and Boole at epoch 0 (all forks active from genesis).
-        let mut configs = BTreeMap::new();
-        configs.insert(Fork::Alan, (Epoch::new(0), TEST_BASELINE_DOMAIN));
-        configs.insert(Fork::Boole, (Epoch::new(0), TEST_BOOLE_DOMAIN));
-        let schedule = Arc::new(
-            ForkSchedule::from_fork_configs(configs, TEST_NETWORK).expect("valid schedule"),
-        );
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, Slot::new(0), slots_per_epoch());
-
-        // Assert: No transitions — both forks at epoch 0, Boole is the active fork.
-        assert!(monitor.transitions.is_empty());
-        assert!(
-            matches!(&monitor.initial, ForkLifecycle::Normal { current, .. } if current.fork == Fork::Boole)
-        );
-    }
-
-    #[test]
-    fn test_early_fork_produces_all_transitions() {
-        // Arrange: Boole at epoch 2 (very early fork).
-        let schedule = make_schedule_with_boole(2);
-
-        // Act
-        let monitor = ForkMonitor::new(&schedule, Slot::new(0), slots_per_epoch());
-
-        // Assert: All 3 transitions emitted.
-        assert_eq!(monitor.transitions.len(), 3);
-        assert!(matches!(
-            &monitor.transitions[0].lifecycle,
-            ForkLifecycle::WarmUp { .. }
-        ));
-        assert!(matches!(
-            &monitor.transitions[1].lifecycle,
-            ForkLifecycle::GracePeriod { .. }
-        ));
-        assert!(matches!(
-            &monitor.transitions[2].lifecycle,
-            ForkLifecycle::Normal { current, .. } if current.fork == Fork::Boole
-        ));
-    }
-
-    // ==================== Async run() tests ====================
-
-    #[tokio::test]
-    async fn test_run_exits_immediately_when_no_forks_scheduled() {
-        // Arrange
-        let schedule = make_schedule_no_future_forks();
-        let clock = clock_at_epoch(CURRENT_EPOCH);
-        let monitor = ForkMonitor::new(&schedule, epoch_to_slot(CURRENT_EPOCH), slots_per_epoch());
-        let lifecycle_tx = test_lifecycle_tx();
-
-        // Act — completes immediately since there are no transitions
-        run(monitor, clock, seconds_per_slot(), lifecycle_tx).await;
-    }
-
-    #[tokio::test]
-    async fn test_run_exits_immediately_when_fork_already_active() {
-        // Arrange
-        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
-        let clock = clock_at_epoch(AFTER_FORK_EPOCH);
-        let monitor = ForkMonitor::new(
-            &schedule,
-            epoch_to_slot(AFTER_FORK_EPOCH),
-            slots_per_epoch(),
-        );
-        let lifecycle_tx = test_lifecycle_tx();
-
-        // Act — completes immediately since all forks already activated
-        run(monitor, clock, seconds_per_slot(), lifecycle_tx).await;
-    }
-
-    /// Tests that the monitor correctly processes fork activation and grace period over time.
-    /// Uses tokio's time control to simulate slot progression.
-    #[tokio::test(start_paused = true)]
-    async fn test_run_completes_full_fork_activation_sequence() {
-        // Arrange
-        let schedule = make_schedule_with_boole(ASYNC_BOOLE_FORK_EPOCH);
-        let clock = clock_at_epoch(ASYNC_START_EPOCH);
-        let monitor = ForkMonitor::new(
-            &schedule,
-            epoch_to_slot(ASYNC_START_EPOCH),
-            slots_per_epoch(),
-        );
-        let (lifecycle_tx, mut lifecycle_rx) = watch::channel(monitor.initial.clone());
-
-        // Act: Spawn monitor and advance time through fork activation and grace period
-        let handle = tokio::spawn({
-            let clock = clock.clone();
-            async move {
-                run(monitor, clock, seconds_per_slot(), lifecycle_tx).await;
+    impl SlotClock for UnusableNextSlotClock {
+        fn new(genesis_slot: Slot, genesis_duration: Duration, slot_duration: Duration) -> Self {
+            Self {
+                inner: ManualSlotClock::new(genesis_slot, genesis_duration, slot_duration),
             }
-        });
+        }
 
-        // Let the spawned task start and hit the first sleep
+        fn duration_to_next_slot(&self) -> Option<Duration> {
+            Some(UNUSABLE_SLEEP)
+        }
+
+        fn now(&self) -> Option<Slot> {
+            self.inner.now()
+        }
+
+        fn is_prior_to_genesis(&self) -> Option<bool> {
+            self.inner.is_prior_to_genesis()
+        }
+
+        fn now_duration(&self) -> Option<Duration> {
+            self.inner.now_duration()
+        }
+
+        fn slot_of(&self, now: Duration) -> Option<Slot> {
+            self.inner.slot_of(now)
+        }
+
+        fn slot_duration(&self) -> Duration {
+            self.inner.slot_duration()
+        }
+
+        fn duration_to_slot(&self, _slot: Slot) -> Option<Duration> {
+            Some(UNUSABLE_SLEEP)
+        }
+
+        fn duration_to_next_epoch(&self, slots_per_epoch: u64) -> Option<Duration> {
+            self.inner.duration_to_next_epoch(slots_per_epoch)
+        }
+
+        fn start_of(&self, slot: Slot) -> Option<Duration> {
+            self.inner.start_of(slot)
+        }
+
+        fn genesis_slot(&self) -> Slot {
+            self.inner.genesis_slot()
+        }
+
+        fn genesis_duration(&self) -> Duration {
+            SlotClock::genesis_duration(&self.inner)
+        }
+    }
+
+    /// A clock that advances one slot per `now()` read, whose first `duration_to_slot`
+    /// query fails (the boundary-slipped race) and whose later queries resolve normally.
+    ///
+    /// This isolates the first step of the fallback ladder: a single `None` must re-observe
+    /// immediately, which is provable because the next slot's transition publishes without
+    /// any virtual time passing.
+    #[derive(Clone)]
+    struct BoundaryOnceUnavailableClock {
+        start_slot: u64,
+        now_reads: Arc<AtomicU64>,
+        boundary_reads: Arc<AtomicU64>,
+    }
+
+    impl BoundaryOnceUnavailableClock {
+        fn starting_at(start_slot: u64) -> Self {
+            Self {
+                start_slot,
+                now_reads: Arc::new(AtomicU64::new(0)),
+                boundary_reads: Arc::new(AtomicU64::new(0)),
+            }
+        }
+    }
+
+    impl SlotClock for BoundaryOnceUnavailableClock {
+        fn new(_genesis_slot: Slot, _genesis_duration: Duration, _slot_duration: Duration) -> Self {
+            unimplemented!("constructed via BoundaryOnceUnavailableClock::starting_at")
+        }
+
+        fn now(&self) -> Option<Slot> {
+            let reads = self.now_reads.fetch_add(1, Ordering::SeqCst);
+            Some(Slot::new(self.start_slot + reads))
+        }
+
+        fn is_prior_to_genesis(&self) -> Option<bool> {
+            Some(false)
+        }
+
+        fn now_duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn slot_of(&self, _now: Duration) -> Option<Slot> {
+            None
+        }
+
+        fn slot_duration(&self) -> Duration {
+            TEST_SLOT_DURATION
+        }
+
+        fn duration_to_slot(&self, _slot: Slot) -> Option<Duration> {
+            (self.boundary_reads.fetch_add(1, Ordering::SeqCst) > 0).then_some(TEST_SLOT_DURATION)
+        }
+
+        fn duration_to_next_slot(&self) -> Option<Duration> {
+            None
+        }
+
+        fn duration_to_next_epoch(&self, _slots_per_epoch: u64) -> Option<Duration> {
+            None
+        }
+
+        fn start_of(&self, _slot: Slot) -> Option<Duration> {
+            None
+        }
+
+        fn genesis_slot(&self) -> Slot {
+            Slot::new(0)
+        }
+
+        fn genesis_duration(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
+
+    /// A clock frozen at one readable slot whose `duration_to_slot` never resolves: `now()`
+    /// keeps succeeding while every boundary query fails.
+    ///
+    /// This is the pathological shape the streak-based fallback exists for: only the first
+    /// consecutive failure may re-observe immediately, every following one must pace at a
+    /// full slot.
+    #[derive(Clone)]
+    struct FrozenNoBoundaryClock {
+        slot: Slot,
+    }
+
+    impl SlotClock for FrozenNoBoundaryClock {
+        fn new(_genesis_slot: Slot, _genesis_duration: Duration, _slot_duration: Duration) -> Self {
+            unimplemented!("constructed directly from a slot")
+        }
+
+        fn now(&self) -> Option<Slot> {
+            Some(self.slot)
+        }
+
+        fn is_prior_to_genesis(&self) -> Option<bool> {
+            Some(false)
+        }
+
+        fn now_duration(&self) -> Option<Duration> {
+            None
+        }
+
+        fn slot_of(&self, _now: Duration) -> Option<Slot> {
+            None
+        }
+
+        fn slot_duration(&self) -> Duration {
+            TEST_SLOT_DURATION
+        }
+
+        fn duration_to_slot(&self, _slot: Slot) -> Option<Duration> {
+            None
+        }
+
+        fn duration_to_next_slot(&self) -> Option<Duration> {
+            None
+        }
+
+        fn duration_to_next_epoch(&self, _slots_per_epoch: u64) -> Option<Duration> {
+            None
+        }
+
+        fn start_of(&self, _slot: Slot) -> Option<Duration> {
+            None
+        }
+
+        fn genesis_slot(&self) -> Slot {
+            Slot::new(0)
+        }
+
+        fn genesis_duration(&self) -> Duration {
+            Duration::ZERO
+        }
+    }
+
+    /// A shutdown channel with the same capacity as the one `TaskExecutor` hands out.
+    fn test_shutdown_channel() -> (Sender<ShutdownReason>, Receiver<ShutdownReason>) {
+        channel(1)
+    }
+
+    /// Assert the monitor failed closed by requesting a client-wide shutdown.
+    fn assert_shutdown_requested(shutdown_rx: &mut Receiver<ShutdownReason>) {
+        match shutdown_rx.try_recv() {
+            Ok(reason) => assert!(
+                matches!(reason, ShutdownReason::Failure(_)),
+                "expected a failure shutdown reason, got {reason:?}"
+            ),
+            Err(e) => panic!("expected a shutdown request, got {e:?}"),
+        }
+    }
+
+    fn assert_no_shutdown_requested(shutdown_rx: &mut Receiver<ShutdownReason>) {
+        if let Ok(reason) = shutdown_rx.try_recv() {
+            panic!("unexpected shutdown request: {reason:?}");
+        }
+    }
+
+    fn alan_config() -> ForkConfig {
+        ForkConfig::new(Fork::Alan, Epoch::new(0), TEST_BASELINE_DOMAIN)
+    }
+
+    fn boole_config() -> ForkConfig {
+        ForkConfig::new(Fork::Boole, Epoch::new(BOOLE_FORK_EPOCH), TEST_BOOLE_DOMAIN)
+    }
+
+    fn normal_alan_lifecycle() -> ForkLifecycle {
+        ForkLifecycle::Normal {
+            current: alan_config(),
+        }
+    }
+
+    fn warmup_lifecycle() -> ForkLifecycle {
+        ForkLifecycle::WarmUp {
+            current: alan_config(),
+            upcoming: boole_config(),
+        }
+    }
+
+    fn grace_period_lifecycle() -> ForkLifecycle {
+        ForkLifecycle::GracePeriod {
+            current: boole_config(),
+            previous: alan_config(),
+        }
+    }
+
+    fn normal_boole_lifecycle() -> ForkLifecycle {
+        ForkLifecycle::Normal {
+            current: boole_config(),
+        }
+    }
+
+    /// A monitor `run` task driven by a test clock, plus the handles a test needs to observe
+    /// it.
+    struct RunningMonitor {
+        handle: tokio::task::JoinHandle<()>,
+        lifecycle_rx: watch::Receiver<ForkLifecycle>,
+        shutdown_rx: Receiver<ShutdownReason>,
+    }
+
+    /// Spawn `run` against the given clock, mirroring `spawn`'s initialization: the watch
+    /// channel starts at the lifecycle derived for the clock's current slot. Yields once so
+    /// the first iteration has run and the task is parked on its slot-boundary sleep.
+    async fn start_run<S: SlotClock + 'static>(
+        schedule: Arc<ForkSchedule>,
+        clock: S,
+    ) -> RunningMonitor {
+        let initial_slot = clock.now().expect("test clock should be readable at start");
+        let (lifecycle_tx, lifecycle_rx) =
+            watch::channel(schedule.lifecycle_at(initial_slot, TEST_SLOTS_PER_EPOCH));
+        let (shutdown_tx, shutdown_rx) = test_shutdown_channel();
+        let handle = tokio::spawn(run(
+            schedule,
+            TEST_SLOTS_PER_EPOCH,
+            clock,
+            initial_slot,
+            lifecycle_tx,
+            shutdown_tx,
+        ));
         tokio::task::yield_now().await;
-
-        // Track observed lifecycle states
-        let mut saw_warmup = false;
-        let mut saw_grace_period = false;
-        let mut saw_normal_boole = false;
-
-        // Advance through epochs until fork activation
-        for epoch in (ASYNC_START_EPOCH + 1)..=ASYNC_BOOLE_FORK_EPOCH {
-            clock.set_slot(epoch * slots_per_epoch());
-            tokio::time::advance(epoch_duration()).await;
-            tokio::task::yield_now().await;
-            check_lifecycle(
-                &mut lifecycle_rx,
-                &mut saw_warmup,
-                &mut saw_grace_period,
-                &mut saw_normal_boole,
-            );
+        RunningMonitor {
+            handle,
+            lifecycle_rx,
+            shutdown_rx,
         }
-
-        // Advance through the grace period (32 slots = 4 epochs on minimal spec)
-        let grace_period_epochs = SUBSEQUENT_WINDOW_SLOTS / slots_per_epoch();
-        for i in 1..=grace_period_epochs {
-            let epoch = ASYNC_BOOLE_FORK_EPOCH + i;
-            clock.set_slot(epoch * slots_per_epoch());
-            tokio::time::advance(epoch_duration()).await;
-            tokio::task::yield_now().await;
-            check_lifecycle(
-                &mut lifecycle_rx,
-                &mut saw_warmup,
-                &mut saw_grace_period,
-                &mut saw_normal_boole,
-            );
-        }
-
-        handle.await.unwrap();
-
-        // Check final state
-        check_lifecycle(
-            &mut lifecycle_rx,
-            &mut saw_warmup,
-            &mut saw_grace_period,
-            &mut saw_normal_boole,
-        );
-
-        assert!(saw_warmup, "Expected WarmUp lifecycle state");
-        assert!(saw_grace_period, "Expected GracePeriod lifecycle state");
-        assert!(saw_normal_boole, "Expected Normal(Boole) lifecycle state");
     }
 
-    /// Helper to check the current lifecycle state against the expected progression.
-    fn check_lifecycle(
-        rx: &mut watch::Receiver<ForkLifecycle>,
-        saw_warmup: &mut bool,
-        saw_grace_period: &mut bool,
-        saw_normal_boole: &mut bool,
-    ) {
-        let state = rx.borrow_and_update().clone();
-        match &state {
-            ForkLifecycle::WarmUp { .. } => *saw_warmup = true,
-            ForkLifecycle::GracePeriod { .. } => *saw_grace_period = true,
-            ForkLifecycle::Normal { current, .. } if current.fork == Fork::Boole => {
-                *saw_normal_boole = true;
-            }
-            _ => {}
+    /// Fire the monitor's pending one-slot sleep and let the woken iteration run.
+    async fn wake_after_one_slot() {
+        tokio::time::advance(TEST_SLOT_DURATION).await;
+        tokio::task::yield_now().await;
+    }
+
+    // ==================== `classify_observation` tests ====================
+
+    #[test]
+    fn test_classify_forward_observation_is_advanced() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation =
+            classify_observation(&schedule, TEST_SLOTS_PER_EPOCH, Slot::new(5), Slot::new(6));
+
+        // Assert
+        assert_eq!(observation, ClockObservation::Advanced);
+    }
+
+    #[test]
+    fn test_classify_equal_observation_is_advanced() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation =
+            classify_observation(&schedule, TEST_SLOTS_PER_EPOCH, Slot::new(5), Slot::new(5));
+
+        // Assert
+        assert_eq!(observation, ClockObservation::Advanced);
+    }
+
+    #[test]
+    fn test_classify_backwards_within_the_grace_window_is_tolerated() {
+        // Arrange: both slots sit inside the grace period, so the derived lifecycle matches.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation = classify_observation(
+            &schedule,
+            TEST_SLOTS_PER_EPOCH,
+            Slot::new(ACTIVATION_SLOT + 5),
+            Slot::new(ACTIVATION_SLOT + 1),
+        );
+
+        // Assert
+        assert_eq!(observation, ClockObservation::BackwardsWithinWindow);
+    }
+
+    #[test]
+    fn test_classify_backwards_onto_the_grace_window_start_is_tolerated() {
+        // Arrange: the observation lands exactly on the activation slot, the half-open
+        // start of the grace window the highest slot is still inside.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation = classify_observation(
+            &schedule,
+            TEST_SLOTS_PER_EPOCH,
+            Slot::new(ACTIVATION_SLOT + 5),
+            Slot::new(ACTIVATION_SLOT),
+        );
+
+        // Assert
+        assert_eq!(observation, ClockObservation::BackwardsWithinWindow);
+    }
+
+    #[test]
+    fn test_classify_backwards_across_the_activation_boundary_is_fatal() {
+        // Arrange: the highest slot is in the grace period, the observation in the warm-up
+        // window just before activation.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation = classify_observation(
+            &schedule,
+            TEST_SLOTS_PER_EPOCH,
+            Slot::new(ACTIVATION_SLOT),
+            Slot::new(ACTIVATION_SLOT - 1),
+        );
+
+        // Assert
+        assert_eq!(observation, ClockObservation::BackwardsAcrossBoundary);
+    }
+
+    #[test]
+    fn test_classify_backwards_across_the_grace_end_boundary_is_fatal() {
+        // Arrange: the highest slot has left the grace period, the observation is still in it.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation = classify_observation(
+            &schedule,
+            TEST_SLOTS_PER_EPOCH,
+            Slot::new(GRACE_END_SLOT),
+            Slot::new(GRACE_END_SLOT - 1),
+        );
+
+        // Assert
+        assert_eq!(observation, ClockObservation::BackwardsAcrossBoundary);
+    }
+
+    #[test]
+    fn test_classify_backwards_from_warmup_into_pre_warmup_normal_is_fatal() {
+        // Arrange: the highest slot is at the exact start of the warm-up window, the
+        // observation just before it, where the lifecycle is still the pre-fork Normal.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+
+        // Act
+        let observation = classify_observation(
+            &schedule,
+            TEST_SLOTS_PER_EPOCH,
+            Slot::new(PREPARATION_START_SLOT),
+            Slot::new(PREPARATION_START_SLOT - 1),
+        );
+
+        // Assert
+        assert_eq!(observation, ClockObservation::BackwardsAcrossBoundary);
+    }
+
+    // ==================== `spawn` initial state tests ====================
+
+    /// Spawn the monitor with the clock at the given slot and return the lifecycle receiver.
+    fn spawn_monitor_at_slot(slot: u64) -> Result<watch::Receiver<ForkLifecycle>, String> {
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let runtime = TestRuntime::default();
+        spawn(
+            schedule,
+            clock_at_slot(slot),
+            TEST_SLOTS_PER_EPOCH,
+            runtime.task_executor.clone(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_spawn_initial_state_is_normal_before_the_preparation_window() {
+        // Arrange and act: the last slot before the warm-up window starts.
+        let lifecycle_rx =
+            spawn_monitor_at_slot(PREPARATION_START_SLOT - 1).expect("spawn should succeed");
+
+        // Assert
+        assert_eq!(*lifecycle_rx.borrow(), normal_alan_lifecycle());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_initial_state_is_warmup_inside_the_preparation_window() {
+        // Arrange and act: the exact first slot of the warm-up window.
+        let lifecycle_rx =
+            spawn_monitor_at_slot(PREPARATION_START_SLOT).expect("spawn should succeed");
+
+        // Assert
+        assert_eq!(*lifecycle_rx.borrow(), warmup_lifecycle());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_initial_state_is_grace_period_inside_the_grace_window() {
+        // Arrange and act: the exact activation slot, the first slot of the grace period.
+        let lifecycle_rx = spawn_monitor_at_slot(ACTIVATION_SLOT).expect("spawn should succeed");
+
+        // Assert
+        assert_eq!(*lifecycle_rx.borrow(), grace_period_lifecycle());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_initial_state_is_normal_after_the_grace_window() {
+        // Arrange and act: the exact first slot after the grace period.
+        let lifecycle_rx = spawn_monitor_at_slot(GRACE_END_SLOT).expect("spawn should succeed");
+
+        // Assert
+        assert_eq!(*lifecycle_rx.borrow(), normal_boole_lifecycle());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_fails_when_the_clock_is_unreadable() {
+        // Arrange: the clock sits before genesis, so `now()` returns `None`.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let genesis_time = Duration::from_secs(10);
+        let clock = ManualSlotClock::new(Slot::new(0), genesis_time, TEST_SLOT_DURATION);
+        clock.set_current_time(genesis_time - Duration::from_secs(1));
+        let runtime = TestRuntime::default();
+
+        // Act
+        let result = spawn(
+            schedule,
+            clock,
+            TEST_SLOTS_PER_EPOCH,
+            runtime.task_executor.clone(),
+        );
+
+        // Assert
+        assert!(
+            result.is_err(),
+            "spawn must refuse to start without a readable clock"
+        );
+    }
+
+    // ==================== Async `run` tests ====================
+
+    /// The loop sleeps only to the next slot boundary, so it wakes many times before a distant
+    /// transition. Each wake must decide from a fresh observation rather than assume it is
+    /// due, and the transition must land exactly when the clock reaches its slot.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_publishes_the_warmup_transition_at_its_exact_slot() {
+        // Arrange: start well before the warm-up window.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = clock_at_slot(0);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act: wake the Tokio timer repeatedly while the slot clock stays at slot 0.
+        for _ in 0..3 {
+            wake_after_one_slot().await;
         }
+
+        // Assert: early wakes publish nothing.
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            normal_alan_lifecycle(),
+            "Nothing may be published while the slot clock is before the transition"
+        );
+
+        // Act and assert at the slot before the transition
+        clock.set_slot(PREPARATION_START_SLOT - 1);
+        wake_after_one_slot().await;
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            normal_alan_lifecycle(),
+            "The transition must not be published one slot early"
+        );
+
+        // Act and assert at the exact transition slot
+        clock.set_slot(PREPARATION_START_SLOT);
+        wake_after_one_slot().await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), warmup_lifecycle());
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// Walk the clock across every boundary in order and observe each phase land at its exact
+    /// slot: WarmUp at the preparation slot, GracePeriod at activation, Normal at grace end.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_publishes_each_phase_at_its_boundary_as_the_clock_advances() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = clock_at_slot(0);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), normal_alan_lifecycle());
+
+        // Act and assert: preparation window opens.
+        clock.set_slot(PREPARATION_START_SLOT);
+        wake_after_one_slot().await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), warmup_lifecycle());
+
+        // Act and assert: fork activates.
+        clock.set_slot(ACTIVATION_SLOT);
+        wake_after_one_slot().await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), grace_period_lifecycle());
+
+        // Act and assert: grace period ends.
+        clock.set_slot(GRACE_END_SLOT);
+        wake_after_one_slot().await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), normal_boole_lifecycle());
+
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// A clock jump across several boundaries must publish only the lifecycle derived from the
+    /// current slot: the lifecycle is state, not an event stream, so replaying the
+    /// intermediate states would hand receivers fork configurations that are already stale.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_publishes_only_the_final_state_after_a_jump_across_all_boundaries() {
+        // Arrange: start before the warm-up window.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = clock_at_slot(0);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act: jump the clock past every boundary, giving the loop a single wake to notice.
+        clock.set_slot(GRACE_END_SLOT + 5);
+        wake_after_one_slot().await;
+
+        // Assert: exactly one change is pending and it is the final state. The jump was
+        // observed in a single iteration, so at most one value was ever sent.
+        assert!(
+            monitor.lifecycle_rx.has_changed().expect("sender is alive"),
+            "The jump must publish a change"
+        );
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow_and_update(),
+            normal_boole_lifecycle(),
+            "Only the state for the current slot may be published, not the skipped phases"
+        );
+
+        // Assert: nothing further is published afterwards.
+        wake_after_one_slot().await;
+        assert!(
+            !monitor.lifecycle_rx.has_changed().expect("sender is alive"),
+            "No further publishes may follow the jump"
+        );
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// An unreadable clock freezes the lifecycle wherever it happened to be, which silently
+    /// corrupts networking, scoring and ENR state, so the node must fail closed.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_requests_shutdown_when_clock_becomes_unavailable() {
+        // Arrange: a clock with genesis later than the time we set below.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let genesis_time = Duration::from_secs(10);
+        let clock = ManualSlotClock::new(Slot::new(0), genesis_time, TEST_SLOT_DURATION);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act: step the clock behind genesis, so `now()` returns `None` on the next wake.
+        clock.set_current_time(genesis_time - Duration::from_secs(1));
+        tokio::time::advance(TEST_SLOT_DURATION).await;
+        monitor
+            .handle
+            .await
+            .expect("fork monitor task should complete");
+
+        // Assert
+        assert_shutdown_requested(&mut monitor.shutdown_rx);
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            normal_alan_lifecycle(),
+            "The lifecycle must stay frozen at its last published state"
+        );
+    }
+
+    /// A published lifecycle cannot be taken back, so a clock that rolls back across one
+    /// leaves the node advertising a fork state its own clock says has not happened yet.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_requests_shutdown_when_clock_rolls_back_across_published_transition() {
+        // Arrange: start in the warm-up window, then publish the activation.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = clock_at_slot(ACTIVATION_SLOT - 2);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        clock.set_slot(ACTIVATION_SLOT);
+        wake_after_one_slot().await;
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            grace_period_lifecycle(),
+            "The transition should have been published before the rollback"
+        );
+
+        // Act: roll the clock back across the activation boundary.
+        clock.set_slot(ACTIVATION_SLOT - 1);
+        tokio::time::advance(TEST_SLOT_DURATION).await;
+        monitor
+            .handle
+            .await
+            .expect("fork monitor task should complete");
+
+        // Assert
+        assert_shutdown_requested(&mut monitor.shutdown_rx);
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            grace_period_lifecycle(),
+            "The published lifecycle must stay as it was; it cannot be rolled back"
+        );
+    }
+
+    /// A clock correction that stays inside the current lifecycle window changes nothing a
+    /// receiver can observe, so it is tolerated with a warning rather than being fatal, and
+    /// the monitor keeps working afterwards.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_tolerates_a_clock_rollback_within_the_current_window() {
+        // Arrange: start inside the grace period.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = clock_at_slot(ACTIVATION_SLOT + 5);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act: fall back to an earlier slot that is still inside the grace period.
+        clock.set_slot(ACTIVATION_SLOT + 1);
+        wake_after_one_slot().await;
+
+        // Assert: no publish, no shutdown, and the task keeps running.
+        assert!(
+            !monitor.lifecycle_rx.has_changed().expect("sender is alive"),
+            "A within-window rollback must not publish anything"
+        );
+        assert_eq!(*monitor.lifecycle_rx.borrow(), grace_period_lifecycle());
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+
+        // Act and assert: the monitor still publishes the next transition once the clock
+        // moves forward again.
+        clock.set_slot(GRACE_END_SLOT);
+        wake_after_one_slot().await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), normal_boole_lifecycle());
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// The sleep is capped at one slot regardless of what the clock reports, because a clock
+    /// that stepped behind genesis reports the whole time until genesis as the time to the
+    /// requested boundary. Without the cap the monitor would park for that whole span and
+    /// miss every transition due in it.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_caps_the_sleep_at_one_slot_when_the_clock_reports_a_longer_wait() {
+        // Arrange
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let started_at = tokio::time::Instant::now();
+        let clock = UnusableNextSlotClock::new(Slot::new(0), Duration::ZERO, TEST_SLOT_DURATION);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act: one slot of Tokio time, against a clock asking for an hour.
+        clock.inner.set_slot(PREPARATION_START_SLOT);
+        wake_after_one_slot().await;
+
+        // Assert
+        assert_eq!(*monitor.lifecycle_rx.borrow(), warmup_lifecycle());
+        assert!(
+            started_at.elapsed() < UNUSABLE_SLEEP,
+            "The monitor must re-observe within one slot, not after the reported wait"
+        );
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// When a single `duration_to_slot` returns `None` (the boundary slipped past between
+    /// the two clock reads), the loop falls back to `Duration::ZERO` and re-observes
+    /// immediately instead of oversleeping. The proof: the clock advances one slot per read
+    /// and reaches the preparation slot on the re-observation, so the WarmUp transition
+    /// publishes without any virtual time passing at all.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_rechecks_immediately_after_a_single_unavailable_boundary() {
+        // Arrange: the first run-loop read lands one slot before the transition and its
+        // boundary query fails; the immediate re-observation lands on the transition slot.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = BoundaryOnceUnavailableClock::starting_at(PREPARATION_START_SLOT - 2);
+        let mut monitor = start_run(schedule, clock).await;
+
+        // Act: yield without advancing time; only a zero-duration sleep lets the loop
+        // re-observe here.
+        for _ in 0..3 {
+            tokio::task::yield_now().await;
+        }
+
+        // Assert
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            warmup_lifecycle(),
+            "The re-observation after a single unavailable boundary must happen immediately"
+        );
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// A pathological clock whose `now()` keeps answering while `duration_to_slot` never
+    /// resolves must not hot-spin on the zero-sleep fallback: only the first consecutive
+    /// failure re-observes immediately, every following one paces at one full slot. Under
+    /// paused time a hot spin would never yield back to this test, so completing the bounded
+    /// advances below is itself the proof of pacing.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_paces_at_one_slot_when_the_boundary_stays_unavailable() {
+        // Arrange: a readable slot before any transition, with no resolvable boundary.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = FrozenNoBoundaryClock { slot: Slot::new(5) };
+        let mut monitor = start_run(schedule, clock).await;
+
+        // Act: several slots of virtual time; every wake finds the boundary still
+        // unavailable and must park for another full slot.
+        for _ in 0..3 {
+            wake_after_one_slot().await;
+        }
+
+        // Assert: the monitor is still pacing, published nothing new, and did not fail.
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+        assert_eq!(*monitor.lifecycle_rx.borrow(), normal_alan_lifecycle());
+        assert!(
+            !monitor.lifecycle_rx.has_changed().expect("sender is alive"),
+            "A frozen clock must not produce lifecycle changes"
+        );
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// Slot durations are not required to be whole seconds, so nothing in the sleep
+    /// calculation may truncate to second precision and wake the monitor into an early
+    /// publish.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_publishes_at_exact_target_with_fractional_slot_duration() {
+        // Arrange
+        let one_millisecond = Duration::from_millis(1);
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = ManualSlotClock::new(Slot::new(0), Duration::ZERO, FRACTIONAL_SLOT_DURATION);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act and assert at the slot before the transition
+        clock.set_slot(PREPARATION_START_SLOT - 1);
+        tokio::time::advance(FRACTIONAL_SLOT_DURATION).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            normal_alan_lifecycle(),
+            "Lifecycle must not publish one slot before the transition"
+        );
+
+        // Act and assert with the clock one millisecond before the transition slot starts
+        let just_before_target = FRACTIONAL_SLOT_DURATION
+            * u32::try_from(PREPARATION_START_SLOT).expect("small slot")
+            - one_millisecond;
+        clock.set_current_time(just_before_target);
+        tokio::time::advance(FRACTIONAL_SLOT_DURATION).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            *monitor.lifecycle_rx.borrow(),
+            normal_alan_lifecycle(),
+            "A fractional slot duration must not be rounded down into an early publish"
+        );
+        assert!(!monitor.handle.is_finished(), "Monitor must keep running");
+
+        // Act and assert at the exact transition slot
+        clock.set_slot(PREPARATION_START_SLOT);
+        tokio::time::advance(one_millisecond).await;
+        tokio::task::yield_now().await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), warmup_lifecycle());
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// The monitor guards against clock rollbacks for the node's lifetime, so it must keep
+    /// running (and keep the watch sender alive) after the last scheduled fork's grace period
+    /// has ended.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_stays_alive_after_the_final_grace_period_ends() {
+        // Arrange: start well past the grace end of the last scheduled fork.
+        let schedule = make_schedule_with_boole(BOOLE_FORK_EPOCH);
+        let clock = clock_at_slot(GRACE_END_SLOT + 10);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+        assert_eq!(*monitor.lifecycle_rx.borrow(), normal_boole_lifecycle());
+
+        // Act: keep the clock moving for several slots.
+        for slot in (GRACE_END_SLOT + 11)..(GRACE_END_SLOT + 14) {
+            clock.set_slot(slot);
+            wake_after_one_slot().await;
+        }
+
+        // Assert: the task is still running and the sender is still alive (`has_changed`
+        // returns `Ok`, not the closed-channel `Err`).
+        assert!(
+            !monitor.handle.is_finished(),
+            "The monitor must not exit after the final grace period"
+        );
+        assert!(
+            !monitor
+                .lifecycle_rx
+                .has_changed()
+                .expect("the lifecycle sender must stay alive after the final grace period"),
+            "No lifecycle change is expected after the final grace period"
+        );
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
+    }
+
+    /// With no future forks scheduled there is nothing to publish, but the monitor still owns
+    /// the rollback and clock-failure guards, so it keeps running.
+    #[tokio::test(start_paused = true)]
+    async fn test_run_keeps_running_when_no_forks_are_scheduled() {
+        // Arrange
+        let schedule = make_schedule_no_future_forks();
+        let clock = clock_at_slot(0);
+        let mut monitor = start_run(schedule, clock.clone()).await;
+
+        // Act
+        for slot in 1..4 {
+            clock.set_slot(slot);
+            wake_after_one_slot().await;
+        }
+
+        // Assert
+        assert_eq!(*monitor.lifecycle_rx.borrow(), normal_alan_lifecycle());
+        assert!(
+            !monitor.handle.is_finished(),
+            "The monitor must keep running with nothing scheduled"
+        );
+        assert_no_shutdown_requested(&mut monitor.shutdown_rx);
     }
 }
