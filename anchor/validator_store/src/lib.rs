@@ -739,6 +739,27 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
     }
 
+    /// Bound a [`Self::collect_signature`] future, mapping elapse to `CollectionTimeout` (the
+    /// collector itself never emits it). A zero `bound` fails fast without polling `collect`,
+    /// so no collection starts and no partial signature is broadcast.
+    async fn collect_within(
+        bound: Duration,
+        collect: impl Future<Output = Result<Signature, Error>>,
+    ) -> Result<Signature, Error> {
+        let timed_out = || {
+            Error::SpecificError(SpecificError::SignatureCollectionFailed(
+                CollectionError::CollectionTimeout,
+            ))
+        };
+        if bound.is_zero() {
+            return Err(timed_out());
+        }
+        match tokio::time::timeout(bound, collect).await {
+            Ok(result) => result,
+            Err(_elapsed) => Err(timed_out()),
+        }
+    }
+
     async fn decide_abstract_block(
         &self,
         validator: &ValidatorMetadata,
@@ -2946,6 +2967,12 @@ pub enum SpecificError {
     ContributionNotInConsensus(u64),
     /// This validator not found in consensus data (Boole+)
     ValidatorNotInConsensus(ValidatorIndex),
+    /// Duty data names a slot more than one slot ahead of the local clock. Only a broken or
+    /// hostile beacon node produces this.
+    SlotTooFarAhead {
+        data_slot: Slot,
+        current_slot: Slot,
+    },
     /// A conflict in the existing stored decided block root for one `(validator, slot)
     /// and an attempt at storing an alternative in its place.
     DecidedRootConflict(Box<DecidedRootConflict>),
@@ -3952,8 +3979,40 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let domain_hash = self.get_domain(epoch, Domain::PTCAttester);
         let signing_root = data.signing_root(domain_hash);
 
-        let signature = match self
-            .collect_signature(
+        // Peers drop a payload attestation once `data.slot` is no longer current, so bound the
+        // wait at slot end rather than hanging until collector eviction (#1218). The saturating
+        // slot/duration math cannot panic; `duration_to_slot` is avoided because its `None`
+        // would conflate an expired duty with a broken clock.
+        let now = self
+            .slot_clock
+            .now_duration()
+            .ok_or(SpecificError::SlotClock)?;
+
+        // `data.slot` also sizes that bound, so an unchecked far-future value from a broken or
+        // hostile beacon node would re-open the unbounded wait (and peers reject future-slot PTC
+        // partials outright). One slot of headroom covers boundary clock skew.
+        let current_slot = self
+            .slot_clock
+            .slot_of(now)
+            .ok_or(SpecificError::SlotClock)?;
+        if data.slot > current_slot + 1 {
+            return Err(SpecificError::SlotTooFarAhead {
+                data_slot: data.slot,
+                current_slot,
+            }
+            .into());
+        }
+
+        let slot_end = self
+            .slot_clock
+            .start_of(data.slot + 1)
+            .ok_or(SpecificError::SlotClock)?;
+        let remaining = slot_end.saturating_sub(now);
+
+        // An expired duty deliberately skips even the partial-signature broadcast.
+        let collected = Self::collect_within(
+            remaining,
+            self.collect_signature(
                 PartialSignatureKind::PTCAttester,
                 Role::PTCAttester,
                 CollectionMode::SingleValidator,
@@ -3961,9 +4020,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 &cluster,
                 signing_root,
                 data.slot,
-            )
-            .await
-        {
+            ),
+        )
+        .await;
+
+        let signature = match collected {
             Ok(signature) => signature,
             Err(err) => {
                 self.report_ptc_collection_failure(&err, &validator_pubkey, data.slot);
@@ -4000,9 +4061,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let collection_timeout =
             self.spec.get_slot_duration() * PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS;
 
-        // Map a deadline elapse to `CollectionTimeout` so it and any collector error share the
-        // single reporting/return path below.
-        let collected = match tokio::time::timeout(
+        let collected = Self::collect_within(
             collection_timeout,
             self.collect_signature(
                 PartialSignatureKind::ProposerPreferences,
@@ -4014,13 +4073,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 proposal_slot,
             ),
         )
-        .await
-        {
-            Ok(result) => result,
-            Err(_elapsed) => Err(Error::SpecificError(
-                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout),
-            )),
-        };
+        .await;
 
         let signature = match collected {
             Ok(signature) => signature,

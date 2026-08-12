@@ -194,9 +194,8 @@ pub static WAD_SOFT_TIMEOUT_TOTAL: LazyLock<Result<IntCounter>> = LazyLock::new(
 // PTC (Payload Timeliness Committee) metrics
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// The committee never reached the partial signature threshold. At the current collector
-/// granularity this also covers genuine channel closes, so it is an upper bound on the true
-/// observation-divergence rate.
+/// No partial signature threshold before the collection deadline. Also covers genuine channel
+/// closes, so an upper bound on the true observation-divergence rate.
 pub const PTC_FAILURE_NO_SIGNATURE: &str = "no_signature";
 /// Local collection or reconstruction infrastructure fault.
 pub const PTC_FAILURE_INFRA: &str = "infra";
