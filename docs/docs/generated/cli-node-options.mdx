@@ -314,7 +314,8 @@ Payload Building Options:
                fork onward: each proposer duty uses whichever value matches the
                fork at its slot, with no fallback between them. Post-ePBS slots
                leave less headroom after the block request, so this value has a
-               hard cap that --allow-dangerous-proposer-delay does not raise.
+               hard 1000ms cap that --allow-dangerous-proposer-delay does not
+               raise.
                
                [default: 0]
 

@@ -3137,7 +3137,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
     ///
     /// Also holds until the configured proposer delay into the slot before returning, so it can
     /// block for as long as that setting allows. Which delay applies (`--proposer-delay-ms` before
-    /// Gloas, `--proposer-delay-epbs-ms` from it on) is decided by the fork at the clock slot. The
+    /// Gloas, `--proposer-delay-epbs-ms` from it on) is decided by the fork at the duty's slot. The
     /// reveal is a required parameter of the block request, so Lighthouse cannot ask earlier and
     /// this is the last point Anchor owns before it does. See `await_proposer_delay`.
     async fn randao_reveal(

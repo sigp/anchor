@@ -528,8 +528,8 @@ pub struct PayloadBuildingOptions {
         help = "Counterpart of --proposer-delay-ms applied from the Gloas (ePBS) fork onward: \
                 each proposer duty uses whichever value matches the fork at its slot, with no \
                 fallback between them. Post-ePBS slots leave less headroom after the block \
-                request, so this value has a hard cap that --allow-dangerous-proposer-delay \
-                does not raise.",
+                request, so this value has a hard 1000ms cap that \
+                --allow-dangerous-proposer-delay does not raise.",
         display_order = 0
     )]
     pub proposer_delay_epbs_ms: u64,
