@@ -3,6 +3,7 @@
 
 use std::{net::IpAddr, path::PathBuf, time::Duration};
 
+use anchor_validator_store::ProposerDelays;
 use beacon_node_fallback::{ApiTopic, beacon_node_health::BeaconNodeSyncDistanceTiers};
 use cli::{NetworkOptions, Node};
 use global_config::{GlobalConfig, defaults::DEFAULT_NODE_ENDPOINTS};
@@ -52,6 +53,33 @@ fn proposer_delay_from_millis(millis: u64, allow_dangerous: bool) -> Result<Dura
             "--allow-dangerous-proposer-delay has no effect: it is only required above \
              {DANGEROUS_PROPOSER_DELAY_MS}ms, and --proposer-delay-ms is {millis}."
         );
+    }
+    Ok(Duration::from_millis(millis))
+}
+
+/// Hard maximum for the post-ePBS proposer delay, refused unconditionally.
+///
+/// Matches go-ssv's cap on `ProposerDelayEPBS`, which deliberately has no override: the post-ePBS
+/// proposal deadline is tighter, so there is no dangerous-but-acknowledged band. Coincidentally
+/// equal to [`DANGEROUS_PROPOSER_DELAY_MS`]; the policies are independent, do not merge them.
+const MAX_PROPOSER_DELAY_EPBS_MS: u64 = 1_000;
+
+/// Refuses anything above [`MAX_PROPOSER_DELAY_EPBS_MS`], with no acknowledgement escape hatch.
+///
+/// `allow_dangerous` is consulted only to tailor the refusal: an operator who set the flag
+/// expecting it to raise this cap is told it does not apply, and one who did not is not pointed at
+/// a flag that cannot help.
+fn proposer_delay_epbs_from_millis(millis: u64, allow_dangerous: bool) -> Result<Duration, String> {
+    if millis > MAX_PROPOSER_DELAY_EPBS_MS {
+        let refusal = format!(
+            "--proposer-delay-epbs-ms {millis} exceeds the {MAX_PROPOSER_DELAY_EPBS_MS}ms maximum. \
+             The post-ePBS proposal deadline is tighter, so the cap is unconditional."
+        );
+        return Err(if allow_dangerous {
+            format!("{refusal} --allow-dangerous-proposer-delay does not apply to this value.")
+        } else {
+            refusal
+        });
     }
     Ok(Duration::from_millis(millis))
 }
@@ -109,9 +137,10 @@ pub struct Config {
     pub builder_boost_factor: Option<u64>,
     /// Should external payloads always be preferred
     pub prefer_builder_proposals: bool,
-    /// Minimum offset from the start of the slot before a proposer duty requests its beacon block,
-    /// giving builders longer to bid for it. Zero disables the behaviour.
-    pub proposer_delay: Duration,
+    /// Minimum offsets from the start of the slot before a proposer duty requests its beacon
+    /// block, giving builders longer to bid for it. One value per side of the Gloas fork, each
+    /// disabled at zero.
+    pub proposer_delays: ProposerDelays,
     /// Controls whether the latency measurement service is enabled
     pub disable_latency_measurement_service: bool,
     /// Enables the beacon head monitor that reacts to head updates from connected beacon nodes.
@@ -167,7 +196,7 @@ impl Config {
             impostor: None,
             builder_boost_factor: None,
             prefer_builder_proposals: false,
-            proposer_delay: Duration::ZERO,
+            proposer_delays: ProposerDelays::default(),
             gas_limit: 36_000_000,
             disable_latency_measurement_service: false,
             enable_beacon_head_monitor: true,
@@ -283,12 +312,19 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
 
     config.gas_limit = cli_args.payload_building_options.gas_limit;
 
-    config.proposer_delay = proposer_delay_from_millis(
-        cli_args.payload_building_options.proposer_delay_ms,
-        cli_args
-            .payload_building_options
-            .allow_dangerous_proposer_delay,
-    )?;
+    let allow_dangerous_proposer_delay = cli_args
+        .payload_building_options
+        .allow_dangerous_proposer_delay;
+    config.proposer_delays = ProposerDelays {
+        pre_gloas: proposer_delay_from_millis(
+            cli_args.payload_building_options.proposer_delay_ms,
+            allow_dangerous_proposer_delay,
+        )?,
+        gloas: proposer_delay_epbs_from_millis(
+            cli_args.payload_building_options.proposer_delay_epbs_ms,
+            allow_dangerous_proposer_delay,
+        )?,
+    };
 
     // Http API server
     config.http_api.enabled = cli_args.http_api_options.http;
@@ -636,5 +672,45 @@ mod tests {
             "must not suggest a flag that cannot help, got: {err}"
         );
         assert!(proposer_delay_from_millis(MAX_PROPOSER_DELAY_MS, true).is_ok());
+    }
+
+    #[test]
+    fn proposer_delay_epbs_default_is_disabled() {
+        assert_eq!(
+            proposer_delay_epbs_from_millis(0, false),
+            Ok(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn proposer_delay_epbs_at_the_cap_needs_no_acknowledgement() {
+        assert_eq!(
+            proposer_delay_epbs_from_millis(300, false),
+            Ok(Duration::from_millis(300))
+        );
+        assert_eq!(
+            proposer_delay_epbs_from_millis(MAX_PROPOSER_DELAY_EPBS_MS, false),
+            Ok(Duration::from_millis(MAX_PROPOSER_DELAY_EPBS_MS)),
+            "the cap itself is allowed; only values above it are refused"
+        );
+    }
+
+    #[test]
+    fn proposer_delay_epbs_above_the_cap_is_refused_unconditionally() {
+        // Without the acknowledgement flag, the refusal must not point at a flag that cannot help.
+        let err = proposer_delay_epbs_from_millis(MAX_PROPOSER_DELAY_EPBS_MS + 1, false)
+            .expect_err("should be refused");
+        assert!(
+            !err.contains("--allow-dangerous-proposer-delay"),
+            "must not suggest a flag that cannot help, got: {err}"
+        );
+
+        // With it, still refused: the flag gates only the pre-Gloas value, and the error says so.
+        let err = proposer_delay_epbs_from_millis(MAX_PROPOSER_DELAY_EPBS_MS + 1, true)
+            .expect_err("should be refused regardless of acknowledgement");
+        assert!(
+            err.contains("--allow-dangerous-proposer-delay does not apply"),
+            "the error must tell the operator the flag does not raise this cap, got: {err}"
+        );
     }
 }

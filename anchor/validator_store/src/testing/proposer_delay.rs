@@ -9,17 +9,17 @@
 //! delay of 300ms (safely under both config bounds: the 1000ms acknowledgement gate and the
 //! 4000ms hard cap) leaves a 200ms remainder.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use bls::PublicKeyBytes;
 use slot_clock::ManualSlotClock;
 use ssv_types::OperatorId;
 use tokio::time::Instant;
-use types::Epoch;
+use types::{ChainSpec, Epoch, EthSpec, MainnetEthSpec};
 use validator_store::ValidatorStore;
 
 use super::common::*;
-use crate::Error;
+use crate::{Error, ProposerDelays};
 
 const OUR_OPERATOR_ID: OperatorId = OperatorId(1);
 const OPERATOR_IDS: [OperatorId; 4] = [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
@@ -33,26 +33,46 @@ const ELAPSED_IN_SLOT_AT_CALL: Duration = Duration::from_millis(100);
 /// The floor minus the elapsed time: 300ms - 100ms.
 const EXPECTED_REMAINING_WAIT: Duration = Duration::from_millis(200);
 
+/// A `--proposer-delay-epbs-ms` value distinct from [`PROPOSER_DELAY`], so which knob applied is
+/// observable from the wait alone. Under the 1000ms hard cap.
+const GLOAS_PROPOSER_DELAY: Duration = Duration::from_millis(500);
+/// The Gloas-side floor minus the elapsed time: 500ms - 100ms.
+const EXPECTED_GLOAS_REMAINING_WAIT: Duration = Duration::from_millis(400);
+
 /// Epoch of `TEST_SLOT` (slot 1) on the mainnet spec.
 const SIGNING_EPOCH: Epoch = Epoch::new(0);
 
-/// Places the shared clock `ELAPSED_IN_SLOT_AT_CALL` into `TEST_SLOT`, replacing the harness
-/// default of 5s in, which the 300ms floor could never reach.
-fn reposition_clock_early_in_test_slot(slot_clock: &ManualSlotClock) {
-    slot_clock.set_current_time(
-        Duration::from_secs(TEST_SLOT * SLOT_DURATION_SECS) + ELAPSED_IN_SLOT_AT_CALL,
+/// Places the shared clock `ELAPSED_IN_SLOT_AT_CALL` into `slot`, replacing the harness default
+/// of 5s into `TEST_SLOT`, which the sub-second floors could never reach.
+fn reposition_clock_early_in_slot(slot_clock: &ManualSlotClock, slot: u64) {
+    slot_clock
+        .set_current_time(Duration::from_secs(slot * SLOT_DURATION_SECS) + ELAPSED_IN_SLOT_AT_CALL);
+}
+
+/// Builds a harness with the given spec and delays, with the clock early in `TEST_SLOT`.
+fn harness(spec: Arc<ChainSpec>, proposer_delays: ProposerDelays) -> ValidatorStoreTestHarness {
+    let committee = create_committee_setup(&OPERATOR_IDS, 1, 0);
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        OUR_OPERATOR_ID,
+        HarnessOptions {
+            spec,
+            proposer_delays,
+            ..Default::default()
+        },
     );
+    reposition_clock_early_in_slot(&harness.slot_clock, TEST_SLOT);
+    harness
 }
 
 fn harness_with_proposer_delay() -> ValidatorStoreTestHarness {
-    let committee = create_committee_setup(&OPERATOR_IDS, 1, 0);
-    let harness = ValidatorStoreTestHarness::new_with_proposer_delay(
-        vec![committee],
-        OUR_OPERATOR_ID,
-        PROPOSER_DELAY,
-    );
-    reposition_clock_early_in_test_slot(&harness.slot_clock);
-    harness
+    harness(
+        Arc::new(ChainSpec::mainnet()),
+        ProposerDelays {
+            pre_gloas: PROPOSER_DELAY,
+            gloas: Duration::ZERO,
+        },
+    )
 }
 
 /// The delay is a floor from slot start, applied *after* signature collection: with the clock
@@ -105,5 +125,86 @@ async fn randao_reveal_unknown_pubkey_fails_without_waiting() {
         started.elapsed(),
         Duration::ZERO,
         "error path must not apply the proposer delay"
+    );
+}
+
+/// Builds a harness with both delay knobs set to distinct values, under the given spec.
+fn harness_with_both_delays(spec: Arc<ChainSpec>) -> ValidatorStoreTestHarness {
+    harness(
+        spec,
+        ProposerDelays {
+            pre_gloas: PROPOSER_DELAY,
+            gloas: GLOAS_PROPOSER_DELAY,
+        },
+    )
+}
+
+/// From the Gloas fork on, the ePBS value is the floor: with Gloas active at genesis, `TEST_SLOT`
+/// is post-fork, so the 500ms ePBS floor sleeps its 400ms remainder rather than the 200ms the
+/// pre-Gloas value would have.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn randao_reveal_in_gloas_waits_the_gloas_floor_remainder() {
+    let harness = harness_with_both_delays(gloas_at_genesis_spec());
+    let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+    let started = Instant::now();
+
+    let result = harness
+        .validator_store
+        .randao_reveal(validator.public_key, SIGNING_EPOCH)
+        .await;
+
+    result.expect("randao reveal should succeed");
+    assert_eq!(
+        started.elapsed(),
+        EXPECTED_GLOAS_REMAINING_WAIT,
+        "a post-Gloas duty must apply the ePBS delay, not the pre-Gloas one"
+    );
+}
+
+/// Before Gloas the ePBS value must be inert: the values are independent, with no fallback in
+/// either direction, so a pre-fork duty waits the pre-Gloas remainder even with the ePBS knob set.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn randao_reveal_pre_gloas_ignores_the_gloas_delay() {
+    // Mainnet default spec: Gloas is unscheduled, so `TEST_SLOT` is pre-fork.
+    let harness = harness_with_both_delays(Arc::new(ChainSpec::mainnet()));
+    let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+    let started = Instant::now();
+
+    let result = harness
+        .validator_store
+        .randao_reveal(validator.public_key, SIGNING_EPOCH)
+        .await;
+
+    result.expect("randao reveal should succeed");
+    assert_eq!(
+        started.elapsed(),
+        EXPECTED_REMAINING_WAIT,
+        "a pre-Gloas duty must apply the pre-Gloas delay, ignoring the ePBS value"
+    );
+}
+
+/// With Gloas scheduled mid-chain rather than at genesis, a duty in the activation epoch must
+/// still pick the ePBS value. This pins that the selection is driven by the duty's actual epoch,
+/// not by a genesis-relative constant that the two fork-uniform tests above could not distinguish.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn randao_reveal_at_mid_schedule_gloas_activation_waits_the_gloas_floor_remainder() {
+    let gloas_epoch = Epoch::new(1);
+    let harness = harness_with_both_delays(gloas_at_epoch_spec(gloas_epoch));
+    // Reposition to the first slot of the activation epoch, the same 100ms in.
+    let first_gloas_slot = gloas_epoch.start_slot(MainnetEthSpec::slots_per_epoch());
+    reposition_clock_early_in_slot(&harness.slot_clock, first_gloas_slot.as_u64());
+    let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+    let started = Instant::now();
+
+    let result = harness
+        .validator_store
+        .randao_reveal(validator.public_key, gloas_epoch)
+        .await;
+
+    result.expect("randao reveal should succeed");
+    assert_eq!(
+        started.elapsed(),
+        EXPECTED_GLOAS_REMAINING_WAIT,
+        "a duty in the Gloas activation epoch must apply the ePBS delay"
     );
 }

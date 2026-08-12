@@ -267,7 +267,9 @@ Payload Building Options:
          --allow-dangerous-proposer-delay
                Permit a --proposer-delay-ms above the safety threshold. Delays
                this large significantly increase the risk of missed block
-               proposals. Only set this if you understand the trade-off.
+               proposals. Only set this if you understand the trade-off. Does
+               not apply to --proposer-delay-epbs-ms, which has a hard cap
+               instead.
 
          --builder-boost-factor <UINT64>
                Defines the boost factor, a percentage multiplier to apply to
@@ -307,6 +309,15 @@ Payload Building Options:
                If this flag is set, Anchor will always prefer blocks
                constructed by builders, regardless of payload value.
 
+         --proposer-delay-epbs-ms <MILLISECONDS>
+               Counterpart of --proposer-delay-ms applied from the Gloas (ePBS)
+               fork onward: each proposer duty uses whichever value matches the
+               fork at its slot, with no fallback between them. Post-ePBS slots
+               leave less headroom after the block request, so this value has a
+               hard cap that --allow-dangerous-proposer-delay does not raise.
+               
+               [default: 0]
+
          --proposer-delay-ms <MILLISECONDS>
                Wait until this many milliseconds into the slot before
                requesting a block for a proposer duty, giving builders longer
@@ -314,7 +325,9 @@ Payload Building Options:
                slot, not extra latency: if the RANDAO pre-consensus round
                already finished later than this, no additional wait happens. A
                recommended starting value is 300. Higher values increase the
-               risk of missing the block proposal.
+               risk of missing the block proposal. Applies to slots before the
+               Gloas (ePBS) fork; from that fork on, --proposer-delay-epbs-ms
+               applies instead.
                
                [default: 0]
 

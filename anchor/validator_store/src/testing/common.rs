@@ -38,7 +38,8 @@ use types::{
 use validator_store::{AggregateToSign, AttestationToSign, SyncMessageToSign, ValidatorStore};
 
 use crate::{
-    AggregationAssignments, AnchorValidatorStore, Error, VotingAssignments, VotingContext,
+    AggregationAssignments, AnchorValidatorStore, Error, ProposerDelays, VotingAssignments,
+    VotingContext,
 };
 
 pub(super) const TEST_SLOT: u64 = 1;
@@ -296,9 +297,9 @@ pub(super) struct HarnessOptions {
     /// SSV fork the store's `ForkSchedule` reports as active. Defaults to `Boole`; tests that
     /// exercise pre-Boole behaviour supply an earlier fork.
     pub(super) active_fork: Fork,
-    /// Proposer delay wired into the store. Defaults to zero so most tests assert timing-free
-    /// behaviour.
-    pub(super) proposer_delay: Duration,
+    /// Proposer delays wired into the store. Both default to zero so most tests assert
+    /// timing-free behaviour.
+    pub(super) proposer_delays: ProposerDelays,
 }
 
 impl Default for HarnessOptions {
@@ -313,7 +314,7 @@ impl Default for HarnessOptions {
             spec: Arc::new(ChainSpec::mainnet()),
             forced_gloas_index: None,
             active_fork: Fork::Boole,
-            proposer_delay: Duration::ZERO,
+            proposer_delays: ProposerDelays::default(),
         }
     }
 }
@@ -385,21 +386,6 @@ impl ValidatorStoreTestHarness {
             our_operator_id,
             HarnessOptions {
                 active_fork,
-                ..Default::default()
-            },
-        )
-    }
-
-    pub(super) fn new_with_proposer_delay(
-        committee_setups: Vec<CommitteeSetup>,
-        our_operator_id: OperatorId,
-        proposer_delay: Duration,
-    ) -> Self {
-        Self::new_with_options(
-            committee_setups,
-            our_operator_id,
-            HarnessOptions {
-                proposer_delay,
                 ..Default::default()
             },
         )
@@ -532,7 +518,7 @@ impl ValidatorStoreTestHarness {
             30_000_000,
             None,
             false,
-            options.proposer_delay,
+            options.proposer_delays,
             false,
             is_synced_rx,
             executor,
