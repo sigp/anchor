@@ -43,6 +43,8 @@ use crate::{
 
 pub(super) const TEST_SLOT: u64 = 1;
 pub(super) const SLOT_DURATION_SECS: u64 = 12;
+/// How far into `TEST_SLOT` the harness slot clock sits (just past the 1/3 mark).
+pub(super) const CLOCK_OFFSET_INTO_TEST_SLOT_SECS: u64 = SLOT_DURATION_SECS / 3 + 1;
 
 /// The raw item stream `sign_attestations` yields: one `Result` batch per committee.
 pub(super) type SignAttestationsResult = Vec<Result<Vec<SingleAttestation>, Error>>;
@@ -418,7 +420,9 @@ impl ValidatorStoreTestHarness {
             Duration::from_secs(SLOT_DURATION_SECS),
         );
         let slot_start = TEST_SLOT * SLOT_DURATION_SECS;
-        slot_clock.set_current_time(Duration::from_secs(slot_start + SLOT_DURATION_SECS / 3 + 1));
+        slot_clock.set_current_time(Duration::from_secs(
+            slot_start + CLOCK_OFFSET_INTO_TEST_SLOT_SECS,
+        ));
 
         let (executor, exit_signal) = create_test_executor();
 
