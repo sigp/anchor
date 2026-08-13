@@ -2629,31 +2629,45 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         aggregates: Vec<AggregateToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<SignedAggregateAndProof<E>>, Error>> + Send {
-        let publish_via_lighthouse = aggregates.first().is_some_and(|first| {
-            self.fork_schedule
-                .active_fork(first.aggregate.data().target.epoch)
-                < Fork::Boole
-        });
+        let this = Arc::clone(self);
+        stream::once(async move {
+            let publish_via_lighthouse = aggregates.first().is_some_and(|first| {
+                this.fork_schedule
+                    .active_fork(first.aggregate.data().target.epoch)
+                    < Fork::Boole
+            });
 
-        if publish_via_lighthouse {
+            if !publish_via_lighthouse {
+                // Boole+ (or empty input): hand Lighthouse an empty batch, which its publish loop
+                // drops silently. Publication ownership lives with the metadata service's
+                // aggregate publisher, which signs and publishes the decided worklist regardless
+                // of whether Lighthouse's duty snapshot saw the selection proofs in time. See
+                // [`crate::aggregator_post_consensus`].
+                if let Some(first) = aggregates.first() {
+                    // Lighthouse's request set is its snapshot's view of who aggregates; the
+                    // publisher only ever sees the decided view. Logging the request set here
+                    // keeps divergent operator views diagnosable by comparing the two.
+                    debug!(
+                        slot = %first.aggregate.data().slot,
+                        requested = aggregates.len(),
+                        aggregators = ?aggregates
+                            .iter()
+                            .map(|agg| agg.aggregator_index)
+                            .collect::<Vec<_>>(),
+                        "Deferring Lighthouse-requested aggregates to the decided-value publisher"
+                    );
+                }
+                return Ok(Vec::new());
+            }
+
             // Pre-Boole: per-validator processing, Lighthouse publishes the results
-            let this = Arc::clone(self);
-            Either::Left(stream::once(async move {
-                let futures = aggregates.into_iter().map(|agg| {
-                    let this = Arc::clone(&this);
-                    async move { this.sign_single_aggregate_and_proof(agg).await }
-                });
-                let results = join_all(futures).await;
-                Ok(results.into_iter().filter_map(|r| r.ok()).collect())
-            }))
-        } else {
-            // Boole+ (or empty input): hand Lighthouse an empty batch, which its publish loop
-            // drops silently. Publication ownership lives with the metadata service's aggregate
-            // publisher, which signs and publishes the decided worklist regardless of whether
-            // Lighthouse's duty snapshot saw the selection proofs in time. See
-            // [`crate::aggregator_post_consensus`].
-            Either::Right(stream::once(async { Ok(Vec::new()) }))
-        }
+            let futures = aggregates.into_iter().map(|agg| {
+                let this = Arc::clone(&this);
+                async move { this.sign_single_aggregate_and_proof(agg).await }
+            });
+            let results = join_all(futures).await;
+            Ok(results.into_iter().filter_map(|r| r.ok()).collect())
+        })
     }
 
     async fn produce_selection_proof(

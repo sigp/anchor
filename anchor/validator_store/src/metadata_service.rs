@@ -27,8 +27,8 @@ use tokio::{
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
-    Attestation, AttestationData, AttestationRef, ChainSpec, EthSpec, ForkName, Hash256,
-    SignedAggregateAndProof, Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
+    Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, SignedAggregateAndProof,
+    Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
 use validator_services::duties_service::{DutiesService, DutyAndProof};
 
@@ -675,12 +675,11 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         let validator_store = self.validator_store.clone();
         let beacon_nodes = self.beacon_nodes.clone();
-        let fork_name = self.spec.fork_name_at_slot::<E>(slot);
 
         self.executor.spawn(
             async move {
                 validator_store
-                    .publish_decided_aggregates(slot, new_executions, |signed| {
+                    .publish_decided_aggregates(slot, new_executions, |fork_name, signed| {
                         post_aggregates(&beacon_nodes, fork_name, signed)
                     })
                     .await;
@@ -1424,12 +1423,12 @@ pub fn filter_contributors_with_contributions<E: EthSpec>(
 }
 
 /// POST one committee's signed aggregates, mirroring Lighthouse's own aggregate publication
-/// policy at the pin: plain `first_success`, v2 with the fork header for Electra-shaped batches,
-/// v1 otherwise.
+/// policy at the pin: `first_success` across the beacon nodes (which makes two passes over the
+/// candidate list before giving up), v2 with the fork header for Electra+ batches, v1 otherwise.
 ///
-/// The v1/v2 choice sniffs the reconstructed variant, which follows the decided value's
-/// `DataVersion` rather than a recomputed fork; the batch is variant-uniform because it holds
-/// exactly one committee's aggregates decoded from one decided value.
+/// `fork_name` is the fork the batch's payloads were decoded under (the decided value's
+/// `DataVersion`), carried with the batch so the endpoint and fork header cannot diverge from
+/// the payload variant.
 async fn post_aggregates<T: SlotClock + 'static, E: EthSpec>(
     beacon_nodes: &BeaconNodeFallback<T>,
     fork_name: ForkName,
@@ -1443,16 +1442,13 @@ async fn post_aggregates<T: SlotClock + 'static, E: EthSpec>(
                     &validator_metrics::ATTESTATION_SERVICE_TIMES,
                     &[validator_metrics::AGGREGATES_HTTP_POST],
                 );
-                let base = signed
-                    .first()
-                    .is_some_and(|s| matches!(s.message().aggregate(), AttestationRef::Base(_)));
-                if base {
+                if fork_name.electra_enabled() {
                     beacon_node
-                        .post_validator_aggregate_and_proof_v1(signed)
+                        .post_validator_aggregate_and_proof_v2(signed, fork_name)
                         .await
                 } else {
                     beacon_node
-                        .post_validator_aggregate_and_proof_v2(signed, fork_name)
+                        .post_validator_aggregate_and_proof_v1(signed)
                         .await
                 }
             }

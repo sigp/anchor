@@ -2,11 +2,14 @@
 //!
 //! One QBFT decision carries both attestation aggregates and sync contributions for an SSV
 //! committee, and the operator must emit exactly one committee partial-signature message per
-//! `(committee, slot)` covering everything it can sign. No consumer can own that message:
-//! contributions are returned through a Lighthouse callback that may or may not fire (issue
-//! #1227), and aggregates are published by the metadata service's publisher because Lighthouse's
-//! duty snapshot is cloned before slot-start selection proofs finish and would silently skip
-//! them.
+//! `(committee, slot)` covering everything it can sign. The decided value drives both what gets
+//! signed and what gets published: Anchor owns Boole+ aggregate publication outright, through
+//! the metadata service's publisher, because the protocol's unit of agreement is the decided
+//! value and no local Lighthouse view is part of it. (Lighthouse's duty snapshot in particular
+//! is cloned before slot-start selection proofs finish, so routing publication through it would
+//! silently skip late-installed proofs.) Contributions are returned through a Lighthouse
+//! callback that may or may not fire (issue #1227), so no callback can own the committee
+//! message either.
 //!
 //! The signing set is therefore a property of the duty, not of any consumer. The slot pipeline
 //! starts one execution per committee when it publishes the decided value at 2/3 slot; the
@@ -74,6 +77,10 @@ pub(crate) struct PreparedRoot<M> {
 /// identity: validator index for aggregates (read by the aggregate publisher),
 /// `(validator index, subcommittee index)` for contributions (read by the Lighthouse callback).
 pub(crate) struct AggregatorPostConsensusOutcome<E: EthSpec> {
+    /// Fork the decided value's SSZ payloads were decoded under (its `DataVersion`). The
+    /// publisher derives its HTTP endpoint choice and fork header from this, so they cannot
+    /// diverge from the payload variant actually in the batch.
+    pub(crate) fork_name: ForkName,
     pub(crate) aggregates: HashMap<ValidatorIndex, PreparedRoot<AggregateAndProof<E>>>,
     pub(crate) contributions: HashMap<(ValidatorIndex, u64), PreparedRoot<ContributionAndProof<E>>>,
 }
@@ -88,8 +95,15 @@ pub(crate) enum ResolvedAggregates<E: EthSpec> {
     ConsensusFailed,
     /// The decided worklist legitimately holds contributions only.
     NoAggregates,
-    /// Signature draining finished; empty when no decided root reached quorum in time.
-    Batch(Vec<SignedAggregateAndProof<E>>),
+    /// Aggregates were decided, but no root reached signature quorum before the deadline.
+    NoSignatures,
+    /// At least one decided aggregate reached quorum. `fork_name` is the fork the decided
+    /// value's payloads were decoded under, carried with the batch so the publish endpoint
+    /// always matches the payload variant.
+    Batch {
+        fork_name: ForkName,
+        aggregates: Vec<SignedAggregateAndProof<E>>,
+    },
 }
 
 /// The signing worklist derived from one decided `AggregatorCommitteeConsensusData`.
@@ -128,7 +142,9 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
     /// The returned handles feed the metadata service's aggregate publisher. Returning only the
     /// vacant insertions gives the publisher the same exactly-once property as the executions
     /// themselves: a repeated call for one `(committee, slot)` registers nothing and therefore
-    /// publishes nothing twice.
+    /// publishes nothing twice. Both properties are scoped to the process lifetime and to the
+    /// retention window below: after an entry is pruned, only a slot clock stepping backwards
+    /// past the window could present its `(committee, slot)` again, and that would re-register.
     ///
     /// Pre-Boole there is no consensus data and this is a no-op returning no executions.
     #[must_use = "dropping the returned executions disables Boole+ aggregate publication"]
@@ -197,8 +213,8 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
     /// publication does not depend on Lighthouse's snapshot timing.
     ///
     /// Takes the execution handle directly rather than re-entering the assignments watch channel,
-    /// so a late-polled publisher cannot observe `MetadataSlotPassed` for an execution that still
-    /// exists in the retention map.
+    /// so a late-polled publisher cannot observe `AggregatorInfoSlotPassed` for an execution that
+    /// still exists in the retention map.
     pub(crate) async fn resolve_decided_aggregates(
         &self,
         committee_id: CommitteeId,
@@ -278,7 +294,14 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
             ));
         }
 
-        ResolvedAggregates::Batch(results)
+        if results.is_empty() {
+            return ResolvedAggregates::NoSignatures;
+        }
+
+        ResolvedAggregates::Batch {
+            fork_name: outcome.fork_name,
+            aggregates: results,
+        }
     }
 
     /// Resolve each committee's decided aggregates and hand every non-empty batch to `publish`.
@@ -295,14 +318,15 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
     /// below.
     ///
     /// A batch always holds exactly one committee's aggregates, all decoded from one decided
-    /// `DataVersion`; the publish closure may rely on that uniformity when selecting an endpoint.
+    /// `DataVersion`; the fork that version names travels with the batch, so the publish
+    /// closure's endpoint choice always matches the payload variant.
     pub(crate) async fn publish_decided_aggregates<F, Fut>(
         &self,
         slot: Slot,
         executions: Vec<(CommitteeId, AggregatorPostConsensusShared<E>)>,
         publish: F,
     ) where
-        F: Fn(Arc<Vec<SignedAggregateAndProof<E>>>) -> Fut,
+        F: Fn(ForkName, Arc<Vec<SignedAggregateAndProof<E>>>) -> Fut,
         Fut: Future<Output = Result<(), String>>,
     {
         let publish = &publish;
@@ -319,7 +343,7 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
                     ResolvedAggregates::NoAggregates => {
                         metrics::inc_publish_result(metrics::NO_AGGREGATES);
                     }
-                    ResolvedAggregates::Batch(batch) if batch.is_empty() => {
+                    ResolvedAggregates::NoSignatures => {
                         warn!(
                             ?committee_id,
                             %slot,
@@ -327,9 +351,12 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
                         );
                         metrics::inc_publish_result(metrics::NO_SIGNATURES);
                     }
-                    ResolvedAggregates::Batch(batch) => {
-                        let signed = Arc::new(batch);
-                        let result = publish(Arc::clone(&signed))
+                    ResolvedAggregates::Batch {
+                        fork_name,
+                        aggregates,
+                    } => {
+                        let signed = Arc::new(aggregates);
+                        let result = publish(fork_name, Arc::clone(&signed))
                             .instrument(info_span!("publish_aggregates", count = signed.len()))
                             .await;
                         // Both arms reproduce the per-aggregate log Lighthouse emits on its
@@ -424,6 +451,7 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
                 "No active cluster for committee, skipping aggregator post-consensus"
             );
             return Ok(Arc::new(AggregatorPostConsensusOutcome {
+                fork_name: ForkName::from(our_consensus_data.version),
                 aggregates: HashMap::new(),
                 contributions: HashMap::new(),
             }));
@@ -454,6 +482,7 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
         };
 
         Ok(Arc::new(AggregatorPostConsensusOutcome {
+            fork_name: ForkName::from(decided_data.version),
             aggregates: self.prepare_roots(worklist.aggregates, &collection_mode, &cluster, slot),
             contributions: self.prepare_roots(
                 worklist.contributions,

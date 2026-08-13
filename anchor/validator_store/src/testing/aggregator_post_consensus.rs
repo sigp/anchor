@@ -34,8 +34,9 @@ use ssv_types::{
 use ssz::Encode;
 use ssz_types::VariableList;
 use types::{
-    AttestationBase, AttestationData, Checkpoint, Epoch, ForkName, Hash256, MainnetEthSpec,
-    SignedContributionAndProof, Slot, SyncCommitteeContribution, SyncSelectionProof,
+    AttestationBase, AttestationData, AttestationElectra, Checkpoint, Epoch, ForkName, Hash256,
+    MainnetEthSpec, SignedContributionAndProof, Slot, SyncCommitteeContribution,
+    SyncSelectionProof,
 };
 use validator_store::{ContributionToSign, ValidatorStore};
 
@@ -43,6 +44,7 @@ use super::common::*;
 use crate::{
     Error, SpecificError,
     aggregator_post_consensus::{AggregatorPostConsensusShared, ResolvedAggregates},
+    metrics,
 };
 
 /// One committee's decided value, as the slot pipeline publishes it.
@@ -247,25 +249,55 @@ fn assigned(validator_index: ValidatorIndex, committee_index: u64) -> AssignedAg
     }
 }
 
-/// An aggregate attestation payload at `TEST_SLOT`. Distinct `committee_index` values produce
-/// distinct signing roots.
+/// The `AttestationData` shared by the aggregate payload builders, at `TEST_SLOT`.
+fn test_attestation_data(index: u64) -> AttestationData {
+    AttestationData {
+        slot: Slot::new(TEST_SLOT),
+        index,
+        beacon_block_root: Hash256::zero(),
+        source: Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::zero(),
+        },
+        target: Checkpoint {
+            epoch: Epoch::new(0),
+            root: Hash256::zero(),
+        },
+    }
+}
+
+/// An aggregate attestation payload at `TEST_SLOT`, in the pre-Electra shape. Distinct
+/// `committee_index` values produce distinct signing roots.
 fn test_aggregate_attestation(committee_index: u64) -> AttestationBase<MainnetEthSpec> {
     AttestationBase {
         aggregation_bits: ssz_types::BitList::with_capacity(128).expect("bitlist should be valid"),
-        data: AttestationData {
-            slot: Slot::new(TEST_SLOT),
-            index: committee_index,
-            beacon_block_root: Hash256::zero(),
-            source: Checkpoint {
-                epoch: Epoch::new(0),
-                root: Hash256::zero(),
-            },
-            target: Checkpoint {
-                epoch: Epoch::new(0),
-                root: Hash256::zero(),
-            },
-        },
+        data: test_attestation_data(committee_index),
         signature: AggregateSignature::infinity(),
+    }
+}
+
+/// An aggregate attestation payload at `TEST_SLOT`, in the Electra+ shape: the committee moves
+/// from `data.index` to `committee_bits`. Distinct `committee_index` values produce distinct
+/// signing roots.
+fn test_aggregate_attestation_electra(committee_index: u64) -> AttestationElectra<MainnetEthSpec> {
+    let mut committee_bits = ssz_types::BitVector::new();
+    committee_bits
+        .set(committee_index as usize, true)
+        .expect("committee bit should be in range");
+    AttestationElectra {
+        aggregation_bits: ssz_types::BitList::with_capacity(128).expect("bitlist should be valid"),
+        data: test_attestation_data(0),
+        signature: AggregateSignature::infinity(),
+        committee_bits,
+    }
+}
+
+/// SSZ payload bytes for one decided aggregate, in the shape `fork` decodes.
+fn aggregate_payload_bytes(fork: ForkName, committee_index: u64) -> Vec<u8> {
+    if fork >= ForkName::Electra {
+        test_aggregate_attestation_electra(committee_index).as_ssz_bytes()
+    } else {
+        test_aggregate_attestation(committee_index).as_ssz_bytes()
     }
 }
 
@@ -281,12 +313,24 @@ fn test_contribution(subcommittee_index: u64) -> SyncCommitteeContribution<Mainn
     }
 }
 
-/// Builds an `AggregatorCommitteeConsensusData` from decided entries.
+/// Fork the standard decided values are built at; [`build_decided_data`] uses it.
+const DEFAULT_DECIDED_FORK: ForkName = ForkName::Deneb;
+
+/// Builds an `AggregatorCommitteeConsensusData` at [`DEFAULT_DECIDED_FORK`] from decided entries.
+fn build_decided_data(
+    aggregators: &[(ValidatorIndex, u64)],
+    contributors: &[(ValidatorIndex, u64)],
+) -> AggregatorCommitteeConsensusData<MainnetEthSpec> {
+    build_decided_data_at_fork(DEFAULT_DECIDED_FORK, aggregators, contributors)
+}
+
+/// Builds an `AggregatorCommitteeConsensusData` decided at `fork` from decided entries.
 ///
 /// `aggregators` and `contributors` are `(validator_index, committee_index)` pairs; the
 /// attestation and contribution payload lists are derived from them (one payload per unique
-/// index).
-fn build_decided_data(
+/// index), with each attestation payload in the shape `fork` decodes.
+fn build_decided_data_at_fork(
+    fork: ForkName,
     aggregators: &[(ValidatorIndex, u64)],
     contributors: &[(ValidatorIndex, u64)],
 ) -> AggregatorCommitteeConsensusData<MainnetEthSpec> {
@@ -310,7 +354,7 @@ fn build_decided_data(
     let aggregated_attestations: Vec<_> = aggregate_committee_indexes
         .iter()
         .map(|&committee_index| {
-            VariableList::new(test_aggregate_attestation(committee_index).as_ssz_bytes())
+            VariableList::new(aggregate_payload_bytes(fork, committee_index))
                 .expect("attestation bytes should fit")
         })
         .collect();
@@ -324,7 +368,7 @@ fn build_decided_data(
         .collect();
 
     AggregatorCommitteeConsensusData {
-        version: DataVersion::from(ForkName::Deneb),
+        version: DataVersion::from(fork),
         aggregators: VariableList::new(aggregators).expect("aggregator list should be valid"),
         aggregator_committee_indexes: VariableList::new(aggregate_committee_indexes)
             .expect("committee indexes should be valid"),
@@ -440,8 +484,8 @@ fn assert_published_aggregators(
     context: &str,
 ) {
     match published {
-        ResolvedAggregates::Batch(batch) => assert_eq!(
-            batch
+        ResolvedAggregates::Batch { aggregates, .. } => assert_eq!(
+            aggregates
                 .iter()
                 .map(|signed| signed.message().aggregator_index())
                 .collect::<Vec<_>>(),
@@ -453,6 +497,9 @@ fn assert_published_aggregators(
         }
         ResolvedAggregates::NoAggregates => {
             panic!("{context}: the decided worklist held no aggregates")
+        }
+        ResolvedAggregates::NoSignatures => {
+            panic!("{context}: no decided root reached signature quorum")
         }
     }
 }
@@ -1078,6 +1125,9 @@ const FIRST_AGGREGATE_COMMITTEE: usize = 0;
 const CONTRIBUTIONS_ONLY_COMMITTEE: usize = 1;
 const SECOND_AGGREGATE_COMMITTEE: usize = 2;
 
+/// Fork and aggregator indexes of one batch handed to the recording publish closure.
+type RecordedBatch = (ForkName, Vec<u64>);
+
 /// Several single-validator committees in one harness, for the publisher's per-committee fan-out.
 struct PublisherFixture {
     harness: ValidatorStoreTestHarness,
@@ -1120,7 +1170,13 @@ impl PublisherFixture {
 
     /// A decided value holding this committee's single aggregate.
     fn aggregate_only(&self, committee: usize) -> DecidedData {
-        build_decided_data(
+        self.aggregate_only_at_fork(committee, DEFAULT_DECIDED_FORK)
+    }
+
+    /// [`Self::aggregate_only`] decided at `fork`, with the payload in that fork's shape.
+    fn aggregate_only_at_fork(&self, committee: usize, fork: ForkName) -> DecidedData {
+        build_decided_data_at_fork(
+            fork,
             &[(self.validator_index(committee), BEACON_COMMITTEE_INDEX)],
             &[],
         )
@@ -1151,21 +1207,23 @@ impl PublisherFixture {
         )
     }
 
-    /// Runs the publisher over `executions` with a recording publish closure, returning the
-    /// aggregator indexes of every batch it was handed.
+    /// Runs the publisher over `executions` with a recording publish closure, returning the fork
+    /// and aggregator indexes of every batch it was handed.
     ///
-    /// `outcome` decides each batch's publish result from its contents, so a test can fail one
-    /// committee's publish without depending on the order committees finish in. The returned
-    /// batches are sorted for the same reason.
+    /// The recorder captures the `ForkName` the closure receives, so tests can pin that it
+    /// matches the decided value's `DataVersion`. `outcome` decides each batch's publish result
+    /// from its contents, so a test can fail one committee's publish without depending on the
+    /// order committees finish in. The returned batches are sorted by their aggregator indexes
+    /// for the same reason.
     async fn run_publisher(
         &self,
         executions: Vec<(CommitteeId, Execution)>,
         outcome: impl Fn(&[u64]) -> Result<(), String>,
-    ) -> Vec<Vec<u64>> {
-        let recorded: Arc<Mutex<Vec<Vec<u64>>>> = Arc::new(Mutex::new(Vec::new()));
+    ) -> Vec<RecordedBatch> {
+        let recorded: Arc<Mutex<Vec<RecordedBatch>>> = Arc::new(Mutex::new(Vec::new()));
         self.harness
             .validator_store
-            .publish_decided_aggregates(Slot::new(TEST_SLOT), executions, |signed| {
+            .publish_decided_aggregates(Slot::new(TEST_SLOT), executions, |fork_name, signed| {
                 let recorded = Arc::clone(&recorded);
                 let outcome = &outcome;
                 async move {
@@ -1174,14 +1232,14 @@ impl PublisherFixture {
                         .map(|signed| signed.message().aggregator_index())
                         .collect();
                     let result = outcome(&aggregators);
-                    recorded.lock().push(aggregators);
+                    recorded.lock().push((fork_name, aggregators));
                     result
                 }
             })
             .await;
 
         let mut recorded = recorded.lock().clone();
-        recorded.sort();
+        recorded.sort_by(|left, right| left.1.cmp(&right.1));
         recorded
     }
 }
@@ -1218,12 +1276,19 @@ async fn publish_decided_aggregates_publishes_each_committee_with_aggregates_onc
     // Act
     let published = fixture.run_publisher(executions, |_| Ok(())).await;
 
-    // Assert: one batch per committee holding aggregates, carrying that committee's aggregator.
+    // Assert: one batch per committee holding aggregates, carrying that committee's aggregator
+    // and the decided value's fork.
     assert_eq!(
         published,
         vec![
-            vec![fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE)],
-            vec![fixture.aggregator_index(SECOND_AGGREGATE_COMMITTEE)],
+            (
+                DEFAULT_DECIDED_FORK,
+                vec![fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE)],
+            ),
+            (
+                DEFAULT_DECIDED_FORK,
+                vec![fixture.aggregator_index(SECOND_AGGREGATE_COMMITTEE)],
+            ),
         ],
         "committees with decided aggregates publish once each, and the contributions-only \
          committee never reaches the publish call"
@@ -1259,14 +1324,29 @@ async fn publish_decided_aggregates_survives_a_failing_publish() {
     assert_eq!(
         published,
         (0..PUBLISHER_OPERATOR_SETS.len())
-            .map(|committee| vec![fixture.aggregator_index(committee)])
+            .map(|committee| (
+                DEFAULT_DECIDED_FORK,
+                vec![fixture.aggregator_index(committee)]
+            ))
             .collect::<Vec<_>>(),
         "a failing publish must not withhold the other committees' batches"
     );
 }
 
+/// Current value of the publisher's `no_signatures` outcome counter.
+///
+/// The counter is process-global, but the label is emitted from exactly one production site and
+/// reached by exactly one test, so a before/after delta stays safe under parallel execution.
+fn no_signatures_count() -> u64 {
+    metrics::AGGREGATOR_COMMITTEE_PUBLISH_TOTAL
+        .as_ref()
+        .expect("the publish outcome metric should be created")
+        .with_label_values(&[metrics::NO_SIGNATURES])
+        .get()
+}
+
 /// A committee that decided aggregates but whose roots never reached signature quorum resolves to
-/// an empty `Batch`, and the publisher posts nothing.
+/// `NoSignatures`, and the publisher posts nothing.
 ///
 /// This is a third outcome, distinct from `ConsensusFailed` (the round itself failed) and
 /// `NoAggregates` (the decided value held none): consensus succeeded and there was something to
@@ -1286,6 +1366,7 @@ async fn publish_decided_aggregates_skips_a_committee_whose_roots_never_reach_qu
         .first()
         .cloned()
         .expect("the committee should register one execution");
+    let no_signatures_before = no_signatures_count();
 
     // Act
     let resolved = fixture
@@ -1295,14 +1376,48 @@ async fn publish_decided_aggregates_skips_a_committee_whose_roots_never_reach_qu
         .await;
     let published = fixture.run_publisher(executions, |_| Ok(())).await;
 
-    // Assert: a batch was resolved, it is empty, and nothing was handed to publish.
+    // Assert: the resolution names the missing signatures, the publish closure was never
+    // invoked, and the publisher counted the committee under its own label.
     assert!(
-        matches!(&resolved, ResolvedAggregates::Batch(batch) if batch.is_empty()),
-        "a decided aggregate whose signature never arrives should resolve to an empty batch, \
+        matches!(&resolved, ResolvedAggregates::NoSignatures),
+        "a decided aggregate whose signature never arrives should resolve to `NoSignatures`, \
          not to a consensus failure or an absent worklist"
     );
     assert!(
         published.is_empty(),
-        "the publisher must not POST an empty batch"
+        "the publisher must not invoke the publish closure without a batch"
+    );
+    assert_eq!(
+        no_signatures_count(),
+        no_signatures_before + 1,
+        "the publisher should count the committee under the `no_signatures` label"
+    );
+}
+
+/// The fork handed to the publish closure is the decided value's `DataVersion` fork, not any
+/// local default: an Electra-decided value reaches the closure as `ForkName::Electra`.
+///
+/// The closure derives its publish endpoint and fork header from this argument, so binding it to
+/// the decided version is what keeps the endpoint from diverging from the payload variant.
+#[tokio::test(flavor = "multi_thread")]
+async fn publish_decided_aggregates_hands_the_decided_versions_fork_to_the_closure() {
+    // Arrange: one committee decides an Electra-versioned value with an Electra-shaped payload.
+    let fixture = PublisherFixture::new();
+    let executions = fixture.publish(vec![(
+        FIRST_AGGREGATE_COMMITTEE,
+        fixture.aggregate_only_at_fork(FIRST_AGGREGATE_COMMITTEE, ForkName::Electra),
+    )]);
+
+    // Act
+    let published = fixture.run_publisher(executions, |_| Ok(())).await;
+
+    // Assert
+    assert_eq!(
+        published,
+        vec![(
+            ForkName::Electra,
+            vec![fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE)],
+        )],
+        "the publish closure must receive the fork named by the decided value's DataVersion"
     );
 }
