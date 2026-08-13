@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 pub use metrics::*;
 
 pub const AGGREGATE_AND_PROOF: &str = "aggregate_and_proof";
+pub const AGGREGATOR_COMMITTEE: &str = "aggregator_committee";
 pub const BLOCK: &str = "block";
 pub const BEACON_VOTE: &str = "beacon_vote";
 pub const SYNC_CONTRIBUTION_AND_PROOF: &str = "sync_contribution_and_proof";
