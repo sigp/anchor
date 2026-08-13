@@ -2,14 +2,17 @@
 //!
 //! One QBFT decision carries both attestation aggregates and sync contributions for an SSV
 //! committee, and the operator must emit exactly one committee partial-signature message per
-//! `(committee, slot)` covering everything it can sign. Lighthouse asks for signatures through two
-//! independent callbacks, one per object class, so neither callback can own that message: whichever
-//! one fires, the other class still has to be signed (issue #1227).
+//! `(committee, slot)` covering everything it can sign. No consumer can own that message:
+//! contributions are returned through a Lighthouse callback that may or may not fire (issue
+//! #1227), and aggregates are published by the metadata service's publisher because Lighthouse's
+//! duty snapshot is cloned before slot-start selection proofs finish and would silently skip
+//! them.
 //!
-//! The signing set is therefore a property of the duty, not of any callback. The slot pipeline
-//! starts one execution per committee when it publishes the decided value at 2/3 slot, and the
-//! callbacks only look up their own results. This is the ssv-spec-normative shape, where the
-//! decided value drives what gets signed and local state only filters.
+//! The signing set is therefore a property of the duty, not of any consumer. The slot pipeline
+//! starts one execution per committee when it publishes the decided value at 2/3 slot; the
+//! contributions callback and the aggregate publisher only look up their own results. This is
+//! the ssv-spec-normative shape, where the decided value drives what gets signed and local state
+//! only filters.
 
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
@@ -20,8 +23,9 @@ use std::{
 use bls::Signature;
 use database::{NonUniqueIndex, UniqueIndex};
 use futures::{
-    FutureExt,
+    FutureExt, StreamExt,
     future::{BoxFuture, Shared},
+    stream::FuturesUnordered,
 };
 use qbft_manager::ConsensusDecider;
 use slot_clock::SlotClock;
@@ -33,15 +37,15 @@ use ssv_types::{
 };
 use ssz::Decode;
 use tokio::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 use types::{
     AggregateAndProof, Attestation, AttestationBase, AttestationElectra, ContributionAndProof,
-    Domain, EthSpec, ForkName, Hash256, SelectionProof, SignedRoot, Slot,
+    Domain, EthSpec, ForkName, Hash256, SelectionProof, SignedAggregateAndProof, SignedRoot, Slot,
 };
 
 use crate::{
     AggregationAssignments, AnchorValidatorStore, CollectionMode, Error, SigningRequest,
-    SpecificError,
+    SpecificError, drain_signatures, metrics,
 };
 
 /// Epochs to retain finished `AggregatorCommittee` post-consensus executions.
@@ -66,12 +70,26 @@ pub(crate) struct PreparedRoot<M> {
     pub(crate) signature: SharedResult<Signature>,
 }
 
-/// Everything this operator signs for one decided `AggregatorCommittee` round, keyed by the
-/// identities the Lighthouse callbacks look up: validator index for aggregates,
-/// `(validator index, subcommittee index)` for contributions.
+/// Everything this operator signs for one decided `AggregatorCommittee` round, keyed by signing
+/// identity: validator index for aggregates (read by the aggregate publisher),
+/// `(validator index, subcommittee index)` for contributions (read by the Lighthouse callback).
 pub(crate) struct AggregatorPostConsensusOutcome<E: EthSpec> {
     pub(crate) aggregates: HashMap<ValidatorIndex, PreparedRoot<AggregateAndProof<E>>>,
     pub(crate) contributions: HashMap<(ValidatorIndex, u64), PreparedRoot<ContributionAndProof<E>>>,
+}
+
+/// Outcome of resolving one committee's decided aggregates for publication.
+///
+/// Returned instead of a bare vec so [`AnchorValidatorStore::publish_decided_aggregates`] can
+/// emit every `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` label from one `match`, keeping the metric's
+/// partition over processed committees checkable in one place.
+pub(crate) enum ResolvedAggregates<E: EthSpec> {
+    /// Consensus failed, timed out, or the deadline could not be computed (logged at the site).
+    ConsensusFailed,
+    /// The decided worklist legitimately holds contributions only.
+    NoAggregates,
+    /// Signature draining finished; empty when no decided root reached quorum in time.
+    Batch(Vec<SignedAggregateAndProof<E>>),
 }
 
 /// The signing worklist derived from one decided `AggregatorCommitteeConsensusData`.
@@ -99,18 +117,25 @@ async fn join_detached_task<R>(
 impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
     AnchorValidatorStore<T, E, C>
 {
-    /// Start one post-consensus execution per committee in freshly built assignments.
+    /// Start one post-consensus execution per committee in freshly built assignments, returning
+    /// the executions newly registered by this call.
     ///
     /// This is the only place executions are created. Callbacks look results up and never start
     /// work, so exactly one committee message per `(committee, slot)` holds by construction rather
     /// than by locking. Called from `update_aggregation_assignments` before the watch channel is
     /// published, so any consumer that can observe the assignments can also observe the execution.
     ///
-    /// Pre-Boole there is no consensus data and this is a no-op.
+    /// The returned handles feed the metadata service's aggregate publisher. Returning only the
+    /// vacant insertions gives the publisher the same exactly-once property as the executions
+    /// themselves: a repeated call for one `(committee, slot)` registers nothing and therefore
+    /// publishes nothing twice.
+    ///
+    /// Pre-Boole there is no consensus data and this is a no-op returning no executions.
+    #[must_use = "dropping the returned executions disables Boole+ aggregate publication"]
     pub(crate) fn start_aggregator_post_consensus(
         self: &Arc<Self>,
         assignments: &AggregationAssignments<E>,
-    ) {
+    ) -> Vec<(CommitteeId, AggregatorPostConsensusShared<E>)> {
         let slot = assignments.slot;
         let mut executions = self.aggregator_post_consensus.lock();
 
@@ -118,6 +143,7 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
             slot.saturating_sub(AGGREGATOR_POST_CONSENSUS_RETAIN_EPOCHS * E::slots_per_epoch());
         executions.retain(|(_, execution_slot), _| *execution_slot >= cutoff);
 
+        let mut new_executions = Vec::new();
         for (&committee_id, decided_data) in &assignments.consensus_data_by_ssv_committee {
             // Vacant-only, so registration is idempotent. Overwriting would spawn a second QBFT
             // round and a second set of detached signing tasks while the first set kept running,
@@ -128,22 +154,228 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
             if let Entry::Vacant(vacant) = executions.entry((committee_id, slot)) {
                 let store = Arc::clone(self);
                 let decided_data = Arc::clone(decided_data);
-                vacant.insert(self.spawn_shared("aggregator_post_consensus", async move {
+                let execution = self.spawn_shared("aggregator_post_consensus", async move {
                     store
                         .run_aggregator_post_consensus(committee_id, slot, decided_data)
                         .await
-                }));
+                });
+                vacant.insert(execution.clone());
+                new_executions.push((committee_id, execution));
             }
         }
+        new_executions
     }
 
-    /// Join the post-consensus execution for `(committee, slot)`, returning the outcome and the
-    /// deadline that bounded the join, for the caller to reuse when draining its own roots.
+    /// Join one committee's execution under the shared deadline, returning the outcome and the
+    /// deadline for the caller to reuse when draining its own roots.
     ///
     /// The single deadline (one slot past the duty slot's end) is an anti-hang backstop, not a
     /// duty-freshness bound: QBFT `SlotTime` rounds legitimately decide after the slot ends and
     /// reconstruction needs a network round trip after that, so bounding at slot end would discard
     /// results decided in contended rounds.
+    async fn join_execution(
+        &self,
+        slot: Slot,
+        execution: AggregatorPostConsensusShared<E>,
+    ) -> Result<(Instant, Arc<AggregatorPostConsensusOutcome<E>>), Error> {
+        let deadline = self.get_instant_in_slot(slot, self.spec.get_slot_duration() * 2)?;
+        let outcome = tokio::time::timeout_at(deadline, execution)
+            .await
+            .map_err(|_| Error::SpecificError(SpecificError::Timeout))?
+            .map_err(|e| (*e).clone())?;
+
+        Ok((deadline, outcome))
+    }
+
+    /// Join one committee's post-consensus execution and assemble every decided aggregate this
+    /// operator signed into publishable [`SignedAggregateAndProof`]s.
+    ///
+    /// This backs [`Self::publish_decided_aggregates`], which owns Boole+ aggregate publication:
+    /// Lighthouse's aggregate callback returns an empty batch at Boole+, because its duty
+    /// snapshot is cloned before slot-start selection proofs finish, silently skipping any proof
+    /// installed after the clone. The publisher works from the decided value instead, so
+    /// publication does not depend on Lighthouse's snapshot timing.
+    ///
+    /// Takes the execution handle directly rather than re-entering the assignments watch channel,
+    /// so a late-polled publisher cannot observe `MetadataSlotPassed` for an execution that still
+    /// exists in the retention map.
+    pub(crate) async fn resolve_decided_aggregates(
+        &self,
+        committee_id: CommitteeId,
+        slot: Slot,
+        execution: AggregatorPostConsensusShared<E>,
+    ) -> ResolvedAggregates<E> {
+        let (deadline, outcome) = match self.join_execution(slot, execution).await {
+            Ok(joined) => joined,
+            Err(e) => {
+                warn!(
+                    ?committee_id,
+                    %slot,
+                    error = ?e,
+                    "Aggregator post-consensus failed, no aggregates to publish"
+                );
+                // Keeps the Lighthouse-era signing counter alive for dashboards keyed on it. The
+                // per-aggregate count is unknowable before the outcome resolves, so failures
+                // count once per committee, an undercount but not silence.
+                let label = match e {
+                    Error::SpecificError(SpecificError::Timeout) => metrics::TIMEOUT,
+                    _ => metrics::OTHER_ERROR,
+                };
+                validator_metrics::inc_counter_vec(
+                    &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                    &[label],
+                );
+                return ResolvedAggregates::ConsensusFailed;
+            }
+        };
+
+        // A decided value can legitimately hold contributions only; nothing to publish then.
+        if outcome.aggregates.is_empty() {
+            debug!(?committee_id, %slot, "Decided worklist holds no aggregates");
+            return ResolvedAggregates::NoAggregates;
+        }
+
+        // Drain every aggregate root's signature concurrently under the deadline, so a root that
+        // never reaches quorum withholds only itself.
+        let pending = FuturesUnordered::new();
+        for (&index, root) in &outcome.aggregates {
+            let signing_root = root.request.signing_root;
+            let signature = root.signature.clone();
+            pending.push(async move { (index, signing_root, signature.await) });
+        }
+        let signatures = drain_signatures(pending, Some(deadline)).await;
+
+        let mut results = Vec::with_capacity(outcome.aggregates.len());
+        for (index, root) in &outcome.aggregates {
+            // Clone the decided message only on a signature hit; misses need just the pubkey.
+            let Some(signature) = signatures.get(&(*index, root.request.signing_root)) else {
+                warn!(
+                    pubkey = ?root.request.validator.public_key,
+                    %slot,
+                    "Missing signature, skipping aggregate"
+                );
+                validator_metrics::inc_counter_vec(
+                    &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                    &[metrics::OTHER_ERROR],
+                );
+                continue;
+            };
+            let message = root.request.duty_data.clone();
+
+            debug!(
+                aggregator_index = message.aggregator_index(),
+                data = ?message.aggregate().data(),
+                num_set_aggregation_bits = message.aggregate().num_set_aggregation_bits(),
+                "Signed AggregateAndProof (Boole+ committee consensus)"
+            );
+            validator_metrics::inc_counter_vec(
+                &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                &[validator_metrics::SUCCESS],
+            );
+            results.push(SignedAggregateAndProof::from_aggregate_and_proof(
+                message,
+                signature.clone(),
+            ));
+        }
+
+        ResolvedAggregates::Batch(results)
+    }
+
+    /// Resolve each committee's decided aggregates and hand every non-empty batch to `publish`.
+    ///
+    /// This is the authoritative Boole+ aggregate publication driver, spawned per slot by the
+    /// metadata service with the executions its assignment update newly registered. Generic over
+    /// the publish operation so tests (in `testing/aggregator_post_consensus.rs`) can inject a
+    /// recorder instead of an HTTP client. Each committee runs resolve-and-publish as one
+    /// `FuturesUnordered` entry, so a contended QBFT round or a slow POST in one committee does
+    /// not delay another committee's publication.
+    ///
+    /// Owns every `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` increment: the labels partition the
+    /// processed committees by outcome, and that partition is checkable in the single `match`
+    /// below.
+    ///
+    /// A batch always holds exactly one committee's aggregates, all decoded from one decided
+    /// `DataVersion`; the publish closure may rely on that uniformity when selecting an endpoint.
+    pub(crate) async fn publish_decided_aggregates<F, Fut>(
+        &self,
+        slot: Slot,
+        executions: Vec<(CommitteeId, AggregatorPostConsensusShared<E>)>,
+        publish: F,
+    ) where
+        F: Fn(Arc<Vec<SignedAggregateAndProof<E>>>) -> Fut,
+        Fut: Future<Output = Result<(), String>>,
+    {
+        let publish = &publish;
+        let mut pending: FuturesUnordered<_> = executions
+            .into_iter()
+            .map(|(committee_id, execution)| async move {
+                match self
+                    .resolve_decided_aggregates(committee_id, slot, execution)
+                    .await
+                {
+                    ResolvedAggregates::ConsensusFailed => {
+                        metrics::inc_publish_result(metrics::CONSENSUS_ERROR);
+                    }
+                    ResolvedAggregates::NoAggregates => {
+                        metrics::inc_publish_result(metrics::NO_AGGREGATES);
+                    }
+                    ResolvedAggregates::Batch(batch) if batch.is_empty() => {
+                        warn!(
+                            ?committee_id,
+                            %slot,
+                            "No decided aggregate reached signature quorum, nothing to publish"
+                        );
+                        metrics::inc_publish_result(metrics::NO_SIGNATURES);
+                    }
+                    ResolvedAggregates::Batch(batch) => {
+                        let signed = Arc::new(batch);
+                        let result = publish(Arc::clone(&signed))
+                            .instrument(info_span!("publish_aggregates", count = signed.len()))
+                            .await;
+                        // Both arms reproduce the per-aggregate log Lighthouse emits on its
+                        // pre-Boole path; operator pipelines key on `type="aggregated"`.
+                        match result {
+                            Ok(()) => {
+                                for signed in signed.iter() {
+                                    let attestation = signed.message().aggregate();
+                                    info!(
+                                        aggregator = signed.message().aggregator_index(),
+                                        signatures = attestation.num_set_aggregation_bits(),
+                                        head_block =
+                                            format!("{:?}", attestation.data().beacon_block_root),
+                                        committee_index = attestation.committee_index(),
+                                        slot = slot.as_u64(),
+                                        "type" = "aggregated",
+                                        "Successfully published attestation"
+                                    );
+                                }
+                                metrics::inc_publish_result(validator_metrics::SUCCESS);
+                            }
+                            Err(e) => {
+                                for signed in signed.iter() {
+                                    let attestation = signed.message().aggregate();
+                                    error!(
+                                        error = %e,
+                                        aggregator = signed.message().aggregator_index(),
+                                        committee_index = attestation.committee_index(),
+                                        slot = slot.as_u64(),
+                                        "type" = "aggregated",
+                                        "Failed to publish attestation"
+                                    );
+                                }
+                                metrics::inc_publish_result(metrics::HTTP_ERROR);
+                            }
+                        }
+                    }
+                }
+            })
+            .collect();
+
+        while pending.next().await.is_some() {}
+    }
+
+    /// Join the post-consensus execution for `(committee, slot)`, returning the outcome and the
+    /// deadline that bounded the join, for the caller to reuse when draining its own roots.
     pub(crate) async fn post_consensus_outcome(
         &self,
         committee_id: CommitteeId,
@@ -160,13 +392,7 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
             .cloned()
             .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
 
-        let deadline = self.get_instant_in_slot(slot, self.spec.get_slot_duration() * 2)?;
-        let outcome = tokio::time::timeout_at(deadline, execution)
-            .await
-            .map_err(|_| Error::SpecificError(SpecificError::Timeout))?
-            .map_err(|e| (*e).clone())?;
-
-        Ok((deadline, outcome))
+        self.join_execution(slot, execution).await
     }
 
     /// Spawn `fut` detached and hand out a `Shared` view of its result.

@@ -142,6 +142,31 @@ pub static AGGREGATOR_COMMITTEE_FETCH_SUCCESS: LazyLock<Result<IntCounterVec>> =
         )
     });
 
+// Labels for `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` (`success` is `validator_metrics::SUCCESS`).
+pub const CONSENSUS_ERROR: &str = "consensus_error";
+pub const HTTP_ERROR: &str = "http_error";
+pub const NO_AGGREGATES: &str = "no_aggregates";
+pub const NO_SIGNATURES: &str = "no_signatures";
+
+/// Outcomes of the Boole+ aggregate publisher, one increment per committee per slot. The labels
+/// partition every committee the publisher processed: `success` and `http_error` from the publish
+/// attempt, `consensus_error` when the outcome failed or timed out, `no_aggregates` when the
+/// decided worklist held contributions only, `no_signatures` when aggregates were decided but no
+/// root reached signature quorum in time. All increments live in
+/// `AnchorValidatorStore::publish_decided_aggregates`.
+pub static AGGREGATOR_COMMITTEE_PUBLISH_TOTAL: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_aggregator_committee_publish_total",
+            "Committees processed by the Boole+ aggregate publisher, by outcome",
+            &["result"],
+        )
+    });
+
+pub fn inc_publish_result(result: &str) {
+    inc_counter_vec(&AGGREGATOR_COMMITTEE_PUBLISH_TOTAL, &[result]);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Weighted Attestation Data (WAD) metrics
 // ═══════════════════════════════════════════════════════════════════════════════
