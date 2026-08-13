@@ -680,7 +680,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             async move {
                 validator_store
                     .publish_decided_aggregates(slot, new_executions, |fork_name, signed| {
-                        post_aggregates(&beacon_nodes, fork_name, signed)
+                        post_aggregate(&beacon_nodes, fork_name, signed)
                     })
                     .await;
             },
@@ -1422,21 +1422,22 @@ pub fn filter_contributors_with_contributions<E: EthSpec>(
     });
 }
 
-/// POST one committee's signed aggregates, mirroring Lighthouse's own aggregate publication
-/// policy at the pin: `first_success` across the beacon nodes (which makes two passes over the
-/// candidate list before giving up), v2 with the fork header for Electra+ batches, v1 otherwise.
+/// POST one signed aggregate, matching go-ssv's publication shape at the reference pin (one
+/// aggregate per request, published as soon as its quorum lands). Endpoint policy mirrors
+/// Lighthouse's at the pin: `first_success` across the beacon nodes (which makes two passes
+/// over the candidate list before giving up), v2 with the fork header for Electra+ aggregates,
+/// v1 otherwise.
 ///
-/// `fork_name` is the fork the batch's payloads were decoded under (the decided value's
-/// `DataVersion`), carried with the batch so the endpoint and fork header cannot diverge from
-/// the payload variant.
-async fn post_aggregates<T: SlotClock + 'static, E: EthSpec>(
+/// `fork_name` is the fork the aggregate's payload was decoded under (the decided value's
+/// `DataVersion`), so the endpoint and fork header cannot diverge from the payload variant.
+async fn post_aggregate<T: SlotClock + 'static, E: EthSpec>(
     beacon_nodes: &BeaconNodeFallback<T>,
     fork_name: ForkName,
-    signed: Arc<Vec<SignedAggregateAndProof<E>>>,
+    signed: SignedAggregateAndProof<E>,
 ) -> Result<(), String> {
     beacon_nodes
         .first_success(|beacon_node| {
-            let signed = signed.as_slice();
+            let signed = std::slice::from_ref(&signed);
             async move {
                 let _timer = validator_metrics::start_timer_vec(
                     &validator_metrics::ATTESTATION_SERVICE_TIMES,

@@ -8,8 +8,8 @@
 //!
 //! The two classes are read out differently. Contributions still go back through the Lighthouse
 //! callback, which filters the shared outcome down to its own requested items. Aggregates do not:
-//! Anchor publishes them itself from the decided value, so `resolve_decided_aggregates` and
-//! `publish_decided_aggregates` are the readers, and the aggregate callback returns nothing.
+//! Anchor publishes them itself from the decided value, one publish call per root, so
+//! `publish_decided_aggregates` is the reader and the aggregate callback returns nothing.
 //!
 //! The worklist tasks are detached, so captured `sign_and_collect` calls arrive
 //! asynchronously; assertions on capture counts poll with a deadline and then let the
@@ -42,9 +42,7 @@ use validator_store::{ContributionToSign, ValidatorStore};
 
 use super::common::*;
 use crate::{
-    Error, SpecificError,
-    aggregator_post_consensus::{AggregatorPostConsensusShared, ResolvedAggregates},
-    metrics,
+    Error, SpecificError, aggregator_post_consensus::AggregatorPostConsensusShared, metrics,
 };
 
 /// One committee's decided value, as the slot pipeline publishes it.
@@ -195,12 +193,13 @@ impl AggregatorCommitteeFixture {
         (data, execution)
     }
 
-    /// Resolves this committee's decided aggregates the way the publisher does.
-    async fn resolve_aggregates(&self, execution: Execution) -> ResolvedAggregates<MainnetEthSpec> {
-        self.harness
-            .validator_store
-            .resolve_decided_aggregates(self.committee_id, Slot::new(TEST_SLOT), execution)
-            .await
+    /// Runs the publisher over this committee's execution with an always-succeeding recording
+    /// closure, returning one `(fork, aggregator index)` entry per publish call.
+    async fn run_publisher(&self, execution: Execution) -> Vec<RecordedPublish> {
+        run_recording_publisher(&self.harness, vec![(self.committee_id, execution)], |_| {
+            Ok(())
+        })
+        .await
     }
 
     /// The aggregator index the standard mixed decided value publishes.
@@ -380,6 +379,61 @@ fn build_decided_data_at_fork(
     }
 }
 
+// ==================== Recording publisher ====================
+
+/// Fork and aggregator index of one publish call made by the recording closure.
+type RecordedPublish = (ForkName, u64);
+
+/// Runs the publisher over `executions` with a recording publish closure, returning one
+/// `(fork, aggregator index)` entry per publish call.
+///
+/// The recorder captures the `ForkName` each call receives, so tests can pin that it matches the
+/// decided value's `DataVersion`. `outcome` decides each call's publish result from its
+/// aggregator index, so a test can fail one aggregate's publish without depending on the order
+/// roots finish in. The returned calls are sorted by aggregator index for the same reason.
+async fn run_recording_publisher(
+    harness: &ValidatorStoreTestHarness,
+    executions: Vec<(CommitteeId, Execution)>,
+    outcome: impl Fn(u64) -> Result<(), String>,
+) -> Vec<RecordedPublish> {
+    let recorded: Arc<Mutex<Vec<RecordedPublish>>> = Arc::new(Mutex::new(Vec::new()));
+    harness
+        .validator_store
+        .publish_decided_aggregates(Slot::new(TEST_SLOT), executions, |fork_name, signed| {
+            let recorded = Arc::clone(&recorded);
+            let outcome = &outcome;
+            async move {
+                let aggregator = signed.message().aggregator_index();
+                let result = outcome(aggregator);
+                recorded.lock().push((fork_name, aggregator));
+                result
+            }
+        })
+        .await;
+
+    let mut recorded = recorded.lock().clone();
+    recorded.sort_by_key(|&(_, aggregator)| aggregator);
+    recorded
+}
+
+/// Serializes the tests that mutate and assert deltas on the `consensus_error`, `no_aggregates`,
+/// and `no_signatures` publish outcome labels, so one test's increments cannot land inside
+/// another's before/after window. `success` and `http_error` have no delta assertions, so tests
+/// touching only those labels stay unserialized.
+static PUBLISH_METRIC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Current value of one `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` label.
+///
+/// The counters are process-global: a test asserting a delta must hold [`PUBLISH_METRIC_LOCK`],
+/// together with every test that increments the same label.
+fn publish_result_count(label: &str) -> u64 {
+    metrics::AGGREGATOR_COMMITTEE_PUBLISH_TOTAL
+        .as_ref()
+        .expect("the publish outcome metric should be created")
+        .with_label_values(&[label])
+        .get()
+}
+
 // ==================== Capture assertions ====================
 
 /// The committee-requester view of one captured `sign_and_collect` call.
@@ -474,34 +528,14 @@ async fn assert_captured_calls_settle_at(harness: &ValidatorStoreTestHarness, ex
     );
 }
 
-/// Asserts the publisher resolved a batch holding exactly `expected` aggregator indexes.
-///
-/// The non-`Batch` variants are what select the publisher's metric label, so a test that expected
-/// a batch and got one of them is reported as that variant rather than as a length mismatch.
-fn assert_published_aggregators(
-    published: ResolvedAggregates<MainnetEthSpec>,
-    expected: &[u64],
-    context: &str,
-) {
-    match published {
-        ResolvedAggregates::Batch { aggregates, .. } => assert_eq!(
-            aggregates
-                .iter()
-                .map(|signed| signed.message().aggregator_index())
-                .collect::<Vec<_>>(),
-            expected,
-            "{context}"
-        ),
-        ResolvedAggregates::ConsensusFailed => {
-            panic!("{context}: the execution failed instead of resolving a batch")
-        }
-        ResolvedAggregates::NoAggregates => {
-            panic!("{context}: the decided worklist held no aggregates")
-        }
-        ResolvedAggregates::NoSignatures => {
-            panic!("{context}: no decided root reached signature quorum")
-        }
-    }
+/// Asserts the recording publisher made exactly one publish call per expected aggregator index,
+/// all at [`DEFAULT_DECIDED_FORK`].
+fn assert_published_aggregators(published: &[RecordedPublish], expected: &[u64], context: &str) {
+    let expected: Vec<RecordedPublish> = expected
+        .iter()
+        .map(|&aggregator| (DEFAULT_DECIDED_FORK, aggregator))
+        .collect();
+    assert_eq!(published, expected.as_slice(), "{context}");
 }
 
 /// Unwraps a single-committee stream result into its signed batch.
@@ -587,7 +621,7 @@ async fn publisher_takes_the_decided_aggregate_while_the_callback_returns_empty(
 
     // Act: only the aggregate callback fires, and the publisher reads the same execution.
     let results = fixture.harness.collect_aggregates(aggregates).await;
-    let published = fixture.resolve_aggregates(execution).await;
+    let published = fixture.run_publisher(execution).await;
 
     // Assert: Lighthouse gets nothing to publish, Anchor publishes the decided aggregate itself.
     assert!(
@@ -595,9 +629,9 @@ async fn publisher_takes_the_decided_aggregate_while_the_callback_returns_empty(
         "the aggregate callback must hand Lighthouse an empty batch at Boole+"
     );
     assert_published_aggregators(
-        published,
+        &published,
         &[fixture.expected_aggregator_index()],
-        "the publisher should return the decided aggregate",
+        "the publisher should publish the decided aggregate",
     );
 
     // Both contribution roots are signed by detached tasks without a contribution callback.
@@ -679,7 +713,7 @@ async fn contribution_callback_and_publisher_share_one_execution() {
 
     // Act: contribution callback first, then the publisher joins the cached outcome.
     let contribution_results = fixture.collect_contributions(contributions).await;
-    let published = fixture.resolve_aggregates(execution).await;
+    let published = fixture.run_publisher(execution).await;
 
     // Assert: each reader took only its own class.
     assert_eq!(
@@ -688,9 +722,9 @@ async fn contribution_callback_and_publisher_share_one_execution() {
         "the contribution callback should return only its contributions"
     );
     assert_published_aggregators(
-        published,
+        &published,
         &[fixture.expected_aggregator_index()],
-        "the publisher should return only the decided aggregate",
+        "the publisher should publish only the decided aggregate",
     );
 
     // The union is signed exactly once: no duplicate captures from the second reader.
@@ -727,11 +761,11 @@ async fn dropped_callback_future_still_completes_worklist() {
     assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
 
     // A late publisher joins the finished execution and gets the decided aggregate.
-    let published = fixture.resolve_aggregates(execution).await;
+    let published = fixture.run_publisher(execution).await;
     assert_published_aggregators(
-        published,
+        &published,
         &[fixture.expected_aggregator_index()],
-        "a late publisher should resolve from the cached execution",
+        "a late publisher should publish from the cached execution",
     );
 
     // Still no duplicate captures after the late read.
@@ -906,9 +940,10 @@ async fn conflicting_aggregate_roots_sign_only_the_first() {
 
 /// A decided value naming only validators this operator has no metadata for produces an empty
 /// worklist: the contribution callback returns an empty batch, the publisher has nothing to
-/// publish, and no signature is ever collected.
+/// publish and counts the committee under `no_aggregates`, and no signature is ever collected.
 #[tokio::test(flavor = "multi_thread")]
 async fn empty_worklist_returns_empty() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
     // Arrange: the decided entries reference foreign validator indices, while the callback
     // references the local validator (required to pass committee grouping).
     let fixture = AggregatorCommitteeFixture::new(SINGLE_VALIDATOR_COUNT);
@@ -924,10 +959,11 @@ async fn empty_worklist_returns_empty() {
     ));
     let contributions =
         vec![fixture.create_contribution(SOLE_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[0])];
+    let no_aggregates_before = publish_result_count(metrics::NO_AGGREGATES);
 
     // Act
     let contribution_results = fixture.collect_contributions(contributions).await;
-    let published = fixture.resolve_aggregates(execution).await;
+    let published = fixture.run_publisher(execution).await;
 
     // Assert: nothing to return, nothing to publish, nothing signed.
     assert!(
@@ -935,8 +971,13 @@ async fn empty_worklist_returns_empty() {
         "no locally signable decided entry means an empty contribution batch"
     );
     assert!(
-        matches!(published, ResolvedAggregates::NoAggregates),
-        "no locally signable decided aggregate means nothing to publish"
+        published.is_empty(),
+        "no locally signable decided aggregate means no publish call"
+    );
+    assert_eq!(
+        publish_result_count(metrics::NO_AGGREGATES),
+        no_aggregates_before + 1,
+        "the publisher should count the aggregate-free committee under `no_aggregates`"
     );
     assert_captured_calls_settle_at(&fixture.harness, 0).await;
 }
@@ -1056,12 +1097,13 @@ async fn start_aggregator_post_consensus_returns_only_vacant_insertions() {
     );
 }
 
-// ==================== resolve_decided_aggregates failure tests ====================
+// ==================== Publisher consensus-failure tests ====================
 
-/// A failed execution resolves to `ConsensusFailed` rather than propagating the error, which is
-/// what makes the publisher count it as a consensus error and publish nothing.
+/// A failed execution publishes nothing and is counted as a consensus error rather than
+/// propagating the error.
 #[tokio::test(flavor = "multi_thread")]
-async fn resolve_decided_aggregates_reports_consensus_failure() {
+async fn publisher_counts_a_failed_execution_as_a_consensus_error() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
     // Arrange: an execution that resolves to an error, as a lost QBFT round would.
     let fixture = AggregatorCommitteeFixture::new(SINGLE_VALIDATOR_COUNT);
     let execution: Execution = async {
@@ -1071,24 +1113,31 @@ async fn resolve_decided_aggregates_reports_consensus_failure() {
     }
     .boxed()
     .shared();
+    let consensus_error_before = publish_result_count(metrics::CONSENSUS_ERROR);
 
     // Act
-    let published = fixture.resolve_aggregates(execution).await;
+    let published = fixture.run_publisher(execution).await;
 
     // Assert
     assert!(
-        matches!(published, ResolvedAggregates::ConsensusFailed),
+        published.is_empty(),
         "a failed execution should publish nothing"
+    );
+    assert_eq!(
+        publish_result_count(metrics::CONSENSUS_ERROR),
+        consensus_error_before + 1,
+        "the publisher should count the failed committee under `consensus_error`"
     );
 }
 
-/// An execution that never decides is bounded by the two-slot deadline instead of hanging, and the
-/// timeout is reported as a consensus failure.
+/// An execution that never decides is bounded by the two-slot deadline instead of hanging, and
+/// the timeout is counted as a consensus error.
 ///
 /// The harness clock is moved past that deadline first, so the bound is asserted without sleeping
 /// two real slots.
 #[tokio::test(flavor = "multi_thread")]
-async fn resolve_decided_aggregates_reports_consensus_failure_once_the_deadline_passes() {
+async fn publisher_counts_a_consensus_error_once_the_deadline_passes() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
     // Arrange
     let fixture = AggregatorCommitteeFixture::new(SINGLE_VALIDATOR_COUNT);
     fixture
@@ -1096,16 +1145,22 @@ async fn resolve_decided_aggregates_reports_consensus_failure_once_the_deadline_
         .slot_clock
         .set_current_time(Duration::from_secs(PAST_PUBLISH_DEADLINE_SECS));
     let execution: Execution = futures::future::pending().boxed().shared();
+    let consensus_error_before = publish_result_count(metrics::CONSENSUS_ERROR);
 
     // Act
-    let published = tokio::time::timeout(STREAM_TIMEOUT, fixture.resolve_aggregates(execution))
+    let published = tokio::time::timeout(STREAM_TIMEOUT, fixture.run_publisher(execution))
         .await
         .expect("the publisher must not outlive the two-slot deadline");
 
     // Assert
     assert!(
-        matches!(published, ResolvedAggregates::ConsensusFailed),
+        published.is_empty(),
         "an undecided execution should publish nothing"
+    );
+    assert_eq!(
+        publish_result_count(metrics::CONSENSUS_ERROR),
+        consensus_error_before + 1,
+        "the publisher should count the timed-out committee under `consensus_error`"
     );
 }
 
@@ -1124,9 +1179,6 @@ const PUBLISHER_INDEX_STRIDE: usize = 100;
 const FIRST_AGGREGATE_COMMITTEE: usize = 0;
 const CONTRIBUTIONS_ONLY_COMMITTEE: usize = 1;
 const SECOND_AGGREGATE_COMMITTEE: usize = 2;
-
-/// Fork and aggregator indexes of one batch handed to the recording publish closure.
-type RecordedBatch = (ForkName, Vec<u64>);
 
 /// Several single-validator committees in one harness, for the publisher's per-committee fan-out.
 struct PublisherFixture {
@@ -1207,50 +1259,24 @@ impl PublisherFixture {
         )
     }
 
-    /// Runs the publisher over `executions` with a recording publish closure, returning the fork
-    /// and aggregator indexes of every batch it was handed.
-    ///
-    /// The recorder captures the `ForkName` the closure receives, so tests can pin that it
-    /// matches the decided value's `DataVersion`. `outcome` decides each batch's publish result
-    /// from its contents, so a test can fail one committee's publish without depending on the
-    /// order committees finish in. The returned batches are sorted by their aggregator indexes
-    /// for the same reason.
+    /// [`run_recording_publisher`] over this fixture's harness.
     async fn run_publisher(
         &self,
         executions: Vec<(CommitteeId, Execution)>,
-        outcome: impl Fn(&[u64]) -> Result<(), String>,
-    ) -> Vec<RecordedBatch> {
-        let recorded: Arc<Mutex<Vec<RecordedBatch>>> = Arc::new(Mutex::new(Vec::new()));
-        self.harness
-            .validator_store
-            .publish_decided_aggregates(Slot::new(TEST_SLOT), executions, |fork_name, signed| {
-                let recorded = Arc::clone(&recorded);
-                let outcome = &outcome;
-                async move {
-                    let aggregators: Vec<u64> = signed
-                        .iter()
-                        .map(|signed| signed.message().aggregator_index())
-                        .collect();
-                    let result = outcome(&aggregators);
-                    recorded.lock().push((fork_name, aggregators));
-                    result
-                }
-            })
-            .await;
-
-        let mut recorded = recorded.lock().clone();
-        recorded.sort_by(|left, right| left.1.cmp(&right.1));
-        recorded
+        outcome: impl Fn(u64) -> Result<(), String>,
+    ) -> Vec<RecordedPublish> {
+        run_recording_publisher(&self.harness, executions, outcome).await
     }
 }
 
-/// Every committee with decided aggregates is published exactly once, and a committee whose
-/// decided value holds only contributions never reaches the publish call at all.
+/// Every decided aggregate is published exactly once, and a committee whose decided value holds
+/// only contributions never reaches the publish call at all.
 ///
-/// Contributions stay on Lighthouse's publish path, so handing an empty batch to the beacon node
-/// would be a pointless POST for the contributions-only case.
+/// Contributions stay on Lighthouse's publish path, so a publish call for the contributions-only
+/// committee would be a pointless POST.
 #[tokio::test(flavor = "multi_thread")]
 async fn publish_decided_aggregates_publishes_each_committee_with_aggregates_once() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
     // Arrange
     let fixture = PublisherFixture::new();
     let executions = fixture.publish(vec![
@@ -1276,18 +1302,18 @@ async fn publish_decided_aggregates_publishes_each_committee_with_aggregates_onc
     // Act
     let published = fixture.run_publisher(executions, |_| Ok(())).await;
 
-    // Assert: one batch per committee holding aggregates, carrying that committee's aggregator
-    // and the decided value's fork.
+    // Assert: one publish call per decided aggregate, carrying its committee's aggregator and
+    // the decided value's fork.
     assert_eq!(
         published,
         vec![
             (
                 DEFAULT_DECIDED_FORK,
-                vec![fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE)],
+                fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE),
             ),
             (
                 DEFAULT_DECIDED_FORK,
-                vec![fixture.aggregator_index(SECOND_AGGREGATE_COMMITTEE)],
+                fixture.aggregator_index(SECOND_AGGREGATE_COMMITTEE),
             ),
         ],
         "committees with decided aggregates publish once each, and the contributions-only \
@@ -1295,8 +1321,8 @@ async fn publish_decided_aggregates_publishes_each_committee_with_aggregates_onc
     );
 }
 
-/// A publish failure is contained to its own committee: it neither panics nor stops the other
-/// committees' batches from being published.
+/// A publish failure is contained to its own aggregate: it neither panics nor stops the other
+/// committees' aggregates from being published.
 #[tokio::test(flavor = "multi_thread")]
 async fn publish_decided_aggregates_survives_a_failing_publish() {
     // Arrange: all three committees decide an aggregate.
@@ -1308,11 +1334,11 @@ async fn publish_decided_aggregates_survives_a_failing_publish() {
     );
     let failing_aggregator = fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE);
 
-    // Act: the first committee's POST fails, keyed by batch contents so the outcome does not
+    // Act: the first committee's POST fails, keyed by aggregator index so the outcome does not
     // depend on which committee resolves first.
     let published = fixture
-        .run_publisher(executions, |aggregators| {
-            if aggregators.contains(&failing_aggregator) {
+        .run_publisher(executions, |aggregator| {
+            if aggregator == failing_aggregator {
                 Err("beacon node unavailable".to_string())
             } else {
                 Ok(())
@@ -1320,40 +1346,26 @@ async fn publish_decided_aggregates_survives_a_failing_publish() {
         })
         .await;
 
-    // Assert: every committee's batch was still attempted.
+    // Assert: every committee's aggregate was still attempted.
     assert_eq!(
         published,
         (0..PUBLISHER_OPERATOR_SETS.len())
-            .map(|committee| (
-                DEFAULT_DECIDED_FORK,
-                vec![fixture.aggregator_index(committee)]
-            ))
+            .map(|committee| (DEFAULT_DECIDED_FORK, fixture.aggregator_index(committee)))
             .collect::<Vec<_>>(),
-        "a failing publish must not withhold the other committees' batches"
+        "a failing publish must not withhold the other committees' aggregates"
     );
 }
 
-/// Current value of the publisher's `no_signatures` outcome counter.
+/// A committee that decided an aggregate whose root never reached signature quorum publishes
+/// nothing, and the root is counted under `no_signatures`.
 ///
-/// The counter is process-global, but the label is emitted from exactly one production site and
-/// reached by exactly one test, so a before/after delta stays safe under parallel execution.
-fn no_signatures_count() -> u64 {
-    metrics::AGGREGATOR_COMMITTEE_PUBLISH_TOTAL
-        .as_ref()
-        .expect("the publish outcome metric should be created")
-        .with_label_values(&[metrics::NO_SIGNATURES])
-        .get()
-}
-
-/// A committee that decided aggregates but whose roots never reached signature quorum resolves to
-/// `NoSignatures`, and the publisher posts nothing.
-///
-/// This is a third outcome, distinct from `ConsensusFailed` (the round itself failed) and
-/// `NoAggregates` (the decided value held none): consensus succeeded and there was something to
-/// sign, but no signature came back. The publisher counts it under its own label, so the three
-/// cases stay separable on a dashboard instead of collapsing into one.
+/// This is a third outcome, distinct from `consensus_error` (the round itself failed) and
+/// `no_aggregates` (the decided value held none): consensus succeeded and there was something to
+/// sign, but no signature came back. The publisher counts each such root under its own label, so
+/// the three cases stay separable on a dashboard instead of collapsing into one.
 #[tokio::test(flavor = "multi_thread")]
 async fn publish_decided_aggregates_skips_a_committee_whose_roots_never_reach_quorum() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
     // Arrange: signature collection fails before the decided value is published, so the
     // committee's only aggregate root resolves to an error.
     let fixture = PublisherFixture::new();
@@ -1362,35 +1374,75 @@ async fn publish_decided_aggregates_skips_a_committee_whose_roots_never_reach_qu
         FIRST_AGGREGATE_COMMITTEE,
         fixture.aggregate_only(FIRST_AGGREGATE_COMMITTEE),
     )]);
-    let (committee_id, execution) = executions
-        .first()
-        .cloned()
-        .expect("the committee should register one execution");
-    let no_signatures_before = no_signatures_count();
+    let no_signatures_before = publish_result_count(metrics::NO_SIGNATURES);
 
     // Act
-    let resolved = fixture
-        .harness
-        .validator_store
-        .resolve_decided_aggregates(committee_id, Slot::new(TEST_SLOT), execution)
-        .await;
     let published = fixture.run_publisher(executions, |_| Ok(())).await;
 
-    // Assert: the resolution names the missing signatures, the publish closure was never
-    // invoked, and the publisher counted the committee under its own label.
-    assert!(
-        matches!(&resolved, ResolvedAggregates::NoSignatures),
-        "a decided aggregate whose signature never arrives should resolve to `NoSignatures`, \
-         not to a consensus failure or an absent worklist"
-    );
+    // Assert: the publish closure was never invoked, and the root was counted under its label.
     assert!(
         published.is_empty(),
-        "the publisher must not invoke the publish closure without a batch"
+        "the publisher must not invoke the publish closure for a root without quorum"
     );
     assert_eq!(
-        no_signatures_count(),
+        publish_result_count(metrics::NO_SIGNATURES),
         no_signatures_before + 1,
-        "the publisher should count the committee under the `no_signatures` label"
+        "each decided root without quorum should count once under `no_signatures`; this \
+         committee decided exactly one root"
+    );
+}
+
+/// Two decided aggregate roots in one committee where exactly one misses signature quorum: the
+/// surviving root is still published, and only the missing root is counted under
+/// `no_signatures`.
+///
+/// This per-root independence is the point of the per-root publisher: under the batch shape a
+/// committee published all-or-nothing, so one quorum miss could withhold a signed sibling.
+#[tokio::test(flavor = "multi_thread")]
+async fn publish_decided_aggregates_publishes_the_surviving_root_when_a_sibling_misses_quorum() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
+    // Arrange: both validators aggregate distinct roots, and signature collection fails only for
+    // the second validator. The fail mode is set before seeding, since the detached worklist
+    // tasks start collecting at publish.
+    const SURVIVING_VALIDATOR_IDX: usize = 0;
+    const FAILING_VALIDATOR_IDX: usize = 1;
+    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
+    fixture
+        .harness
+        .fail_signature_collection_for(fixture.pubkey(FAILING_VALIDATOR_IDX));
+    let (_, execution) = fixture.seed_decided_value_with_execution(build_decided_data(
+        &[
+            (
+                fixture.validator_index(SURVIVING_VALIDATOR_IDX),
+                BEACON_COMMITTEE_INDEX,
+            ),
+            (
+                fixture.validator_index(FAILING_VALIDATOR_IDX),
+                CONFLICTING_BEACON_COMMITTEE_INDEX,
+            ),
+        ],
+        &[],
+    ));
+    let no_signatures_before = publish_result_count(metrics::NO_SIGNATURES);
+
+    // Act
+    let published = fixture.run_publisher(execution).await;
+
+    // Assert: exactly the surviving root was published, exactly the missing one was counted.
+    assert_eq!(
+        published,
+        vec![(
+            DEFAULT_DECIDED_FORK,
+            fixture
+                .harness
+                .aggregator_index(COMMITTEE_INDEX, SURVIVING_VALIDATOR_IDX),
+        )],
+        "a sibling's quorum miss must not withhold the surviving root's publish call"
+    );
+    assert_eq!(
+        publish_result_count(metrics::NO_SIGNATURES),
+        no_signatures_before + 1,
+        "only the root that missed quorum should count under `no_signatures`"
     );
 }
 
@@ -1416,7 +1468,7 @@ async fn publish_decided_aggregates_hands_the_decided_versions_fork_to_the_closu
         published,
         vec![(
             ForkName::Electra,
-            vec![fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE)],
+            fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE),
         )],
         "the publish closure must receive the fork named by the decided value's DataVersion"
     );

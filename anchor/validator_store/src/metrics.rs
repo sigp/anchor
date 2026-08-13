@@ -148,17 +148,18 @@ pub const HTTP_ERROR: &str = "http_error";
 pub const NO_AGGREGATES: &str = "no_aggregates";
 pub const NO_SIGNATURES: &str = "no_signatures";
 
-/// Outcomes of the Boole+ aggregate publisher, one increment per committee per slot. The labels
-/// partition every committee the publisher processed: `success` and `http_error` from the publish
-/// attempt, `consensus_error` when the outcome failed or timed out, `no_aggregates` when the
-/// decided worklist held contributions only, `no_signatures` when aggregates were decided but no
-/// root reached signature quorum in time. All increments live in
-/// `AnchorValidatorStore::publish_decided_aggregates`.
+/// Outcomes of the Boole+ aggregate publisher. `consensus_error` (outcome failed or timed out)
+/// and `no_aggregates` (decided worklist held contributions only) count committees, since those
+/// failures occur before any per-root work exists. `success` and `http_error` (per publish
+/// attempt) and `no_signatures` (root missed signature quorum in time) count individual
+/// aggregates, matching go-ssv's one-POST-per-aggregate accounting. All increments live in
+/// `AnchorValidatorStore::publish_decided_aggregates` and its per-committee/per-root helpers in
+/// `aggregator_post_consensus.rs`.
 pub static AGGREGATOR_COMMITTEE_PUBLISH_TOTAL: LazyLock<Result<IntCounterVec>> =
     LazyLock::new(|| {
         try_create_int_counter_vec(
             "anchor_aggregator_committee_publish_total",
-            "Committees processed by the Boole+ aggregate publisher, by outcome",
+            "Boole+ aggregate publisher outcomes (committee-level errors, per-aggregate results)",
             &["result"],
         )
     });

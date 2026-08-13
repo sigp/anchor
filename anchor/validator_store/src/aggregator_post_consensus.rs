@@ -48,7 +48,7 @@ use types::{
 
 use crate::{
     AggregationAssignments, AnchorValidatorStore, CollectionMode, Error, SigningRequest,
-    SpecificError, drain_signatures, metrics,
+    SpecificError, metrics,
 };
 
 /// Epochs to retain finished `AggregatorCommittee` post-consensus executions.
@@ -79,31 +79,10 @@ pub(crate) struct PreparedRoot<M> {
 pub(crate) struct AggregatorPostConsensusOutcome<E: EthSpec> {
     /// Fork the decided value's SSZ payloads were decoded under (its `DataVersion`). The
     /// publisher derives its HTTP endpoint choice and fork header from this, so they cannot
-    /// diverge from the payload variant actually in the batch.
+    /// diverge from the payload variant of the decided aggregates.
     pub(crate) fork_name: ForkName,
     pub(crate) aggregates: HashMap<ValidatorIndex, PreparedRoot<AggregateAndProof<E>>>,
     pub(crate) contributions: HashMap<(ValidatorIndex, u64), PreparedRoot<ContributionAndProof<E>>>,
-}
-
-/// Outcome of resolving one committee's decided aggregates for publication.
-///
-/// Returned instead of a bare vec so [`AnchorValidatorStore::publish_decided_aggregates`] can
-/// emit every `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` label from one `match`, keeping the metric's
-/// partition over processed committees checkable in one place.
-pub(crate) enum ResolvedAggregates<E: EthSpec> {
-    /// Consensus failed, timed out, or the deadline could not be computed (logged at the site).
-    ConsensusFailed,
-    /// The decided worklist legitimately holds contributions only.
-    NoAggregates,
-    /// Aggregates were decided, but no root reached signature quorum before the deadline.
-    NoSignatures,
-    /// At least one decided aggregate reached quorum. `fork_name` is the fork the decided
-    /// value's payloads were decoded under, carried with the batch so the publish endpoint
-    /// always matches the payload variant.
-    Batch {
-        fork_name: ForkName,
-        aggregates: Vec<SignedAggregateAndProof<E>>,
-    },
 }
 
 /// The signing worklist derived from one decided `AggregatorCommitteeConsensusData`.
@@ -126,6 +105,105 @@ async fn join_detached_task<R>(
         None => None,
     }
     .ok_or_else(post_consensus_aborted)
+}
+
+/// Await one decided root's threshold signature under the deadline and publish it on quorum,
+/// one publish call per aggregate.
+///
+/// Both publish arms reproduce the per-aggregate log Lighthouse emits on its pre-Boole path;
+/// operator pipelines key on `type="aggregated"`.
+async fn publish_one_root<E: EthSpec, F, Fut>(
+    slot: Slot,
+    fork_name: ForkName,
+    deadline: Instant,
+    root: &PreparedRoot<AggregateAndProof<E>>,
+    publish: &F,
+) where
+    F: Fn(ForkName, SignedAggregateAndProof<E>) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    let signature = match tokio::time::timeout_at(deadline, root.signature.clone()).await {
+        Ok(Ok(signature)) => signature,
+        // `collect_signature` failures are also logged by the detached signing task, but a task
+        // that died without a result (spawn refused, executor exit, panic) is only visible here,
+        // so carry the error into the warn.
+        Ok(Err(e)) => {
+            warn!(
+                pubkey = ?root.request.validator.public_key,
+                %slot,
+                error = ?e,
+                "Missing signature, skipping aggregate"
+            );
+            validator_metrics::inc_counter_vec(
+                &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                &[metrics::OTHER_ERROR],
+            );
+            metrics::inc_publish_result(metrics::NO_SIGNATURES);
+            return;
+        }
+        // Deadline expired before this root's quorum; only this root is withheld.
+        Err(_) => {
+            warn!(
+                pubkey = ?root.request.validator.public_key,
+                %slot,
+                "Missing signature, skipping aggregate"
+            );
+            validator_metrics::inc_counter_vec(
+                &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+                &[metrics::OTHER_ERROR],
+            );
+            metrics::inc_publish_result(metrics::NO_SIGNATURES);
+            return;
+        }
+    };
+
+    let message = root.request.duty_data.clone();
+    debug!(
+        aggregator_index = message.aggregator_index(),
+        data = ?message.aggregate().data(),
+        num_set_aggregation_bits = message.aggregate().num_set_aggregation_bits(),
+        "Signed AggregateAndProof (Boole+ committee consensus)"
+    );
+    validator_metrics::inc_counter_vec(
+        &validator_metrics::SIGNED_AGGREGATES_TOTAL,
+        &[validator_metrics::SUCCESS],
+    );
+    let signed = SignedAggregateAndProof::from_aggregate_and_proof(message, signature);
+
+    let aggregator = signed.message().aggregator_index();
+    let attestation = signed.message().aggregate();
+    let signatures = attestation.num_set_aggregation_bits();
+    let head_block = format!("{:?}", attestation.data().beacon_block_root);
+    let committee_index = attestation.committee_index();
+
+    let result = publish(fork_name, signed)
+        .instrument(info_span!("publish_aggregate", aggregator))
+        .await;
+    match result {
+        Ok(()) => {
+            info!(
+                aggregator,
+                signatures,
+                head_block,
+                committee_index,
+                slot = slot.as_u64(),
+                "type" = "aggregated",
+                "Successfully published attestation"
+            );
+            metrics::inc_publish_result(validator_metrics::SUCCESS);
+        }
+        Err(e) => {
+            error!(
+                error = %e,
+                aggregator,
+                committee_index,
+                slot = slot.as_u64(),
+                "type" = "aggregated",
+                "Failed to publish attestation"
+            );
+            metrics::inc_publish_result(metrics::HTTP_ERROR);
+        }
+    }
 }
 
 impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
@@ -203,8 +281,8 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
         Ok((deadline, outcome))
     }
 
-    /// Join one committee's post-consensus execution and assemble every decided aggregate this
-    /// operator signed into publishable [`SignedAggregateAndProof`]s.
+    /// Join one committee's post-consensus execution and publish each decided aggregate this
+    /// operator signed as soon as its threshold signature reconstructs.
     ///
     /// This backs [`Self::publish_decided_aggregates`], which owns Boole+ aggregate publication:
     /// Lighthouse's aggregate callback returns an empty batch at Boole+, because its duty
@@ -215,12 +293,16 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
     /// Takes the execution handle directly rather than re-entering the assignments watch channel,
     /// so a late-polled publisher cannot observe `AggregatorInfoSlotPassed` for an execution that
     /// still exists in the retention map.
-    pub(crate) async fn resolve_decided_aggregates(
+    async fn publish_committee_aggregates<F, Fut>(
         &self,
         committee_id: CommitteeId,
         slot: Slot,
         execution: AggregatorPostConsensusShared<E>,
-    ) -> ResolvedAggregates<E> {
+        publish: &F,
+    ) where
+        F: Fn(ForkName, SignedAggregateAndProof<E>) -> Fut,
+        Fut: Future<Output = Result<(), String>>,
+    {
         let (deadline, outcome) = match self.join_execution(slot, execution).await {
             Ok(joined) => joined,
             Err(e) => {
@@ -241,160 +323,61 @@ impl<T: SlotClock + 'static, E: EthSpec, C: ConsensusDecider<E> + 'static>
                     &validator_metrics::SIGNED_AGGREGATES_TOTAL,
                     &[label],
                 );
-                return ResolvedAggregates::ConsensusFailed;
+                metrics::inc_publish_result(metrics::CONSENSUS_ERROR);
+                return;
             }
         };
 
         // A decided value can legitimately hold contributions only; nothing to publish then.
         if outcome.aggregates.is_empty() {
             debug!(?committee_id, %slot, "Decided worklist holds no aggregates");
-            return ResolvedAggregates::NoAggregates;
+            metrics::inc_publish_result(metrics::NO_AGGREGATES);
+            return;
         }
 
-        // Drain every aggregate root's signature concurrently under the deadline, so a root that
-        // never reaches quorum withholds only itself.
-        let pending = FuturesUnordered::new();
-        for (&index, root) in &outcome.aggregates {
-            let signing_root = root.request.signing_root;
-            let signature = root.signature.clone();
-            pending.push(async move { (index, signing_root, signature.await) });
-        }
-        let signatures = drain_signatures(pending, Some(deadline)).await;
-
-        let mut results = Vec::with_capacity(outcome.aggregates.len());
-        for (index, root) in &outcome.aggregates {
-            // Clone the decided message only on a signature hit; misses need just the pubkey.
-            let Some(signature) = signatures.get(&(*index, root.request.signing_root)) else {
-                warn!(
-                    pubkey = ?root.request.validator.public_key,
-                    %slot,
-                    "Missing signature, skipping aggregate"
-                );
-                validator_metrics::inc_counter_vec(
-                    &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                    &[metrics::OTHER_ERROR],
-                );
-                continue;
-            };
-            let message = root.request.duty_data.clone();
-
-            debug!(
-                aggregator_index = message.aggregator_index(),
-                data = ?message.aggregate().data(),
-                num_set_aggregation_bits = message.aggregate().num_set_aggregation_bits(),
-                "Signed AggregateAndProof (Boole+ committee consensus)"
-            );
-            validator_metrics::inc_counter_vec(
-                &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                &[validator_metrics::SUCCESS],
-            );
-            results.push(SignedAggregateAndProof::from_aggregate_and_proof(
-                message,
-                signature.clone(),
-            ));
-        }
-
-        if results.is_empty() {
-            return ResolvedAggregates::NoSignatures;
-        }
-
-        ResolvedAggregates::Batch {
-            fork_name: outcome.fork_name,
-            aggregates: results,
-        }
+        // Each root publishes independently under the shared deadline, so a root that never
+        // reaches quorum withholds only itself and never delays a sibling's POST.
+        let mut roots: FuturesUnordered<_> = outcome
+            .aggregates
+            .values()
+            .map(|root| publish_one_root(slot, outcome.fork_name, deadline, root, publish))
+            .collect();
+        while roots.next().await.is_some() {}
     }
 
-    /// Resolve each committee's decided aggregates and hand every non-empty batch to `publish`.
+    /// Resolve each committee's decided aggregates and hand each signed aggregate to `publish`
+    /// the moment its threshold signature reconstructs, one publish call per aggregate. This is
+    /// go-ssv's publication shape at the reference pin: a bad aggregate cannot fail a sibling's
+    /// POST, and a no-quorum root cannot delay its committee's other aggregates.
     ///
     /// This is the authoritative Boole+ aggregate publication driver, spawned per slot by the
     /// metadata service with the executions its assignment update newly registered. Generic over
     /// the publish operation so tests (in `testing/aggregator_post_consensus.rs`) can inject a
-    /// recorder instead of an HTTP client. Each committee runs resolve-and-publish as one
-    /// `FuturesUnordered` entry, so a contended QBFT round or a slow POST in one committee does
-    /// not delay another committee's publication.
+    /// recorder instead of an HTTP client. Each committee runs as one `FuturesUnordered` entry
+    /// and each of its roots as another inside it, so committees and roots are all mutually
+    /// independent.
     ///
-    /// Owns every `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` increment: the labels partition the
-    /// processed committees by outcome, and that partition is checkable in the single `match`
-    /// below.
+    /// Owns every `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` increment, together with
+    /// [`publish_one_root`]: `consensus_error` and `no_aggregates` count committees (those
+    /// failures occur before per-root work exists), while `success`, `http_error`, and
+    /// `no_signatures` count individual aggregates.
     ///
-    /// A batch always holds exactly one committee's aggregates, all decoded from one decided
-    /// `DataVersion`; the fork that version names travels with the batch, so the publish
-    /// closure's endpoint choice always matches the payload variant.
+    /// The fork handed to `publish` is the one the decided value's payloads were decoded under,
+    /// so the closure's endpoint choice always matches the payload variant.
     pub(crate) async fn publish_decided_aggregates<F, Fut>(
         &self,
         slot: Slot,
         executions: Vec<(CommitteeId, AggregatorPostConsensusShared<E>)>,
         publish: F,
     ) where
-        F: Fn(ForkName, Arc<Vec<SignedAggregateAndProof<E>>>) -> Fut,
+        F: Fn(ForkName, SignedAggregateAndProof<E>) -> Fut,
         Fut: Future<Output = Result<(), String>>,
     {
         let publish = &publish;
         let mut pending: FuturesUnordered<_> = executions
             .into_iter()
-            .map(|(committee_id, execution)| async move {
-                match self
-                    .resolve_decided_aggregates(committee_id, slot, execution)
-                    .await
-                {
-                    ResolvedAggregates::ConsensusFailed => {
-                        metrics::inc_publish_result(metrics::CONSENSUS_ERROR);
-                    }
-                    ResolvedAggregates::NoAggregates => {
-                        metrics::inc_publish_result(metrics::NO_AGGREGATES);
-                    }
-                    ResolvedAggregates::NoSignatures => {
-                        warn!(
-                            ?committee_id,
-                            %slot,
-                            "No decided aggregate reached signature quorum, nothing to publish"
-                        );
-                        metrics::inc_publish_result(metrics::NO_SIGNATURES);
-                    }
-                    ResolvedAggregates::Batch {
-                        fork_name,
-                        aggregates,
-                    } => {
-                        let signed = Arc::new(aggregates);
-                        let result = publish(fork_name, Arc::clone(&signed))
-                            .instrument(info_span!("publish_aggregates", count = signed.len()))
-                            .await;
-                        // Both arms reproduce the per-aggregate log Lighthouse emits on its
-                        // pre-Boole path; operator pipelines key on `type="aggregated"`.
-                        match result {
-                            Ok(()) => {
-                                for signed in signed.iter() {
-                                    let attestation = signed.message().aggregate();
-                                    info!(
-                                        aggregator = signed.message().aggregator_index(),
-                                        signatures = attestation.num_set_aggregation_bits(),
-                                        head_block =
-                                            format!("{:?}", attestation.data().beacon_block_root),
-                                        committee_index = attestation.committee_index(),
-                                        slot = slot.as_u64(),
-                                        "type" = "aggregated",
-                                        "Successfully published attestation"
-                                    );
-                                }
-                                metrics::inc_publish_result(validator_metrics::SUCCESS);
-                            }
-                            Err(e) => {
-                                for signed in signed.iter() {
-                                    let attestation = signed.message().aggregate();
-                                    error!(
-                                        error = %e,
-                                        aggregator = signed.message().aggregator_index(),
-                                        committee_index = attestation.committee_index(),
-                                        slot = slot.as_u64(),
-                                        "type" = "aggregated",
-                                        "Failed to publish attestation"
-                                    );
-                                }
-                                metrics::inc_publish_result(metrics::HTTP_ERROR);
-                            }
-                        }
-                    }
-                }
+            .map(|(committee_id, execution)| {
+                self.publish_committee_aggregates(committee_id, slot, execution, publish)
             })
             .collect();
 

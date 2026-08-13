@@ -4,7 +4,7 @@
 //! in-memory database, mock consensus, and a mock signature collector.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
     sync::{
@@ -89,11 +89,17 @@ pub(super) struct CapturedSignatureCall {
     pub(super) captured_at: Instant,
 }
 
-/// Mock that captures calls and returns a canned infinity signature, or a collection timeout once
-/// [`ValidatorStoreTestHarness::fail_signature_collection`] is called.
+/// Validator pubkeys whose signature collection fails; shared with the harness so tests can fail
+/// a single validator's roots.
+type FailingPubkeys = Arc<Mutex<HashSet<PublicKeyBytes>>>;
+
+/// Mock that captures calls and returns a canned infinity signature, or a collection timeout for
+/// every call once [`ValidatorStoreTestHarness::fail_signature_collection`] is called, or for one
+/// validator's calls once [`ValidatorStoreTestHarness::fail_signature_collection_for`] is.
 struct MockSignatureCollector {
     captured: CapturedCalls,
     fails: Arc<AtomicBool>,
+    failing_pubkeys: FailingPubkeys,
 }
 
 impl SignatureCollecting for MockSignatureCollector {
@@ -112,7 +118,12 @@ impl SignatureCollecting for MockSignatureCollector {
         });
         // Stands in for any root that never reaches quorum; the caller only distinguishes
         // success from failure.
-        if self.fails.load(Ordering::Relaxed) {
+        if self.fails.load(Ordering::Relaxed)
+            || self
+                .failing_pubkeys
+                .lock()
+                .contains(&signing_data.validator_pubkey)
+        {
             return Box::pin(async { Err(CollectionError::CollectionTimeout) });
         }
         let sig = Signature::infinity().expect("infinity signature");
@@ -122,14 +133,21 @@ impl SignatureCollecting for MockSignatureCollector {
 
 /// Creates a mock signature collector, returning the shared captured calls and failure-mode
 /// handles.
-fn create_mock_collector() -> (Box<dyn SignatureCollecting>, CapturedCalls, Arc<AtomicBool>) {
+fn create_mock_collector() -> (
+    Box<dyn SignatureCollecting>,
+    CapturedCalls,
+    Arc<AtomicBool>,
+    FailingPubkeys,
+) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
     let fails = Arc::new(AtomicBool::new(false));
+    let failing_pubkeys: FailingPubkeys = Arc::new(Mutex::new(HashSet::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
         fails: Arc::clone(&fails),
+        failing_pubkeys: Arc::clone(&failing_pubkeys),
     };
-    (Box::new(mock), captured, fails)
+    (Box::new(mock), captured, fails, failing_pubkeys)
 }
 
 // ==================== Committee setup ====================
@@ -208,6 +226,9 @@ pub(super) struct ValidatorStoreTestHarness {
     pub(super) captured_calls: CapturedCalls,
     /// Set by [`Self::fail_signature_collection`]; read by the mock collector on every call.
     signature_collection_fails: Arc<AtomicBool>,
+    /// Filled by [`Self::fail_signature_collection_for`]; read by the mock collector on every
+    /// call.
+    failing_pubkeys: FailingPubkeys,
     /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
     /// after construction.
     pub(super) slot_clock: ManualSlotClock,
@@ -274,7 +295,8 @@ impl ValidatorStoreTestHarness {
             "test",
         ));
 
-        let (mock_collector, captured_calls, signature_collection_fails) = create_mock_collector();
+        let (mock_collector, captured_calls, signature_collection_fails, failing_pubkeys) =
+            create_mock_collector();
 
         // Database
         let database = Arc::new(
@@ -364,6 +386,7 @@ impl ValidatorStoreTestHarness {
             committee_setups,
             captured_calls,
             signature_collection_fails,
+            failing_pubkeys,
             slot_clock,
             is_synced_tx,
             _slashing_db_dir: slashing_db_dir,
@@ -481,6 +504,12 @@ impl ValidatorStoreTestHarness {
     pub(super) fn fail_signature_collection(&self) {
         self.signature_collection_fails
             .store(true, Ordering::Relaxed);
+    }
+
+    /// Makes every subsequent `sign_and_collect` call for `pubkey` fail, so one root can miss
+    /// quorum while its siblings still collect. Calls are still captured.
+    pub(super) fn fail_signature_collection_for(&self, pubkey: PublicKeyBytes) {
+        self.failing_pubkeys.lock().insert(pubkey);
     }
 
     pub(super) fn create_attestation(
