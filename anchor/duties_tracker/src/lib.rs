@@ -199,6 +199,9 @@ impl Default for Duties {
 }
 
 /// Whether a validator holds a duty at a slot, as one atomic verdict over the stored duty view.
+///
+/// A retained view is never revoked by a failed or malformed refresh, a local registry change,
+/// `execution_optimistic`, or a reorg. It changes only when a complete schedule replaces it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DutyAssignment {
     /// A complete fetched view assigns the validator at this slot.
@@ -216,6 +219,7 @@ pub trait DutiesProvider: Sync + Send + 'static {
         validator_index: ValidatorIndex,
     ) -> bool;
 
+    /// Whether a complete proposer schedule is retained for `epoch`.
     fn is_epoch_known_for_proposers(&self, epoch: Epoch) -> bool;
 
     fn is_validator_proposer_at_slot(&self, slot: Slot, validator_index: ValidatorIndex) -> bool;
