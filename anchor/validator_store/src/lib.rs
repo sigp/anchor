@@ -47,8 +47,9 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator, ProposerConsensusData,
-        ProposerConsensusDataValidator, QbftData, SelectionProofBatchId, ValidatorDuty,
+        EnvelopeConsensusDataValidator, ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator,
+        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
+        ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -1306,6 +1307,23 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             validator_attestation_committees,
             self.genesis_validators_root,
             self.strict_mfp,
+        ))
+    }
+
+    /// Constructs the QBFT data validator for envelope-signing duties.
+    #[cfg_attr(not(test), expect(dead_code))] // no non-test caller yet
+    fn create_envelope_consensus_data_validator(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        validator_index: ValidatorIndex,
+        slot: Slot,
+        decided_block_root: Hash256,
+    ) -> Box<EnvelopeConsensusDataValidator<E>> {
+        Box::new(EnvelopeConsensusDataValidator::new(
+            validator_pubkey,
+            validator_index,
+            slot,
+            decided_block_root,
         ))
     }
 
@@ -2959,6 +2977,21 @@ pub enum SpecificError {
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
         current_slot: Slot,
+    },
+    /// The envelope slot is before the Gloas fork.
+    EnvelopeBeforeGloas {
+        slot: Slot,
+        fork: ForkName,
+    },
+    /// The envelope was built externally; only self-build envelopes are signed.
+    EnvelopeNotSelfBuild {
+        builder_index: u64,
+    },
+    /// Consensus decided an envelope another operator built. This is an intentional
+    /// non-publish, not a failure: the partial signature was already contributed.
+    EnvelopeNotBuiltLocally {
+        local_root: Hash256,
+        decided_root: Hash256,
     },
 }
 
