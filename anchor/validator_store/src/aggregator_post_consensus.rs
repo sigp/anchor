@@ -141,7 +141,9 @@ async fn publish_one_root<E: EthSpec, F, Fut>(
             metrics::inc_publish_result(metrics::NO_SIGNATURES);
             return;
         }
-        // Deadline expired before this root's quorum; only this root is withheld.
+        // Deadline expired before this root's quorum; only this root is withheld. Labelled
+        // `timeout` to match the committee-level join arm, now that expiry is distinguishable
+        // from a collection failure.
         Err(_) => {
             warn!(
                 pubkey = ?root.request.validator.public_key,
@@ -150,7 +152,7 @@ async fn publish_one_root<E: EthSpec, F, Fut>(
             );
             validator_metrics::inc_counter_vec(
                 &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                &[metrics::OTHER_ERROR],
+                &[metrics::TIMEOUT],
             );
             metrics::inc_publish_result(metrics::NO_SIGNATURES);
             return;
