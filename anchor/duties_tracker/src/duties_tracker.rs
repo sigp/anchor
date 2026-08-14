@@ -3,6 +3,7 @@ use std::{future::Future, sync::Arc};
 use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
 use database::NetworkState;
+use eth2::types::{DutiesResponse, ProposerData};
 use safe_arith::ArithError;
 use slot_clock::SlotClock;
 use ssv_types::ValidatorIndex;
@@ -13,7 +14,7 @@ use tracing::{debug, error, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
 
 use crate::{
-    Duties, DutiesProvider, DutyAssignment, MembershipKey, ProposerSchedule,
+    Duties, DutiesProvider, DutyAssignment, MembershipKey, ProposerSchedule, ProposerScheduleError,
     voluntary_exit_tracker::VoluntaryExitTracker,
 };
 
@@ -226,15 +227,12 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
                         "Downloaded proposer duties"
                     );
 
-                    match ProposerSchedule::from_response(epoch, self.slots_per_epoch, response) {
-                        Ok(schedule) => {
-                            self.duties.proposers.write().insert(epoch, schedule);
-                        }
-                        Err(e) => warn!(
+                    if let Err(e) = self.install_proposer_schedule(epoch, response) {
+                        warn!(
                             %epoch,
                             error = %e,
                             "Discarding malformed proposer duties; retaining prior view"
-                        ),
+                        );
                     }
                 }
                 Err(e) => last_err = Some(Error::FailedToPollProposers(e.to_string())),
@@ -247,6 +245,19 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             .retain(|&epoch, _| epoch + HISTORICAL_DUTIES_EPOCHS >= current_epoch);
 
         last_err.map_or(Ok(()), Err)
+    }
+
+    /// Validate `response` and install it as the schedule for `epoch`, replacing any schedule
+    /// already retained. A response that fails validation is discarded, leaving the previously
+    /// retained schedule in place.
+    fn install_proposer_schedule(
+        &self,
+        epoch: Epoch,
+        response: DutiesResponse<Vec<ProposerData>>,
+    ) -> Result<(), ProposerScheduleError> {
+        let schedule = ProposerSchedule::from_response(epoch, self.slots_per_epoch, response)?;
+        self.duties.proposers.write().insert(epoch, schedule);
+        Ok(())
     }
 
     pub fn start(self: Arc<Self>, executor: TaskExecutor) {
@@ -521,6 +532,34 @@ mod tests {
         }
     }
 
+    /// Mid-epoch offset of the slot the install tests overwrite; the exact value is arbitrary.
+    const TARGET_SLOT_OFFSET: u64 = 7;
+
+    /// The in-epoch slot whose proposer the install tests pin.
+    fn target_slot(epoch: Epoch) -> Slot {
+        epoch.start_slot(SLOTS_PER_EPOCH) + Slot::new(TARGET_SLOT_OFFSET)
+    }
+
+    /// Puts `pubkey` at `slot`, leaving every slot distinct and in-epoch.
+    fn assign(
+        mut data: Vec<ProposerData>,
+        slot: Slot,
+        pubkey: PublicKeyBytes,
+    ) -> Vec<ProposerData> {
+        data.iter_mut()
+            .find(|duty| duty.slot == slot)
+            .expect("slot must be present in the schedule")
+            .pubkey = pubkey;
+        data
+    }
+
+    /// One entry short of complete, so `from_response` rejects it as `WrongLength`.
+    fn incomplete_epoch_duties(epoch: Epoch) -> Vec<ProposerData> {
+        let mut data = complete_epoch_duties(epoch);
+        data.pop();
+        data
+    }
+
     // ==================== proposer_assignment_at_slot ====================
 
     #[test]
@@ -582,10 +621,11 @@ mod tests {
 
     #[test]
     fn test_proposer_assignment_at_slot_returns_none_for_unfetched_epoch() {
-        // A slot whose epoch has not been fetched -> Unknown, regardless of pubkey.
+        // A slot whose epoch has not been fetched -> Unknown, at every slot and for any pubkey.
         let tracker = tracker_with_empty_network_state();
         let fetched_epoch = Epoch::new(0);
         let pubkey = random_validator_pubkey();
+        let other = random_validator_pubkey();
         let fetched_slot = fetched_epoch.start_slot(SLOTS_PER_EPOCH);
         seed_epoch(
             &tracker,
@@ -593,13 +633,18 @@ mod tests {
             vec![proposer(fetched_slot, pubkey)],
         );
 
-        // Query a slot in a DIFFERENT, unfetched epoch.
-        let unfetched_slot = (fetched_epoch + 5).start_slot(SLOTS_PER_EPOCH);
-        assert_eq!(
-            tracker.proposer_assignment_at_slot(unfetched_slot, &pubkey),
-            DutyAssignment::Unknown,
-            "a slot in an unfetched epoch must return Unknown"
-        );
+        // Query every slot in a DIFFERENT, unfetched epoch.
+        let unfetched_start = (fetched_epoch + 5).start_slot(SLOTS_PER_EPOCH);
+        for offset in 0..SLOTS_PER_EPOCH {
+            let unfetched_slot = unfetched_start + Slot::new(offset);
+            for queried in [&pubkey, &other] {
+                assert_eq!(
+                    tracker.proposer_assignment_at_slot(unfetched_slot, queried),
+                    DutyAssignment::Unknown,
+                    "slot {unfetched_slot} in an unfetched epoch must return Unknown"
+                );
+            }
+        }
     }
 
     // ==================== ProposerSchedule::from_response ====================
@@ -784,6 +829,216 @@ mod tests {
             result.unwrap_err(),
             DuplicateSlot(dup_slot),
             "a slot appearing twice (with another absent) must be rejected as DuplicateSlot(dup_slot)"
+        );
+    }
+
+    // ==================== schedule install / transitions ====================
+
+    #[test]
+    fn test_install_replaces_previous_schedule() {
+        // regression caught: a refresh that merges into, or skips over, an existing epoch entry
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let slot = target_slot(epoch);
+        let first = random_validator_pubkey();
+        let second = random_validator_pubkey();
+
+        tracker
+            .install_proposer_schedule(
+                epoch,
+                duties_response(assign(complete_epoch_duties(epoch), slot, first)),
+            )
+            .expect("a complete schedule must install");
+        tracker
+            .install_proposer_schedule(
+                epoch,
+                duties_response(assign(complete_epoch_duties(epoch), slot, second)),
+            )
+            .expect("a complete schedule must install");
+
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &second),
+            DutyAssignment::Assigned,
+            "the newly installed schedule must decide the slot"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &first),
+            DutyAssignment::NotAssigned,
+            "the replaced schedule must no longer assign the slot"
+        );
+    }
+
+    #[test]
+    fn test_malformed_refresh_preserves_prior_schedule() {
+        // regression caught: a rejected refresh clobbering or erasing the retained schedule
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let slot = target_slot(epoch);
+        let retained = random_validator_pubkey();
+        let usurper = random_validator_pubkey();
+
+        tracker
+            .install_proposer_schedule(
+                epoch,
+                duties_response(assign(complete_epoch_duties(epoch), slot, retained)),
+            )
+            .expect("a complete schedule must install");
+
+        let result = tracker.install_proposer_schedule(
+            epoch,
+            duties_response(assign(incomplete_epoch_duties(epoch), slot, usurper)),
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            WrongLength {
+                expected: 32,
+                actual: 31
+            },
+            "a 31-duty refresh must be rejected as WrongLength {{ expected: 32, actual: 31 }}"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &retained),
+            DutyAssignment::Assigned,
+            "the prior schedule must survive a rejected refresh"
+        );
+    }
+
+    #[test]
+    fn test_malformed_install_without_prior_leaves_epoch_unknown() {
+        // regression caught: a rejected install still marking the epoch as fetched
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let slot = target_slot(epoch);
+        let pubkey = random_validator_pubkey();
+
+        let result = tracker
+            .install_proposer_schedule(epoch, duties_response(incomplete_epoch_duties(epoch)));
+
+        assert_eq!(
+            result.unwrap_err(),
+            WrongLength {
+                expected: 32,
+                actual: 31
+            },
+            "a 31-duty install must be rejected as WrongLength {{ expected: 32, actual: 31 }}"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &pubkey),
+            DutyAssignment::Unknown,
+            "a rejected install must leave the epoch unanswerable"
+        );
+        assert!(
+            !tracker.is_epoch_known_for_proposers(epoch),
+            "a rejected install must not mark the epoch as known"
+        );
+    }
+
+    #[test]
+    fn test_optimistic_metadata_does_not_weaken_authority() {
+        // regression caught: `execution_optimistic` downgrading a complete schedule to Unknown
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let slot = target_slot(epoch);
+        let assigned = random_validator_pubkey();
+        let other = random_validator_pubkey();
+        let response = DutiesResponse {
+            dependent_root: Hash256::zero(),
+            execution_optimistic: Some(true),
+            data: assign(complete_epoch_duties(epoch), slot, assigned),
+        };
+
+        tracker
+            .install_proposer_schedule(epoch, response)
+            .expect("a complete schedule must install regardless of its metadata");
+
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &assigned),
+            DutyAssignment::Assigned,
+            "an optimistic schedule must still assign its proposer"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &other),
+            DutyAssignment::NotAssigned,
+            "an optimistic schedule must still refute a non-proposer, never answer Unknown"
+        );
+    }
+
+    #[test]
+    fn test_dependent_root_change_replaces_view() {
+        // regression caught: a reorged schedule kept alongside, or behind, the stale one
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let slot = target_slot(epoch);
+        let stale_root = Hash256::from_low_u64_be(DISTINCTIVE_ROOT_SEED);
+        let reorged_root = Hash256::from_low_u64_be(DISTINCTIVE_ROOT_SEED + 1);
+        let stale = random_validator_pubkey();
+        let reorged = random_validator_pubkey();
+
+        tracker
+            .install_proposer_schedule(
+                epoch,
+                DutiesResponse {
+                    dependent_root: stale_root,
+                    execution_optimistic: None,
+                    data: assign(complete_epoch_duties(epoch), slot, stale),
+                },
+            )
+            .expect("a complete schedule must install");
+        tracker
+            .install_proposer_schedule(
+                epoch,
+                DutiesResponse {
+                    dependent_root: reorged_root,
+                    execution_optimistic: None,
+                    data: assign(complete_epoch_duties(epoch), slot, reorged),
+                },
+            )
+            .expect("a complete schedule must install");
+
+        let stored_root = tracker
+            .duties
+            .proposers
+            .read()
+            .get(&epoch)
+            .expect("the epoch must be retained")
+            .dependent_root();
+        assert_eq!(
+            stored_root, reorged_root,
+            "the retained schedule must carry the newest dependent_root"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &reorged),
+            DutyAssignment::Assigned,
+            "the schedule from the newest dependent_root must decide the slot"
+        );
+    }
+
+    #[test]
+    fn test_complete_schedule_is_authoritative_for_non_local_validators() {
+        // regression caught: filtering the installed schedule by the local validator registry
+        let tracker = tracker_with_empty_network_state();
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let slot = target_slot(epoch);
+        let scheduled = random_validator_pubkey();
+        let unrelated = random_validator_pubkey();
+
+        tracker
+            .install_proposer_schedule(
+                epoch,
+                duties_response(assign(complete_epoch_duties(epoch), slot, scheduled)),
+            )
+            .expect("a complete schedule must install");
+
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &scheduled),
+            DutyAssignment::Assigned,
+            "a scheduled non-local validator must be Assigned at its slot"
+        );
+        assert_eq!(
+            tracker.proposer_assignment_at_slot(slot, &unrelated),
+            DutyAssignment::NotAssigned,
+            "an unscheduled validator must be NotAssigned, never Unknown"
         );
     }
 }
