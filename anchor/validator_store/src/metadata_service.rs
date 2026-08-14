@@ -27,14 +27,14 @@ use tokio::{
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
-    Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, Slot,
-    SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
+    Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, SignedAggregateAndProof,
+    Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
 use validator_services::duties_service::{DutiesService, DutyAndProof};
 
 use crate::{
     AggregationAssignments, AnchorValidatorStore, ContributionWaiter, VotingAssignments,
-    VotingContext, metrics,
+    VotingContext, aggregator_post_consensus::AggregatorPostConsensusShared, metrics,
 };
 
 /// Data for sync committee aggregators.
@@ -640,11 +640,52 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             consensus_data_by_ssv_committee,
         };
 
-        self.validator_store
+        let new_executions = self
+            .validator_store
             .update_aggregation_assignments(aggregator_info);
+        self.spawn_aggregate_publisher(slot, new_executions);
 
         trace!(%slot, "Published AggregationAssignments at 2/3 slot");
         Ok(())
+    }
+
+    /// Spawn the detached publisher for this slot's newly registered post-consensus executions.
+    ///
+    /// The publisher owns Boole+ aggregate publication: the Lighthouse aggregate callback returns
+    /// an empty batch at Boole+ because its duty snapshot is cloned before slot-start selection
+    /// proofs finish, so aggregates the snapshot never saw would otherwise be silently dropped.
+    /// Contributions are unaffected (sync selection proofs are precomputed a slot ahead) and stay
+    /// on the Lighthouse publish path.
+    ///
+    /// Exactly-once: `new_executions` holds only vacant registrations, so a repeated Phase 3 run
+    /// for one slot cannot spawn a second publisher for the same `(committee, slot)`.
+    ///
+    /// The publisher is implicitly Boole-gated (consensus data exists only for Boole+ slots),
+    /// while the empty Lighthouse callback gates on the aggregate's target epoch. The two agree
+    /// because `attestation.data.target.epoch` equals the slot's own epoch by construction, which
+    /// is what rules out both paths publishing for one duty.
+    fn spawn_aggregate_publisher(
+        &self,
+        slot: Slot,
+        new_executions: Vec<(CommitteeId, AggregatorPostConsensusShared<E>)>,
+    ) {
+        if new_executions.is_empty() {
+            return;
+        }
+
+        let validator_store = self.validator_store.clone();
+        let beacon_nodes = self.beacon_nodes.clone();
+
+        self.executor.spawn(
+            async move {
+                validator_store
+                    .publish_decided_aggregates(slot, new_executions, |fork_name, signed| {
+                        post_aggregate(&beacon_nodes, fork_name, signed)
+                    })
+                    .await;
+            },
+            "aggregator_committee_publisher",
+        );
     }
 
     /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
@@ -1379,6 +1420,42 @@ pub fn filter_contributors_with_contributions<E: EthSpec>(
     contributors_with_roots.retain(|(_, contrib)| {
         sync_contributions.contains_key(&SyncSubnetId::new(contrib.committee_index))
     });
+}
+
+/// POST one signed aggregate, matching go-ssv's publication shape at the reference pin (one
+/// aggregate per request, published as soon as its quorum lands). Endpoint policy mirrors
+/// Lighthouse's at the pin: `first_success` across the beacon nodes (which makes two passes
+/// over the candidate list before giving up), v2 with the fork header for Electra+ aggregates,
+/// v1 otherwise.
+///
+/// `fork_name` is the fork the aggregate's payload was decoded under (the decided value's
+/// `DataVersion`), so the endpoint and fork header cannot diverge from the payload variant.
+async fn post_aggregate<T: SlotClock + 'static, E: EthSpec>(
+    beacon_nodes: &BeaconNodeFallback<T>,
+    fork_name: ForkName,
+    signed: SignedAggregateAndProof<E>,
+) -> Result<(), String> {
+    beacon_nodes
+        .first_success(|beacon_node| {
+            let signed = std::slice::from_ref(&signed);
+            async move {
+                let _timer = validator_metrics::start_timer_vec(
+                    &validator_metrics::ATTESTATION_SERVICE_TIMES,
+                    &[validator_metrics::AGGREGATES_HTTP_POST],
+                );
+                if fork_name.electra_enabled() {
+                    beacon_node
+                        .post_validator_aggregate_and_proof_v2(signed, fork_name)
+                        .await
+                } else {
+                    beacon_node
+                        .post_validator_aggregate_and_proof_v1(signed)
+                        .await
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("{e}"))
 }
 
 #[cfg(test)]
