@@ -142,6 +142,32 @@ pub static AGGREGATOR_COMMITTEE_FETCH_SUCCESS: LazyLock<Result<IntCounterVec>> =
         )
     });
 
+// Labels for `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` (`success` is `validator_metrics::SUCCESS`).
+pub const CONSENSUS_ERROR: &str = "consensus_error";
+pub const HTTP_ERROR: &str = "http_error";
+pub const NO_AGGREGATES: &str = "no_aggregates";
+pub const NO_SIGNATURES: &str = "no_signatures";
+
+/// Outcomes of the Boole+ aggregate publisher. `consensus_error` (outcome failed or timed out)
+/// and `no_aggregates` (decided worklist held contributions only) count committees, since those
+/// failures occur before any per-root work exists. `success` and `http_error` (per publish
+/// attempt) and `no_signatures` (root missed signature quorum in time) count individual
+/// aggregates, matching go-ssv's one-POST-per-aggregate accounting. All increments live in
+/// `AnchorValidatorStore::publish_decided_aggregates` and its per-committee/per-root helpers in
+/// `aggregator_post_consensus.rs`.
+pub static AGGREGATOR_COMMITTEE_PUBLISH_TOTAL: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_aggregator_committee_publish_total",
+            "Boole+ aggregate publisher outcomes (committee-level errors, per-aggregate results)",
+            &["result"],
+        )
+    });
+
+pub fn inc_publish_result(result: &str) {
+    inc_counter_vec(&AGGREGATOR_COMMITTEE_PUBLISH_TOTAL, &[result]);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Weighted Attestation Data (WAD) metrics
 // ═══════════════════════════════════════════════════════════════════════════════
