@@ -13,7 +13,7 @@ use tracing::{debug, error, trace, warn};
 use types::{ChainSpec, Epoch, Slot};
 
 use crate::{
-    Duties, DutiesProvider, DutyAssignment, MembershipKey,
+    Duties, DutiesProvider, DutyAssignment, MembershipKey, ProposerSchedule,
     voluntary_exit_tracker::VoluntaryExitTracker,
 };
 
@@ -205,7 +205,8 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         Ok(())
     }
 
-    /// Download the proposer duties for the current epoch.
+    /// Download the proposer duties for the current and next epoch, retaining only
+    /// responses that validate as complete schedules.
     async fn poll_beacon_proposers(&self) -> Result<(), Error> {
         let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
         let current_epoch = current_slot.epoch(self.slots_per_epoch);
@@ -215,18 +216,26 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             match self
                 .beacon_nodes
                 .first_success(|beacon_node| async move {
-                    beacon_node.get_validator_duties_proposer(epoch).await
+                    beacon_node.get_validator_duties_proposer_v2(epoch).await
                 })
                 .await
-                .map(|response| response.data)
             {
-                Ok(proposer_duties) => {
+                Ok(response) => {
                     trace!(
-                        num_proposer_duties = proposer_duties.len(),
+                        num_proposer_duties = response.data.len(),
                         "Downloaded proposer duties"
                     );
 
-                    self.duties.proposers.write().insert(epoch, proposer_duties);
+                    match ProposerSchedule::from_response(epoch, self.slots_per_epoch, response) {
+                        Ok(schedule) => {
+                            self.duties.proposers.write().insert(epoch, schedule);
+                        }
+                        Err(e) => warn!(
+                            %epoch,
+                            error = %e,
+                            "Discarding malformed proposer duties; retaining prior view"
+                        ),
+                    }
                 }
                 Err(e) => last_err = Some(Error::FailedToPollProposers(e.to_string())),
             };
@@ -328,8 +337,8 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
             .proposers
             .read()
             .get(&epoch)
-            .map(|proposers| {
-                proposers.iter().any(|proposer_data| {
+            .map(|schedule| {
+                schedule.duties().iter().any(|proposer_data| {
                     proposer_data.slot == slot && proposer_data.validator_index == validator_index
                 })
             })
@@ -347,8 +356,9 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
     ) -> DutyAssignment {
         let epoch = slot.epoch(self.slots_per_epoch);
         match self.duties.proposers.read().get(&epoch) {
-            Some(proposers) => {
-                if proposers
+            Some(schedule) => {
+                if schedule
+                    .duties()
                     .iter()
                     .any(|d| d.slot == slot && d.pubkey == *validator_pubkey)
                 {
@@ -372,15 +382,19 @@ mod tests {
     use std::time::Duration;
 
     use beacon_node_fallback::{ApiTopic, BeaconNodeFallback, CandidateBeaconNode, Config};
-    use bls::{Keypair, PublicKeyBytes};
+    use bls::{FixedBytesExtended, Keypair, PublicKeyBytes};
     use database::NetworkDatabase;
-    use eth2::{BeaconNodeHttpClient, Timeouts, types::ProposerData};
+    use eth2::{
+        BeaconNodeHttpClient, Timeouts,
+        types::{DutiesResponse, ProposerData},
+    };
     use openssl::rsa::Rsa;
     use sensitive_url::SensitiveUrl;
     use slot_clock::{ManualSlotClock, SlotClock};
-    use types::{ChainSpec, Epoch, Slot};
+    use types::{ChainSpec, Epoch, Hash256, Slot};
 
     use super::*;
+    use crate::ProposerScheduleError::{DuplicateSlot, SlotOutOfEpoch, WrongLength};
 
     /// Slots per epoch used by these tests. Kept small and independent of any real fork schedule.
     const SLOTS_PER_EPOCH: u64 = 32;
@@ -451,10 +465,17 @@ mod tests {
         PublicKeyBytes::from(Keypair::random().pk)
     }
 
-    /// Seeds `tracker.duties.proposers[epoch]` with `data` exactly as `poll_beacon_proposers`
-    /// does (a single unfiltered `insert` of the whole `response.data`).
+    /// Seeds `tracker.duties.proposers[epoch]` with `data` by wrapping the raw duties in a
+    /// `ProposerSchedule` via the test-only `from_duties_unchecked` ctor. This deliberately
+    /// bypasses the completeness/validity checks that `from_response` enforces, so the
+    /// `proposer_assignment_at_slot` tests below can seed intentionally partial schedules that a
+    /// validated response could never produce.
     fn seed_epoch(tracker: &DutiesTracker<ManualSlotClock>, epoch: Epoch, data: Vec<ProposerData>) {
-        tracker.duties.proposers.write().insert(epoch, data);
+        tracker
+            .duties
+            .proposers
+            .write()
+            .insert(epoch, ProposerSchedule::from_duties_unchecked(data));
     }
 
     /// Builds a `ProposerData` for the given slot/pubkey with an arbitrary validator index.
@@ -463,6 +484,40 @@ mod tests {
             pubkey,
             validator_index: 0,
             slot,
+        }
+    }
+
+    /// Epoch used by the `from_response` matrix. Deliberately NON-ZERO: at epoch 0 the epoch's
+    /// start slot is 0, so a regression that forgot to rebase slots onto the epoch
+    /// (`slot.checked_sub(start_slot)`) would still pass. Epoch 3 forces `start_slot == 96`,
+    /// so any such bug turns these tests RED.
+    const RESPONSE_EPOCH: u64 = 3;
+
+    /// Distinctive, clearly non-zero `dependent_root` seed for the metadata-retention test. It
+    /// differs from `from_duties_unchecked`'s `Hash256::zero()` default, so a dropped-metadata
+    /// regression in `from_response` is observable rather than masked by a matching default.
+    const DISTINCTIVE_ROOT_SEED: u64 = 0xDEAD_BEEF;
+
+    /// Builds a COMPLETE schedule for `epoch`: exactly one `proposer` entry for every slot in
+    /// `[start_slot, start_slot + SLOTS_PER_EPOCH)`, each with a fresh random pubkey. Entries are
+    /// emitted in REVERSED slot order so acceptance tests prove `from_response` is
+    /// order-independent (it must not assume the input is pre-sorted).
+    fn complete_epoch_duties(epoch: Epoch) -> Vec<ProposerData> {
+        let start = epoch.start_slot(SLOTS_PER_EPOCH).as_u64();
+        (0..SLOTS_PER_EPOCH)
+            .rev()
+            .map(|offset| proposer(Slot::new(start + offset), random_validator_pubkey()))
+            .collect()
+    }
+
+    /// Wraps `data` in a `DutiesResponse` carrying placeholder metadata (`Hash256::zero()` /
+    /// `None`). Used only by the validation-matrix cases whose result (a `WrongLength`,
+    /// `SlotOutOfEpoch`, or `DuplicateSlot` error) is decided before any metadata is read.
+    fn duties_response(data: Vec<ProposerData>) -> DutiesResponse<Vec<ProposerData>> {
+        DutiesResponse {
+            dependent_root: Hash256::zero(),
+            execution_optimistic: None,
+            data,
         }
     }
 
@@ -544,6 +599,191 @@ mod tests {
             tracker.proposer_assignment_at_slot(unfetched_slot, &pubkey),
             DutyAssignment::Unknown,
             "a slot in an unfetched epoch must return Unknown"
+        );
+    }
+
+    // ==================== ProposerSchedule::from_response ====================
+
+    #[test]
+    fn test_from_response_accepts_complete_unsorted_schedule() {
+        // regression caught: a completeness/uniqueness check that assumes the input is pre-sorted
+        // (e.g. compares the i-th duty's slot to `start_slot + i`) would reject this valid
+        // schedule. Arrange: a full 32-entry epoch-3 schedule supplied in REVERSED slot
+        // order.
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let response = duties_response(complete_epoch_duties(epoch));
+
+        // Act
+        let schedule = ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, response)
+            .expect("a complete, in-epoch, duplicate-free schedule must be accepted");
+
+        // Assert: exactly all SLOTS_PER_EPOCH duties are retained.
+        assert_eq!(
+            schedule.duties().len(),
+            SLOTS_PER_EPOCH as usize,
+            "an accepted schedule must retain exactly SLOTS_PER_EPOCH duties"
+        );
+    }
+
+    #[test]
+    fn test_from_response_retains_dependent_root_and_execution_optimistic() {
+        // regression caught: `from_response` dropping or defaulting the response metadata (e.g.
+        // constructing `Self` with `Hash256::zero()` / `None` instead of copying
+        // `response.dependent_root` / `response.execution_optimistic`). The distinctive non-zero
+        // root and `Some(true)` below differ from those defaults, so a dropped-metadata bug is
+        // visible rather than masked. This MUST go through `from_response` (not the unchecked
+        // ctor, which would make the assertion vacuous).
+        // Arrange: a complete schedule carried by a response with DISTINCTIVE non-default metadata.
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let dependent_root = Hash256::from_low_u64_be(DISTINCTIVE_ROOT_SEED);
+        let response = DutiesResponse {
+            dependent_root,
+            execution_optimistic: Some(true),
+            data: complete_epoch_duties(epoch),
+        };
+
+        // Act
+        let schedule = ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, response)
+            .expect("a complete schedule must be accepted");
+
+        // Assert: both metadata fields survive verbatim.
+        assert_eq!(
+            schedule.dependent_root(),
+            dependent_root,
+            "dependent_root must be copied through from_response verbatim"
+        );
+        assert_eq!(
+            schedule.execution_optimistic(),
+            Some(true),
+            "execution_optimistic must be copied through from_response verbatim"
+        );
+    }
+
+    #[test]
+    fn test_from_response_rejects_too_short_schedule() {
+        // regression caught: a length check using `<` / `>=` instead of `!=`, or dropped entirely,
+        // would let a short (incomplete) schedule through as if it were complete.
+        // Arrange: 31 entries (drop the last slot of the complete set).
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let mut data = complete_epoch_duties(epoch);
+        data.pop();
+
+        // Act
+        let result = ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, duties_response(data));
+
+        // Assert: exact variant AND payload. `unwrap_err` sidesteps the `Ok` type lacking
+        // `PartialEq` while still pinning the error precisely.
+        assert_eq!(
+            result.unwrap_err(),
+            WrongLength {
+                expected: 32,
+                actual: 31
+            },
+            "31 duties must be rejected as WrongLength {{ expected: 32, actual: 31 }}"
+        );
+    }
+
+    #[test]
+    fn test_from_response_rejects_too_long_schedule() {
+        // regression caught: a length check missing its upper bound (only `len < expected`) would
+        // accept an over-long schedule. WrongLength must also preempt the duplicate scan here.
+        // Arrange: 33 entries — the complete 32 plus one extra (duplicated) in-range slot.
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let mut data = complete_epoch_duties(epoch);
+        data.push(proposer(
+            epoch.start_slot(SLOTS_PER_EPOCH),
+            random_validator_pubkey(),
+        ));
+
+        // Act
+        let result = ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, duties_response(data));
+
+        // Assert: exact variant AND payload (length checked before any per-slot scan).
+        assert_eq!(
+            result.unwrap_err(),
+            WrongLength {
+                expected: 32,
+                actual: 33
+            },
+            "33 duties must be rejected as WrongLength {{ expected: 32, actual: 33 }}"
+        );
+    }
+
+    #[test]
+    fn test_from_response_rejects_empty_schedule() {
+        // regression caught: treating an empty response as a valid (vacuously complete) schedule.
+        // Arrange: zero entries.
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+
+        // Act
+        let result =
+            ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, duties_response(Vec::new()));
+
+        // Assert: exact variant AND payload.
+        assert_eq!(
+            result.unwrap_err(),
+            WrongLength {
+                expected: 32,
+                actual: 0
+            },
+            "an empty schedule must be rejected as WrongLength {{ expected: 32, actual: 0 }}"
+        );
+    }
+
+    #[test]
+    fn test_from_response_rejects_slot_from_another_epoch() {
+        // regression caught: a missing/incorrect epoch-bounds check — e.g. no upper `offset <
+        // slots_per_epoch` guard, or a missing `checked_sub(start_slot)` rebase — that would admit
+        // a duty slot belonging to a neighbouring epoch. The non-zero RESPONSE_EPOCH is essential:
+        // at epoch 0 a missing rebase would be invisible.
+        // Arrange: 32 entries — 31 distinct in-range slots plus exactly ONE slot from epoch 4.
+        // That foreign slot is the ONLY defect, so `SlotOutOfEpoch` is the only reachable error
+        // regardless of iteration order (the remaining 31 slots are distinct and in-range).
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let foreign_slot = Epoch::new(RESPONSE_EPOCH + 1).start_slot(SLOTS_PER_EPOCH);
+        let mut data = complete_epoch_duties(epoch);
+        data[0].slot = foreign_slot;
+
+        // Act
+        let result = ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, duties_response(data));
+
+        // Assert: exact out-of-epoch slot AND epoch.
+        assert_eq!(
+            result.unwrap_err(),
+            SlotOutOfEpoch(foreign_slot, epoch),
+            "a duty slot from epoch 4 must be rejected as SlotOutOfEpoch(foreign_slot, epoch 3)"
+        );
+    }
+
+    #[test]
+    fn test_from_response_rejects_duplicate_slot_which_also_covers_missing_slot() {
+        // regression caught: dropping the per-slot uniqueness (`seen[offset]`) check, which would
+        // silently accept a schedule that duplicates one slot and (by pigeonhole) omits another.
+        // There is no `MissingSlot` variant, and none is needed: with `len == 32`, all slots
+        // in-range, and no duplicate, the schedule is necessarily complete — so a missing slot can
+        // ONLY surface as a `DuplicateSlot`. This case therefore doubles as the missing-slot test.
+        // Arrange: 32 entries, all in-range; overwrite one entry's slot with another's so
+        // `dup_slot` appears twice and `missing_slot` is absent. Length stays 32 so
+        // WrongLength cannot preempt.
+        let epoch = Epoch::new(RESPONSE_EPOCH);
+        let mut data = complete_epoch_duties(epoch);
+        let dup_slot = data[0].slot;
+        let missing_slot = data[1].slot;
+        assert_ne!(
+            dup_slot, missing_slot,
+            "precondition: the duplicated and omitted slots must differ"
+        );
+        data[1].slot = dup_slot;
+
+        // Act
+        let result = ProposerSchedule::from_response(epoch, SLOTS_PER_EPOCH, duties_response(data));
+
+        // Assert: exact duplicated slot. `dup_slot` is identical for whichever of the two matching
+        // entries is scanned second, so the payload is deterministic regardless of iteration order.
+        assert_eq!(
+            result.unwrap_err(),
+            DuplicateSlot(dup_slot),
+            "a slot appearing twice (with another absent) must be rejected as DuplicateSlot(dup_slot)"
         );
     }
 }

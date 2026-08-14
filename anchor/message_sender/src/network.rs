@@ -140,7 +140,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> NetworkMessageSender<S, D> {
         // since we're just doing a sanity check on our own message content
         if let Some(validator) = self.validator.as_ref()
             && let Err(err) = validator
-                .validate(&message_bytes, &TopicContext::default())
+                .validate(&message_bytes, &TopicContext::default(), None)
                 .as_result()
         {
             // `Reject` is more severe and can be punished by other peers. We should not have

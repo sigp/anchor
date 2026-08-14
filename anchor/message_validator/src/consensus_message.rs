@@ -611,6 +611,7 @@ mod tests {
                 voluntary_exit_duty_count: expected_duty_count,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_qbft_message_accepted(result, "Expected successful validation");
@@ -661,6 +662,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -718,6 +720,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -772,6 +775,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         );
 
         assert_validation_error(
@@ -2077,6 +2081,7 @@ mod tests {
                 voluntary_exit_duty_count: 0,
                 ..Default::default()
             }),
+            None,
         )
     }
 
