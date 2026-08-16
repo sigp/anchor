@@ -7,6 +7,10 @@ your beacon node.
 `--proposer-delay-ms` tunes *when* Anchor asks for a block. Asking later gives builders more time to
 bid, at the cost of leaving less of the slot for everything that follows.
 
+From the Gloas (ePBS) fork onward, `--proposer-delay-epbs-ms` takes over: each proposer duty uses
+whichever value matches the fork at its slot. The two values are independent, with no fallback
+between them, and the ePBS value also defaults to `0` (off).
+
 ## How the delay works
 
 The value is an **offset from the start of the slot, not added latency**. Set `300` and Anchor
@@ -21,7 +25,14 @@ tell you.
 In a cluster, **every** operator holding a share requests its own candidate block and consensus
 picks between them, so set and monitor this fleet-wide rather than on a single node.
 
+Which value applies is decided per duty by the Ethereum fork at the duty's slot: before Gloas,
+`--proposer-delay-ms`; from Gloas onward, `--proposer-delay-epbs-ms`. An existing
+`--proposer-delay-ms` setting therefore stops applying at the fork unless you also set the ePBS
+value.
+
 ## Choosing a value
+
+### `--proposer-delay-ms` (before Gloas)
 
 | Value | Behaviour |
 | --- | --- |
@@ -30,8 +41,16 @@ picks between them, so set and monitor this fleet-wide rather than on a single n
 | above `1000` | Refused unless you also pass `--allow-dangerous-proposer-delay`. |
 | above `4000` | Refused outright. The acknowledgement flag does not override it. |
 
+### `--proposer-delay-epbs-ms` (from Gloas onward)
+
+| Value | Behaviour |
+| --- | --- |
+| `0` | Disabled. The default. |
+| up to `1000` | Applied from the first slot of the Gloas fork epoch. |
+| above `1000` | Refused outright. `--allow-dangerous-proposer-delay` does not override it; there is no escape hatch, matching the SSV node. |
+
 ```bash
-anchor node --proposer-delay-ms 300
+anchor node --proposer-delay-ms 300 --proposer-delay-epbs-ms 300
 ```
 
 **The higher the value, the higher the chance of missing a block proposal**, since consensus,
@@ -46,9 +65,16 @@ safe maximum; both are guard rails.
 - `anchor_proposer_delay_applied_seconds` is the wait actually applied, labelled `disabled`,
   `target_passed`, `waited`, or `clock_unavailable`. Non-waiting outcomes record zero, so a flat
   zero line means the delay is not biting rather than that the metric is missing.
+- From Gloas onward, a flat zero with only `--proposer-delay-ms` configured means the fork switched
+  which value applies, not that the delay is broken. The duty's span records which knob applied as
+  `proposer_delay_source` (`pre_gloas` or `gloas`).
 
 ## Coming from an SSV node
 
 Same semantics as the SSV node's `ProposerDelay`, so an existing value carries over directly. The
 SSV node reads it from a config file or the `PROPOSER_DELAY` environment variable; Anchor takes a
 command line flag in milliseconds, so `ProposerDelay: 300ms` becomes `--proposer-delay-ms 300`.
+
+The ePBS value maps the same way from the SSV node's `ProposerDelayEPBS` key or the
+`PROPOSER_DELAY_EPBS` environment variable: `ProposerDelayEPBS: 300ms` becomes
+`--proposer-delay-epbs-ms 300`. Both clients hard-cap it at one second.

@@ -515,16 +515,31 @@ pub struct PayloadBuildingOptions {
                 the start of the slot, not extra latency: if the RANDAO pre-consensus round \
                 already finished later than this, no additional wait happens. A recommended \
                 starting value is 300. Higher values increase the risk of missing the block \
-                proposal.",
+                proposal. Applies to slots before the Gloas (ePBS) fork; from that fork on, \
+                --proposer-delay-epbs-ms applies instead.",
         display_order = 0
     )]
     pub proposer_delay_ms: u64,
 
     #[clap(
         long,
+        value_name = "MILLISECONDS",
+        default_value_t = 0,
+        help = "Counterpart of --proposer-delay-ms applied from the Gloas (ePBS) fork onward: \
+                each proposer duty uses whichever value matches the fork at its slot, with no \
+                fallback between them. Post-ePBS slots leave less headroom after the block \
+                request, so this value has a hard 1000ms cap that \
+                --allow-dangerous-proposer-delay does not raise.",
+        display_order = 0
+    )]
+    pub proposer_delay_epbs_ms: u64,
+
+    #[clap(
+        long,
         help = "Permit a --proposer-delay-ms above the safety threshold. Delays this large \
                 significantly increase the risk of missed block proposals. Only set this if you \
-                understand the trade-off.",
+                understand the trade-off. Does not apply to --proposer-delay-epbs-ms, which has \
+                a hard cap instead.",
         display_order = 0
     )]
     pub allow_dangerous_proposer_delay: bool,
