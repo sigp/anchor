@@ -37,7 +37,7 @@ use qbft_manager::{
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
-    SyncSelectionProofDescriptor, ValidatorSigningData,
+    SyncCommitteeBatchEntry, ValidatorSigningData,
 };
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
@@ -613,7 +613,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         slot: Slot,
         callback_subnet: SyncSubnetId,
         position_counts: &HashMap<SyncSubnetId, usize>,
-    ) -> Result<Vec<SyncSelectionProofDescriptor>, SyncSelectionProofAssignmentError> {
+    ) -> Result<Vec<SyncCommitteeBatchEntry>, SyncSelectionProofAssignmentError> {
         if position_counts.is_empty() {
             return Err(SyncSelectionProofAssignmentError::Empty);
         }
@@ -651,10 +651,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let mut descriptor = Vec::with_capacity(position_counts.len());
         for (&subnet_id, &position_count) in position_counts {
-            descriptor.push(SyncSelectionProofDescriptor {
+            descriptor.push(SyncCommitteeBatchEntry {
                 subnet_id,
                 signing_root: self.compute_sync_selection_root(slot, subnet_id.into()),
-                position_count,
+                multiplicity: position_count,
             });
         }
 
@@ -1380,31 +1380,32 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let data = Contributions::<E>::from_ssz_bytes(&data.data_ssz)
                 .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
 
-            let data = data
-                .into_iter()
-                .map(Contribution::from)
-                .find(|data| data.contribution.subcommittee_index == subcommittee_index)
-                .ok_or(SpecificError::NoDataAgreed)?;
+            let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
+            let PreparedSyncContributionBatch {
+                callback_message: message,
+                callback_signing_root: signing_root,
+                descriptor,
+            } = prepare_decided_sync_contributions(
+                data,
+                SyncSubnetId::new(subcommittee_index),
+                aggregator_index,
+                domain_hash,
+            )?;
 
             debug!(
-                slot = %data.contribution.slot,
-                block_root = ?data.contribution.beacon_block_root,
-                subcommittee_index = data.contribution.subcommittee_index,
-                num_set_aggregation_bits = data.contribution.aggregation_bits.num_set_bits(),
+                slot = %message.contribution.slot,
+                block_root = ?message.contribution.beacon_block_root,
+                subcommittee_index = message.contribution.subcommittee_index,
+                num_set_aggregation_bits = message.contribution.aggregation_bits.num_set_bits(),
                 "Decided on Contribution to sign"
             );
 
-            let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-            let message = ContributionAndProof {
-                aggregator_index,
-                contribution: data.contribution,
-                selection_proof: data.selection_proof_sig,
-            };
-            let signing_root = message.signing_root(domain_hash);
+            let collection_mode =
+                sync_committee_collection_mode(SyncSubnetId::new(subcommittee_index), descriptor);
             self.collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::SyncCommittee,
-                CollectionMode::SingleValidator,
+                collection_mode,
                 &validator,
                 &cluster,
                 signing_root,
@@ -2080,14 +2081,73 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
     selection_proof: SyncSelectionProof,
 }
 
+struct PreparedSyncContributionBatch<E: EthSpec> {
+    callback_message: ContributionAndProof<E>,
+    callback_signing_root: Hash256,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
+}
+
+/// Prepares the exact decided sync contribution root multiset for every Lighthouse callback.
+fn prepare_decided_sync_contributions<E: EthSpec>(
+    contributions: Contributions<E>,
+    callback_subnet: SyncSubnetId,
+    aggregator_index: u64,
+    domain_hash: Hash256,
+) -> Result<PreparedSyncContributionBatch<E>, SpecificError> {
+    let mut callback = None;
+    let mut descriptor = Vec::with_capacity(contributions.len());
+
+    for contribution in contributions.into_iter().map(Contribution::from) {
+        let subnet_id = SyncSubnetId::new(contribution.contribution.subcommittee_index);
+        let message = ContributionAndProof {
+            aggregator_index,
+            contribution: contribution.contribution,
+            selection_proof: contribution.selection_proof_sig,
+        };
+        let signing_root = message.signing_root(domain_hash);
+
+        if callback.is_none() && subnet_id == callback_subnet {
+            callback = Some((message, signing_root));
+        }
+        descriptor.push(SyncCommitteeBatchEntry {
+            subnet_id,
+            signing_root,
+            multiplicity: 1,
+        });
+    }
+
+    let (callback_message, callback_signing_root) = callback.ok_or(SpecificError::NoDataAgreed)?;
+
+    descriptor.sort_unstable_by_key(|entry| (u64::from(entry.subnet_id), entry.signing_root));
+
+    let mut collapsed: Vec<SyncCommitteeBatchEntry> = Vec::with_capacity(descriptor.len());
+    for entry in descriptor {
+        match collapsed.last_mut() {
+            Some(previous)
+                if previous.subnet_id == entry.subnet_id
+                    && previous.signing_root == entry.signing_root =>
+            {
+                previous.multiplicity += entry.multiplicity;
+            }
+            _ => collapsed.push(entry),
+        }
+    }
+
+    Ok(PreparedSyncContributionBatch {
+        callback_message,
+        callback_signing_root,
+        descriptor: collapsed,
+    })
+}
+
 #[derive(Clone)]
 enum CollectionMode {
     SingleValidator,
     SingleValidatorBatch {
         /// Subnet requested by the current Lighthouse callback.
         subnet_id: SyncSubnetId,
-        /// Canonical descriptor for every unique subnet assigned to this validator and slot.
-        descriptor: Vec<SyncSelectionProofDescriptor>,
+        /// Canonical descriptor for every unique subnet and signing root pair in this batch.
+        descriptor: Vec<SyncCommitteeBatchEntry>,
     },
     Committee {
         /// The number of validator partial signatures this operator batches locally into the
@@ -2097,6 +2157,25 @@ enum CollectionMode {
         /// message.
         base_hash: Hash256,
     },
+}
+
+fn sync_committee_collection_mode(
+    callback_subnet: SyncSubnetId,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
+) -> CollectionMode {
+    if descriptor
+        .iter()
+        .map(|entry| entry.multiplicity)
+        .sum::<usize>()
+        == 1
+    {
+        CollectionMode::SingleValidator
+    } else {
+        CollectionMode::SingleValidatorBatch {
+            subnet_id: callback_subnet,
+            descriptor,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2884,13 +2963,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                             },
                         )?;
 
+                    let collection_mode = sync_committee_collection_mode(subnet_id, descriptor);
                     self.collect_signature(
                         PartialSignatureKind::ContributionProofs,
                         Role::SyncCommittee,
-                        CollectionMode::SingleValidatorBatch {
-                            subnet_id,
-                            descriptor,
-                        },
+                        collection_mode,
                         &validator,
                         &cluster,
                         signing_root,

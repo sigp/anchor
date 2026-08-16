@@ -34,7 +34,10 @@ use ssv_types::{
 };
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
-use tokio::{sync::watch, time::Instant};
+use tokio::{
+    sync::{Barrier, watch},
+    time::Instant,
+};
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
     Hash256, MainnetEthSpec, SelectionProof, SignedAggregateAndProof, Slot, SyncSubnetId,
@@ -58,9 +61,20 @@ pub(super) type SignAggregatesResult =
 
 // ==================== Mock consensus decider ====================
 
-/// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
+/// Mock that either echoes the proposed data or returns one fixed SSZ-decoded value.
 /// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
-pub(super) struct MockConsensusDecider;
+#[derive(Default)]
+pub(super) struct MockConsensusDecider {
+    fixed_decision: Option<(Vec<u8>, Arc<Barrier>)>,
+}
+
+impl MockConsensusDecider {
+    pub(super) fn fixed_after_barrier<D: Encode>(value: &D, parties: usize) -> Self {
+        Self {
+            fixed_decision: Some((value.as_ssz_bytes(), Arc::new(Barrier::new(parties)))),
+        }
+    }
+}
 
 impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
     async fn decide_instance<D: QbftDecidable<E>>(
@@ -71,7 +85,14 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
         _timeout_mode: TimeoutMode,
         _committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
-        Ok(Completed::Success(initial))
+        let decided = match &self.fixed_decision {
+            Some((bytes, barrier)) => {
+                barrier.wait().await;
+                D::from_ssz_bytes(bytes).expect("fixed test consensus value should decode")
+            }
+            None => initial,
+        };
+        Ok(Completed::Success(decided))
     }
 }
 
@@ -253,6 +274,7 @@ impl ValidatorStoreTestHarness {
             our_operator_id,
             active_fork,
             Duration::ZERO,
+            MockConsensusDecider::default(),
         )
     }
 
@@ -266,6 +288,22 @@ impl ValidatorStoreTestHarness {
             our_operator_id,
             Fork::Boole,
             proposer_delay,
+            MockConsensusDecider::default(),
+        )
+    }
+
+    pub(super) fn new_with_fork_and_consensus(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        active_fork: Fork,
+        consensus: MockConsensusDecider,
+    ) -> Self {
+        Self::new_with_options(
+            committee_setups,
+            our_operator_id,
+            active_fork,
+            Duration::ZERO,
+            consensus,
         )
     }
 
@@ -274,6 +312,7 @@ impl ValidatorStoreTestHarness {
         our_operator_id: OperatorId,
         active_fork: Fork,
         proposer_delay: Duration,
+        consensus: MockConsensusDecider,
     ) -> Self {
         // Dummy RSA key for database operator identification (not used for decryption)
         let rsa_pubkey = database::test_utils::generators::pubkey::random_rsa();
@@ -364,7 +403,7 @@ impl ValidatorStoreTestHarness {
         let validator_store = AnchorValidatorStore::new(
             database,
             mock_collector,
-            Arc::new(MockConsensusDecider),
+            Arc::new(consensus),
             slashing_protection,
             true, // disable slashing protection for simpler testing
             slot_clock.clone(),
