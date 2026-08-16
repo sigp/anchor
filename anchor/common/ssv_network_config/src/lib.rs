@@ -202,7 +202,7 @@ fn read<T: FromStr>(file: &Path) -> Result<T, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{collections::HashMap, io::Write};
 
     use fork::ALAN_TOPIC_PREFIX;
     use tempfile::TempDir;
@@ -316,6 +316,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_builtin_network_fork_domains_are_globally_unique() {
+        let mut domains = HashMap::new();
+
+        for network in [MAINNET, HOLESKY, HOODI] {
+            let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
+
+            for &fork in Fork::all() {
+                let Some(domain_type) = config.fork_schedule.domain_type(fork) else {
+                    continue;
+                };
+
+                if let Some((previous_network, previous_fork)) = domains.get(&domain_type) {
+                    panic!(
+                        "Domain {} is shared by {previous_network}/{previous_fork} and \
+                         {network}/{fork}; built-in network fork domains must be globally unique",
+                        String::from(domain_type)
+                    );
+                }
+                domains.insert(domain_type, (network, fork));
+            }
+        }
+    }
+
     // ==================== Config loading tests ====================
 
     #[test]
@@ -350,6 +374,30 @@ boole:
         assert_eq!(
             config.fork_schedule.domain_type(Fork::Boole),
             Some(BOOLE_DOMAIN_TYPE)
+        );
+    }
+
+    #[test]
+    fn test_load_rejects_duplicate_fork_domains() {
+        // Arrange
+        let yaml = format!(
+            r#"
+boole:
+  epoch: {}
+  domain_type: "00000001"
+"#,
+            LARGE_BOOLE_EPOCH
+        );
+        let dir = create_test_config_dir(Some(&yaml));
+
+        // Act
+        let error = SsvNetworkConfig::load(dir.path().to_path_buf())
+            .expect_err("fork domains must be unique");
+
+        // Assert
+        assert_eq!(
+            error,
+            "Fork boole reuses domain 00000001 already assigned to fork alan"
         );
     }
 
