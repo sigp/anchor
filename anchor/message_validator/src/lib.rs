@@ -762,6 +762,22 @@ fn verify_message_signatures(
     Ok(())
 }
 
+/// Returns the single validator index of a non-committee duty message.
+///
+/// The index is absent when the validator is known locally but its beacon metadata has not been
+/// synced yet. That is a gap in the local view, not a fault of the sending peer, so it maps to
+/// [`ValidationFailure::NoShareMetadata`] (Ignore) rather than a Reject.
+fn single_validator_index(
+    validation_context: &ValidationContext<impl SlotClock>,
+) -> Result<ValidatorIndex, ValidationFailure> {
+    validation_context
+        .committee_info
+        .validator_indices
+        .first()
+        .copied()
+        .ok_or(ValidationFailure::NoShareMetadata)
+}
+
 /// Validates if a validator is assigned to a specific duty
 pub(crate) fn validate_beacon_duty(
     validation_context: &ValidationContext<impl SlotClock>,
@@ -792,15 +808,7 @@ pub(crate) fn validate_beacon_duty(
             return Ok(());
         }
 
-        // Non-committee roles always have one validator index
-        let validator_index = validation_context
-            .committee_info
-            .validator_indices
-            .first()
-            .copied()
-            .ok_or(ValidationFailure::UnexpectedFailure {
-                msg: "Unexpected error when getting first validator index".to_string(),
-            })?;
+        let validator_index = single_validator_index(validation_context)?;
 
         if !duty_provider.is_validator_proposer_at_slot(slot, validator_index) {
             return Err(ValidationFailure::NoDuty);
@@ -811,14 +819,7 @@ pub(crate) fn validate_beacon_duty(
     if role == Role::SyncCommittee {
         let period =
             sync_committee_period(epoch, validation_context.epochs_per_sync_committee_period)?;
-        let validator_index = validation_context
-            .committee_info
-            .validator_indices
-            .first()
-            .copied()
-            .ok_or(ValidationFailure::UnexpectedFailure {
-                msg: "Unexpected error when getting first validator index".to_string(),
-            })?;
+        let validator_index = single_validator_index(validation_context)?;
 
         if !duty_provider.is_validator_in_sync_committee(period, validator_index) {
             return Err(ValidationFailure::NoDuty);
