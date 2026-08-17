@@ -38,11 +38,14 @@ use types::{
 use validator_store::{AggregateToSign, AttestationToSign, SyncMessageToSign, ValidatorStore};
 
 use crate::{
-    AggregationAssignments, AnchorValidatorStore, Error, VotingAssignments, VotingContext,
+    AggregationAssignments, AnchorValidatorStore, Error, ProposerDelays, VotingAssignments,
+    VotingContext,
 };
 
 pub(super) const TEST_SLOT: u64 = 1;
 pub(super) const SLOT_DURATION_SECS: u64 = 12;
+/// How far into `TEST_SLOT` the harness slot clock sits (just past the 1/3 mark).
+pub(super) const CLOCK_OFFSET_INTO_TEST_SLOT_SECS: u64 = SLOT_DURATION_SECS / 3 + 1;
 
 /// The raw item stream `sign_attestations` yields: one `Result` batch per committee.
 pub(super) type SignAttestationsResult = Vec<Result<Vec<SingleAttestation>, Error>>;
@@ -294,9 +297,9 @@ pub(super) struct HarnessOptions {
     /// SSV fork the store's `ForkSchedule` reports as active. Defaults to `Boole`; tests that
     /// exercise pre-Boole behaviour supply an earlier fork.
     pub(super) active_fork: Fork,
-    /// Proposer delay wired into the store. Defaults to zero so most tests assert timing-free
-    /// behaviour.
-    pub(super) proposer_delay: Duration,
+    /// Proposer delays wired into the store. Both default to zero so most tests assert
+    /// timing-free behaviour.
+    pub(super) proposer_delays: ProposerDelays,
 }
 
 impl Default for HarnessOptions {
@@ -311,7 +314,7 @@ impl Default for HarnessOptions {
             spec: Arc::new(ChainSpec::mainnet()),
             forced_gloas_index: None,
             active_fork: Fork::Boole,
-            proposer_delay: Duration::ZERO,
+            proposer_delays: ProposerDelays::default(),
         }
     }
 }
@@ -388,21 +391,6 @@ impl ValidatorStoreTestHarness {
         )
     }
 
-    pub(super) fn new_with_proposer_delay(
-        committee_setups: Vec<CommitteeSetup>,
-        our_operator_id: OperatorId,
-        proposer_delay: Duration,
-    ) -> Self {
-        Self::new_with_options(
-            committee_setups,
-            our_operator_id,
-            HarnessOptions {
-                proposer_delay,
-                ..Default::default()
-            },
-        )
-    }
-
     pub(super) fn new_with_options(
         committee_setups: Vec<CommitteeSetup>,
         our_operator_id: OperatorId,
@@ -418,7 +406,9 @@ impl ValidatorStoreTestHarness {
             Duration::from_secs(SLOT_DURATION_SECS),
         );
         let slot_start = TEST_SLOT * SLOT_DURATION_SECS;
-        slot_clock.set_current_time(Duration::from_secs(slot_start + SLOT_DURATION_SECS / 3 + 1));
+        slot_clock.set_current_time(Duration::from_secs(
+            slot_start + CLOCK_OFFSET_INTO_TEST_SLOT_SECS,
+        ));
 
         let (executor, exit_signal) = create_test_executor();
 
@@ -528,7 +518,7 @@ impl ValidatorStoreTestHarness {
             30_000_000,
             None,
             false,
-            options.proposer_delay,
+            options.proposer_delays,
             false,
             is_synced_rx,
             executor,
@@ -783,6 +773,15 @@ impl ValidatorStoreTestHarness {
                 },
             },
         }
+    }
+
+    /// The public key of validator `validator_idx` in committee `committee_idx`.
+    pub(super) fn validator_pubkey(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+    ) -> PublicKeyBytes {
+        self.committee_setups[committee_idx].validators[validator_idx].public_key
     }
 
     /// Builds an attestation duty for `TEST_SLOT` whose `data.index` is pre-set to `index`,

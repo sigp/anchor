@@ -88,6 +88,18 @@ use crate::instrumentation::CollectionFailureClass;
 /// This acts as a maximum safe-guard against clock drift.
 const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 
+/// Number of slots a decided block root stays readable.
+const MAX_DECIDED_ROOT_AGE_SLOTS: u64 = 4;
+
+/// Key for the decided-block-root handoff store.
+///
+/// The store serves many validators, so the slot alone cannot identify a duty.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct DecidedBlockRootKey {
+    validator: PublicKeyBytes,
+    slot: Slot,
+}
+
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
     NonZeroUsize::new(3000).expect("3000 is non-zero");
 
@@ -185,6 +197,8 @@ pub struct AnchorValidatorStore<
 > {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
+    /// Beacon block roots decided by block QBFT, keyed `(validator, slot)`.
+    decided_block_roots: Mutex<HashMap<DecidedBlockRootKey, Hash256>>,
     signature_collector: Box<dyn SignatureCollecting>,
     consensus: Arc<C>,
     slashing_protection: Arc<SlashingDatabase>,
@@ -205,8 +219,8 @@ pub struct AnchorValidatorStore<
     // operator controls
     builder_boost_factor: Option<u64>,
     prefer_builder_proposals: bool,
-    /// See [`await_proposer_delay`] for the semantics.
-    proposer_delay: Duration,
+    /// See [`ProposerDelays`] and [`await_proposer_delay`] for the semantics.
+    proposer_delays: ProposerDelays,
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
@@ -279,12 +293,49 @@ impl ProposerDelayDecision {
     }
 }
 
+/// The configured proposer delays, one per side of the Gloas (ePBS) fork.
+///
+/// Each proposer duty uses whichever value matches the Ethereum fork at its slot, selected by
+/// [`proposer_delay_at_epoch`]. The values are independent, with no fallback between them, and
+/// both default to zero (disabled). This mirrors go-ssv's `ProposerDelay` / `ProposerDelayEPBS`
+/// pair: the split exists because ePBS retimes the proposal deadline, so the safe ranges differ.
+///
+/// Unvalidated by construction; the per-value caps are enforced in `client`'s config parsing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProposerDelays {
+    /// Applied to duties in slots before the Gloas fork.
+    pub pre_gloas: Duration,
+    /// Applied to duties in slots at or after the Gloas fork.
+    pub gloas: Duration,
+}
+
+/// Which configured proposer delay applies to a duty in `epoch`: the ePBS value from the Gloas
+/// fork on, the regular value before it. Forks activate on epoch boundaries, so the duty epoch
+/// determines the fork at the duty slot exactly; this is go-ssv's `proposerDelayForSlot` keyed by
+/// the epoch the `ValidatorStore` seam already receives.
+///
+/// Also returns the matching low-cardinality source label for the duty span, so an operator can
+/// tell "delay off" from "the fork switched values" when the wait reads zero after Gloas.
+fn proposer_delay_at_epoch(
+    spec: &ChainSpec,
+    delays: ProposerDelays,
+    epoch: Epoch,
+) -> (Duration, &'static str) {
+    if spec.fork_name_at_epoch(epoch).gloas_enabled() {
+        (delays.gloas, "gloas")
+    } else {
+        (delays.pre_gloas, "pre_gloas")
+    }
+}
+
 /// Holds this proposer duty until `proposer_delay` into its slot, recording the outcome either way,
 /// including the no-wait cases.
 ///
 /// The delay is a *floor* from the start of the slot, not extra latency: a duty whose RANDAO
-/// pre-consensus already ran past it waits no longer. This matches go-ssv's `ProposerDelay`, so the
-/// same configured value yields the same request time on either client.
+/// pre-consensus already ran past it waits no longer. `proposer_delay` is already fork-selected by
+/// [`proposer_delay_at_epoch`], so this matches go-ssv's `ProposerDelay` before Gloas and
+/// `ProposerDelayEPBS` after it, and the same configured value yields the same request time on
+/// either client.
 ///
 /// `elapsed` is passed in rather than re-read so the wait and
 /// [`metrics::RANDAO_REVEAL_COMPLETION_OFFSET`] share one measurement; operators are told to
@@ -341,7 +392,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         gas_limit: u64,
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
-        proposer_delay: Duration,
+        proposer_delays: ProposerDelays,
         strict_mfp: bool,
         is_synced: watch::Receiver<bool>,
         task_executor: TaskExecutor,
@@ -349,6 +400,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Arc::new(Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
+            decided_block_roots: Mutex::new(HashMap::new()),
             signature_collector,
             consensus,
             slashing_protection,
@@ -365,7 +417,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             gas_limit,
             builder_boost_factor,
             prefer_builder_proposals,
-            proposer_delay,
+            proposer_delays,
             strict_mfp,
             is_synced,
             task_executor,
@@ -724,6 +776,27 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
     }
 
+    /// Bound a [`Self::collect_signature`] future, mapping elapse to `CollectionTimeout` (the
+    /// collector itself never emits it). A zero `bound` fails fast without polling `collect`,
+    /// so no collection starts and no partial signature is broadcast.
+    async fn collect_within(
+        bound: Duration,
+        collect: impl Future<Output = Result<Signature, Error>>,
+    ) -> Result<Signature, Error> {
+        let timed_out = || {
+            Error::SpecificError(SpecificError::SignatureCollectionFailed(
+                CollectionError::CollectionTimeout,
+            ))
+        };
+        if bound.is_zero() {
+            return Err(timed_out());
+        }
+        match tokio::time::timeout(bound, collect).await {
+            Ok(result) => result,
+            Err(_elapsed) => Err(timed_out()),
+        }
+    }
+
     async fn decide_abstract_block(
         &self,
         validator: &ValidatorMetadata,
@@ -799,8 +872,107 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         };
 
         // Decode the decided data into a block we can sign
-        decode_decided_block(&completed_data)
-            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))
+        let unsigned_block = decode_decided_block(&completed_data)
+            .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))?;
+
+        // Record the decided root for later reads. This point is reached holding the consensus
+        // decided value and each operator's own local proposal. Every participating
+        // operator records the same root. Post-Gloas only.
+        if ForkName::from(completed_data.version) >= ForkName::Gloas
+            && let UnsignedBlock::Full(FullBlockContents::Block(block)) = &unsigned_block
+        {
+            self.record_decided_block_root(validator.public_key, slot, block.canonical_root())
+                .map_err(Error::SpecificError)?;
+        }
+
+        Ok(unsigned_block)
+    }
+
+    /// Record the block-QBFT-decided beacon block root for `(validator_pubkey, slot)`.
+    ///
+    /// First-write-wins. A repeat write of the same root is idempotent. A write of a different
+    /// root is a hard error that keeps the first root.
+    ///
+    /// Entries older than `MAX_DECIDED_ROOT_AGE_SLOTS` relative to the inserted slot are dropped
+    /// on insert. A write for an old slot cannot evict a newer entry. This eviction mechanism only
+    /// restricts the map from storing old roots.
+    fn record_decided_block_root(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+        root: Hash256,
+    ) -> Result<(), SpecificError> {
+        let key = DecidedBlockRootKey {
+            validator: validator_pubkey,
+            slot,
+        };
+
+        let mut decided_block_roots = self.decided_block_roots.lock();
+
+        // Addition on the stored side, so an early slot cannot underflow.
+        decided_block_roots
+            .retain(|stored_key, _| stored_key.slot + MAX_DECIDED_ROOT_AGE_SLOTS >= slot);
+
+        match decided_block_roots.entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(root);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                if entry.get() == &root {
+                    Ok(())
+                } else {
+                    Err(SpecificError::DecidedRootConflict(Box::new(
+                        DecidedRootConflict {
+                            validator_pubkey,
+                            slot,
+                            existing_root: *entry.get(),
+                            new_root: root,
+                        },
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Read the decided beacon block root for `(validator_pubkey, slot)`.
+    ///
+    /// The current slot comes from `self.slot_clock`, never from the caller, so untrusted input
+    /// cannot bypass the staleness check.
+    ///
+    /// The staleness check runs before the lookup. Eviction alone cannot reject a stale entry:
+    /// with no later insert, an old entry stays in the map.
+    ///
+    /// Reads are non-destructive and return the root by value.
+    #[cfg_attr(not(test), expect(dead_code))] // no non-test caller yet
+    fn get_decided_block_root(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+    ) -> Result<Hash256, Error> {
+        let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+
+        if slot + MAX_DECIDED_ROOT_AGE_SLOTS < current_slot {
+            return Err(Error::SpecificError(SpecificError::DecidedRootStale {
+                validator_pubkey,
+                slot,
+                current_slot,
+            }));
+        }
+
+        self.decided_block_roots
+            .lock()
+            .get(&DecidedBlockRootKey {
+                validator: validator_pubkey,
+                slot,
+            })
+            .copied()
+            .ok_or(Error::SpecificError(
+                SpecificError::DecidedRootUnavailable {
+                    validator_pubkey,
+                    slot,
+                },
+            ))
     }
 
     async fn sign_abstract_block(
@@ -2741,6 +2913,16 @@ enum CollectionMode {
     },
 }
 
+/// Payload of `SpecificError::DecidedRootConflict`: the rejected write and the root it collided
+/// with.
+#[derive(Debug, Clone)]
+pub struct DecidedRootConflict {
+    pub validator_pubkey: PublicKeyBytes,
+    pub slot: Slot,
+    pub existing_root: Hash256,
+    pub new_root: Hash256,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncSelectionProofAssignmentError {
     Empty,
@@ -2822,6 +3004,26 @@ pub enum SpecificError {
     ContributionNotInConsensus(u64),
     /// This validator not found in consensus data (Boole+)
     ValidatorNotInConsensus(ValidatorIndex),
+    /// Duty data names a slot more than one slot ahead of the local clock. Only a broken or
+    /// hostile beacon node produces this.
+    SlotTooFarAhead {
+        data_slot: Slot,
+        current_slot: Slot,
+    },
+    /// A conflict in the existing stored decided block root for one `(validator, slot)
+    /// and an attempt at storing an alternative in its place.
+    DecidedRootConflict(Box<DecidedRootConflict>),
+    /// No decided block root is stored for `(validator, slot)`.
+    DecidedRootUnavailable {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+    },
+    /// The requested slot is more than `MAX_DECIDED_ROOT_AGE_SLOTS` slots behind the current slot.
+    DecidedRootStale {
+        validator_pubkey: PublicKeyBytes,
+        slot: Slot,
+        current_slot: Slot,
+    },
 }
 
 impl From<CollectionError> for SpecificError {
@@ -2933,10 +3135,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
     /// Runs RANDAO pre-consensus and reconstructs the reveal for this proposer duty.
     ///
-    /// Also holds until `--proposer-delay-ms` into the slot before returning, so it can block for
-    /// as long as that setting allows. The reveal is a required parameter of the block request,
-    /// so Lighthouse cannot ask earlier and this is the last point Anchor owns before it does.
-    /// See `await_proposer_delay`.
+    /// Also holds until the configured proposer delay into the slot before returning, so it can
+    /// block for as long as that setting allows. Which delay applies (`--proposer-delay-ms` before
+    /// Gloas, `--proposer-delay-epbs-ms` from it on) is decided by the fork at the duty's slot. The
+    /// reveal is a required parameter of the block request, so Lighthouse cannot ask earlier and
+    /// this is the last point Anchor owns before it does. See `await_proposer_delay`.
     async fn randao_reveal(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -2952,6 +3155,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             randao_completed_ms = field::Empty,
             proposer_delay_outcome = field::Empty,
             proposer_delay_waited_ms = field::Empty,
+            proposer_delay_source = field::Empty,
             signing_epoch = signing_epoch.as_u64(),
             failure_reason = field::Empty,
             outcome = field::Empty,
@@ -3007,7 +3211,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     "Proposer randao reveal reconstructed"
                 );
 
-                await_proposer_delay(self.proposer_delay, randao_completed).await;
+                // Keyed to the duty's epoch (Lighthouse passes the duty slot's epoch), not the
+                // clock: forks flip on epoch boundaries, so this is exactly the fork at the duty
+                // slot even if entry straddles one.
+                let (proposer_delay, delay_source) =
+                    proposer_delay_at_epoch(&self.spec, self.proposer_delays, signing_epoch);
+                Span::current().record("proposer_delay_source", delay_source);
+                await_proposer_delay(proposer_delay, randao_completed).await;
 
                 Ok(signature)
             }
@@ -3814,8 +4024,40 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let domain_hash = self.get_domain(epoch, Domain::PTCAttester);
         let signing_root = data.signing_root(domain_hash);
 
-        let signature = match self
-            .collect_signature(
+        // Peers drop a payload attestation once `data.slot` is no longer current, so bound the
+        // wait at slot end rather than hanging until collector eviction (#1218). The saturating
+        // slot/duration math cannot panic; `duration_to_slot` is avoided because its `None`
+        // would conflate an expired duty with a broken clock.
+        let now = self
+            .slot_clock
+            .now_duration()
+            .ok_or(SpecificError::SlotClock)?;
+
+        // `data.slot` also sizes that bound, so an unchecked far-future value from a broken or
+        // hostile beacon node would re-open the unbounded wait (and peers reject future-slot PTC
+        // partials outright). One slot of headroom covers boundary clock skew.
+        let current_slot = self
+            .slot_clock
+            .slot_of(now)
+            .ok_or(SpecificError::SlotClock)?;
+        if data.slot > current_slot + 1 {
+            return Err(SpecificError::SlotTooFarAhead {
+                data_slot: data.slot,
+                current_slot,
+            }
+            .into());
+        }
+
+        let slot_end = self
+            .slot_clock
+            .start_of(data.slot + 1)
+            .ok_or(SpecificError::SlotClock)?;
+        let remaining = slot_end.saturating_sub(now);
+
+        // An expired duty deliberately skips even the partial-signature broadcast.
+        let collected = Self::collect_within(
+            remaining,
+            self.collect_signature(
                 PartialSignatureKind::PTCAttester,
                 Role::PTCAttester,
                 CollectionMode::SingleValidator,
@@ -3823,9 +4065,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 &cluster,
                 signing_root,
                 data.slot,
-            )
-            .await
-        {
+            ),
+        )
+        .await;
+
+        let signature = match collected {
             Ok(signature) => signature,
             Err(err) => {
                 self.report_ptc_collection_failure(&err, &validator_pubkey, data.slot);
@@ -3862,9 +4106,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let collection_timeout =
             self.spec.get_slot_duration() * PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS;
 
-        // Map a deadline elapse to `CollectionTimeout` so it and any collector error share the
-        // single reporting/return path below.
-        let collected = match tokio::time::timeout(
+        let collected = Self::collect_within(
             collection_timeout,
             self.collect_signature(
                 PartialSignatureKind::ProposerPreferences,
@@ -3876,13 +4118,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 proposal_slot,
             ),
         )
-        .await
-        {
-            Ok(result) => result,
-            Err(_elapsed) => Err(Error::SpecificError(
-                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout),
-            )),
-        };
+        .await;
 
         let signature = match collected {
             Ok(signature) => signature,
@@ -4177,6 +4413,76 @@ mod tests {
         assert!(ProposerDelayDecision::Disabled.wait().is_none());
         assert!(ProposerDelayDecision::TargetPassed.wait().is_none());
         assert!(ProposerDelayDecision::ClockUnavailable.wait().is_none());
+    }
+
+    /// Distinct values on both sides so a swapped branch cannot pass.
+    const BOUNDARY_TEST_DELAYS: ProposerDelays = ProposerDelays {
+        pre_gloas: Duration::from_millis(300),
+        gloas: Duration::from_millis(700),
+    };
+
+    /// Mainnet spec with Gloas scheduled at the given epoch. `None` is passed explicitly rather
+    /// than relying on the mainnet default, so these tests survive a pin that schedules Gloas.
+    fn spec_with_gloas(gloas_fork_epoch: Option<Epoch>) -> ChainSpec {
+        let mut spec = ChainSpec::mainnet();
+        spec.gloas_fork_epoch = gloas_fork_epoch;
+        spec
+    }
+
+    /// Forks activate at the first slot of their epoch, so the epoch boundary here is exactly
+    /// the Gloas boundary slot.
+    #[test]
+    fn proposer_delay_switches_at_the_gloas_activation_epoch() {
+        let activation = Epoch::new(100);
+        let spec = spec_with_gloas(Some(activation));
+
+        assert_eq!(
+            proposer_delay_at_epoch(&spec, BOUNDARY_TEST_DELAYS, activation - 1),
+            (BOUNDARY_TEST_DELAYS.pre_gloas, "pre_gloas")
+        );
+        assert_eq!(
+            proposer_delay_at_epoch(&spec, BOUNDARY_TEST_DELAYS, activation),
+            (BOUNDARY_TEST_DELAYS.gloas, "gloas")
+        );
+    }
+
+    #[test]
+    fn proposer_delay_uses_pre_gloas_value_when_gloas_unscheduled() {
+        let spec = spec_with_gloas(None);
+
+        // Not zero-because-gloas-default: the pre-Gloas value must apply at any epoch.
+        assert_eq!(
+            proposer_delay_at_epoch(&spec, BOUNDARY_TEST_DELAYS, Epoch::new(100_000)),
+            (BOUNDARY_TEST_DELAYS.pre_gloas, "pre_gloas")
+        );
+    }
+
+    /// A zero on the fork-selected side must stay zero: the values are independent, with no
+    /// fallback to the other side's nonzero value in either direction.
+    #[test]
+    fn proposer_delay_zero_on_the_selected_side_never_falls_back() {
+        let activation = Epoch::new(100);
+        let spec = spec_with_gloas(Some(activation));
+
+        let only_pre_gloas = ProposerDelays {
+            pre_gloas: Duration::from_millis(300),
+            gloas: Duration::ZERO,
+        };
+        assert_eq!(
+            proposer_delay_at_epoch(&spec, only_pre_gloas, activation),
+            (Duration::ZERO, "gloas"),
+            "a Gloas duty must not fall back to the pre-Gloas value"
+        );
+
+        let only_gloas = ProposerDelays {
+            pre_gloas: Duration::ZERO,
+            gloas: Duration::from_millis(700),
+        };
+        assert_eq!(
+            proposer_delay_at_epoch(&spec, only_gloas, activation - 1),
+            (Duration::ZERO, "pre_gloas"),
+            "a pre-Gloas duty must not fall back to the Gloas value"
+        );
     }
 
     /// Creates a test `VotingAssignments` with the given parameters.

@@ -647,7 +647,7 @@ impl Client {
             config.gas_limit,
             config.builder_boost_factor,
             config.prefer_builder_proposals,
-            config.proposer_delay,
+            config.proposer_delays,
             config.strict_mfp,
             is_synced.clone(),
             executor.clone(),
@@ -819,6 +819,20 @@ impl Client {
         registration_service
             .start_validator_registration_service(&spec)
             .map_err(|e| format!("Unable to start validator registration service: {e}"))?;
+
+        // The proposer delays do not fall back to each other, so a pre-Gloas-only configuration
+        // silently loses its delay at the fork. Warn at startup, but only on networks where
+        // Gloas is actually scheduled; anywhere else this would be a permanent false alarm.
+        if spec.is_gloas_scheduled()
+            && !config.proposer_delays.pre_gloas.is_zero()
+            && config.proposer_delays.gloas.is_zero()
+        {
+            warn!(
+                "--proposer-delay-ms is set but --proposer-delay-epbs-ms is not: the delay will \
+                 stop applying at the Gloas (ePBS) fork. Set --proposer-delay-epbs-ms to keep a \
+                 delay after it."
+            );
+        }
 
         // PTC payload-attestation duty (Gloas / ePBS). Start only when Gloas is scheduled,
         // mirroring LH's VC (validator_client/src/lib.rs:657). The service also self-gates per
