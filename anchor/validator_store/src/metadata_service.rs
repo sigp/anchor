@@ -10,7 +10,6 @@ use eth2::{
     BeaconNodeHttpClient,
     types::{BlockId, SyncContributionData},
 };
-use fork::{Fork, ForkSchedule};
 use futures::stream::{FuturesUnordered, StreamExt};
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -28,7 +27,7 @@ use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
     Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, SignedAggregateAndProof,
-    Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
+    SignedContributionAndProof, Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
 use validator_services::duties_service::{DutiesService, DutyAndProof};
 
@@ -178,7 +177,6 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     spec: Arc<ChainSpec>,
-    fork_schedule: Arc<ForkSchedule>,
     weighted_attestation_data: bool,
 }
 
@@ -226,7 +224,6 @@ async fn run_slot_start_publisher<T: SlotClock>(slot_clock: T, mut publish: impl
 }
 
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
         duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
         validator_store: Arc<AnchorValidatorStore<T, E>>,
@@ -234,7 +231,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         beacon_nodes: Arc<BeaconNodeFallback<T>>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        fork_schedule: Arc<ForkSchedule>,
         weighted_attestation_data: bool,
     ) -> Self {
         Self {
@@ -244,7 +240,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             beacon_nodes,
             executor,
             spec,
-            fork_schedule,
             weighted_attestation_data,
         }
     }
@@ -642,8 +637,13 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         let epoch = slot.epoch(E::slots_per_epoch());
 
+        // The exact complement of the Lighthouse callback gates by construction: consensus data
+        // (and therefore the publisher) exists precisely when Lighthouse does not own
+        // publication.
         let consensus_data_by_ssv_committee =
-            if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
+            if self.validator_store.lighthouse_owns_publication(epoch) {
+                HashMap::new()
+            } else {
                 self.build_consensus_data_for_all_committees(
                     slot,
                     attesters_by_ssv_committee,
@@ -652,8 +652,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     all_subnet_ids,
                 )
                 .await?
-            } else {
-                HashMap::new()
             };
 
         let aggregator_info = AggregationAssignments {
@@ -674,19 +672,20 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
     /// Spawn the detached publisher for this slot's newly registered post-consensus executions.
     ///
-    /// The publisher owns Boole+ aggregate publication: the Lighthouse aggregate callback returns
-    /// an empty batch at Boole+ because its duty snapshot is cloned before slot-start selection
-    /// proofs finish, so aggregates the snapshot never saw would otherwise be silently dropped.
-    /// Contributions are unaffected (sync selection proofs are precomputed a slot ahead) and stay
-    /// on the Lighthouse publish path.
+    /// The publisher owns Boole+ publication of aggregates and sync contributions: the Lighthouse
+    /// callbacks return empty batches at Boole+ because their duty snapshots are cloned before
+    /// slot-start selection proofs finish, so roots the snapshots never saw would otherwise be
+    /// silently dropped. (Anchor's sync selection proofs are NOT precomputed a slot ahead: its
+    /// one-slot Lighthouse lookahead config starts slot N's proof signing at slot N's boundary,
+    /// in the same slot-start partial-signature batch as the attestation proofs.)
     ///
     /// Exactly-once: `new_executions` holds only vacant registrations, so a repeated Phase 3 run
     /// for one slot cannot spawn a second publisher for the same `(committee, slot)`.
     ///
     /// The publisher is implicitly Boole-gated (consensus data exists only for Boole+ slots),
-    /// while the empty Lighthouse callback gates on the aggregate's target epoch. The two agree
-    /// because `attestation.data.target.epoch` equals the slot's own epoch by construction, which
-    /// is what rules out both paths publishing for one duty.
+    /// while the empty Lighthouse callbacks gate on the duty's epoch. The two agree because
+    /// `attestation.data.target.epoch` and `contribution.slot`'s epoch equal the slot's own epoch
+    /// by construction, which is what rules out both paths publishing for one duty.
     fn spawn_aggregate_publisher(
         &self,
         slot: Slot,
@@ -702,9 +701,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         self.executor.spawn(
             async move {
                 validator_store
-                    .publish_decided_aggregates(slot, new_executions, |fork_name, signed| {
-                        post_aggregate(&beacon_nodes, fork_name, signed)
-                    })
+                    .publish_decided_aggregates(
+                        slot,
+                        new_executions,
+                        |fork_name, signed| post_aggregate(&beacon_nodes, fork_name, signed),
+                        |signed| post_contribution(&beacon_nodes, signed),
+                    )
                     .await;
             },
             "aggregator_committee_publisher",
@@ -1475,6 +1477,27 @@ async fn post_aggregate<T: SlotClock + 'static, E: EthSpec>(
                         .post_validator_aggregate_and_proof_v1(signed)
                         .await
                 }
+            }
+        })
+        .await
+        .map_err(|e| format!("{e}"))
+}
+
+/// POST one signed sync contribution, matching go-ssv's publication shape at the reference pin
+/// (one contribution per request, published as soon as its quorum lands). Endpoint policy mirrors
+/// Lighthouse's at the pin: `first_success` across the beacon nodes; the endpoint takes no fork
+/// header.
+async fn post_contribution<T: SlotClock + 'static, E: EthSpec>(
+    beacon_nodes: &BeaconNodeFallback<T>,
+    signed: SignedContributionAndProof<E>,
+) -> Result<(), String> {
+    beacon_nodes
+        .first_success(|beacon_node| {
+            let signed = std::slice::from_ref(&signed);
+            async move {
+                beacon_node
+                    .post_validator_contribution_and_proofs(signed)
+                    .await
             }
         })
         .await

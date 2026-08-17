@@ -136,43 +136,24 @@ type CollectedSignatures = HashMap<(ValidatorIndex, Hash256), Signature>;
 /// Drive signature collection to completion, keeping each result as it resolves.
 ///
 /// Results are taken one at a time rather than as a group so that a root which never reaches
-/// quorum withholds only itself. `deadline`, when set, bounds the wait and leaves the roots still
-/// outstanding out of the returned map; callers surface those through `SigningRequest::resolve`
-/// failing for the affected request.
-async fn drain_signatures<F, E>(
-    mut pending: FuturesUnordered<F>,
-    deadline: Option<Instant>,
-) -> CollectedSignatures
+/// quorum withholds only itself; callers surface missing roots through
+/// `SigningRequest::resolve` failing for the affected request.
+async fn drain_signatures<F, E>(mut pending: FuturesUnordered<F>) -> CollectedSignatures
 where
     F: Future<Output = (ValidatorIndex, Hash256, Result<Signature, E>)>,
     E: Debug,
 {
     let mut signatures = HashMap::with_capacity(pending.len());
-    let collect = async {
-        while let Some((index, signing_root, result)) = pending.next().await {
-            match result {
-                Ok(signature) => {
-                    signatures.insert((index, signing_root), signature);
-                }
-                Err(e) => {
-                    error!(?index, ?signing_root, error = ?e, "Failed to collect signature");
-                }
+    while let Some((index, signing_root, result)) = pending.next().await {
+        match result {
+            Ok(signature) => {
+                signatures.insert((index, signing_root), signature);
+            }
+            Err(e) => {
+                error!(?index, ?signing_root, error = ?e, "Failed to collect signature");
             }
         }
-    };
-
-    match deadline {
-        Some(deadline) => {
-            if tokio::time::timeout_at(deadline, collect).await.is_err() {
-                warn!(
-                    unresolved = pending.len(),
-                    "Deadline passed before every signature resolved"
-                );
-            }
-        }
-        None => collect.await,
     }
-
     signatures
 }
 
@@ -243,17 +224,16 @@ pub struct AnchorValidatorStore<
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
-    /// Once-only post-consensus signing executions for `AggregatorCommittee` duties (Boole+).
+    /// `(committee, slot)` keys whose Boole+ `AggregatorCommittee` post-consensus execution has
+    /// already been started.
     ///
-    /// One entry per `(committee, slot)`, registered by the slot pipeline in
-    /// [`Self::update_aggregation_assignments`] before those assignments are published, and only
-    /// when the entry is vacant. That registration is the single writer, so the complete decided
-    /// worklist is signed and batched exactly once no matter which consumers run, in what order,
-    /// or whether their futures are dropped. Consumers (the contributions callback via this map,
-    /// the aggregate publisher via the handles registration returns) only read detached `Shared`
-    /// futures; they never start work.
-    aggregator_post_consensus:
-        Mutex<HashMap<(CommitteeId, Slot), AggregatorPostConsensusShared<E>>>,
+    /// Registered by the slot pipeline in [`Self::update_aggregation_assignments`] before those
+    /// assignments are published, first-insert-only. That registration is the single writer, so
+    /// the complete decided worklist is signed and batched exactly once no matter how often the
+    /// pipeline runs. The execution handles themselves travel to their sole consumer (the
+    /// metadata service's publisher) through the registration's return value; this set only
+    /// provides registration idempotence across the retention window.
+    aggregator_post_consensus: Mutex<HashSet<(CommitteeId, Slot)>>,
 }
 
 /// How far into `slot` the clock currently is, or `None` if the clock cannot answer.
@@ -413,7 +393,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             strict_mfp,
             is_synced,
             task_executor,
-            aggregator_post_consensus: Mutex::new(HashMap::new()),
+            aggregator_post_consensus: Mutex::new(HashSet::new()),
         })
     }
 
@@ -551,7 +531,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             })
             .collect();
 
-        Ok(drain_signatures(pending, None).await)
+        Ok(drain_signatures(pending).await)
     }
 
     /// Run `AggregatorCommittee` QBFT consensus for a committee at 2/3 slot.
@@ -1422,90 +1402,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .await
     }
 
-    /// Boole+ committee-based contribution signing: join the per-`(committee, slot)`
-    /// post-consensus execution and return the requested contributions from its outcome.
+    /// Whether Lighthouse's callbacks own publication of aggregator-committee duties at `epoch`.
     ///
-    /// The execution signs the complete decided worklist (both object classes) regardless of
-    /// which Lighthouse callbacks fire; this callback only filters. See
-    /// [`crate::aggregator_post_consensus`].
-    async fn sign_committee_sync_committee_contributions(
-        &self,
-        committee_id: CommitteeId,
-        contributions: Vec<(ValidatorMetadata, ContributionToSign<E>)>,
-    ) -> Result<Vec<SignedContributionAndProof<E>>, Error> {
-        let Some((_, first)) = contributions.first() else {
-            warn!("sign_committee_sync_committee_contributions called with empty contributions");
-            return Ok(vec![]);
-        };
-        let slot = first.contribution.slot;
-
-        let (deadline, outcome) = self.post_consensus_outcome(committee_id, slot).await?;
-
-        // Select this callback's own identities out of the shared outcome. The execution signs the
-        // whole decided value, so anything missing here is an entry the cluster did not decide on.
-        let mut prepared = Vec::with_capacity(contributions.len());
-        let pending = FuturesUnordered::new();
-        for (validator, contrib) in &contributions {
-            let root = validator.index.and_then(|index| {
-                outcome
-                    .contributions
-                    .get(&(index, contrib.contribution.subcommittee_index))
-                    .map(|root| (index, root))
-            });
-            let Some((index, root)) = root else {
-                debug!(
-                    pubkey = ?contrib.aggregator_pubkey,
-                    subcommittee_index = contrib.contribution.subcommittee_index,
-                    "Requested contribution not in the decided worklist, skipping due to \
-                     divergent operator views"
-                );
-                validator_metrics::inc_counter_vec(
-                    &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                    &[metrics::OTHER_ERROR],
-                );
-                continue;
-            };
-            let signing_root = root.request.signing_root;
-            let signature = root.signature.clone();
-            pending.push(async move { (index, signing_root, signature.await) });
-            prepared.push(root.request.clone());
-        }
-
-        let signatures = drain_signatures(pending, Some(deadline)).await;
-
-        let mut results = Vec::with_capacity(prepared.len());
-        for request in prepared {
-            let (message, signature) = match request.resolve(&signatures) {
-                Ok(resolved) => resolved,
-                Err(pubkey) => {
-                    warn!(
-                        ?pubkey,
-                        "Missing signature, skipping sync committee contribution"
-                    );
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                    continue;
-                }
-            };
-
-            debug!(
-                aggregator_index = ?message.aggregator_index,
-                slot = %message.contribution.slot,
-                block_root = ?message.contribution.beacon_block_root,
-                subcommittee_index = message.contribution.subcommittee_index,
-                num_set_aggregation_bits = message.contribution.aggregation_bits.num_set_bits(),
-                "Signed ContributionAndProof (Boole+ committee consensus)"
-            );
-            validator_metrics::inc_counter_vec(
-                &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                &[validator_metrics::SUCCESS],
-            );
-            results.push(SignedContributionAndProof { message, signature });
-        }
-
-        Ok(results)
+    /// Pre-Boole they do; from Boole the metadata service's publisher owns both classes
+    /// (aggregates and sync contributions) and the callbacks return empty batches. This is the
+    /// exact complement of the publisher's registration gate (consensus data is only built for
+    /// Boole+ slots), so exactly one path publishes for any duty. Both callbacks derive `epoch`
+    /// from the duty's own payload (the aggregate's target epoch, the contribution's slot),
+    /// which equal the duty slot's epoch by construction.
+    pub(crate) fn lighthouse_owns_publication(&self, epoch: Epoch) -> bool {
+        self.fork_schedule.active_fork(epoch) < Fork::Boole
     }
 
     /// Sign sync committee messages for all validators in a single SSV committee.
@@ -2242,8 +2148,6 @@ pub enum SpecificError {
         slot: Slot,
         reason: SyncSelectionProofAssignmentError,
     },
-    /// Pre-built consensus data not found for this committee (Boole+)
-    ConsensusDataNotFound,
     /// This committee's aggregate not found in consensus data (Boole+)
     AggregateNotInConsensus(u64),
     /// This subcommittee's contribution not found in consensus data (Boole+)
@@ -2710,32 +2614,30 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
     ) -> impl Stream<Item = Result<Vec<SignedAggregateAndProof<E>>, Error>> + Send {
         let this = Arc::clone(self);
         stream::once(async move {
-            let publish_via_lighthouse = aggregates.first().is_some_and(|first| {
-                this.fork_schedule
-                    .active_fork(first.aggregate.data().target.epoch)
-                    < Fork::Boole
-            });
+            // Empty input: nothing to sign and no fork to determine.
+            let Some(first) = aggregates.first() else {
+                return Ok(Vec::new());
+            };
 
-            if !publish_via_lighthouse {
-                // Boole+ (or empty input): hand Lighthouse an empty batch, which its publish loop
-                // drops silently. Publication ownership lives with the metadata service's
-                // aggregate publisher, which signs and publishes the decided worklist regardless
-                // of whether Lighthouse's duty snapshot saw the selection proofs in time. See
+            if !this.lighthouse_owns_publication(first.aggregate.data().target.epoch) {
+                // Boole+: hand Lighthouse an empty batch, which its publish loop drops silently.
+                // Publication ownership lives with the metadata service's publisher, which signs
+                // and publishes the decided worklist regardless of whether Lighthouse's duty
+                // snapshot saw the selection proofs in time. See
                 // [`crate::aggregator_post_consensus`].
-                if let Some(first) = aggregates.first() {
-                    // Lighthouse's request set is its snapshot's view of who aggregates; the
-                    // publisher only ever sees the decided view. Logging the request set here
-                    // keeps divergent operator views diagnosable by comparing the two.
-                    debug!(
-                        slot = %first.aggregate.data().slot,
-                        requested = aggregates.len(),
-                        aggregators = ?aggregates
-                            .iter()
-                            .map(|agg| agg.aggregator_index)
-                            .collect::<Vec<_>>(),
-                        "Deferring Lighthouse-requested aggregates to the decided-value publisher"
-                    );
-                }
+                //
+                // Lighthouse's request set is its snapshot's view of who aggregates; the
+                // publisher only ever sees the decided view. Logging the request set here keeps
+                // divergent operator views diagnosable by comparing the two.
+                debug!(
+                    slot = %first.aggregate.data().slot,
+                    requested = aggregates.len(),
+                    aggregators = ?aggregates
+                        .iter()
+                        .map(|agg| agg.aggregator_index)
+                        .collect::<Vec<_>>(),
+                    "Deferring Lighthouse-requested aggregates to the decided-value publisher"
+                );
                 return Ok(Vec::new());
             }
 
@@ -3024,50 +2926,48 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         contributions: Vec<ContributionToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<SignedContributionAndProof<E>>, Error>> + Send {
-        // Early return for empty input — no fork to determine, nothing to sign
-        let Some(first) = contributions.first() else {
-            return Either::Right(FuturesUnordered::new());
-        };
+        let this = Arc::clone(self);
+        stream::once(async move {
+            // Empty input: nothing to sign and no fork to determine.
+            let Some(first) = contributions.first() else {
+                return Ok(Vec::new());
+            };
 
-        let epoch = first.contribution.slot.epoch(E::slots_per_epoch());
+            if !this
+                .lighthouse_owns_publication(first.contribution.slot.epoch(E::slots_per_epoch()))
+            {
+                // Boole+: hand Lighthouse an empty batch, which its publish loop drops silently.
+                // Publication ownership lives with the metadata service's publisher, which signs
+                // and publishes the decided worklist regardless of whether Lighthouse's duty
+                // snapshot saw the sync selection proofs in time. See
+                // [`crate::aggregator_post_consensus`].
+                //
+                // Lighthouse's request set is its snapshot's view of who aggregates; the
+                // publisher only ever sees the decided view. Logging the request set here keeps
+                // divergent operator views diagnosable by comparing the two.
+                debug!(
+                    slot = %first.contribution.slot,
+                    // Lighthouse requests contributions per subnet, so one call is one subnet;
+                    // the publisher's logs key on subcommittee index, and this field is the join.
+                    subnet = first.contribution.subcommittee_index,
+                    requested = contributions.len(),
+                    aggregators = ?contributions
+                        .iter()
+                        .map(|contrib| contrib.aggregator_index)
+                        .collect::<Vec<_>>(),
+                    "Deferring Lighthouse-requested contributions to the decided-value publisher"
+                );
+                return Ok(Vec::new());
+            }
 
-        if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
-            // Boole+: group by committee, stream per committee via FuturesUnordered
-            let _span = info_span!("sign_sync_committee_contributions").entered();
-            let committee_mapping = self.group_by_committee(contributions, |c| c.aggregator_pubkey);
-
-            let committee_futures: FuturesUnordered<_> = committee_mapping
-                .into_iter()
-                .map(|(committee_id, (_cluster, contributions))| {
-                    let this = Arc::clone(self);
-                    async move {
-                        run_committee_signing(
-                            committee_id,
-                            contributions.len(),
-                            &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                            this.sign_committee_sync_committee_contributions(
-                                committee_id,
-                                contributions,
-                            ),
-                        )
-                        .await
-                    }
-                })
-                .collect();
-
-            Either::Right(committee_futures)
-        } else {
-            // Pre-Boole: per-validator processing, no committee grouping needed
-            let this = Arc::clone(self);
-            Either::Left(stream::once(async move {
-                let futures = contributions.into_iter().map(|contrib| {
-                    let this = Arc::clone(&this);
-                    async move { this.sign_single_sync_committee_contribution(contrib).await }
-                });
-                let results = join_all(futures).await;
-                Ok(results.into_iter().filter_map(|r| r.ok()).collect())
-            }))
-        }
+            // Pre-Boole: per-validator processing, Lighthouse publishes the results
+            let futures = contributions.into_iter().map(|contrib| {
+                let this = Arc::clone(&this);
+                async move { this.sign_single_sync_committee_contribution(contrib).await }
+            });
+            let results = join_all(futures).await;
+            Ok(results.into_iter().filter_map(|r| r.ok()).collect())
+        })
     }
 
     // stolen from lighthouse

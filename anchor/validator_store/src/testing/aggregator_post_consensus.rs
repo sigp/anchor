@@ -6,10 +6,10 @@
 //! class must still produce the partial signatures for the other class, so the shared committee
 //! batch never stalls below its expected size.
 //!
-//! The two classes are read out differently. Contributions still go back through the Lighthouse
-//! callback, which filters the shared outcome down to its own requested items. Aggregates do not:
-//! Anchor publishes them itself from the decided value, one publish call per root, so
-//! `publish_decided_aggregates` is the reader and the aggregate callback returns nothing.
+//! Both classes are read out the same way: Anchor publishes aggregates and contributions itself
+//! from the decided value, one publish call per root, so `publish_decided_aggregates` is the
+//! only reader and both Lighthouse callbacks return nothing (see `testing/committee_aggregate.rs`
+//! and `testing/committee_contribution.rs` for the callback contract).
 //!
 //! The worklist tasks are detached, so captured `sign_and_collect` calls arrive
 //! asynchronously; assertions on capture counts poll with a deadline and then let the
@@ -22,7 +22,7 @@ use std::{
 };
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
-use futures::{FutureExt, StreamExt};
+use futures::FutureExt;
 use parking_lot::Mutex;
 use signature_collector::SignatureRequester;
 use ssv_types::{
@@ -35,10 +35,8 @@ use ssz::Encode;
 use ssz_types::VariableList;
 use types::{
     AttestationBase, AttestationData, AttestationElectra, Checkpoint, Epoch, ForkName, Hash256,
-    MainnetEthSpec, SignedContributionAndProof, Slot, SyncCommitteeContribution,
-    SyncSelectionProof,
+    MainnetEthSpec, Slot, SyncCommitteeContribution,
 };
-use validator_store::{ContributionToSign, ValidatorStore};
 
 use super::common::*;
 use crate::{
@@ -49,8 +47,6 @@ use crate::{
 type DecidedData = AggregatorCommitteeConsensusData<MainnetEthSpec>;
 /// A handle on one `(committee, slot)` post-consensus execution, as handed to the publisher.
 type Execution = AggregatorPostConsensusShared<MainnetEthSpec>;
-
-type SignContributionsResult = Vec<Result<Vec<SignedContributionAndProof<MainnetEthSpec>>, Error>>;
 
 const COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
     [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
@@ -69,7 +65,6 @@ const BEACON_COMMITTEE_INDEX: u64 = 0;
 const CONFLICTING_BEACON_COMMITTEE_INDEX: u64 = 1;
 const CONTRIBUTION_SUBCOMMITTEES: [u64; 2] = [0, 1];
 const ALL_SUBCOMMITTEES: [u64; 4] = [0, 1, 2, 3];
-const MISSING_SUBCOMMITTEE_INDEX: u64 = 2;
 
 /// Decided validator indices with no local metadata, so the worklist filters them out.
 const FOREIGN_AGGREGATOR_INDEX: usize = 900;
@@ -145,8 +140,7 @@ impl AggregatorCommitteeFixture {
     }
 
     /// Seeds `AggregationAssignments` at `TEST_SLOT` without consensus data for any committee, so
-    /// no execution is registered and the callbacks fail with `ConsensusDataNotFound`. Returns the
-    /// (empty) set of executions the publish registered.
+    /// no execution is registered. Returns the (empty) set of executions the publish registered.
     fn seed_assignments_without_consensus_data(&self) -> Vec<(CommitteeId, Execution)> {
         self.harness.publish_decided_values(HashMap::new())
     }
@@ -193,9 +187,9 @@ impl AggregatorCommitteeFixture {
         (data, execution)
     }
 
-    /// Runs the publisher over this committee's execution with an always-succeeding recording
-    /// closure, returning one `(fork, aggregator index)` entry per publish call.
-    async fn run_publisher(&self, execution: Execution) -> Vec<RecordedPublish> {
+    /// Runs the publisher over this committee's execution with always-succeeding recording
+    /// closures, returning one entry per publish call of either class.
+    async fn run_publisher(&self, execution: Execution) -> RecordedPublishes {
         run_recording_publisher(&self.harness, vec![(self.committee_id, execution)], |_| {
             Ok(())
         })
@@ -206,35 +200,6 @@ impl AggregatorCommitteeFixture {
     fn expected_aggregator_index(&self) -> u64 {
         self.harness
             .aggregator_index(COMMITTEE_INDEX, AGGREGATE_VALIDATOR_IDX)
-    }
-
-    fn create_contribution(
-        &self,
-        position: usize,
-        subcommittee_index: u64,
-    ) -> ContributionToSign<MainnetEthSpec> {
-        let validator = self.validator_metadata(position);
-        ContributionToSign {
-            aggregator_index: *validator
-                .index
-                .expect("test validator should have an index") as u64,
-            aggregator_pubkey: validator.public_key,
-            contribution: test_contribution(subcommittee_index),
-            selection_proof: SyncSelectionProof::from(Signature::empty()),
-        }
-    }
-
-    async fn collect_contributions(
-        &self,
-        contributions: Vec<ContributionToSign<MainnetEthSpec>>,
-    ) -> SignContributionsResult {
-        let stream = self
-            .harness
-            .validator_store
-            .sign_sync_committee_contributions(contributions);
-        tokio::time::timeout(STREAM_TIMEOUT, stream.collect())
-            .await
-            .expect("contribution callback should complete within the stream timeout")
     }
 }
 
@@ -381,39 +346,69 @@ fn build_decided_data_at_fork(
 
 // ==================== Recording publisher ====================
 
-/// Fork and aggregator index of one publish call made by the recording closure.
+/// Fork and aggregator index of one aggregate publish call made by the recording closure.
 type RecordedPublish = (ForkName, u64);
+/// Aggregator index and subcommittee index of one contribution publish call.
+type RecordedContribution = (u64, u64);
 
-/// Runs the publisher over `executions` with a recording publish closure, returning one
-/// `(fork, aggregator index)` entry per publish call.
+/// Every publish call the recording publisher made, one entry per call, by class.
+#[derive(Debug, Default, PartialEq)]
+struct RecordedPublishes {
+    aggregates: Vec<RecordedPublish>,
+    contributions: Vec<RecordedContribution>,
+}
+
+/// Runs the publisher over `executions` with recording publish closures, returning one entry per
+/// publish call of either class.
 ///
-/// The recorder captures the `ForkName` each call receives, so tests can pin that it matches the
-/// decided value's `DataVersion`. `outcome` decides each call's publish result from its
-/// aggregator index, so a test can fail one aggregate's publish without depending on the order
-/// roots finish in. The returned calls are sorted by aggregator index for the same reason.
+/// The aggregate recorder captures the `ForkName` each call receives, so tests can pin that it
+/// matches the decided value's `DataVersion`. `outcome` decides each call's publish result from
+/// its aggregator index (for both classes), so a test can fail one root's publish without
+/// depending on the order roots finish in. The returned calls are sorted for the same reason.
 async fn run_recording_publisher(
     harness: &ValidatorStoreTestHarness,
     executions: Vec<(CommitteeId, Execution)>,
     outcome: impl Fn(u64) -> Result<(), String>,
-) -> Vec<RecordedPublish> {
-    let recorded: Arc<Mutex<Vec<RecordedPublish>>> = Arc::new(Mutex::new(Vec::new()));
+) -> RecordedPublishes {
+    let aggregates: Arc<Mutex<Vec<RecordedPublish>>> = Arc::new(Mutex::new(Vec::new()));
+    let contributions: Arc<Mutex<Vec<RecordedContribution>>> = Arc::new(Mutex::new(Vec::new()));
+    let outcome = &outcome;
     harness
         .validator_store
-        .publish_decided_aggregates(Slot::new(TEST_SLOT), executions, |fork_name, signed| {
-            let recorded = Arc::clone(&recorded);
-            let outcome = &outcome;
-            async move {
-                let aggregator = signed.message().aggregator_index();
-                let result = outcome(aggregator);
-                recorded.lock().push((fork_name, aggregator));
-                result
-            }
-        })
+        .publish_decided_aggregates(
+            Slot::new(TEST_SLOT),
+            executions,
+            |fork_name, signed| {
+                let aggregates = Arc::clone(&aggregates);
+                async move {
+                    let aggregator = signed.message().aggregator_index();
+                    let result = outcome(aggregator);
+                    aggregates.lock().push((fork_name, aggregator));
+                    result
+                }
+            },
+            |signed| {
+                let contributions = Arc::clone(&contributions);
+                async move {
+                    let aggregator = signed.message.aggregator_index;
+                    let result = outcome(aggregator);
+                    contributions
+                        .lock()
+                        .push((aggregator, signed.message.contribution.subcommittee_index));
+                    result
+                }
+            },
+        )
         .await;
 
-    let mut recorded = recorded.lock().clone();
-    recorded.sort_by_key(|&(_, aggregator)| aggregator);
-    recorded
+    let mut aggregates = aggregates.lock().clone();
+    aggregates.sort_by_key(|&(_, aggregator)| aggregator);
+    let mut contributions = contributions.lock().clone();
+    contributions.sort_unstable();
+    RecordedPublishes {
+        aggregates,
+        contributions,
+    }
 }
 
 /// Serializes the tests that mutate and assert deltas on the `consensus_error`, `no_aggregates`,
@@ -430,6 +425,16 @@ fn publish_result_count(label: &str) -> u64 {
     metrics::AGGREGATOR_COMMITTEE_PUBLISH_TOTAL
         .as_ref()
         .expect("the publish outcome metric should be created")
+        .with_label_values(&[label])
+        .get()
+}
+
+/// Current value of one `SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL` label, under the same
+/// [`PUBLISH_METRIC_LOCK`] discipline as [`publish_result_count`].
+fn contribution_signing_count(label: &str) -> u64 {
+    validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL
+        .as_ref()
+        .expect("the contribution signing metric should be created")
         .with_label_values(&[label])
         .get()
 }
@@ -528,16 +533,6 @@ async fn assert_captured_calls_settle_at(harness: &ValidatorStoreTestHarness, ex
     );
 }
 
-/// Asserts the recording publisher made exactly one publish call per expected aggregator index,
-/// all at [`DEFAULT_DECIDED_FORK`].
-fn assert_published_aggregators(published: &[RecordedPublish], expected: &[u64], context: &str) {
-    let expected: Vec<RecordedPublish> = expected
-        .iter()
-        .map(|&aggregator| (DEFAULT_DECIDED_FORK, aggregator))
-        .collect();
-    assert_eq!(published, expected.as_slice(), "{context}");
-}
-
 /// Unwraps a single-committee stream result into its signed batch.
 fn single_batch<T>(results: Vec<Result<Vec<T>, Error>>) -> Vec<T> {
     assert_eq!(results.len(), 1, "expected one committee stream item");
@@ -550,39 +545,63 @@ fn single_batch<T>(results: Vec<Result<Vec<T>, Error>>) -> Vec<T> {
 
 // ==================== Complete-worklist tests ====================
 
-/// A contribution-only Lighthouse callback must still trigger signing of the decided
-/// aggregate: the detached execution signs the complete mixed worklist, and every root joins
-/// one three-entry committee batch keyed by the decided-value hash.
+/// The publisher takes both classes from the decided value while both Lighthouse callbacks
+/// return empty batches.
+///
+/// This pins the design the module rests on: which callbacks fire has no influence on what is
+/// signed or published. The execution signs the complete mixed worklist into one committee
+/// batch, and the publisher is the single POSTer for aggregates and contributions alike.
 #[tokio::test(flavor = "multi_thread")]
-async fn contribution_only_callback_signs_complete_mixed_worklist() {
+async fn publisher_takes_both_classes_while_the_callbacks_return_empty() {
     // Arrange
     let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
-    let decided = fixture.seed_mixed_decided_value();
+    let (decided, execution) = fixture.seed_mixed_decided_value_with_execution();
+    let aggregates = vec![
+        fixture
+            .harness
+            .create_aggregate(COMMITTEE_INDEX, AGGREGATE_VALIDATOR_IDX),
+    ];
     let contributions = CONTRIBUTION_SUBCOMMITTEES
         .iter()
-        .map(|&subcommittee| fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, subcommittee))
+        .map(|&subcommittee| {
+            fixture.harness.create_contribution(
+                COMMITTEE_INDEX,
+                CONTRIBUTOR_VALIDATOR_IDX,
+                subcommittee,
+            )
+        })
         .collect();
 
-    // Act: only the contribution callback fires.
-    let results = fixture.collect_contributions(contributions).await;
+    // Act: both callbacks fire, then the publisher reads the same execution.
+    let aggregate_results = fixture.harness.collect_aggregates(aggregates).await;
+    let contribution_results = fixture.harness.collect_contributions(contributions).await;
+    let published = fixture.run_publisher(execution).await;
 
-    // Assert: the callback returns exactly its own two contributions.
-    let mut signed = single_batch(results);
-    signed.sort_by_key(|item| item.message.contribution.subcommittee_index);
-    assert_eq!(
-        signed.len(),
-        CONTRIBUTION_SUBCOMMITTEES.len(),
-        "the contribution callback should return only its requested contributions"
+    // Assert: Lighthouse gets nothing to publish on either path.
+    assert!(
+        single_batch(aggregate_results).is_empty(),
+        "the aggregate callback must hand Lighthouse an empty batch at Boole+"
     );
-    for (item, &subcommittee) in signed.iter().zip(CONTRIBUTION_SUBCOMMITTEES.iter()) {
-        assert_eq!(item.message.contribution.subcommittee_index, subcommittee);
-        assert_eq!(
-            item.message.aggregator_index,
-            *fixture.validator_index(CONTRIBUTOR_VALIDATOR_IDX) as u64
-        );
-    }
+    assert!(
+        single_batch(contribution_results).is_empty(),
+        "the contribution callback must hand Lighthouse an empty batch at Boole+"
+    );
 
-    // The aggregate root is signed by a detached task even though no aggregate callback fired.
+    // Anchor publishes the full decided worklist itself.
+    let contributor = *fixture.validator_index(CONTRIBUTOR_VALIDATOR_IDX) as u64;
+    assert_eq!(
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: vec![
+                (contributor, CONTRIBUTION_SUBCOMMITTEES[0]),
+                (contributor, CONTRIBUTION_SUBCOMMITTEES[1]),
+            ],
+        },
+        "the publisher should publish the decided aggregate and both decided contributions"
+    );
+
+    // The worklist was signed exactly once, into one committee batch.
     assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
     let calls = committee_calls(&fixture.harness);
     assert_eq!(
@@ -600,53 +619,6 @@ async fn contribution_only_callback_signs_complete_mixed_worklist() {
         calls_for_pubkey(&calls, fixture.pubkey(CONTRIBUTOR_VALIDATOR_IDX)),
         CONTRIBUTION_SUBCOMMITTEES.len(),
         "the contributor must sign one root per subcommittee"
-    );
-}
-
-/// The mirror case, read through the publisher: the aggregate callback returns nothing, the
-/// publisher takes the decided aggregate, and the decided contributions are signed anyway.
-///
-/// The aggregate callback no longer joins the execution at all, so this is the test that the
-/// aggregate half of the worklist is complete: only the publisher can observe it.
-#[tokio::test(flavor = "multi_thread")]
-async fn publisher_takes_the_decided_aggregate_while_the_callback_returns_empty() {
-    // Arrange
-    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
-    let (decided, execution) = fixture.seed_mixed_decided_value_with_execution();
-    let aggregates = vec![
-        fixture
-            .harness
-            .create_aggregate(COMMITTEE_INDEX, AGGREGATE_VALIDATOR_IDX),
-    ];
-
-    // Act: only the aggregate callback fires, and the publisher reads the same execution.
-    let results = fixture.harness.collect_aggregates(aggregates).await;
-    let published = fixture.run_publisher(execution).await;
-
-    // Assert: Lighthouse gets nothing to publish, Anchor publishes the decided aggregate itself.
-    assert!(
-        single_batch(results).is_empty(),
-        "the aggregate callback must hand Lighthouse an empty batch at Boole+"
-    );
-    assert_published_aggregators(
-        &published,
-        &[fixture.expected_aggregator_index()],
-        "the publisher should publish the decided aggregate",
-    );
-
-    // Both contribution roots are signed by detached tasks without a contribution callback.
-    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
-    let calls = committee_calls(&fixture.harness);
-    assert_eq!(distinct_roots(&calls).len(), MIXED_WORKLIST_SIZE);
-    assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
-    assert_eq!(
-        calls_for_pubkey(&calls, fixture.pubkey(AGGREGATE_VALIDATOR_IDX)),
-        1
-    );
-    assert_eq!(
-        calls_for_pubkey(&calls, fixture.pubkey(CONTRIBUTOR_VALIDATOR_IDX)),
-        CONTRIBUTION_SUBCOMMITTEES.len(),
-        "the decided contributions must be signed without a contribution callback"
     );
 }
 
@@ -699,73 +671,32 @@ async fn republished_assignments_do_not_resubmit() {
     assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
 }
 
-/// The contribution callback and the publisher read the same execution: neither re-runs consensus
-/// nor duplicates signatures, and each takes only its own class of decided item.
+/// A publisher that joins after the worklist has already been signed still publishes both
+/// classes from the cached execution, without re-running consensus or duplicating signatures.
 #[tokio::test(flavor = "multi_thread")]
-async fn contribution_callback_and_publisher_share_one_execution() {
-    // Arrange
+async fn a_late_publisher_publishes_both_classes_from_the_cached_execution() {
+    // Arrange: let the detached execution finish the complete worklist first.
     let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
     let (decided, execution) = fixture.seed_mixed_decided_value_with_execution();
-    let contributions = CONTRIBUTION_SUBCOMMITTEES
-        .iter()
-        .map(|&subcommittee| fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, subcommittee))
-        .collect();
+    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
+    let calls = committee_calls(&fixture.harness);
+    assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
 
-    // Act: contribution callback first, then the publisher joins the cached outcome.
-    let contribution_results = fixture.collect_contributions(contributions).await;
+    // Act: the publisher joins the finished execution.
     let published = fixture.run_publisher(execution).await;
 
-    // Assert: each reader took only its own class.
+    // Assert: it publishes the full decided worklist.
+    let contributor = *fixture.validator_index(CONTRIBUTOR_VALIDATOR_IDX) as u64;
     assert_eq!(
-        single_batch(contribution_results).len(),
-        CONTRIBUTION_SUBCOMMITTEES.len(),
-        "the contribution callback should return only its contributions"
-    );
-    assert_published_aggregators(
-        &published,
-        &[fixture.expected_aggregator_index()],
-        "the publisher should publish only the decided aggregate",
-    );
-
-    // The union is signed exactly once: no duplicate captures from the second reader.
-    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
-    let calls = committee_calls(&fixture.harness);
-    assert_eq!(distinct_roots(&calls).len(), MIXED_WORKLIST_SIZE);
-    assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
-}
-
-/// Dropping a callback future must not cancel the execution it is reading: the complete worklist
-/// is still signed, and a later reader still gets its items from the same execution.
-#[tokio::test(flavor = "multi_thread")]
-async fn dropped_callback_future_still_completes_worklist() {
-    // Arrange
-    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
-    let (decided, execution) = fixture.seed_mixed_decided_value_with_execution();
-    let contributions: Vec<_> = CONTRIBUTION_SUBCOMMITTEES
-        .iter()
-        .map(|&subcommittee| fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, subcommittee))
-        .collect();
-
-    // Act: poll the contribution callback once, then drop it. A zero timeout polls the inner
-    // future exactly once before the deadline elapses; if the callback happens to win the race the
-    // scenario degrades to the sequential case.
-    let stream = fixture
-        .harness
-        .validator_store
-        .sign_sync_committee_contributions(contributions);
-    let _ = tokio::time::timeout(Duration::ZERO, stream.collect::<SignContributionsResult>()).await;
-
-    // Assert: the detached execution still signs the complete worklist.
-    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
-    let calls = committee_calls(&fixture.harness);
-    assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
-
-    // A late publisher joins the finished execution and gets the decided aggregate.
-    let published = fixture.run_publisher(execution).await;
-    assert_published_aggregators(
-        &published,
-        &[fixture.expected_aggregator_index()],
-        "a late publisher should publish from the cached execution",
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: vec![
+                (contributor, CONTRIBUTION_SUBCOMMITTEES[0]),
+                (contributor, CONTRIBUTION_SUBCOMMITTEES[1]),
+            ],
+        },
+        "a late publisher should publish from the cached execution"
     );
 
     // Still no duplicate captures after the late read.
@@ -777,7 +708,8 @@ async fn dropped_callback_future_still_completes_worklist() {
 }
 
 /// One validator owning an aggregate plus contributions in all four subcommittees keeps five
-/// distinct signing roots in one five-entry batch.
+/// distinct signing roots in one five-entry batch, and the publisher assembles one POST per
+/// `(validator, subcommittee)` identity.
 #[tokio::test(flavor = "multi_thread")]
 async fn multi_root_validator_keeps_distinct_roots() {
     // Arrange
@@ -788,20 +720,26 @@ async fn multi_root_validator_keeps_distinct_roots() {
         .iter()
         .map(|&subcommittee| (validator, subcommittee))
         .collect();
-    let decided = fixture.seed_decided_value(build_decided_data(
+    let (decided, execution) = fixture.seed_decided_value_with_execution(build_decided_data(
         &[(validator, BEACON_COMMITTEE_INDEX)],
         &contributors,
     ));
-    let contributions = ALL_SUBCOMMITTEES
-        .iter()
-        .map(|&subcommittee| fixture.create_contribution(SOLE_VALIDATOR_IDX, subcommittee))
-        .collect();
 
     // Act
-    let results = fixture.collect_contributions(contributions).await;
+    let published = fixture.run_publisher(execution).await;
 
-    // Assert
-    assert_eq!(single_batch(results).len(), ALL_SUBCOMMITTEES.len());
+    // Assert: one aggregate POST plus one contribution POST per subcommittee.
+    assert_eq!(
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: ALL_SUBCOMMITTEES
+                .iter()
+                .map(|&subcommittee| (*validator as u64, subcommittee))
+                .collect(),
+        },
+        "each (validator, subcommittee) identity should publish its own contribution"
+    );
     assert_captured_calls_settle_at(&fixture.harness, EXPECTED_WORKLIST_SIZE).await;
     let calls = committee_calls(&fixture.harness);
     assert_eq!(
@@ -818,43 +756,8 @@ async fn multi_root_validator_keeps_distinct_roots() {
 
 // ==================== Divergent-view and normalization tests ====================
 
-/// A requested item absent from the decided value is skipped, while the other requested
-/// items succeed and the batch size counts only decided entries.
-#[tokio::test(flavor = "multi_thread")]
-async fn requested_item_missing_from_decided_value() {
-    // Arrange: the decided value covers subcommittees 0 and 1, but the callback also asks
-    // for subcommittee 2.
-    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
-    let decided = fixture.seed_mixed_decided_value();
-    let contributions = CONTRIBUTION_SUBCOMMITTEES
-        .iter()
-        .chain(std::iter::once(&MISSING_SUBCOMMITTEE_INDEX))
-        .map(|&subcommittee| fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, subcommittee))
-        .collect();
-
-    // Act
-    let results = fixture.collect_contributions(contributions).await;
-
-    // Assert: only the decided subcommittees come back.
-    let signed = single_batch(results);
-    let returned_subcommittees: HashSet<u64> = signed
-        .iter()
-        .map(|item| item.message.contribution.subcommittee_index)
-        .collect();
-    assert_eq!(
-        returned_subcommittees,
-        HashSet::from(CONTRIBUTION_SUBCOMMITTEES),
-        "the undecided subcommittee must be skipped, not signed"
-    );
-
-    // The batch covers the decided union only, without the missing item.
-    assert_captured_calls_settle_at(&fixture.harness, MIXED_WORKLIST_SIZE).await;
-    let calls = committee_calls(&fixture.harness);
-    assert_batch_identity(&calls, MIXED_WORKLIST_SIZE, decided.hash());
-}
-
 /// Exact duplicate decided entries collapse to one worklist entry each, so the batch size
-/// reflects the deduplicated union.
+/// reflects the deduplicated union and each identity publishes once.
 #[tokio::test(flavor = "multi_thread")]
 async fn duplicate_decided_entries_normalized() {
     // Arrange: the same aggregator entry twice and the same contributor entry twice.
@@ -862,7 +765,7 @@ async fn duplicate_decided_entries_normalized() {
     let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
     let aggregator = fixture.validator_index(AGGREGATE_VALIDATOR_IDX);
     let contributor = fixture.validator_index(CONTRIBUTOR_VALIDATOR_IDX);
-    let decided = fixture.seed_decided_value(build_decided_data(
+    let (decided, execution) = fixture.seed_decided_value_with_execution(build_decided_data(
         &[
             (aggregator, BEACON_COMMITTEE_INDEX),
             (aggregator, BEACON_COMMITTEE_INDEX),
@@ -872,14 +775,19 @@ async fn duplicate_decided_entries_normalized() {
             (contributor, CONTRIBUTION_SUBCOMMITTEES[0]),
         ],
     ));
-    let contributions =
-        vec![fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[0])];
 
     // Act
-    let results = fixture.collect_contributions(contributions).await;
+    let published = fixture.run_publisher(execution).await;
 
     // Assert
-    assert_eq!(single_batch(results).len(), 1);
+    assert_eq!(
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: vec![(*contributor as u64, CONTRIBUTION_SUBCOMMITTEES[0])],
+        },
+        "duplicate decided entries must publish once per identity"
+    );
     assert_captured_calls_settle_at(&fixture.harness, EXPECTED_DEDUPED_SIZE).await;
     let calls = committee_calls(&fixture.harness);
     assert_eq!(
@@ -907,15 +815,9 @@ async fn conflicting_aggregate_roots_sign_only_the_first() {
         ],
         &[(contributor, CONTRIBUTION_SUBCOMMITTEES[0])],
     ));
-    let contributions =
-        vec![fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[0])];
-
-    // Act
-    let results = fixture.collect_contributions(contributions).await;
 
     // Assert: exactly one of the conflicting aggregates is signed, the contribution is
     // unaffected, and the batch counts both.
-    assert_eq!(single_batch(results).len(), 1);
     assert_captured_calls_settle_at(&fixture.harness, EXPECTED_SIGNED_SIZE).await;
     let calls = committee_calls(&fixture.harness);
     assert_eq!(
@@ -939,13 +841,12 @@ async fn conflicting_aggregate_roots_sign_only_the_first() {
 // ==================== Empty and error path tests ====================
 
 /// A decided value naming only validators this operator has no metadata for produces an empty
-/// worklist: the contribution callback returns an empty batch, the publisher has nothing to
-/// publish and counts the committee under `no_aggregates`, and no signature is ever collected.
+/// worklist: the publisher has nothing to publish in either class, counts the committee under
+/// `no_aggregates`, and no signature is ever collected.
 #[tokio::test(flavor = "multi_thread")]
-async fn empty_worklist_returns_empty() {
+async fn empty_worklist_publishes_nothing() {
     let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
-    // Arrange: the decided entries reference foreign validator indices, while the callback
-    // references the local validator (required to pass committee grouping).
+    // Arrange: the decided entries reference foreign validator indices only.
     let fixture = AggregatorCommitteeFixture::new(SINGLE_VALIDATOR_COUNT);
     let (_, execution) = fixture.seed_decided_value_with_execution(build_decided_data(
         &[(
@@ -957,22 +858,16 @@ async fn empty_worklist_returns_empty() {
             CONTRIBUTION_SUBCOMMITTEES[0],
         )],
     ));
-    let contributions =
-        vec![fixture.create_contribution(SOLE_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[0])];
     let no_aggregates_before = publish_result_count(metrics::NO_AGGREGATES);
 
     // Act
-    let contribution_results = fixture.collect_contributions(contributions).await;
     let published = fixture.run_publisher(execution).await;
 
-    // Assert: nothing to return, nothing to publish, nothing signed.
-    assert!(
-        single_batch(contribution_results).is_empty(),
-        "no locally signable decided entry means an empty contribution batch"
-    );
-    assert!(
-        published.is_empty(),
-        "no locally signable decided aggregate means no publish call"
+    // Assert: nothing to publish in either class, nothing signed.
+    assert_eq!(
+        published,
+        RecordedPublishes::default(),
+        "no locally signable decided entry means no publish call of either class"
     );
     assert_eq!(
         publish_result_count(metrics::NO_AGGREGATES),
@@ -982,27 +877,15 @@ async fn empty_worklist_returns_empty() {
     assert_captured_calls_settle_at(&fixture.harness, 0).await;
 }
 
-/// Missing consensus data for the committee registers no execution: the contribution callback
-/// fails with `ConsensusDataNotFound`, the publisher gets no handle, and nothing is signed.
+/// Missing consensus data for the committee registers no execution: the publisher gets no
+/// handle and nothing is signed.
 #[tokio::test(flavor = "multi_thread")]
-async fn consensus_data_missing_errors() {
-    // Arrange: assignments exist for the slot, but carry no consensus data for any committee,
-    // so the execution fails with `ConsensusDataNotFound`. (Seeding nothing at all would park
-    // the callback on the assignments watch channel instead of erroring.)
+async fn consensus_data_missing_registers_no_execution() {
+    // Arrange: assignments exist for the slot, but carry no consensus data for any committee.
     let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
     let executions = fixture.seed_assignments_without_consensus_data();
-    let contributions =
-        vec![fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[0])];
 
-    // Act
-    let contribution_results = fixture.collect_contributions(contributions).await;
-
-    // Assert: `run_committee_signing` swallows the failure into one empty stream item per
-    // committee, nothing is handed to the publisher, and no signature collection is attempted.
-    assert!(
-        single_batch(contribution_results).is_empty(),
-        "a failed execution should yield an empty contribution batch"
-    );
+    // Assert: nothing is handed to the publisher, and no signature collection is attempted.
     assert!(
         executions.is_empty(),
         "a committee with no decided value must not register a publisher handle"
@@ -1029,20 +912,20 @@ async fn slot_mismatched_decided_payloads_are_excluded() {
     for contribution in decided.sync_committee_contributions.iter_mut() {
         contribution.slot = Slot::new(TEST_SLOT + 1);
     }
-    fixture.seed_decided_value(decided);
-    let contributions = vec![
-        fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[0]),
-        fixture.create_contribution(CONTRIBUTOR_VALIDATOR_IDX, CONTRIBUTION_SUBCOMMITTEES[1]),
-    ];
+    let (_, execution) = fixture.seed_decided_value_with_execution(decided);
 
     // Act
-    let results = fixture.collect_contributions(contributions).await;
+    let published = fixture.run_publisher(execution).await;
 
-    // Assert: the requested contributions resolve to nothing (their decided payloads were
-    // excluded), while the aggregate still gets signed with a batch sized to the survivors.
-    assert!(
-        single_batch(results).is_empty(),
-        "slot-mismatched contributions should not be returned"
+    // Assert: the mismatched contributions are excluded from the worklist and never published,
+    // while the aggregate still gets signed and published with a batch sized to the survivors.
+    assert_eq!(
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: vec![],
+        },
+        "slot-mismatched contributions should not be published"
     );
     const EXPECTED_SURVIVOR_COUNT: usize = 1;
     assert_captured_calls_settle_at(&fixture.harness, EXPECTED_SURVIVOR_COUNT).await;
@@ -1114,19 +997,27 @@ async fn publisher_counts_a_failed_execution_as_a_consensus_error() {
     .boxed()
     .shared();
     let consensus_error_before = publish_result_count(metrics::CONSENSUS_ERROR);
+    let contribution_errors_before = contribution_signing_count(metrics::OTHER_ERROR);
 
     // Act
     let published = fixture.run_publisher(execution).await;
 
     // Assert
-    assert!(
-        published.is_empty(),
+    assert_eq!(
+        published,
+        RecordedPublishes::default(),
         "a failed execution should publish nothing"
     );
     assert_eq!(
         publish_result_count(metrics::CONSENSUS_ERROR),
         consensus_error_before + 1,
         "the publisher should count the failed committee under `consensus_error`"
+    );
+    assert_eq!(
+        contribution_signing_count(metrics::OTHER_ERROR),
+        contribution_errors_before + 1,
+        "a failed committee round should count once on the contribution signing counter too, \
+         keeping the only contribution failure signal non-silent"
     );
 }
 
@@ -1153,8 +1044,9 @@ async fn publisher_counts_a_consensus_error_once_the_deadline_passes() {
         .expect("the publisher must not outlive the two-slot deadline");
 
     // Assert
-    assert!(
-        published.is_empty(),
+    assert_eq!(
+        published,
+        RecordedPublishes::default(),
         "an undecided execution should publish nothing"
     );
     assert_eq!(
@@ -1234,7 +1126,7 @@ impl PublisherFixture {
         )
     }
 
-    /// A decided value holding one contribution and no aggregate, which the publisher must skip.
+    /// A decided value holding one contribution and no aggregate.
     fn contributions_only(&self, committee: usize) -> DecidedData {
         build_decided_data(
             &[],
@@ -1264,18 +1156,19 @@ impl PublisherFixture {
         &self,
         executions: Vec<(CommitteeId, Execution)>,
         outcome: impl Fn(u64) -> Result<(), String>,
-    ) -> Vec<RecordedPublish> {
+    ) -> RecordedPublishes {
         run_recording_publisher(&self.harness, executions, outcome).await
     }
 }
 
-/// Every decided aggregate is published exactly once, and a committee whose decided value holds
-/// only contributions never reaches the publish call at all.
+/// Every decided root is published exactly once, whichever class it belongs to: a
+/// contributions-only committee publishes its contribution rather than being discarded, and it
+/// is the one counted under `no_aggregates`.
 ///
-/// Contributions stay on Lighthouse's publish path, so a publish call for the contributions-only
-/// committee would be a pointless POST.
+/// The discard was the pre-#1260 behavior, when contributions still rode Lighthouse's publish
+/// path; with the Lighthouse callback inert, the publisher is the only POSTer for both classes.
 #[tokio::test(flavor = "multi_thread")]
-async fn publish_decided_aggregates_publishes_each_committee_with_aggregates_once() {
+async fn publish_decided_aggregates_publishes_each_committees_decided_worklist_once() {
     let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
     // Arrange
     let fixture = PublisherFixture::new();
@@ -1298,26 +1191,37 @@ async fn publish_decided_aggregates_publishes_each_committee_with_aggregates_onc
         PUBLISHER_OPERATOR_SETS.len(),
         "each committee should register one execution"
     );
+    let no_aggregates_before = publish_result_count(metrics::NO_AGGREGATES);
 
     // Act
     let published = fixture.run_publisher(executions, |_| Ok(())).await;
 
-    // Assert: one publish call per decided aggregate, carrying its committee's aggregator and
-    // the decided value's fork.
+    // Assert: one publish call per decided root, each aggregate carrying its committee's
+    // aggregator and the decided value's fork, the contribution carrying its identity.
     assert_eq!(
         published,
-        vec![
-            (
-                DEFAULT_DECIDED_FORK,
-                fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE),
-            ),
-            (
-                DEFAULT_DECIDED_FORK,
-                fixture.aggregator_index(SECOND_AGGREGATE_COMMITTEE),
-            ),
-        ],
-        "committees with decided aggregates publish once each, and the contributions-only \
-         committee never reaches the publish call"
+        RecordedPublishes {
+            aggregates: vec![
+                (
+                    DEFAULT_DECIDED_FORK,
+                    fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE),
+                ),
+                (
+                    DEFAULT_DECIDED_FORK,
+                    fixture.aggregator_index(SECOND_AGGREGATE_COMMITTEE),
+                ),
+            ],
+            contributions: vec![(
+                fixture.aggregator_index(CONTRIBUTIONS_ONLY_COMMITTEE),
+                CONTRIBUTION_SUBCOMMITTEES[0],
+            )],
+        },
+        "committees publish their decided roots once each, contributions included"
+    );
+    assert_eq!(
+        publish_result_count(metrics::NO_AGGREGATES),
+        no_aggregates_before + 1,
+        "the contributions-only committee should still count once under `no_aggregates`"
     );
 }
 
@@ -1348,7 +1252,7 @@ async fn publish_decided_aggregates_survives_a_failing_publish() {
 
     // Assert: every committee's aggregate was still attempted.
     assert_eq!(
-        published,
+        published.aggregates,
         (0..PUBLISHER_OPERATOR_SETS.len())
             .map(|committee| (DEFAULT_DECIDED_FORK, fixture.aggregator_index(committee)))
             .collect::<Vec<_>>(),
@@ -1380,8 +1284,9 @@ async fn publish_decided_aggregates_skips_a_committee_whose_roots_never_reach_qu
     let published = fixture.run_publisher(executions, |_| Ok(())).await;
 
     // Assert: the publish closure was never invoked, and the root was counted under its label.
-    assert!(
-        published.is_empty(),
+    assert_eq!(
+        published,
+        RecordedPublishes::default(),
         "the publisher must not invoke the publish closure for a root without quorum"
     );
     assert_eq!(
@@ -1430,7 +1335,7 @@ async fn publish_decided_aggregates_publishes_the_surviving_root_when_a_sibling_
 
     // Assert: exactly the surviving root was published, exactly the missing one was counted.
     assert_eq!(
-        published,
+        published.aggregates,
         vec![(
             DEFAULT_DECIDED_FORK,
             fixture
@@ -1465,11 +1370,41 @@ async fn publish_decided_aggregates_hands_the_decided_versions_fork_to_the_closu
 
     // Assert
     assert_eq!(
-        published,
+        published.aggregates,
         vec![(
             ForkName::Electra,
             fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE),
         )],
         "the publish closure must receive the fork named by the decided value's DataVersion"
+    );
+}
+
+/// Cross-class independence inside one committee: a contribution root that misses signature
+/// quorum withholds only itself, and the sibling aggregate is still published.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_contributions_quorum_miss_does_not_withhold_the_sibling_aggregate() {
+    // Serialized: the failing contribution roots increment the contribution signing counter's
+    // `other_error` label, which the failed-execution test asserts a delta on.
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
+    // Arrange: a mixed decided value where only the contributor's signature collection fails.
+    // The fail mode is set before seeding, since the detached worklist tasks start collecting at
+    // publish.
+    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
+    fixture
+        .harness
+        .fail_signature_collection_for(fixture.pubkey(CONTRIBUTOR_VALIDATOR_IDX));
+    let (_, execution) = fixture.seed_mixed_decided_value_with_execution();
+
+    // Act
+    let published = fixture.run_publisher(execution).await;
+
+    // Assert: the aggregate publishes, the failed contributions publish nothing.
+    assert_eq!(
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: vec![],
+        },
+        "a contribution quorum miss must not withhold the sibling aggregate's publish call"
     );
 }
