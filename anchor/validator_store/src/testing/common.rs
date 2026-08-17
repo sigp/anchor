@@ -32,6 +32,7 @@ use ssv_types::{
     ValidatorIndex, ValidatorMetadata,
     consensus::{AggregatorCommitteeConsensusData, QbftDataValidator},
 };
+use ssz::Encode;
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
 use tokio::{

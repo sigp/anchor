@@ -300,17 +300,22 @@ async fn pre_boole_callbacks_use_the_complete_fixed_decided_descriptor() {
         Fork::Alan,
         MockConsensusDecider::fixed_after_barrier(&fixed_value, 2),
     );
-    harness
-        .validator_store
-        .update_aggregation_assignments(AggregationAssignments {
-            slot: Slot::new(TEST_SLOT),
-            aggregator_committees: HashMap::new(),
-            multi_sync_aggregators: HashMap::from([(
-                validator.public_key,
-                ContributionWaiter::new(2),
-            )]),
-            consensus_data_by_ssv_committee: HashMap::new(),
-        });
+    let new_executions =
+        harness
+            .validator_store
+            .update_aggregation_assignments(AggregationAssignments {
+                slot: Slot::new(TEST_SLOT),
+                aggregator_committees: HashMap::new(),
+                multi_sync_aggregators: HashMap::from([(
+                    validator.public_key,
+                    ContributionWaiter::new(2),
+                )]),
+                consensus_data_by_ssv_committee: HashMap::new(),
+            });
+    assert!(
+        new_executions.is_empty(),
+        "pre-Boole assignments without consensus data must not register aggregate executions"
+    );
 
     let stream = harness
         .validator_store
