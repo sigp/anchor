@@ -23,7 +23,7 @@ use ssv_types::{
     ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion,
-        GloasBeaconVote, QbftDataValidator,
+        EnvelopeConsensusData, GloasBeaconVote, QbftDataValidator,
     },
 };
 use ssz::Encode;
@@ -68,6 +68,15 @@ pub(super) async fn run_sign_attestations(
 
 // ==================== Mock consensus decider ====================
 
+/// Shared storage for captured `decide_instance` calls.
+pub(super) type CapturedDecides = Arc<Mutex<Vec<CapturedDecideCall>>>;
+
+/// One captured `decide_instance` call.
+pub(super) struct CapturedDecideCall {
+    /// Type name of the proposed consensus data, identifying which duty started consensus.
+    pub(super) data_type: &'static str,
+}
+
 /// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
 /// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
 ///
@@ -76,8 +85,13 @@ pub(super) async fn run_sign_attestations(
 /// tests exercise "the cluster-decided index differs from this operator's local seed", which is
 /// exactly the case `#1027` must apply. Non-Gloas seeds (`BeaconVote`) are always echoed back
 /// unchanged, since their decided value carries no index.
+///
+/// When `forced_envelope_decision` is `Some`, it replaces the echo for `EnvelopeConsensusData`
+/// seeds. Every `decide_instance` call is captured, regardless of the configured behavior.
 pub(super) struct MockConsensusDecider {
     forced_gloas_index: Option<u64>,
+    forced_envelope_decision: Option<EnvelopeConsensusData>,
+    captured: CapturedDecides,
 }
 
 impl MockConsensusDecider {
@@ -85,6 +99,8 @@ impl MockConsensusDecider {
     pub(super) fn echoing() -> Self {
         Self {
             forced_gloas_index: None,
+            forced_envelope_decision: None,
+            captured: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -93,7 +109,24 @@ impl MockConsensusDecider {
     pub(super) fn forcing_gloas_index(index: u64) -> Self {
         Self {
             forced_gloas_index: Some(index),
+            forced_envelope_decision: None,
+            captured: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Decides every `EnvelopeConsensusData` seed as `decided`, modeling a cluster that
+    /// decided another operator's envelope. Non-envelope seeds keep the echo behavior.
+    pub(super) fn deciding_envelope(decided: EnvelopeConsensusData) -> Self {
+        Self {
+            forced_gloas_index: None,
+            forced_envelope_decision: Some(decided),
+            captured: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Handle to the captured `decide_instance` calls.
+    pub(super) fn captured_decides(&self) -> CapturedDecides {
+        Arc::clone(&self.captured)
     }
 }
 
@@ -106,6 +139,17 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
         _timeout_mode: TimeoutMode,
         _committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
+        self.captured.lock().push(CapturedDecideCall {
+            data_type: std::any::type_name::<D>(),
+        });
+        if let Some(decided) = self.forced_envelope_decision.clone() {
+            // Same soundness argument as below: `D: 'static`. Only an `EnvelopeConsensusData`
+            // seed downcasts; every other `D` falls through to the existing behavior.
+            let decided_any: Box<dyn Any> = Box::new(decided);
+            if let Ok(decided_envelope) = decided_any.downcast::<D>() {
+                return Ok(Completed::Success(*decided_envelope));
+            }
+        }
         // `D: QbftDecidable<E>` requires `'static`, so this downcast is sound. Only the Gloas
         // seed type carries `attestation_data_index`; every other `D` falls through to the echo.
         if let Some(index) = self.forced_gloas_index {
@@ -294,6 +338,9 @@ pub(super) struct HarnessOptions {
     /// When `Some`, the mock decides every `GloasBeaconVote` with this `attestation_data_index`,
     /// modeling a cluster-decided index that may differ from each operator's local seed.
     pub(super) forced_gloas_index: Option<u64>,
+    /// When `Some`, the mock decides every `EnvelopeConsensusData` seed as this value,
+    /// modeling a cluster that decided another operator's envelope.
+    pub(super) forced_envelope_decision: Option<EnvelopeConsensusData>,
     /// SSV fork the store's `ForkSchedule` reports as active. Defaults to `Boole`; tests that
     /// exercise pre-Boole behaviour supply an earlier fork.
     pub(super) active_fork: Fork,
@@ -313,6 +360,7 @@ impl Default for HarnessOptions {
             disable_slashing_protection: true,
             spec: Arc::new(ChainSpec::mainnet()),
             forced_gloas_index: None,
+            forced_envelope_decision: None,
             active_fork: Fork::Boole,
             proposer_delays: ProposerDelays::default(),
         }
@@ -354,6 +402,9 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
+    /// Not yet read by any harness-driven test; the envelope-signing e2e tests will consume it.
+    #[expect(dead_code)]
+    pub(super) captured_decides: CapturedDecides,
     /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
     /// after construction.
     pub(super) slot_clock: ManualSlotClock,
@@ -496,10 +547,15 @@ impl ValidatorStoreTestHarness {
 
         let (is_synced_tx, is_synced_rx) = watch::channel(true);
 
-        let decider = match options.forced_gloas_index {
-            Some(index) => MockConsensusDecider::forcing_gloas_index(index),
-            None => MockConsensusDecider::echoing(),
+        let decider = match (options.forced_gloas_index, options.forced_envelope_decision) {
+            (Some(index), None) => MockConsensusDecider::forcing_gloas_index(index),
+            (None, Some(decided)) => MockConsensusDecider::deciding_envelope(decided),
+            (None, None) => MockConsensusDecider::echoing(),
+            (Some(_), Some(_)) => {
+                panic!("harness options must not force both a Gloas index and an envelope decision")
+            }
         };
+        let captured_decides = decider.captured_decides();
 
         let spec = Arc::clone(&options.spec);
         let genesis_validators_root = Hash256::zero();
@@ -528,6 +584,7 @@ impl ValidatorStoreTestHarness {
             validator_store,
             committee_setups,
             captured_calls,
+            captured_decides,
             slot_clock,
             is_synced_tx,
             spec,

@@ -6,6 +6,7 @@ mod committee_attestation_gloas;
 mod committee_attestation_slashing;
 mod decided_block_root;
 mod decided_block_root_e2e;
+mod envelope_signing;
 mod payload_attestation;
 mod proposer_delay;
 mod proposer_preferences;
