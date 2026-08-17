@@ -334,7 +334,7 @@ impl ValidatedMessage {
 /// Context for topic-aware message validation.
 ///
 /// This enum makes explicit whether topic validation should be performed:
-/// - `SkipValidation`: Used for outgoing messages and tests where topic validation is not needed
+/// - `SkipValidation`: Used for tests where topic validation is not needed
 /// - `Validate`: Used for incoming network messages where topic validation is required
 ///
 /// For incoming network messages, always use `TopicContext::Validate`. If topic parsing
@@ -344,9 +344,7 @@ impl ValidatedMessage {
 pub enum TopicContext {
     /// Skip topic validation entirely.
     ///
-    /// Used for:
-    /// - Outgoing message self-validation (we calculate our own routing)
-    /// - Testing scenarios where topic context is irrelevant
+    /// Used for testing scenarios where topic context is irrelevant.
     #[default]
     SkipValidation,
 
@@ -391,6 +389,42 @@ pub struct Validator<S: SlotClock, D: DutiesProvider> {
     subnet_service: Arc<subnet_service::SubnetService<S>>,
     fork_schedule: Arc<ForkSchedule>,
     spec: Arc<ChainSpec>,
+}
+
+/// Decode and perform stateless structural validation of an outbound message.
+pub fn validate_outbound(message_data: &[u8]) -> Result<Slot, ValidationFailure> {
+    let signed_ssv_message = SignedSSVMessage::from_ssz_bytes(message_data)
+        .map_err(ValidationFailure::UndecodableMessageData)?;
+    validate_outbound_message(&signed_ssv_message)
+}
+
+/// Perform stateless structural validation of an outbound message and return its routing slot.
+///
+/// This is not an authorization boundary. It deliberately excludes all network, duty, timing,
+/// fork-role, signature-verification, and validation-state checks. Outbound producers must enforce
+/// those invariants before constructing the message. Incoming messages continue through
+/// [`Validator::validate`], which owns gossip validation state.
+pub fn validate_outbound_message(
+    signed_ssv_message: &SignedSSVMessage,
+) -> Result<Slot, ValidationFailure> {
+    validate_structure_and_role(signed_ssv_message)?;
+    signed_ssv_message
+        .ssv_message()
+        .extract_slot()
+        .ok_or(ValidationFailure::UnknownMessageSlot)
+}
+
+fn validate_structure_and_role(
+    signed_ssv_message: &SignedSSVMessage,
+) -> Result<Role, ValidationFailure> {
+    signed_ssv_message
+        .validate()
+        .map_err(ValidationFailure::from)?;
+    signed_ssv_message
+        .ssv_message()
+        .msg_id()
+        .role()
+        .ok_or(ValidationFailure::InvalidRole)
 }
 
 impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
@@ -462,17 +496,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         topic_context: &TopicContext,
         received_from: Option<PeerId>,
     ) -> Result<ValidatedMessage, ValidationFailure> {
-        // Structural validation: signer/signature invariants, RSA size, etc.
-        signed_ssv_message
-            .validate()
-            .map_err(ValidationFailure::from)?;
-
-        // Get the role from message ID
+        let role = validate_structure_and_role(signed_ssv_message)?;
         let ssv_message = signed_ssv_message.ssv_message();
-        let role = ssv_message
-            .msg_id()
-            .role()
-            .ok_or(ValidationFailure::InvalidRole)?;
 
         // Get committee ID for topic validation
         let committee_id = match ssv_message.msg_id().duty_executor() {
@@ -1232,7 +1257,7 @@ pub(crate) fn hash_data(full_data: &[u8]) -> [u8; 32] {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use bls::{Hash256, PublicKeyBytes};
+    use bls::{Hash256, PublicKeyBytes, Signature};
     use duties_tracker::{DutiesProvider, DutyAssignment};
     use openssl::{
         hash::MessageDigest,
@@ -1247,15 +1272,129 @@ mod tests {
         domain_type::DomainType,
         message::{MsgType, SSVMessage, SignedSSVMessage},
         msgid::{DutyExecutor, MessageId, Role},
+        partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
     };
     use ssz::Encode;
     use types::{Epoch, Slot};
 
-    use crate::{MessageAcceptance, ValidationFailure, hash_data};
+    use crate::{MessageAcceptance, ValidationFailure, hash_data, validate_outbound};
 
     // Constants for committee sizes in tests to improve readability.
     pub(crate) const SINGLE_NODE_COMMITTEE: usize = 1;
     pub(crate) const FOUR_NODE_COMMITTEE: usize = 4;
+
+    fn signed_test_message(
+        msg_type: MsgType,
+        message_id: MessageId,
+        data: Vec<u8>,
+    ) -> SignedSSVMessage {
+        let ssv_message = SSVMessage::new(msg_type, message_id, data)
+            .expect("test SSVMessage should be structurally valid");
+        SignedSSVMessage::new(
+            vec![[0xAA; RSA_SIGNATURE_SIZE]],
+            vec![OperatorId(1)],
+            ssv_message,
+            vec![],
+        )
+        .expect("test SignedSSVMessage should be structurally valid")
+    }
+
+    #[test]
+    fn validate_outbound_returns_nested_message_slots() {
+        let consensus_message_id = create_message_id_for_test(Role::Committee);
+        let mut qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
+            .with_identifier(consensus_message_id.clone())
+            .build();
+        qbft_message.height = 42;
+        let signed_consensus_message = signed_test_message(
+            MsgType::SSVConsensusMsgType,
+            consensus_message_id,
+            qbft_message.as_ssz_bytes(),
+        );
+
+        assert_eq!(
+            validate_outbound(&signed_consensus_message.as_ssz_bytes()),
+            Ok(Slot::new(42))
+        );
+
+        let partial_signature_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::RandaoPartialSig,
+            slot: Slot::new(43),
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::ZERO,
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(0),
+            }])
+            .expect("one partial signature should fit"),
+        };
+        let signed_partial_signature_message = signed_test_message(
+            MsgType::SSVPartialSignatureMsgType,
+            create_message_id_for_test(Role::Proposer),
+            partial_signature_messages.as_ssz_bytes(),
+        );
+
+        assert_eq!(
+            validate_outbound(&signed_partial_signature_message.as_ssz_bytes()),
+            Ok(Slot::new(43))
+        );
+    }
+
+    #[test]
+    fn validate_outbound_rejects_malformed_outer_and_nested_messages() {
+        assert!(matches!(
+            validate_outbound(&[]),
+            Err(ValidationFailure::UndecodableMessageData(_))
+        ));
+
+        for (msg_type, role) in [
+            (MsgType::SSVConsensusMsgType, Role::Committee),
+            (MsgType::SSVPartialSignatureMsgType, Role::Proposer),
+        ] {
+            let signed_message =
+                signed_test_message(msg_type, create_message_id_for_test(role), vec![0x01]);
+            assert_eq!(
+                validate_outbound(&signed_message.as_ssz_bytes()),
+                Err(ValidationFailure::UnknownMessageSlot)
+            );
+        }
+    }
+
+    #[test]
+    fn validate_outbound_rejects_duplicate_signers() {
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let mut signed_message =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(1)], vec![], vec![]);
+        signed_message
+            .aggregate([signed_message.clone()])
+            .expect("aggregation permits duplicate signers for validation tests");
+
+        assert_eq!(
+            validate_outbound(&signed_message.as_ssz_bytes()),
+            Err(ValidationFailure::DuplicatedSigner)
+        );
+    }
+
+    #[test]
+    fn validate_outbound_rejects_invalid_role() {
+        let mut invalid_message_id = [0u8; 56];
+        invalid_message_id[4] = u8::MAX;
+        let invalid_message_id = MessageId::from(invalid_message_id);
+        let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal)
+            .with_identifier(invalid_message_id.clone())
+            .build();
+        let signed_message = signed_test_message(
+            MsgType::SSVConsensusMsgType,
+            invalid_message_id,
+            qbft_message.as_ssz_bytes(),
+        );
+
+        assert_eq!(
+            validate_outbound(&signed_message.as_ssz_bytes()),
+            Err(ValidationFailure::InvalidRole)
+        );
+    }
 
     /// Test that an `ExcessiveDutyCount` maps to `Ignore`.
     /// Duty-limit breach is a rate condition. An honest relayer can forward a message that
