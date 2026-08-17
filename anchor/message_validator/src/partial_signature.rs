@@ -952,9 +952,9 @@ mod tests {
                         role: Role::Committee,
                         ..
                     }
-                )
+                ) && MessageAcceptance::from(failure) == MessageAcceptance::Ignore
             },
-            "ExcessiveDutyCount",
+            "ExcessiveDutyCount (Ignore)",
         );
     }
 

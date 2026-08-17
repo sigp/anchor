@@ -118,7 +118,6 @@ pub enum ValidationFailure {
     NonExistentCommitteeID,
     RoundTooHigh,
     ValidatorIndexMismatch,
-    TooManyDutiesPerEpoch,
     NoDuty,
     EstimatedRoundNotInAllowedSpread {
         got: String,
@@ -243,7 +242,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::RoundTooHigh
             | ValidationFailure::RoundOverflow
             | ValidationFailure::ValidatorIndexMismatch
-            | ValidationFailure::TooManyDutiesPerEpoch
+            | ValidationFailure::ExcessiveDutyCount { .. }
             | ValidationFailure::NoDuty
             | ValidationFailure::EstimatedRoundNotInAllowedSpread { .. } => {
                 MessageAcceptance::Ignore
