@@ -78,6 +78,16 @@ const MIXED_WORKLIST_SIZE: usize = 1 + CONTRIBUTION_SUBCOMMITTEES.len();
 /// so deadline tests reach the timeout without sleeping two real slots.
 const PAST_PUBLISH_DEADLINE_SECS: u64 = (TEST_SLOT + 3) * SLOT_DURATION_SECS;
 
+/// A clock position strictly between the two per-root deadlines for `TEST_SLOT`: past the
+/// contribution deadline (that slot's end) and before the aggregate deadline (one slot later).
+/// Tests of the per-class asymmetry sit here, where the two classes must behave differently.
+const BETWEEN_CLASS_DEADLINES_SECS: u64 =
+    (TEST_SLOT + 1) * SLOT_DURATION_SECS + SLOT_DURATION_SECS / 2;
+
+/// Long enough that a publisher which is going to finish has finished, short enough to keep the
+/// asymmetry test fast. Only used to prove a publisher is still waiting.
+const STILL_WAITING_PROBE: Duration = Duration::from_millis(500);
+
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// Extra wait after the expected capture count is reached, to catch spurious extra captures.
@@ -672,9 +682,9 @@ async fn republished_assignments_do_not_resubmit() {
 }
 
 /// A publisher that joins after the worklist has already been signed still publishes both
-/// classes from the cached execution, without re-running consensus or duplicating signatures.
+/// classes from the resolved execution, without re-running consensus or duplicating signatures.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_late_publisher_publishes_both_classes_from_the_cached_execution() {
+async fn a_late_publisher_publishes_both_classes_from_the_resolved_execution() {
     // Arrange: let the detached execution finish the complete worklist first.
     let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
     let (decided, execution) = fixture.seed_mixed_decided_value_with_execution();
@@ -696,7 +706,7 @@ async fn a_late_publisher_publishes_both_classes_from_the_cached_execution() {
                 (contributor, CONTRIBUTION_SUBCOMMITTEES[1]),
             ],
         },
-        "a late publisher should publish from the cached execution"
+        "a late publisher should publish from the resolved execution"
     );
 
     // Still no duplicate captures after the late read.
@@ -943,12 +953,13 @@ async fn slot_mismatched_decided_payloads_are_excluded() {
 
 // ==================== Publisher registration tests ====================
 
-/// Registration is vacant-only, so a `(committee, slot)` yields its publisher handle exactly once.
+/// Registration is first-insert-only, so a `(committee, slot)` yields its publisher handle
+/// exactly once.
 ///
 /// The handle is what makes the publisher run, so a second handle for one slot would post the
 /// same aggregates to the beacon node twice.
 #[tokio::test(flavor = "multi_thread")]
-async fn start_aggregator_post_consensus_returns_only_vacant_insertions() {
+async fn start_aggregator_post_consensus_returns_only_first_insertions() {
     // Arrange
     let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
     let decided = Arc::new(fixture.mixed_decided_data());
@@ -1376,6 +1387,94 @@ async fn publish_decided_aggregates_hands_the_decided_versions_fork_to_the_closu
             fixture.aggregator_index(FIRST_AGGREGATE_COMMITTEE),
         )],
         "the publish closure must receive the fork named by the decided value's DataVersion"
+    );
+}
+
+/// The two classes carry different deadlines, and the difference is load-bearing: a beacon node
+/// accepts a contribution only during its own slot, while aggregates stay acceptable for about an
+/// epoch. So contributions stop waiting for quorum at slot end and aggregates keep waiting.
+///
+/// The clock sits between the two deadlines and signature collection never resolves, so the two
+/// classes must diverge: the contribution roots give up immediately and count `timeout`, while the
+/// aggregate root is still waiting when the probe expires. A refactor that collapsed both classes
+/// onto one deadline would fail this test in one direction or the other.
+#[tokio::test(flavor = "multi_thread")]
+async fn contributions_stop_at_slot_end_while_aggregates_keep_waiting() {
+    let _metric_guard = PUBLISH_METRIC_LOCK.lock().await;
+    // Arrange: a mixed decided value whose roots never reach quorum, with the clock past the
+    // contribution deadline (this slot's end) but before the aggregate deadline (a slot later).
+    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
+    fixture.harness.hang_signature_collection();
+    let (_, execution) = fixture.seed_mixed_decided_value_with_execution();
+    fixture
+        .harness
+        .slot_clock
+        .set_current_time(Duration::from_secs(BETWEEN_CLASS_DEADLINES_SECS));
+    let contribution_timeouts_before = contribution_signing_count(metrics::TIMEOUT);
+    let no_signatures_before = publish_result_count(metrics::NO_SIGNATURES);
+
+    // Act: the publisher cannot finish while the aggregate root is still within its deadline.
+    let outcome = tokio::time::timeout(STILL_WAITING_PROBE, fixture.run_publisher(execution)).await;
+
+    // Assert: the aggregate is still waiting past this slot's end.
+    assert!(
+        outcome.is_err(),
+        "the aggregate root must keep waiting past slot end; it stays publishable for about an \
+         epoch, so bounding it here would discard a recoverable duty"
+    );
+
+    // The contributions already gave up, counted under the class's own signing counter.
+    assert_eq!(
+        contribution_signing_count(metrics::TIMEOUT),
+        contribution_timeouts_before + CONTRIBUTION_SUBCOMMITTEES.len() as u64,
+        "each contribution root past slot end should count once under `timeout`"
+    );
+    assert_eq!(
+        publish_result_count(metrics::NO_SIGNATURES),
+        no_signatures_before,
+        "contribution outcomes must stay out of the aggregate-only publish counter"
+    );
+}
+
+/// A failing contribution POST is contained to its own root: the sibling aggregate still
+/// publishes and the drain still completes.
+///
+/// The aggregate side of this is covered by `publish_decided_aggregates_survives_a_failing_publish`;
+/// this is the contribution half, which the two-class publisher made reachable.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_contribution_post_does_not_withhold_the_sibling_aggregate() {
+    // Arrange: every contribution POST fails, keyed by the contributor's aggregator index so the
+    // outcome does not depend on which root resolves first.
+    let fixture = AggregatorCommitteeFixture::new(MIXED_COMMITTEE_VALIDATOR_COUNT);
+    let (_, execution) = fixture.seed_mixed_decided_value_with_execution();
+    let failing_contributor = *fixture.validator_index(CONTRIBUTOR_VALIDATOR_IDX) as u64;
+
+    // Act
+    let published = run_recording_publisher(
+        &fixture.harness,
+        vec![(fixture.committee_id, execution)],
+        |aggregator| {
+            if aggregator == failing_contributor {
+                Err("beacon node rejected the contribution".to_string())
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .await;
+
+    // Assert: both contributions were still attempted, and the aggregate published regardless.
+    assert_eq!(
+        published,
+        RecordedPublishes {
+            aggregates: vec![(DEFAULT_DECIDED_FORK, fixture.expected_aggregator_index())],
+            contributions: vec![
+                (failing_contributor, CONTRIBUTION_SUBCOMMITTEES[0]),
+                (failing_contributor, CONTRIBUTION_SUBCOMMITTEES[1]),
+            ],
+        },
+        "a failing contribution POST must not withhold its sibling aggregate or its own sibling \
+         contribution"
     );
 }
 
