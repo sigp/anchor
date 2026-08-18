@@ -1439,8 +1439,9 @@ async fn contributions_stop_at_slot_end_while_aggregates_keep_waiting() {
 /// A failing contribution POST is contained to its own root: the sibling aggregate still
 /// publishes and the drain still completes.
 ///
-/// The aggregate side of this is covered by `publish_decided_aggregates_survives_a_failing_publish`;
-/// this is the contribution half, which the two-class publisher made reachable.
+/// The aggregate side of this is covered by
+/// `publish_decided_aggregates_survives_a_failing_publish`; this is the contribution half, which
+/// the two-class publisher made reachable.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failing_contribution_post_does_not_withhold_the_sibling_aggregate() {
     // Arrange: every contribution POST fails, keyed by the contributor's aggregator index so the
