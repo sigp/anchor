@@ -3,12 +3,12 @@
 //! This module provides the `ForkSchedule` type for managing fork activations
 //! and determining which fork is active at a given epoch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use ssv_types::domain_type::DomainType;
-use types::Epoch;
+use types::{Epoch, Slot};
 
-use crate::Fork;
+use crate::{Fork, ForkLifecycle};
 
 /// Number of epochs before a fork to start preparing (dual-subscribing, etc.).
 ///
@@ -96,7 +96,11 @@ pub struct ForkSchedule {
 }
 
 impl ForkSchedule {
-    /// Create a new fork schedule with the given fork active from epoch 0.
+    /// Create a fork schedule with every fork up to `fork` active from epoch 0.
+    ///
+    /// Every included fork uses `baseline_domain_type`. This constructor is intended for
+    /// Alan-only network defaults and test schedules. Explicit production fork schedules should
+    /// use [`Self::from_fork_configs`] so ordering and domain uniqueness are validated.
     pub fn new(fork: Fork, baseline_domain_type: DomainType, network_name: &str) -> Self {
         let mut configs = BTreeMap::new();
         for fork in Fork::all().iter().take_while(|&f| f <= &fork) {
@@ -133,6 +137,7 @@ impl ForkSchedule {
     /// - Alan fork is missing from configs
     /// - Alan fork is not at epoch 0
     /// - Fork epochs are not in chronological order
+    /// - Fork domain types are not unique
     pub fn from_fork_configs(
         raw_configs: BTreeMap<Fork, (Epoch, DomainType)>,
         network_name: &str,
@@ -151,7 +156,8 @@ impl ForkSchedule {
         // Validate chronological ordering - earlier forks must have < epochs
         // The exception is epoch 0, which may schedule multiple forks (to enable them at genesis)
         let mut prev_epoch: Option<u64> = None;
-        for (fork, (epoch, _)) in &raw_configs {
+        let mut domains = HashMap::new();
+        for (fork, (epoch, domain_type)) in &raw_configs {
             if let Some(prev) = prev_epoch
                 && epoch.as_u64() <= prev
                 && epoch.as_u64() != 0
@@ -161,6 +167,15 @@ impl ForkSchedule {
                     epoch.as_u64()
                 ));
             }
+
+            if let Some(previous_fork) = domains.get(domain_type) {
+                return Err(format!(
+                    "Fork {fork} reuses domain {} already assigned to fork {previous_fork}",
+                    String::from(*domain_type)
+                ));
+            }
+            domains.insert(*domain_type, *fork);
+
             prev_epoch = Some(epoch.as_u64());
         }
 
@@ -209,6 +224,55 @@ impl ForkSchedule {
             .expect("constructors ensure there is at least one fork at epoch 0")
     }
 
+    /// Derive the fork lifecycle state for a slot directly from the schedule.
+    ///
+    /// This is the single source of truth for lifecycle state: the same slot
+    /// always maps to the same state, so restarts, clock jumps, and steady
+    /// operation all go through one code path.
+    ///
+    /// Windows, using the fork's activation slot `A` (all half-open):
+    /// - `WarmUp` in `[A - FORK_PREPARATION_EPOCHS in slots, A)`
+    /// - `GracePeriod` in `[A, A + SUBSEQUENT_WINDOW_SLOTS)`
+    /// - `Normal` everywhere else
+    ///
+    /// `WarmUp` takes precedence when an upcoming fork's preparation window
+    /// overlaps the current fork's grace period: preparing for the imminent
+    /// fork matters more than retaining the previous fork's topics. Schedules
+    /// that trigger this overlap (forks less than
+    /// `FORK_PREPARATION_EPOCHS + SUBSEQUENT_WINDOW_SLOTS` apart) are
+    /// logged as errors at monitor spawn.
+    pub fn lifecycle_at(&self, slot: Slot, slots_per_epoch: u64) -> ForkLifecycle {
+        let epoch = slot.epoch(slots_per_epoch);
+        let current = self.active_fork_config(epoch).clone();
+
+        // WarmUp: an upcoming fork's preparation window has started.
+        if let Some((upcoming_fork, upcoming_epoch)) = self.next_fork_after(epoch) {
+            let preparation_start_slot = upcoming_epoch
+                .as_u64()
+                .saturating_sub(FORK_PREPARATION_EPOCHS)
+                * slots_per_epoch;
+            if slot.as_u64() >= preparation_start_slot {
+                let upcoming = self
+                    .config(upcoming_fork)
+                    .expect("next_fork_after only returns scheduled forks")
+                    .clone();
+                return ForkLifecycle::WarmUp { current, upcoming };
+            }
+        }
+
+        // GracePeriod: within the subsequent window of a non-genesis activation.
+        // Genesis forks (epoch 0) have no previous fork to grace out of.
+        let activation_slot = current.epoch.as_u64() * slots_per_epoch;
+        if current.epoch.as_u64() > 0 && slot.as_u64() < activation_slot + SUBSEQUENT_WINDOW_SLOTS {
+            let previous = self
+                .active_fork_config(Epoch::new(current.epoch.as_u64() - 1))
+                .clone();
+            return ForkLifecycle::GracePeriod { current, previous };
+        }
+
+        ForkLifecycle::Normal { current }
+    }
+
     /// Get the next scheduled fork after the given epoch.
     pub fn next_fork_after(&self, epoch: Epoch) -> Option<(Fork, Epoch)> {
         self.configs
@@ -229,11 +293,31 @@ mod tests {
     const BASELINE_DOMAIN: DomainType = DomainType([0, 0, 0, 1]);
     const BOOLE_DOMAIN: DomainType = DomainType([0, 0, 0, 2]);
 
+    // Mainnet slots per epoch, used by the `lifecycle_at` boundary tests.
+    const SLOTS_PER_EPOCH: u64 = 32;
+    // The Boole activation epoch used by the `lifecycle_at` boundary tests.
+    const BOOLE_FORK_EPOCH: u64 = 100;
+    // First slot of the warm-up window: `FORK_PREPARATION_EPOCHS` before activation.
+    const PREPARATION_START_SLOT: u64 =
+        (BOOLE_FORK_EPOCH - FORK_PREPARATION_EPOCHS) * SLOTS_PER_EPOCH;
+    // First slot of the grace period: the Boole activation slot.
+    const ACTIVATION_SLOT: u64 = BOOLE_FORK_EPOCH * SLOTS_PER_EPOCH;
+    // First slot after the grace period: back to `Normal`, now on Boole.
+    const GRACE_END_SLOT: u64 = ACTIVATION_SLOT + SUBSEQUENT_WINDOW_SLOTS;
+
     fn schedule_with_boole(epoch: u64) -> ForkSchedule {
         let mut configs = BTreeMap::new();
         configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
         configs.insert(Fork::Boole, (Epoch::new(epoch), BOOLE_DOMAIN));
         ForkSchedule::from_fork_configs(configs, TEST_NETWORK).expect("valid test schedule")
+    }
+
+    fn alan_config() -> ForkConfig {
+        ForkConfig::new(Fork::Alan, Epoch::new(0), BASELINE_DOMAIN)
+    }
+
+    fn boole_config_at(epoch: u64) -> ForkConfig {
+        ForkConfig::new(Fork::Boole, Epoch::new(epoch), BOOLE_DOMAIN)
     }
 
     #[test]
@@ -349,6 +433,34 @@ mod tests {
     }
 
     #[test]
+    fn test_from_fork_configs_rejects_duplicate_domains() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(100), BASELINE_DOMAIN));
+
+        let error = ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+            .expect_err("fork domains must be unique");
+        assert_eq!(
+            error,
+            "Fork boole reuses domain 00000001 already assigned to fork alan"
+        );
+    }
+
+    #[test]
+    fn test_from_fork_configs_rejects_duplicate_domains_at_epoch_zero() {
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(0), BASELINE_DOMAIN));
+
+        let error = ForkSchedule::from_fork_configs(configs, TEST_NETWORK)
+            .expect_err("fork domains must be unique");
+        assert_eq!(
+            error,
+            "Fork boole reuses domain 00000001 already assigned to fork alan"
+        );
+    }
+
+    #[test]
     fn test_topic_prefix_for_fork_alan() {
         let prefix = Fork::Alan.topic_prefix("mainnet");
         assert_eq!(prefix, ALAN_TOPIC_PREFIX);
@@ -365,5 +477,131 @@ mod tests {
 
         let prefix_holesky = Fork::Boole.topic_prefix("holesky");
         assert_eq!(prefix_holesky, "/ssv/holesky/boole/");
+    }
+
+    // ==================== `lifecycle_at` boundary tests ====================
+    //
+    // Note: the documented WarmUp-over-GracePeriod precedence on overlapping windows cannot
+    // be exercised with the current two-fork enum. An overlap needs a third fork whose
+    // preparation window starts inside Boole's grace period; Alan is the genesis fork (no
+    // grace period of its own) and no fork follows Boole, so no two-fork schedule can
+    // construct the overlap.
+
+    /// Every window boundary is half-open, so each phase must start at its exact slot and end
+    /// one slot before the next phase's start.
+    #[test]
+    fn test_lifecycle_at_boundary_table() {
+        // Arrange
+        let schedule = schedule_with_boole(BOOLE_FORK_EPOCH);
+        let boole = boole_config_at(BOOLE_FORK_EPOCH);
+        let normal_alan = ForkLifecycle::Normal {
+            current: alan_config(),
+        };
+        let warmup = ForkLifecycle::WarmUp {
+            current: alan_config(),
+            upcoming: boole.clone(),
+        };
+        let grace_period = ForkLifecycle::GracePeriod {
+            current: boole.clone(),
+            previous: alan_config(),
+        };
+        let normal_boole = ForkLifecycle::Normal { current: boole };
+        let cases = [
+            // Last slot before the preparation window opens.
+            (PREPARATION_START_SLOT - 1, &normal_alan),
+            // Exact preparation start: 99 * 32 = 3168.
+            (PREPARATION_START_SLOT, &warmup),
+            // Last slot of the warm-up window: 3199.
+            (ACTIVATION_SLOT - 1, &warmup),
+            // Exact activation slot: 3200.
+            (ACTIVATION_SLOT, &grace_period),
+            // Last slot of the grace period: 3200 + 31.
+            (GRACE_END_SLOT - 1, &grace_period),
+            // First slot after the grace period: 3200 + 32.
+            (GRACE_END_SLOT, &normal_boole),
+            // Far after the transition.
+            (GRACE_END_SLOT + 100_000, &normal_boole),
+        ];
+
+        for (slot, expected) in cases {
+            // Act
+            let lifecycle = schedule.lifecycle_at(Slot::new(slot), SLOTS_PER_EPOCH);
+
+            // Assert
+            assert_eq!(&lifecycle, expected, "unexpected lifecycle at slot {slot}");
+        }
+    }
+
+    /// With no future fork scheduled there is no warm-up window, and a genesis fork has no
+    /// previous fork to grace out of, so every slot is `Normal`.
+    #[test]
+    fn test_lifecycle_at_alan_only_schedule_is_always_normal() {
+        // Arrange
+        let schedule = ForkSchedule::new(Fork::Alan, BASELINE_DOMAIN, TEST_NETWORK);
+        let normal_alan = ForkLifecycle::Normal {
+            current: alan_config(),
+        };
+
+        for slot in [0, 1, SLOTS_PER_EPOCH, ACTIVATION_SLOT, u64::MAX / 2] {
+            // Act
+            let lifecycle = schedule.lifecycle_at(Slot::new(slot), SLOTS_PER_EPOCH);
+
+            // Assert
+            assert_eq!(
+                lifecycle, normal_alan,
+                "an Alan-only schedule must be Normal at slot {slot}"
+            );
+        }
+    }
+
+    /// A fork scheduled at epoch 0 activates at genesis: there is no previous fork to grace
+    /// out of, so the grace period must not apply.
+    #[test]
+    fn test_lifecycle_at_genesis_fork_has_no_grace_period() {
+        // Arrange: both forks at epoch 0.
+        let mut configs = BTreeMap::new();
+        configs.insert(Fork::Alan, (Epoch::new(0), BASELINE_DOMAIN));
+        configs.insert(Fork::Boole, (Epoch::new(0), BOOLE_DOMAIN));
+        let schedule =
+            ForkSchedule::from_fork_configs(configs, TEST_NETWORK).expect("valid test schedule");
+
+        // Act
+        let lifecycle = schedule.lifecycle_at(Slot::new(0), SLOTS_PER_EPOCH);
+
+        // Assert
+        assert_eq!(
+            lifecycle,
+            ForkLifecycle::Normal {
+                current: boole_config_at(0),
+            }
+        );
+    }
+
+    /// A fork at epoch 1 has its whole preparation window inside epoch 0, so the warm-up
+    /// starts at genesis itself.
+    #[test]
+    fn test_lifecycle_at_early_fork_preparation_window_starts_at_genesis() {
+        // Arrange
+        let schedule = schedule_with_boole(1);
+        let warmup = ForkLifecycle::WarmUp {
+            current: alan_config(),
+            upcoming: boole_config_at(1),
+        };
+
+        // Act and assert: the warm-up window covers genesis through the last epoch-0 slot.
+        assert_eq!(schedule.lifecycle_at(Slot::new(0), SLOTS_PER_EPOCH), warmup);
+        assert_eq!(
+            schedule.lifecycle_at(Slot::new(SLOTS_PER_EPOCH - 1), SLOTS_PER_EPOCH),
+            warmup
+        );
+
+        // Act and assert: activation at the first epoch-1 slot enters the grace period.
+        assert_eq!(
+            schedule.lifecycle_at(Slot::new(SLOTS_PER_EPOCH), SLOTS_PER_EPOCH),
+            ForkLifecycle::GracePeriod {
+                current: boole_config_at(1),
+                previous: alan_config(),
+            }
+        );
     }
 }

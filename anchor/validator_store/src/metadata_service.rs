@@ -10,7 +10,6 @@ use eth2::{
     BeaconNodeHttpClient,
     types::{BlockId, SyncContributionData},
 };
-use fork::{Fork, ForkSchedule};
 use futures::stream::{FuturesUnordered, StreamExt};
 use slot_clock::SlotClock;
 use ssv_types::{
@@ -30,14 +29,14 @@ use tokio::{
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
-    Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, Slot,
-    SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
+    Attestation, AttestationData, ChainSpec, EthSpec, ForkName, Hash256, SignedAggregateAndProof,
+    SignedContributionAndProof, Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
 use validator_services::duties_service::{DutiesService, DutyAndProof};
 
 use crate::{
     AggregationAssignments, AnchorValidatorStore, ContributionWaiter, SlotVote, VotingAssignments,
-    VotingContext, metrics,
+    VotingContext, aggregator_post_consensus::AggregatorPostConsensusShared, metrics,
 };
 
 /// Data for sync committee aggregators.
@@ -92,6 +91,19 @@ const BEACON_API_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 const WAD_SOFT_TIMEOUT: Duration = Duration::from_secs(1);
 const WAD_HARD_TIMEOUT: Duration = Duration::from_secs(3);
 const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Publish `VotingAssignments` this long after the slot boundary.
+///
+/// The boundary sleep runs on the monotonic timer but the slot is read from the
+/// wall clock, and the two drift apart by a few milliseconds over a full-slot
+/// sleep. A wake landing marginally before the boundary would read the previous
+/// slot, republish it, and skip the new one (issue #1223). This margin absorbs
+/// that drift. 50 ms mirrors the message validator's `CLOCK_ERROR_TOLERANCE`,
+/// the clock error the SSV network already budgets for between nodes. Nothing
+/// consumes the assignments this early: the soonest consumers are the
+/// selection-proof flows (deadline 2/3 slot) and the voting-context build
+/// (triggered no earlier than a head event).
+const VOTING_ASSIGNMENTS_PUBLISH_DELAY: Duration = Duration::from_millis(50);
 
 /// Builds each validator's per-subnet position counts from raw sync committee positions.
 fn build_sync_validator_assignments<E, I, P>(
@@ -263,7 +275,6 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     beacon_nodes: Arc<BeaconNodeFallback<T>>,
     executor: TaskExecutor,
     spec: Arc<ChainSpec>,
-    fork_schedule: Arc<ForkSchedule>,
     weighted_attestation_data: bool,
 }
 
@@ -292,8 +303,25 @@ async fn wait_for_head_event<T: SlotClock>(
     }
 }
 
+/// Drive `publish` once per slot, shortly after each slot boundary.
+///
+/// The delay past the boundary is what makes this correct: sleeping exactly to
+/// the boundary lets a marginally early timer wake read the previous slot,
+/// republish it, and skip the new one (issue #1223). See
+/// [`VOTING_ASSIGNMENTS_PUBLISH_DELAY`].
+async fn run_slot_start_publisher<T: SlotClock>(slot_clock: T, mut publish: impl FnMut()) {
+    loop {
+        if let Some(duration_to_next_slot) = slot_clock.duration_to_next_slot() {
+            sleep(duration_to_next_slot + VOTING_ASSIGNMENTS_PUBLISH_DELAY).await;
+            publish();
+        } else {
+            error!("Failed to read slot clock");
+            sleep(slot_clock.slot_duration()).await;
+        }
+    }
+}
+
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
         duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
         validator_store: Arc<AnchorValidatorStore<T, E>>,
@@ -301,7 +329,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         beacon_nodes: Arc<BeaconNodeFallback<T>>,
         executor: TaskExecutor,
         spec: Arc<ChainSpec>,
-        fork_schedule: Arc<ForkSchedule>,
         weighted_attestation_data: bool,
     ) -> Self {
         Self {
@@ -311,7 +338,6 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             beacon_nodes,
             executor,
             spec,
-            fork_schedule,
             weighted_attestation_data,
         }
     }
@@ -343,21 +369,13 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let self_clone_phase1 = self.clone();
         executor.spawn(
             async move {
-                loop {
-                    if let Some(duration_to_next_slot) =
-                        self_clone_phase1.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until slot start
-                        sleep(duration_to_next_slot).await;
-
-                        if let Err(err) = self_clone_phase1.update_voting_assignments() {
-                            error!(err, "Failed to update validator voting assignments");
-                        }
-                    } else {
-                        error!("Failed to read slot clock");
-                        sleep(slot_duration).await;
+                let slot_clock = self_clone_phase1.slot_clock.clone();
+                run_slot_start_publisher(slot_clock, move || {
+                    if let Err(err) = self_clone_phase1.update_voting_assignments() {
+                        error!(err, "Failed to update validator voting assignments");
                     }
-                }
+                })
+                .await
             },
             "voting_assignments_service",
         );
@@ -713,16 +731,19 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // ═══════════════════════════════════════════════════════════════════════
         let epoch = slot.epoch(E::slots_per_epoch());
 
+        // The exact complement of the Lighthouse callback gates by construction: consensus data
+        // (and therefore the publisher) exists precisely when Lighthouse does not own
+        // publication.
         let consensus_data_by_ssv_committee =
-            if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
+            if self.validator_store.lighthouse_owns_publication(epoch) {
+                HashMap::new()
+            } else {
                 self.build_consensus_data_for_all_committees(
                     slot,
                     attesters_by_ssv_committee,
                     sync_by_ssv_committee,
                 )
                 .await?
-            } else {
-                HashMap::new()
             };
 
         let aggregator_info = AggregationAssignments {
@@ -732,8 +753,10 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             consensus_data_by_ssv_committee,
         };
 
-        self.validator_store
+        let new_executions = self
+            .validator_store
             .update_aggregation_assignments(aggregator_info);
+        self.spawn_aggregate_publisher(slot, new_executions);
 
         trace!(%slot, "Published AggregationAssignments at 2/3 slot");
         Ok(())
@@ -785,6 +808,49 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             aggregate_attestation_keys,
             sync_contribution_keys,
         }
+    }
+
+    /// Spawn the detached publisher for this slot's newly registered post-consensus executions.
+    ///
+    /// The publisher owns Boole+ publication of aggregates and sync contributions: the Lighthouse
+    /// callbacks return empty batches at Boole+ because their duty snapshots are cloned before
+    /// slot-start selection proofs finish, so roots the snapshots never saw would otherwise be
+    /// silently dropped. (Anchor's sync selection proofs are NOT precomputed a slot ahead: its
+    /// one-slot Lighthouse lookahead config starts slot N's proof signing at slot N's boundary,
+    /// in the same slot-start partial-signature batch as the attestation proofs.)
+    ///
+    /// Exactly-once: `new_executions` holds only vacant registrations, so a repeated Phase 3 run
+    /// for one slot cannot spawn a second publisher for the same `(committee, slot)`.
+    ///
+    /// The publisher is implicitly Boole-gated (consensus data exists only for Boole+ slots),
+    /// while the empty Lighthouse callbacks gate on the duty's epoch. The two agree because
+    /// `attestation.data.target.epoch` and `contribution.slot`'s epoch equal the slot's own epoch
+    /// by construction, which is what rules out both paths publishing for one duty.
+    fn spawn_aggregate_publisher(
+        &self,
+        slot: Slot,
+        new_executions: Vec<(CommitteeId, AggregatorPostConsensusShared<E>)>,
+    ) {
+        if new_executions.is_empty() {
+            return;
+        }
+
+        let validator_store = self.validator_store.clone();
+        let beacon_nodes = self.beacon_nodes.clone();
+
+        self.executor.spawn(
+            async move {
+                validator_store
+                    .publish_decided_aggregates(
+                        slot,
+                        new_executions,
+                        |fork_name, signed| post_aggregate(&beacon_nodes, fork_name, signed),
+                        |signed| post_contribution(&beacon_nodes, signed),
+                    )
+                    .await;
+            },
+            "aggregator_committee_publisher",
+        );
     }
 
     /// Build `AggregatorCommitteeConsensusData` for each committee that has aggregators.
@@ -1489,6 +1555,63 @@ pub fn sort_contributors_by_signing_root_then_validator_index(
             .cmp(root_b)
             .then_with(|| contrib_a.validator_index.cmp(&contrib_b.validator_index))
     });
+}
+
+/// POST one signed aggregate, matching go-ssv's publication shape at the reference pin (one
+/// aggregate per request, published as soon as its quorum lands). Endpoint policy mirrors
+/// Lighthouse's at the pin: `first_success` across the beacon nodes (which makes two passes
+/// over the candidate list before giving up), v2 with the fork header for Electra+ aggregates,
+/// v1 otherwise.
+///
+/// `fork_name` is the fork the aggregate's payload was decoded under (the decided value's
+/// `DataVersion`), so the endpoint and fork header cannot diverge from the payload variant.
+async fn post_aggregate<T: SlotClock + 'static, E: EthSpec>(
+    beacon_nodes: &BeaconNodeFallback<T>,
+    fork_name: ForkName,
+    signed: SignedAggregateAndProof<E>,
+) -> Result<(), String> {
+    beacon_nodes
+        .first_success(|beacon_node| {
+            let signed = std::slice::from_ref(&signed);
+            async move {
+                let _timer = validator_metrics::start_timer_vec(
+                    &validator_metrics::ATTESTATION_SERVICE_TIMES,
+                    &[validator_metrics::AGGREGATES_HTTP_POST],
+                );
+                if fork_name.electra_enabled() {
+                    beacon_node
+                        .post_validator_aggregate_and_proof_v2(signed, fork_name)
+                        .await
+                } else {
+                    beacon_node
+                        .post_validator_aggregate_and_proof_v1(signed)
+                        .await
+                }
+            }
+        })
+        .await
+        .map_err(|e| format!("{e}"))
+}
+
+/// POST one signed sync contribution, matching go-ssv's publication shape at the reference pin
+/// (one contribution per request, published as soon as its quorum lands). Endpoint policy mirrors
+/// Lighthouse's at the pin: `first_success` across the beacon nodes; the endpoint takes no fork
+/// header.
+async fn post_contribution<T: SlotClock + 'static, E: EthSpec>(
+    beacon_nodes: &BeaconNodeFallback<T>,
+    signed: SignedContributionAndProof<E>,
+) -> Result<(), String> {
+    beacon_nodes
+        .first_success(|beacon_node| {
+            let signed = std::slice::from_ref(&signed);
+            async move {
+                beacon_node
+                    .post_validator_contribution_and_proofs(signed)
+                    .await
+            }
+        })
+        .await
+        .map_err(|e| format!("{e}"))
 }
 
 #[cfg(test)]
@@ -2791,5 +2914,105 @@ mod tests {
         };
 
         assert!(!from_head_event);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════
+    // Slot start publisher tests
+    //
+    // The virtual tokio timer stands in for the monotonic timer the publisher sleeps on,
+    // and the manual slot clock stands in for the wall clock it reads slots from. Driving
+    // them separately is what lets these tests reproduce the drift between the two.
+    // ═══════════════════════════════════════════════════════════════════════════════════
+
+    use parking_lot::Mutex;
+
+    const SLOT_DURATION: Duration = Duration::from_secs(SLOT_DURATION_SECS);
+    /// How far the wall clock trails the virtual timer when the boundary sleep wakes. The
+    /// drift observed in issue #1223 was 1 ms to 5 ms.
+    const WALL_CLOCK_LAG: Duration = Duration::from_millis(3);
+    /// Slot boundaries crossed by `publishes_each_slot_exactly_once`.
+    const LOCKSTEP_SLOTS: u64 = 3;
+
+    /// Spawn the publisher, recording the slot its clock reads at each publish. Production
+    /// reads the slot inside `update_voting_assignments`, so the recorded slot is the one
+    /// that would have been published.
+    async fn spawn_slot_start_publisher(slot_clock: &ManualSlotClock) -> Arc<Mutex<Vec<Slot>>> {
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let publish_clock = slot_clock.clone();
+        let recorded = published.clone();
+        tokio::spawn(run_slot_start_publisher(slot_clock.clone(), move || {
+            let slot = publish_clock.now().expect("manual slot clock is readable");
+            recorded.lock().push(slot);
+        }));
+        // Let the publisher arm its first sleep before either clock moves.
+        tokio::task::yield_now().await;
+        published
+    }
+
+    /// Advance the virtual timer, giving a sleep that expires within the step a scheduling
+    /// round to run. `tokio::time::advance` only wakes the sleeper, it does not poll it, so
+    /// without the extra round the publish would be observed a step late.
+    async fn advance_virtual_time(duration: Duration) {
+        tokio::time::advance(duration).await;
+        tokio::task::yield_now().await;
+    }
+
+    /// Move the wall clock and the virtual timer forward by the same amount. The wall clock
+    /// moves first so a timer firing within the step reads the time the step ends at.
+    async fn advance_in_lockstep(slot_clock: &ManualSlotClock, duration: Duration) {
+        slot_clock.advance_time(duration);
+        advance_virtual_time(duration).await;
+    }
+
+    /// Regression test for issue #1223.
+    ///
+    /// A boundary sleep that wakes a few milliseconds before the wall clock reaches the
+    /// slot boundary used to republish the previous slot, and the next iteration then slept
+    /// past the new slot entirely, so waiters on it saw `MetadataSlotPassed`. The publish
+    /// offset has to hold the publish back until the wall clock has crossed.
+    #[tokio::test(start_paused = true)]
+    async fn early_wake_still_publishes_the_new_slot() {
+        // Arrange: publisher armed at the start of TEST_SLOT.
+        let slot_clock = make_test_slot_clock();
+        let published = spawn_slot_start_publisher(&slot_clock).await;
+
+        // Act: fire the boundary sleep with the wall clock still short of the boundary.
+        slot_clock.advance_time(SLOT_DURATION - WALL_CLOCK_LAG);
+        advance_virtual_time(SLOT_DURATION).await;
+
+        assert!(
+            published.lock().is_empty(),
+            "publishing at the early wake would read slot {TEST_SLOT} again"
+        );
+
+        // The wall clock crosses the boundary within the publish offset.
+        advance_in_lockstep(&slot_clock, VOTING_ASSIGNMENTS_PUBLISH_DELAY).await;
+
+        // Assert: the new slot is published once, and the previous slot is not repeated.
+        assert_eq!(
+            published.lock().as_slice(),
+            [Slot::new(TEST_SLOT + 1)],
+            "an early wake must still publish the new slot exactly once"
+        );
+    }
+
+    /// Without drift, every slot boundary produces exactly one publish for that slot.
+    #[tokio::test(start_paused = true)]
+    async fn publishes_each_slot_exactly_once() {
+        // Arrange: publisher armed at the start of TEST_SLOT.
+        let slot_clock = make_test_slot_clock();
+        let published = spawn_slot_start_publisher(&slot_clock).await;
+
+        // Act: settle onto the publish offset, then cross one boundary per step.
+        advance_in_lockstep(&slot_clock, VOTING_ASSIGNMENTS_PUBLISH_DELAY).await;
+        for _ in 0..LOCKSTEP_SLOTS {
+            advance_in_lockstep(&slot_clock, SLOT_DURATION).await;
+        }
+
+        // Assert: one publish per boundary, slots strictly increasing by one.
+        let expected: Vec<Slot> = (1..=LOCKSTEP_SLOTS)
+            .map(|offset| Slot::new(TEST_SLOT + offset))
+            .collect();
+        assert_eq!(published.lock().as_slice(), expected);
     }
 }

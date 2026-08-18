@@ -695,34 +695,6 @@ pub struct AggregatorCommitteeConsensusData<E: EthSpec> {
         VariableList<SyncCommitteeContribution<E>, MaxSyncContributions>,
 }
 
-impl<E: EthSpec> AggregatorCommitteeConsensusData<E> {
-    /// Counts the total number of expected post-consensus signatures for this committee.
-    ///
-    /// This includes both aggregators and contributors that match the given filter.
-    /// Used to ensure all signatures are batched into a single message rather than
-    /// being split across multiple messages.
-    ///
-    /// Returns: count(aggregators) + count(contributors) filtered by committee membership
-    pub fn post_consensus_signature_count<F>(&self, is_in_committee: F) -> usize
-    where
-        F: Fn(&ValidatorIndex) -> bool,
-    {
-        let aggregator_count = self
-            .aggregators
-            .iter()
-            .filter(|agg| is_in_committee(&agg.validator_index))
-            .count();
-
-        let contributor_count = self
-            .contributors
-            .iter()
-            .filter(|contrib| is_in_committee(&contrib.validator_index))
-            .count();
-
-        aggregator_count + contributor_count
-    }
-}
-
 impl<E: EthSpec> QbftData for AggregatorCommitteeConsensusData<E> {
     type Hash = Hash256;
 

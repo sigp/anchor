@@ -1,7 +1,7 @@
 //! Integration tests for sync selection proof descriptor construction.
 
 use fork::Fork;
-use signature_collector::{SignatureRequester, SyncSelectionProofDescriptor};
+use signature_collector::{SignatureRequester, SyncCommitteeBatchEntry};
 use ssv_types::OperatorId;
 use types::{Slot, SyncSubnetId};
 use validator_store::ValidatorStore;
@@ -85,14 +85,18 @@ async fn pre_boole_callbacks_receive_the_same_canonical_descriptor() {
         let expected_descriptor = case
             .expected_counts
             .iter()
-            .map(|(subnet, position_count)| SyncSelectionProofDescriptor {
+            .map(|(subnet, multiplicity)| SyncCommitteeBatchEntry {
                 subnet_id: SyncSubnetId::new(*subnet),
                 signing_root: harness
                     .validator_store
                     .compute_sync_selection_root(Slot::new(TEST_SLOT), *subnet),
-                position_count: *position_count,
+                multiplicity: *multiplicity,
             })
             .collect::<Vec<_>>();
+        let total_multiplicity = expected_descriptor
+            .iter()
+            .map(|entry| entry.multiplicity)
+            .sum::<usize>();
 
         let captured = harness.captured_calls.lock();
         assert_eq!(captured.len(), case.callbacks.len());
@@ -104,18 +108,23 @@ async fn pre_boole_callbacks_receive_the_same_canonical_descriptor() {
                 .expect("callback subnet should be present")
                 .signing_root;
             match &call.requester {
+                SignatureRequester::SingleValidator { pubkey } if total_multiplicity == 1 => {
+                    assert_eq!(*pubkey, validator.public_key);
+                    assert_eq!(call.signing_root, callback_root);
+                    assert_eq!(call.validator_pubkey, validator.public_key);
+                }
                 SignatureRequester::SingleValidatorBatch {
                     pubkey,
                     subnet_id,
                     descriptor,
-                } => {
+                } if total_multiplicity > 1 => {
                     assert_eq!(*pubkey, validator.public_key);
                     assert_eq!(*subnet_id, callback_subnet);
                     assert_eq!(descriptor, &expected_descriptor);
                     assert_eq!(call.signing_root, callback_root);
                     assert_eq!(call.validator_pubkey, validator.public_key);
                 }
-                other => panic!("expected SingleValidatorBatch, got {other:?}"),
+                other => panic!("unexpected signature requester: {other:?}"),
             }
         }
     }
@@ -257,7 +266,7 @@ async fn pre_boole_accepts_exactly_thirteen_positions() {
     assert!(matches!(
         &captured[0].requester,
         SignatureRequester::SingleValidatorBatch { descriptor, .. }
-            if descriptor[0].position_count == 13
+            if descriptor[0].multiplicity == 13
     ));
 }
 
