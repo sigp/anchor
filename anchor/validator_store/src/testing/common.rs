@@ -77,6 +77,14 @@ pub(super) struct CapturedDecideCall {
     pub(super) data_type: &'static str,
 }
 
+/// Forced outcome for `EnvelopeConsensusData` decide calls.
+pub(super) enum ForcedEnvelopeFailure {
+    /// Complete with `Completed::TimedOut`.
+    Timeout,
+    /// Fail with this error.
+    Error(QbftError),
+}
+
 /// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
 /// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
 ///
@@ -87,10 +95,12 @@ pub(super) struct CapturedDecideCall {
 /// unchanged, since their decided value carries no index.
 ///
 /// When `forced_envelope_decision` is `Some`, it replaces the echo for `EnvelopeConsensusData`
-/// seeds. Every `decide_instance` call is captured, regardless of the configured behavior.
+/// seeds; when `forced_envelope_failure` is `Some`, envelope seeds time out or fail instead.
+/// Every `decide_instance` call is captured, regardless of the configured behavior.
 pub(super) struct MockConsensusDecider {
     forced_gloas_index: Option<u64>,
     forced_envelope_decision: Option<EnvelopeConsensusData>,
+    forced_envelope_failure: Option<ForcedEnvelopeFailure>,
     captured: CapturedDecides,
 }
 
@@ -100,6 +110,7 @@ impl MockConsensusDecider {
         Self {
             forced_gloas_index: None,
             forced_envelope_decision: None,
+            forced_envelope_failure: None,
             captured: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -109,8 +120,7 @@ impl MockConsensusDecider {
     pub(super) fn forcing_gloas_index(index: u64) -> Self {
         Self {
             forced_gloas_index: Some(index),
-            forced_envelope_decision: None,
-            captured: Arc::new(Mutex::new(Vec::new())),
+            ..Self::echoing()
         }
     }
 
@@ -118,9 +128,17 @@ impl MockConsensusDecider {
     /// decided another operator's envelope. Non-envelope seeds keep the echo behavior.
     pub(super) fn deciding_envelope(decided: EnvelopeConsensusData) -> Self {
         Self {
-            forced_gloas_index: None,
             forced_envelope_decision: Some(decided),
-            captured: Arc::new(Mutex::new(Vec::new())),
+            ..Self::echoing()
+        }
+    }
+
+    /// Fails every `EnvelopeConsensusData` decide call with `failure`, modeling envelope
+    /// consensus that times out or errors. Non-envelope seeds keep the echo behavior.
+    pub(super) fn failing_envelope(failure: ForcedEnvelopeFailure) -> Self {
+        Self {
+            forced_envelope_failure: Some(failure),
+            ..Self::echoing()
         }
     }
 
@@ -148,6 +166,25 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
             let decided_any: Box<dyn Any> = Box::new(decided);
             if let Ok(decided_envelope) = decided_any.downcast::<D>() {
                 return Ok(Completed::Success(*decided_envelope));
+            }
+        }
+        if let Some(failure) = &self.forced_envelope_failure {
+            // Same soundness argument as below: `D: 'static`. Only an `EnvelopeConsensusData`
+            // seed triggers the forced failure; every other seed echoes back unchanged.
+            let boxed: Box<dyn Any> = Box::new(initial);
+            match boxed.downcast::<EnvelopeConsensusData>() {
+                Ok(_envelope_seed) => {
+                    return match failure {
+                        ForcedEnvelopeFailure::Timeout => Ok(Completed::TimedOut),
+                        ForcedEnvelopeFailure::Error(err) => Err(err.clone()),
+                    };
+                }
+                Err(original) => {
+                    let echoed = original
+                        .downcast::<D>()
+                        .expect("downcast back to original D always succeeds");
+                    return Ok(Completed::Success(*echoed));
+                }
             }
         }
         // `D: QbftDecidable<E>` requires `'static`, so this downcast is sound. Only the Gloas
@@ -341,6 +378,9 @@ pub(super) struct HarnessOptions {
     /// When `Some`, the mock decides every `EnvelopeConsensusData` seed as this value,
     /// modeling a cluster that decided another operator's envelope.
     pub(super) forced_envelope_decision: Option<EnvelopeConsensusData>,
+    /// When `Some`, the mock fails every `EnvelopeConsensusData` decide call with this outcome,
+    /// modeling envelope consensus that times out or errors.
+    pub(super) forced_envelope_failure: Option<ForcedEnvelopeFailure>,
     /// SSV fork the store's `ForkSchedule` reports as active. Defaults to `Boole`; tests that
     /// exercise pre-Boole behaviour supply an earlier fork.
     pub(super) active_fork: Fork,
@@ -361,6 +401,7 @@ impl Default for HarnessOptions {
             spec: Arc::new(ChainSpec::mainnet()),
             forced_gloas_index: None,
             forced_envelope_decision: None,
+            forced_envelope_failure: None,
             active_fork: Fork::Boole,
             proposer_delays: ProposerDelays::default(),
         }
@@ -545,13 +586,16 @@ impl ValidatorStoreTestHarness {
 
         let (is_synced_tx, is_synced_rx) = watch::channel(true);
 
-        let decider = match (options.forced_gloas_index, options.forced_envelope_decision) {
-            (Some(index), None) => MockConsensusDecider::forcing_gloas_index(index),
-            (None, Some(decided)) => MockConsensusDecider::deciding_envelope(decided),
-            (None, None) => MockConsensusDecider::echoing(),
-            (Some(_), Some(_)) => {
-                panic!("harness options must not force both a Gloas index and an envelope decision")
-            }
+        let decider = match (
+            options.forced_gloas_index,
+            options.forced_envelope_decision,
+            options.forced_envelope_failure,
+        ) {
+            (Some(index), None, None) => MockConsensusDecider::forcing_gloas_index(index),
+            (None, Some(decided), None) => MockConsensusDecider::deciding_envelope(decided),
+            (None, None, Some(failure)) => MockConsensusDecider::failing_envelope(failure),
+            (None, None, None) => MockConsensusDecider::echoing(),
+            _ => panic!("harness options must not force more than one consensus behavior"),
         };
         let captured_decides = decider.captured_decides();
 

@@ -4067,6 +4067,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     builder_index: envelope.builder_index,
                 }));
             }
+            let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+            if slot > current_slot {
+                return Err(Error::GreaterThanCurrentSlot { slot, current_slot });
+            }
 
             let decided_block_root = self.get_decided_block_root(validator_pubkey, slot)?;
             let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
