@@ -780,7 +780,6 @@ impl Client {
             beacon_nodes.clone(),
             executor.clone(),
             spec.clone(),
-            fork_schedule.clone(),
             config.with_weighted_attestation_data,
         );
 

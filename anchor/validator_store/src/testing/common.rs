@@ -41,9 +41,10 @@ use tokio::{
 };
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
-    Hash256, MainnetEthSpec, SelectionProof, SignedAggregateAndProof, Slot, SyncSubnetId,
+    Hash256, MainnetEthSpec, SelectionProof, SignedAggregateAndProof, SignedContributionAndProof,
+    Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
-use validator_store::{AggregateToSign, AttestationToSign, ValidatorStore};
+use validator_store::{AggregateToSign, AttestationToSign, ContributionToSign, ValidatorStore};
 
 use crate::{
     AggregationAssignments, AnchorValidatorStore, Error, VotingAssignments, VotingContext,
@@ -59,6 +60,10 @@ pub(super) const STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 /// What the Lighthouse aggregate callback yields: one result per stream item.
 pub(super) type SignAggregatesResult =
     Vec<Result<Vec<SignedAggregateAndProof<MainnetEthSpec>>, Error>>;
+
+/// What the Lighthouse contribution callback yields: one result per stream item.
+pub(super) type SignContributionsResult =
+    Vec<Result<Vec<SignedContributionAndProof<MainnetEthSpec>>, Error>>;
 
 // ==================== Mock consensus decider ====================
 
@@ -117,10 +122,16 @@ type FailingPubkeys = Arc<Mutex<HashSet<PublicKeyBytes>>>;
 
 /// Mock that captures calls and returns a canned infinity signature, or a collection timeout for
 /// every call once [`ValidatorStoreTestHarness::fail_signature_collection`] is called, or for one
-/// validator's calls once [`ValidatorStoreTestHarness::fail_signature_collection_for`] is.
+/// validator's calls once [`ValidatorStoreTestHarness::fail_signature_collection_for`] is, or
+/// never resolves at all once [`ValidatorStoreTestHarness::hang_signature_collection`] is.
+///
+/// Failing and hanging are different: a failure resolves to an error, which readers count as
+/// `other_error`, while a hang leaves the root pending so the reader's own deadline decides its
+/// fate. Only the hang mode reaches a per-root deadline-expiry path.
 struct MockSignatureCollector {
     captured: CapturedCalls,
     fails: Arc<AtomicBool>,
+    hangs: Arc<AtomicBool>,
     failing_pubkeys: FailingPubkeys,
 }
 
@@ -148,6 +159,11 @@ impl SignatureCollecting for MockSignatureCollector {
         {
             return Box::pin(async { Err(CollectionError::CollectionTimeout) });
         }
+        // Stands in for a root whose quorum never arrives: the future stays pending, so the
+        // caller's deadline is what ends the wait.
+        if self.hangs.load(Ordering::Relaxed) {
+            return Box::pin(std::future::pending());
+        }
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
     }
@@ -159,17 +175,20 @@ fn create_mock_collector() -> (
     Box<dyn SignatureCollecting>,
     CapturedCalls,
     Arc<AtomicBool>,
+    Arc<AtomicBool>,
     FailingPubkeys,
 ) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
     let fails = Arc::new(AtomicBool::new(false));
+    let hangs = Arc::new(AtomicBool::new(false));
     let failing_pubkeys: FailingPubkeys = Arc::new(Mutex::new(HashSet::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
         fails: Arc::clone(&fails),
+        hangs: Arc::clone(&hangs),
         failing_pubkeys: Arc::clone(&failing_pubkeys),
     };
-    (Box::new(mock), captured, fails, failing_pubkeys)
+    (Box::new(mock), captured, fails, hangs, failing_pubkeys)
 }
 
 // ==================== Committee setup ====================
@@ -178,6 +197,54 @@ pub(super) struct CommitteeSetup {
     pub(super) cluster: Cluster,
     pub(super) validators: Vec<ValidatorMetadata>,
     shares: Vec<Share>,
+}
+
+/// Standard two-committee topology shared by the Boole+ callback-gate tests
+/// (`committee_aggregate.rs` and `committee_contribution.rs`): a primary and a secondary
+/// committee with distinct operator sets and disjoint validator index spaces, both containing
+/// this operator.
+pub(super) const PRIMARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
+    [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+pub(super) const SECONDARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
+    [OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
+pub(super) const PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 0;
+pub(super) const SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 100;
+
+/// [`create_committee_setup`] for the standard primary committee.
+pub(super) fn create_primary_committee_setup(num_validators: usize) -> CommitteeSetup {
+    create_committee_setup(
+        &PRIMARY_COMMITTEE_OPERATOR_IDS,
+        num_validators,
+        PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
+    )
+}
+
+/// [`create_committee_setup`] for the standard secondary committee.
+pub(super) fn create_secondary_committee_setup(num_validators: usize) -> CommitteeSetup {
+    create_committee_setup(
+        &SECONDARY_COMMITTEE_OPERATOR_IDS,
+        num_validators,
+        SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
+    )
+}
+
+/// Asserts a callback stream yielded exactly one item and that item is an empty batch.
+///
+/// The empty batch is the Boole+ contract for both callback classes: Lighthouse's publish loops
+/// drop an empty result silently, which is what keeps Anchor the single publisher of committee
+/// duties. `what` names the class in failure messages ("aggregates", "sync contributions").
+pub(super) fn assert_single_empty_batch<T>(results: Vec<Result<Vec<T>, Error>>, what: &str) {
+    assert_eq!(results.len(), 1, "expected exactly one stream item");
+    let batch = results
+        .into_iter()
+        .next()
+        .expect("stream item should exist")
+        .unwrap_or_else(|e| panic!("the callback for {what} should not fail: {e:?}"));
+    assert!(
+        batch.is_empty(),
+        "Lighthouse must receive nothing to publish at Boole+; the metadata service publishes \
+         committee {what} from the decided value"
+    );
 }
 
 /// Builds a synthetic committee with deterministic validator and share data.
@@ -248,6 +315,8 @@ pub(super) struct ValidatorStoreTestHarness {
     pub(super) captured_calls: CapturedCalls,
     /// Set by [`Self::fail_signature_collection`]; read by the mock collector on every call.
     signature_collection_fails: Arc<AtomicBool>,
+    /// Filled by [`Self::hang_signature_collection`]; read by the mock collector on every call.
+    signature_collection_hangs: Arc<AtomicBool>,
     /// Filled by [`Self::fail_signature_collection_for`]; read by the mock collector on every
     /// call.
     failing_pubkeys: FailingPubkeys,
@@ -335,8 +404,13 @@ impl ValidatorStoreTestHarness {
             "test",
         ));
 
-        let (mock_collector, captured_calls, signature_collection_fails, failing_pubkeys) =
-            create_mock_collector();
+        let (
+            mock_collector,
+            captured_calls,
+            signature_collection_fails,
+            signature_collection_hangs,
+            failing_pubkeys,
+        ) = create_mock_collector();
 
         // Database
         let database = Arc::new(
@@ -426,6 +500,7 @@ impl ValidatorStoreTestHarness {
             committee_setups,
             captured_calls,
             signature_collection_fails,
+            signature_collection_hangs,
             failing_pubkeys,
             slot_clock,
             is_synced_tx,
@@ -539,10 +614,57 @@ impl ValidatorStoreTestHarness {
             .expect("the aggregate callback should complete within the stream timeout")
     }
 
+    /// Runs the Lighthouse contribution callback to completion.
+    pub(super) async fn collect_contributions(
+        &self,
+        contributions: Vec<ContributionToSign<MainnetEthSpec>>,
+    ) -> SignContributionsResult {
+        let stream = self
+            .validator_store
+            .sign_sync_committee_contributions(contributions);
+        tokio::time::timeout(STREAM_TIMEOUT, stream.collect())
+            .await
+            .expect("the contribution callback should complete within the stream timeout")
+    }
+
+    /// A contribution request at `TEST_SLOT`, as Lighthouse's sync committee service would send.
+    pub(super) fn create_contribution(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+        subcommittee_index: u64,
+    ) -> ContributionToSign<MainnetEthSpec> {
+        let validator = &self.committee_setups[committee_idx].validators[validator_idx];
+        let validator_index = validator
+            .index
+            .expect("test validator should have an index");
+
+        ContributionToSign {
+            aggregator_index: *validator_index as u64,
+            aggregator_pubkey: validator.public_key,
+            contribution: SyncCommitteeContribution {
+                slot: Slot::new(TEST_SLOT),
+                beacon_block_root: Hash256::zero(),
+                subcommittee_index,
+                aggregation_bits: Default::default(),
+                signature: AggregateSignature::infinity(),
+            },
+            selection_proof: SyncSelectionProof::from(Signature::empty()),
+        }
+    }
+
     /// Makes every subsequent `sign_and_collect` call fail, for tests of the paths a root that
     /// never reaches quorum takes. Calls are still captured.
     pub(super) fn fail_signature_collection(&self) {
         self.signature_collection_fails
+            .store(true, Ordering::Relaxed);
+    }
+
+    /// Makes every subsequent `sign_and_collect` call hang forever, so the caller's own deadline
+    /// decides each root's fate. This is the only way to reach a per-root deadline-expiry path;
+    /// [`Self::fail_signature_collection`] resolves to an error instead. Calls are still captured.
+    pub(super) fn hang_signature_collection(&self) {
+        self.signature_collection_hangs
             .store(true, Ordering::Relaxed);
     }
 

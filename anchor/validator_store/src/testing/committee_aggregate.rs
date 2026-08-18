@@ -14,11 +14,6 @@ use ssv_types::{OperatorId, msgid::Role};
 
 use super::common::*;
 
-const PRIMARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
-    [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
-const SECONDARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
-    [OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
-
 const OUR_OPERATOR_ID: OperatorId = OperatorId(1);
 const PRIMARY_COMMITTEE_INDEX: usize = 0;
 const SECONDARY_COMMITTEE_INDEX: usize = 1;
@@ -27,26 +22,6 @@ const SECOND_VALIDATOR_INDEX: usize = 1;
 
 const PRIMARY_COMMITTEE_VALIDATOR_COUNT: usize = 2;
 const SINGLE_VALIDATOR_COUNT: usize = 1;
-const PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 0;
-const SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 100;
-
-/// Asserts the stream yielded exactly one item and that item is an empty batch.
-///
-/// The empty batch is the Boole+ contract: Lighthouse's publish loop drops an empty result
-/// silently, which is what keeps Anchor the single publisher of committee aggregates.
-fn assert_single_empty_batch(results: SignAggregatesResult) {
-    assert_eq!(results.len(), 1, "expected exactly one stream item");
-    let batch = results
-        .into_iter()
-        .next()
-        .expect("stream item should exist")
-        .expect("the aggregate callback should not fail");
-    assert!(
-        batch.is_empty(),
-        "Lighthouse must receive nothing to publish at Boole+; the metadata service publishes \
-         committee aggregates from the decided value"
-    );
-}
 
 // ==================== Boole+ tests ====================
 
@@ -62,7 +37,7 @@ async fn sign_aggregate_and_proofs_empty_input_yields_one_empty_batch() {
     let results = harness.collect_aggregates(vec![]).await;
 
     // Assert
-    assert_single_empty_batch(results);
+    assert_single_empty_batch(results, "aggregates");
 }
 
 /// Boole+ yields one empty batch however many committees the request spans, without waiting on
@@ -91,7 +66,7 @@ async fn sign_aggregate_and_proofs_boole_yields_one_empty_batch_for_all_committe
     let results = harness.collect_aggregates(aggregates).await;
 
     // Assert
-    assert_single_empty_batch(results);
+    assert_single_empty_batch(results, "aggregates");
     assert!(
         harness.captured_calls.lock().is_empty(),
         "the callback must not collect signatures; signing belongs to the post-consensus execution"
@@ -150,20 +125,4 @@ async fn sign_aggregate_and_proofs_pre_boole_signs_each_validator() {
             "pre-Boole aggregates are collected per validator, not as a committee batch"
         );
     }
-}
-
-fn create_primary_committee_setup(num_validators: usize) -> CommitteeSetup {
-    create_committee_setup(
-        &PRIMARY_COMMITTEE_OPERATOR_IDS,
-        num_validators,
-        PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
-    )
-}
-
-fn create_secondary_committee_setup(num_validators: usize) -> CommitteeSetup {
-    create_committee_setup(
-        &SECONDARY_COMMITTEE_OPERATOR_IDS,
-        num_validators,
-        SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
-    )
 }
