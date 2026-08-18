@@ -6,6 +6,7 @@ pub const AGGREGATE_AND_PROOF: &str = "aggregate_and_proof";
 pub const BLOCK: &str = "block";
 pub const BEACON_VOTE: &str = "beacon_vote";
 pub const SYNC_CONTRIBUTION_AND_PROOF: &str = "sync_contribution_and_proof";
+pub const ENVELOPE: &str = "envelope";
 pub const TIMEOUT: &str = "timeout";
 pub const OTHER_ERROR: &str = "other_error";
 pub const TRIGGER_HEAD_EVENT: &str = "head_event";
@@ -226,3 +227,20 @@ pub static PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCoun
             &["reason"],
         )
     });
+
+/// Consensus, signing, and content match all succeeded; the envelope is returned for
+/// publication.
+pub const ENVELOPE_OUTCOME_PUBLISHED: &str = "published";
+/// Consensus decided an envelope another operator built. Intentional non-publish,
+/// never a failure.
+pub const ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY: &str = "not_built_locally";
+/// QBFT, decode, or signature collection failed.
+pub const ENVELOPE_OUTCOME_FAILED: &str = "failed";
+
+pub static ENVELOPE_SIGNING_OUTCOMES: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
+    try_create_int_counter_vec(
+        "anchor_envelope_signing_outcomes_total",
+        "Envelope signing duty outcomes",
+        &["outcome"],
+    )
+});

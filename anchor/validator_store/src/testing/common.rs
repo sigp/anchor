@@ -402,8 +402,6 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
-    /// Not yet read by any harness-driven test; the envelope-signing e2e tests will consume it.
-    #[expect(dead_code)]
     pub(super) captured_decides: CapturedDecides,
     /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
     /// after construction.
