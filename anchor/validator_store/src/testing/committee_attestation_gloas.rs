@@ -78,7 +78,7 @@ async fn gloas_decided_index_applied_to_every_validator_attestation() {
         OUR_OPERATOR,
         HarnessOptions {
             spec: gloas_at_genesis_spec(),
-            forced_gloas_index: Some(DECIDED_INDEX),
+            decider: MockConsensusDecider::forcing_gloas_index(DECIDED_INDEX),
             ..Default::default()
         },
     );
@@ -144,7 +144,7 @@ async fn gloas_all_operators_converge_on_decided_index_signing_root() {
         OperatorId(1),
         HarnessOptions {
             spec: gloas_at_genesis_spec(),
-            forced_gloas_index: Some(DECIDED_INDEX),
+            decider: MockConsensusDecider::forcing_gloas_index(DECIDED_INDEX),
             ..Default::default()
         },
     );
@@ -156,7 +156,7 @@ async fn gloas_all_operators_converge_on_decided_index_signing_root() {
         OperatorId(2),
         HarnessOptions {
             spec: gloas_at_genesis_spec(),
-            forced_gloas_index: Some(DECIDED_INDEX),
+            decider: MockConsensusDecider::forcing_gloas_index(DECIDED_INDEX),
             ..Default::default()
         },
     );
@@ -373,7 +373,7 @@ async fn sync_and_attestation_paths_seed_identical_gloas_instance() {
         OUR_OPERATOR,
         HarnessOptions {
             spec: gloas_at_genesis_spec(),
-            forced_gloas_index: Some(DECIDED_INDEX),
+            decider: MockConsensusDecider::forcing_gloas_index(DECIDED_INDEX),
             ..Default::default()
         },
     );
@@ -504,7 +504,7 @@ async fn sync_first_populates_the_decided_vote_cache() {
         OUR_OPERATOR,
         HarnessOptions {
             spec: gloas_at_genesis_spec(),
-            forced_gloas_index: Some(DECIDED_INDEX),
+            decider: MockConsensusDecider::forcing_gloas_index(DECIDED_INDEX),
             ..Default::default()
         },
     );

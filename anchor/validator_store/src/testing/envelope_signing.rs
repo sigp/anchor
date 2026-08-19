@@ -156,7 +156,10 @@ fn forced_decision_harness(
         vec![committee],
         OperatorId(1),
         HarnessOptions {
-            forced_envelope_decision: Some(envelope_consensus_value(pubkey, &decided_envelope)),
+            decider: MockConsensusDecider::deciding_envelope(envelope_consensus_value(
+                pubkey,
+                &decided_envelope,
+            )),
             ..gloas_options()
         },
     );
@@ -654,7 +657,7 @@ async fn undecodable_decided_envelope_counts_as_failed_and_signs_nothing() {
         vec![committee],
         OperatorId(1),
         HarnessOptions {
-            forced_envelope_decision: Some(forced),
+            decider: MockConsensusDecider::deciding_envelope(forced),
             ..gloas_options()
         },
     );
@@ -687,7 +690,7 @@ async fn undecodable_decided_envelope_counts_as_failed_and_signs_nothing() {
 async fn consensus_timeout_counts_as_failed_and_signs_nothing() {
     let _guard = METRIC_TEST_LOCK.lock().await;
     let (harness, pubkey) = harness_with_options(HarnessOptions {
-        forced_envelope_failure: Some(ForcedEnvelopeFailure::Timeout),
+        decider: MockConsensusDecider::failing_envelope(ForcedEnvelopeFailure::Timeout),
         ..gloas_options()
     });
     let envelope = self_build_envelope(seed_decided_root(&harness, pubkey));
@@ -716,7 +719,9 @@ async fn consensus_timeout_counts_as_failed_and_signs_nothing() {
 async fn consensus_error_counts_as_failed_and_signs_nothing() {
     let _guard = METRIC_TEST_LOCK.lock().await;
     let (harness, pubkey) = harness_with_options(HarnessOptions {
-        forced_envelope_failure: Some(ForcedEnvelopeFailure::Error(QbftError::QueueClosedError)),
+        decider: MockConsensusDecider::failing_envelope(ForcedEnvelopeFailure::Error(
+            QbftError::QueueClosedError,
+        )),
         ..gloas_options()
     });
     let envelope = self_build_envelope(seed_decided_root(&harness, pubkey));

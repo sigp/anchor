@@ -3,7 +3,17 @@
 //! Provides a `ValidatorStoreTestHarness` that wires up a real `AnchorValidatorStore` with
 //! in-memory database, mock consensus, and a mock signature collector.
 
-use std::{any::Any, collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::{NetworkDatabase, PendingStateUpdates};
@@ -22,24 +32,29 @@ use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share,
     ValidatorIndex, ValidatorMetadata,
     consensus::{
-        AggregatorCommitteeConsensusData, AssignedAggregator, BeaconVote, DataVersion,
-        EnvelopeConsensusData, GloasBeaconVote, QbftDataValidator,
+        AggregatorCommitteeConsensusData, BeaconVote, EnvelopeConsensusData, GloasBeaconVote,
+        QbftDataValidator,
     },
 };
 use ssz::Encode;
-use ssz_types::VariableList;
 use task_executor::TaskExecutor;
 use tempfile::TempDir;
-use tokio::{sync::watch, time::Instant};
+use tokio::{
+    sync::{Barrier, watch},
+    time::Instant,
+};
 use types::{
     Attestation, AttestationBase, AttestationData, ChainSpec, Checkpoint, Epoch, EthSpec, Graffiti,
-    Hash256, MainnetEthSpec, SelectionProof, SingleAttestation, Slot, SyncSubnetId,
+    Hash256, MainnetEthSpec, SelectionProof, SignedAggregateAndProof, SignedContributionAndProof,
+    SingleAttestation, Slot, SyncCommitteeContribution, SyncSelectionProof, SyncSubnetId,
 };
-use validator_store::{AggregateToSign, AttestationToSign, SyncMessageToSign, ValidatorStore};
+use validator_store::{
+    AggregateToSign, AttestationToSign, ContributionToSign, SyncMessageToSign, ValidatorStore,
+};
 
 use crate::{
     AggregationAssignments, AnchorValidatorStore, Error, ProposerDelays, VotingAssignments,
-    VotingContext,
+    VotingContext, aggregator_post_consensus::AggregatorPostConsensusShared,
 };
 
 pub(super) const TEST_SLOT: u64 = 1;
@@ -49,6 +64,18 @@ pub(super) const CLOCK_OFFSET_INTO_TEST_SLOT_SECS: u64 = SLOT_DURATION_SECS / 3 
 
 /// The raw item stream `sign_attestations` yields: one `Result` batch per committee.
 pub(super) type SignAttestationsResult = Vec<Result<Vec<SingleAttestation>, Error>>;
+
+/// Bound on any Lighthouse callback stream in these tests; a callback that blocks past it is a
+/// failure, not a slow machine.
+pub(super) const STREAM_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What the Lighthouse aggregate callback yields: one result per stream item.
+pub(super) type SignAggregatesResult =
+    Vec<Result<Vec<SignedAggregateAndProof<MainnetEthSpec>>, Error>>;
+
+/// What the Lighthouse contribution callback yields: one result per stream item.
+pub(super) type SignContributionsResult =
+    Vec<Result<Vec<SignedContributionAndProof<MainnetEthSpec>>, Error>>;
 
 /// Drives `sign_attestations` to completion and unwraps every committee batch.
 pub(super) async fn run_sign_attestations(
@@ -97,21 +124,30 @@ pub(super) enum ForcedEnvelopeFailure {
 /// When `forced_envelope_decision` is `Some`, it replaces the echo for `EnvelopeConsensusData`
 /// seeds; when `forced_envelope_failure` is `Some`, envelope seeds time out or fail instead.
 /// Every `decide_instance` call is captured, regardless of the configured behavior.
+///
+/// When `fixed_decision` is `Some`, every seed decides as that SSZ-encoded value once `parties`
+/// callers have reached the barrier, modeling a cluster decision that differs from each caller's
+/// own proposal.
+#[derive(Default)]
 pub(super) struct MockConsensusDecider {
     forced_gloas_index: Option<u64>,
     forced_envelope_decision: Option<EnvelopeConsensusData>,
     forced_envelope_failure: Option<ForcedEnvelopeFailure>,
+    fixed_decision: Option<(Vec<u8>, Arc<Barrier>)>,
     captured: CapturedDecides,
 }
 
 impl MockConsensusDecider {
     /// Echoes every decided seed back unchanged (default behavior used by most tests).
     pub(super) fn echoing() -> Self {
+        Self::default()
+    }
+
+    /// Decides every seed as `value` once `parties` callers have reached the barrier.
+    pub(super) fn fixed_after_barrier<D: Encode>(value: &D, parties: usize) -> Self {
         Self {
-            forced_gloas_index: None,
-            forced_envelope_decision: None,
-            forced_envelope_failure: None,
-            captured: Arc::new(Mutex::new(Vec::new())),
+            fixed_decision: Some((value.as_ssz_bytes(), Arc::new(Barrier::new(parties)))),
+            ..Self::default()
         }
     }
 
@@ -120,7 +156,7 @@ impl MockConsensusDecider {
     pub(super) fn forcing_gloas_index(index: u64) -> Self {
         Self {
             forced_gloas_index: Some(index),
-            ..Self::echoing()
+            ..Self::default()
         }
     }
 
@@ -129,7 +165,7 @@ impl MockConsensusDecider {
     pub(super) fn deciding_envelope(decided: EnvelopeConsensusData) -> Self {
         Self {
             forced_envelope_decision: Some(decided),
-            ..Self::echoing()
+            ..Self::default()
         }
     }
 
@@ -138,7 +174,7 @@ impl MockConsensusDecider {
     pub(super) fn failing_envelope(failure: ForcedEnvelopeFailure) -> Self {
         Self {
             forced_envelope_failure: Some(failure),
-            ..Self::echoing()
+            ..Self::default()
         }
     }
 
@@ -214,7 +250,14 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
                 }
             }
         }
-        Ok(Completed::Success(initial))
+        let decided = match &self.fixed_decision {
+            Some((bytes, barrier)) => {
+                barrier.wait().await;
+                D::from_ssz_bytes(bytes).expect("fixed test consensus value should decode")
+            }
+            None => initial,
+        };
+        Ok(Completed::Success(decided))
     }
 }
 
@@ -234,16 +277,29 @@ pub(super) struct CapturedSignatureCall {
     pub(super) captured_at: Instant,
 }
 
-/// Mock that captures calls and returns a canned infinity signature, or a configured failure, or
-/// a future that never resolves (`hang`).
+/// Validator pubkeys whose signature collection fails; shared with the harness so tests can fail
+/// a single validator's roots.
+type FailingPubkeys = Arc<Mutex<HashSet<PublicKeyBytes>>>;
+
+/// Mock that captures calls and returns a canned infinity signature, or one of the configured
+/// failure modes: the `HarnessOptions` error for every call, a collection timeout for every call
+/// once [`ValidatorStoreTestHarness::fail_signature_collection`] is called, a timeout for one
+/// validator's calls once [`ValidatorStoreTestHarness::fail_signature_collection_for`] is, or a
+/// future that never resolves (`hangs`).
+///
+/// Failing and hanging are different: a failure resolves to an error, which readers count as
+/// `other_error`, while a hang leaves the root pending so the reader's own deadline decides its
+/// fate. Only the hang mode reaches a per-root deadline-expiry path. Hanging takes precedence
+/// over both failure modes.
 struct MockSignatureCollector {
     captured: CapturedCalls,
+    /// Set from `HarnessOptions::collector_failure`; every call fails with this error.
     failure: Option<CollectionError>,
-    /// When `true`, `sign_and_collect` captures the call and then returns a future that never
-    /// resolves, modeling a quorum that never forms. This lets tests drive the production
-    /// `tokio::time::timeout` in `sign_proposer_preferences` to elapse; `hang` takes precedence
-    /// over `failure`.
-    hang: bool,
+    fails: Arc<AtomicBool>,
+    /// Starts from `HarnessOptions::collector_hangs`; also set by
+    /// [`ValidatorStoreTestHarness::hang_signature_collection`].
+    hangs: Arc<AtomicBool>,
+    failing_pubkeys: FailingPubkeys,
 }
 
 impl SignatureCollecting for MockSignatureCollector {
@@ -262,11 +318,22 @@ impl SignatureCollecting for MockSignatureCollector {
             validator_pubkey: signing_data.validator_pubkey,
             captured_at: Instant::now(),
         });
-        if self.hang {
-            // Never resolves, so the caller only unblocks via the production collection timeout.
-            // `std::future::pending::<Result<Arc<Signature>, CollectionError>>()` is `Send`, which
-            // satisfies the returned future's bound.
+        // Stands in for a root whose quorum never arrives: the future stays pending, so the
+        // caller's deadline is what ends the wait.
+        // `std::future::pending::<Result<Arc<Signature>, CollectionError>>()` is `Send`, which
+        // satisfies the returned future's bound.
+        if self.hangs.load(Ordering::Relaxed) {
             return Box::pin(std::future::pending());
+        }
+        // Stands in for any root that never reaches quorum; the caller only distinguishes
+        // success from failure.
+        if self.fails.load(Ordering::Relaxed)
+            || self
+                .failing_pubkeys
+                .lock()
+                .contains(&signing_data.validator_pubkey)
+        {
+            return Box::pin(async { Err(CollectionError::CollectionTimeout) });
         }
         if let Some(failure) = self.failure.clone() {
             return Box::pin(async move { Err(failure) });
@@ -276,18 +343,30 @@ impl SignatureCollecting for MockSignatureCollector {
     }
 }
 
-/// Creates a mock signature collector and returns the shared captured calls handle.
+/// Creates a mock signature collector, returning the shared captured calls and failure-mode
+/// handles.
 fn create_mock_collector(
     failure: Option<CollectionError>,
     hang: bool,
-) -> (Box<dyn SignatureCollecting>, CapturedCalls) {
+) -> (
+    Box<dyn SignatureCollecting>,
+    CapturedCalls,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    FailingPubkeys,
+) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
+    let fails = Arc::new(AtomicBool::new(false));
+    let hangs = Arc::new(AtomicBool::new(hang));
+    let failing_pubkeys: FailingPubkeys = Arc::new(Mutex::new(HashSet::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
         failure,
-        hang,
+        fails: Arc::clone(&fails),
+        hangs: Arc::clone(&hangs),
+        failing_pubkeys: Arc::clone(&failing_pubkeys),
     };
-    (Box::new(mock), captured)
+    (Box::new(mock), captured, fails, hangs, failing_pubkeys)
 }
 
 // ==================== Committee setup ====================
@@ -296,6 +375,54 @@ pub(super) struct CommitteeSetup {
     pub(super) cluster: Cluster,
     pub(super) validators: Vec<ValidatorMetadata>,
     shares: Vec<Share>,
+}
+
+/// Standard two-committee topology shared by the Boole+ callback-gate tests
+/// (`committee_aggregate.rs` and `committee_contribution.rs`): a primary and a secondary
+/// committee with distinct operator sets and disjoint validator index spaces, both containing
+/// this operator.
+pub(super) const PRIMARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
+    [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)];
+pub(super) const SECONDARY_COMMITTEE_OPERATOR_IDS: [OperatorId; 4] =
+    [OperatorId(1), OperatorId(5), OperatorId(6), OperatorId(7)];
+pub(super) const PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 0;
+pub(super) const SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX: usize = 100;
+
+/// [`create_committee_setup`] for the standard primary committee.
+pub(super) fn create_primary_committee_setup(num_validators: usize) -> CommitteeSetup {
+    create_committee_setup(
+        &PRIMARY_COMMITTEE_OPERATOR_IDS,
+        num_validators,
+        PRIMARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
+    )
+}
+
+/// [`create_committee_setup`] for the standard secondary committee.
+pub(super) fn create_secondary_committee_setup(num_validators: usize) -> CommitteeSetup {
+    create_committee_setup(
+        &SECONDARY_COMMITTEE_OPERATOR_IDS,
+        num_validators,
+        SECONDARY_COMMITTEE_STARTING_VALIDATOR_INDEX,
+    )
+}
+
+/// Asserts a callback stream yielded exactly one item and that item is an empty batch.
+///
+/// The empty batch is the Boole+ contract for both callback classes: Lighthouse's publish loops
+/// drop an empty result silently, which is what keeps Anchor the single publisher of committee
+/// duties. `what` names the class in failure messages ("aggregates", "sync contributions").
+pub(super) fn assert_single_empty_batch<T>(results: Vec<Result<Vec<T>, Error>>, what: &str) {
+    assert_eq!(results.len(), 1, "expected exactly one stream item");
+    let batch = results
+        .into_iter()
+        .next()
+        .expect("stream item should exist")
+        .unwrap_or_else(|e| panic!("the callback for {what} should not fail: {e:?}"));
+    assert!(
+        batch.is_empty(),
+        "Lighthouse must receive nothing to publish at Boole+; the metadata service publishes \
+         committee {what} from the decided value"
+    );
 }
 
 /// Builds a synthetic committee with deterministic validator and share data.
@@ -372,15 +499,10 @@ pub(super) struct HarnessOptions {
     /// `TEST_SLOT` is pre-Electra. Tests that need a specific fork at `TEST_SLOT` (Electra or
     /// Gloas) supply a spec with the matching `*_fork_epoch` set to genesis.
     pub(super) spec: Arc<ChainSpec>,
-    /// When `Some`, the mock decides every `GloasBeaconVote` with this `attestation_data_index`,
-    /// modeling a cluster-decided index that may differ from each operator's local seed.
-    pub(super) forced_gloas_index: Option<u64>,
-    /// When `Some`, the mock decides every `EnvelopeConsensusData` seed as this value,
-    /// modeling a cluster that decided another operator's envelope.
-    pub(super) forced_envelope_decision: Option<EnvelopeConsensusData>,
-    /// When `Some`, the mock fails every `EnvelopeConsensusData` decide call with this outcome,
-    /// modeling envelope consensus that times out or errors.
-    pub(super) forced_envelope_failure: Option<ForcedEnvelopeFailure>,
+    /// Consensus decider wired into the store. Defaults to the echoing mock; tests that need a
+    /// cluster decision differing from the local seed supply a configured
+    /// [`MockConsensusDecider`].
+    pub(super) decider: MockConsensusDecider,
     /// SSV fork the store's `ForkSchedule` reports as active. Defaults to `Boole`; tests that
     /// exercise pre-Boole behaviour supply an earlier fork.
     pub(super) active_fork: Fork,
@@ -399,9 +521,7 @@ impl Default for HarnessOptions {
             // DB so the signing paths can record and check attestations.
             disable_slashing_protection: true,
             spec: Arc::new(ChainSpec::mainnet()),
-            forced_gloas_index: None,
-            forced_envelope_decision: None,
-            forced_envelope_failure: None,
+            decider: MockConsensusDecider::echoing(),
             active_fork: Fork::Boole,
             proposer_delays: ProposerDelays::default(),
         }
@@ -444,6 +564,13 @@ pub(super) struct ValidatorStoreTestHarness {
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
     pub(super) captured_decides: CapturedDecides,
+    /// Set by [`Self::fail_signature_collection`]; read by the mock collector on every call.
+    signature_collection_fails: Arc<AtomicBool>,
+    /// Filled by [`Self::hang_signature_collection`]; read by the mock collector on every call.
+    signature_collection_hangs: Arc<AtomicBool>,
+    /// Filled by [`Self::fail_signature_collection_for`]; read by the mock collector on every
+    /// call.
+    failing_pubkeys: FailingPubkeys,
     /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
     /// after construction.
     pub(super) slot_clock: ManualSlotClock,
@@ -481,6 +608,23 @@ impl ValidatorStoreTestHarness {
         )
     }
 
+    pub(super) fn new_with_fork_and_consensus(
+        committee_setups: Vec<CommitteeSetup>,
+        our_operator_id: OperatorId,
+        active_fork: Fork,
+        consensus: MockConsensusDecider,
+    ) -> Self {
+        Self::new_with_options(
+            committee_setups,
+            our_operator_id,
+            HarnessOptions {
+                active_fork,
+                decider: consensus,
+                ..Default::default()
+            },
+        )
+    }
+
     pub(super) fn new_with_options(
         committee_setups: Vec<CommitteeSetup>,
         our_operator_id: OperatorId,
@@ -508,8 +652,13 @@ impl ValidatorStoreTestHarness {
             "test",
         ));
 
-        let (mock_collector, captured_calls) =
-            create_mock_collector(options.collector_failure, options.collector_hangs);
+        let (
+            mock_collector,
+            captured_calls,
+            signature_collection_fails,
+            signature_collection_hangs,
+            failing_pubkeys,
+        ) = create_mock_collector(options.collector_failure, options.collector_hangs);
 
         // Database
         let database = Arc::new(
@@ -586,17 +735,7 @@ impl ValidatorStoreTestHarness {
 
         let (is_synced_tx, is_synced_rx) = watch::channel(true);
 
-        let decider = match (
-            options.forced_gloas_index,
-            options.forced_envelope_decision,
-            options.forced_envelope_failure,
-        ) {
-            (Some(index), None, None) => MockConsensusDecider::forcing_gloas_index(index),
-            (None, Some(decided), None) => MockConsensusDecider::deciding_envelope(decided),
-            (None, None, Some(failure)) => MockConsensusDecider::failing_envelope(failure),
-            (None, None, None) => MockConsensusDecider::echoing(),
-            _ => panic!("harness options must not force more than one consensus behavior"),
-        };
+        let decider = options.decider;
         let captured_decides = decider.captured_decides();
 
         let spec = Arc::clone(&options.spec);
@@ -627,6 +766,9 @@ impl ValidatorStoreTestHarness {
             committee_setups,
             captured_calls,
             captured_decides,
+            signature_collection_fails,
+            signature_collection_hangs,
+            failing_pubkeys,
             slot_clock,
             is_synced_tx,
             spec,
@@ -643,6 +785,15 @@ impl ValidatorStoreTestHarness {
         validator_idx: usize,
     ) -> ValidatorMetadata {
         self.committee_setups[committee_idx].validators[validator_idx].clone()
+    }
+
+    /// The beacon-chain validator index of one committee member, as it appears in signed
+    /// aggregates and decided values.
+    pub(super) fn aggregator_index(&self, committee_idx: usize, validator_idx: usize) -> u64 {
+        *self
+            .validator_metadata(committee_idx, validator_idx)
+            .index
+            .expect("test validator should have an index") as u64
     }
 
     pub(super) fn seed_sync_voting_assignments_for_slot(
@@ -755,81 +906,96 @@ impl ValidatorStoreTestHarness {
             .cloned()
     }
 
-    /// Seeds `AggregationAssignments` for the given committees at the provided slot.
+    /// Publishes `consensus_data_by_ssv_committee` as the decided values at `TEST_SLOT`, returning
+    /// the executions the publish newly registered.
     ///
-    /// Each validator in the selected committee is treated as an attestation aggregator for a
-    /// single beacon committee index derived from the test committee position.
-    pub(super) fn seed_aggregation_assignments_for_slot(
+    /// This is the slot pipeline's Phase 3 step: registration happens before the assignments reach
+    /// the watch channel, and only vacant registrations come back, so a republish returns nothing.
+    pub(super) fn publish_decided_values(
         &self,
-        slot: u64,
-        committee_indices: &[usize],
-    ) {
-        let mut aggregator_committees = HashMap::new();
-        let mut consensus_data_by_ssv_committee = HashMap::new();
-
-        for &committee_idx in committee_indices {
-            let setup = &self.committee_setups[committee_idx];
-            let beacon_committee_index = committee_idx as u64;
-
-            for validator in &setup.validators {
-                aggregator_committees.insert(validator.public_key, beacon_committee_index);
-            }
-
-            let aggregators: Vec<_> = setup
-                .validators
-                .iter()
-                .map(|validator| AssignedAggregator {
-                    validator_index: validator.index.expect("test validator should have index"),
-                    selection_proof: Signature::empty(),
-                    committee_index: beacon_committee_index,
-                })
-                .collect();
-
-            let aggregated_attestation = AttestationBase::<MainnetEthSpec> {
-                aggregation_bits: ssz_types::BitList::with_capacity(128)
-                    .expect("bitlist should be valid"),
-                data: AttestationData {
-                    slot: Slot::new(slot),
-                    index: beacon_committee_index,
-                    beacon_block_root: Hash256::zero(),
-                    source: Checkpoint {
-                        epoch: Epoch::new(0),
-                        root: Hash256::zero(),
-                    },
-                    target: Checkpoint {
-                        epoch: Epoch::new(0),
-                        root: Hash256::zero(),
-                    },
-                },
-                signature: AggregateSignature::infinity(),
-            };
-
-            let consensus_data = AggregatorCommitteeConsensusData::<MainnetEthSpec> {
-                version: DataVersion::from(types::ForkName::Deneb),
-                aggregators: VariableList::new(aggregators)
-                    .expect("aggregator list should be valid"),
-                aggregator_committee_indexes: VariableList::new(vec![beacon_committee_index])
-                    .expect("committee indexes should be valid"),
-                aggregated_attestations: VariableList::new(vec![
-                    VariableList::new(aggregated_attestation.as_ssz_bytes())
-                        .expect("attestation bytes should fit"),
-                ])
-                .expect("aggregated attestations should be valid"),
-                contributors: VariableList::empty(),
-                sync_committee_contributions: VariableList::empty(),
-            };
-
-            consensus_data_by_ssv_committee
-                .insert(setup.cluster.committee_id(), Arc::new(consensus_data));
-        }
-
+        consensus_data_by_ssv_committee: HashMap<
+            CommitteeId,
+            Arc<AggregatorCommitteeConsensusData<MainnetEthSpec>>,
+        >,
+    ) -> Vec<(CommitteeId, AggregatorPostConsensusShared<MainnetEthSpec>)> {
         self.validator_store
             .update_aggregation_assignments(AggregationAssignments {
-                slot: Slot::new(slot),
-                aggregator_committees,
+                slot: Slot::new(TEST_SLOT),
+                aggregator_committees: HashMap::new(),
                 multi_sync_aggregators: HashMap::new(),
                 consensus_data_by_ssv_committee,
-            });
+            })
+    }
+
+    /// Runs the Lighthouse aggregate callback to completion.
+    pub(super) async fn collect_aggregates(
+        &self,
+        aggregates: Vec<AggregateToSign<MainnetEthSpec>>,
+    ) -> SignAggregatesResult {
+        let stream = self.validator_store.sign_aggregate_and_proofs(aggregates);
+        tokio::time::timeout(STREAM_TIMEOUT, stream.collect())
+            .await
+            .expect("the aggregate callback should complete within the stream timeout")
+    }
+
+    /// Runs the Lighthouse contribution callback to completion.
+    pub(super) async fn collect_contributions(
+        &self,
+        contributions: Vec<ContributionToSign<MainnetEthSpec>>,
+    ) -> SignContributionsResult {
+        let stream = self
+            .validator_store
+            .sign_sync_committee_contributions(contributions);
+        tokio::time::timeout(STREAM_TIMEOUT, stream.collect())
+            .await
+            .expect("the contribution callback should complete within the stream timeout")
+    }
+
+    /// A contribution request at `TEST_SLOT`, as Lighthouse's sync committee service would send.
+    pub(super) fn create_contribution(
+        &self,
+        committee_idx: usize,
+        validator_idx: usize,
+        subcommittee_index: u64,
+    ) -> ContributionToSign<MainnetEthSpec> {
+        let validator = &self.committee_setups[committee_idx].validators[validator_idx];
+        let validator_index = validator
+            .index
+            .expect("test validator should have an index");
+
+        ContributionToSign {
+            aggregator_index: *validator_index as u64,
+            aggregator_pubkey: validator.public_key,
+            contribution: SyncCommitteeContribution {
+                slot: Slot::new(TEST_SLOT),
+                beacon_block_root: Hash256::zero(),
+                subcommittee_index,
+                aggregation_bits: Default::default(),
+                signature: AggregateSignature::infinity(),
+            },
+            selection_proof: SyncSelectionProof::from(Signature::empty()),
+        }
+    }
+
+    /// Makes every subsequent `sign_and_collect` call fail, for tests of the paths a root that
+    /// never reaches quorum takes. Calls are still captured.
+    pub(super) fn fail_signature_collection(&self) {
+        self.signature_collection_fails
+            .store(true, Ordering::Relaxed);
+    }
+
+    /// Makes every subsequent `sign_and_collect` call hang forever, so the caller's own deadline
+    /// decides each root's fate. This is the only way to reach a per-root deadline-expiry path;
+    /// [`Self::fail_signature_collection`] resolves to an error instead. Calls are still captured.
+    pub(super) fn hang_signature_collection(&self) {
+        self.signature_collection_hangs
+            .store(true, Ordering::Relaxed);
+    }
+
+    /// Makes every subsequent `sign_and_collect` call for `pubkey` fail, so one root can miss
+    /// quorum while its siblings still collect. Calls are still captured.
+    pub(super) fn fail_signature_collection_for(&self, pubkey: PublicKeyBytes) {
+        self.failing_pubkeys.lock().insert(pubkey);
     }
 
     pub(super) fn create_attestation(
@@ -922,15 +1088,6 @@ impl ValidatorStoreTestHarness {
         committee_idx: usize,
         validator_idx: usize,
     ) -> AggregateToSign<MainnetEthSpec> {
-        self.create_aggregate_at_slot(committee_idx, validator_idx, TEST_SLOT)
-    }
-
-    pub(super) fn create_aggregate_at_slot(
-        &self,
-        committee_idx: usize,
-        validator_idx: usize,
-        slot: u64,
-    ) -> AggregateToSign<MainnetEthSpec> {
         let validator = &self.committee_setups[committee_idx].validators[validator_idx];
         let validator_index = validator
             .index
@@ -943,7 +1100,7 @@ impl ValidatorStoreTestHarness {
                 aggregation_bits: ssz_types::BitList::with_capacity(128)
                     .expect("bitlist should be valid"),
                 data: AttestationData {
-                    slot: Slot::new(slot),
+                    slot: Slot::new(TEST_SLOT),
                     index: committee_idx as u64,
                     beacon_block_root: Hash256::zero(),
                     source: Checkpoint {

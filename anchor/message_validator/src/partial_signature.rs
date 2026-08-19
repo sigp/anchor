@@ -893,6 +893,103 @@ mod tests {
         );
     }
 
+    /// Runs a single-validator partial signature message through validation with an empty
+    /// `validator_indices` (validator known locally, beacon index not synced yet).
+    fn validate_with_empty_validator_indices(
+        role: Role,
+        kind: PartialSignatureKind,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let mut committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        committee_info.validator_indices = vec![];
+
+        let (_, signed_msg) = create_test_partial_signature(
+            role,
+            kind,
+            OperatorId(1),
+            PartialSigTestOptions::default(),
+            None,
+        );
+
+        let binding = generate_random_rsa_public_keys(signed_msg.operator_ids().len());
+        let map = create_operator_pub_keys(committee_info.committee_members.clone(), binding);
+
+        let validation_context = create_test_validation_context(
+            &signed_msg,
+            &committee_info,
+            role,
+            &map,
+            generate_fork_schedule(Fork::Alan),
+        );
+
+        validate_partial_signature_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider {
+                voluntary_exit_duty_count: 0,
+                ..Default::default()
+            }),
+            None,
+        )
+    }
+
+    fn assert_no_share_metadata_ignored(result: Result<ValidatedSSVMessage, ValidationFailure>) {
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(failure, ValidationFailure::NoShareMetadata)
+                    && MessageAcceptance::from(failure) == MessageAcceptance::Ignore
+            },
+            "NoShareMetadata (Ignore)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_missing_validator_index_returns_no_share_metadata() {
+        // PostConsensus, not RANDAO, so the first-slot RANDAO carve-out does not apply
+        let result = validate_with_empty_validator_indices(
+            Role::Proposer,
+            PartialSignatureKind::PostConsensus,
+        );
+
+        assert_no_share_metadata_ignored(result);
+    }
+
+    #[test]
+    fn test_sync_committee_missing_validator_index_returns_no_share_metadata() {
+        let result = validate_with_empty_validator_indices(
+            Role::SyncCommittee,
+            PartialSignatureKind::PostConsensus,
+        );
+
+        assert_no_share_metadata_ignored(result);
+    }
+
+    #[test]
+    fn test_committee_role_missing_validator_index_skips_single_index_lookup() {
+        // Committee roles never look up a single validator index, so validation proceeds past
+        // validate_beacon_duty. With zero known validators the per-slot duty limit is 0, which
+        // is the downstream failure we expect to reach instead of NoShareMetadata.
+        let result = validate_with_empty_validator_indices(
+            Role::Committee,
+            PartialSignatureKind::PostConsensus,
+        );
+
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::ExcessiveDutyCount {
+                        limit: 0,
+                        role: Role::Committee,
+                        ..
+                    }
+                ) && MessageAcceptance::from(failure) == MessageAcceptance::Ignore
+            },
+            "ExcessiveDutyCount (Ignore)",
+        );
+    }
+
     #[test]
     fn test_committee_role_skips_validator_index_check() {
         // Create committee info with specific validator indices

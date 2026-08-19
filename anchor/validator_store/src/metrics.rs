@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 pub use metrics::*;
 
 pub const AGGREGATE_AND_PROOF: &str = "aggregate_and_proof";
+pub const AGGREGATOR_COMMITTEE: &str = "aggregator_committee";
 pub const BLOCK: &str = "block";
 pub const BEACON_VOTE: &str = "beacon_vote";
 pub const SYNC_CONTRIBUTION_AND_PROOF: &str = "sync_contribution_and_proof";
@@ -170,6 +171,34 @@ pub static AGGREGATOR_COMMITTEE_FETCH_SUCCESS: LazyLock<Result<IntCounterVec>> =
             &["type", "status"],
         )
     });
+
+// Labels for `AGGREGATOR_COMMITTEE_PUBLISH_TOTAL` (`success` is `validator_metrics::SUCCESS`).
+pub const CONSENSUS_ERROR: &str = "consensus_error";
+pub const HTTP_ERROR: &str = "http_error";
+pub const NO_AGGREGATES: &str = "no_aggregates";
+pub const NO_SIGNATURES: &str = "no_signatures";
+
+/// Aggregate-class outcomes of the Boole+ publisher. `consensus_error` (outcome failed or timed
+/// out) and `no_aggregates` (decided worklist held no aggregates) count committees, since those
+/// failures occur before any per-root work exists. `success` and `http_error` (per publish
+/// attempt) and `no_signatures` (root missed signature quorum in time) count individual
+/// aggregates, matching go-ssv's one-POST-per-aggregate accounting. The publisher's sync
+/// contribution outcomes are deliberately excluded: they keep the Lighthouse-era
+/// `SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL` accounting and per-publish logs instead. All
+/// increments live in `AnchorValidatorStore::publish_decided_aggregates` and its
+/// per-committee/per-root helpers in `aggregator_post_consensus.rs`.
+pub static AGGREGATOR_COMMITTEE_PUBLISH_TOTAL: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_aggregator_committee_publish_total",
+            "Boole+ aggregate publisher outcomes (committee-level errors, per-aggregate results)",
+            &["result"],
+        )
+    });
+
+pub fn inc_publish_result(result: &str) {
+    inc_counter_vec(&AGGREGATOR_COMMITTEE_PUBLISH_TOTAL, &[result]);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Weighted Attestation Data (WAD) metrics

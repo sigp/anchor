@@ -1,3 +1,4 @@
+mod aggregator_post_consensus;
 mod instrumentation;
 pub mod metadata_service;
 mod metrics;
@@ -17,7 +18,7 @@ use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, BlockContentsTuple, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
 use futures::{
-    Stream,
+    Stream, StreamExt,
     future::{Either, join_all},
     stream,
     stream::FuturesUnordered,
@@ -37,7 +38,7 @@ use qbft_manager::{
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
-    SyncSelectionProofDescriptor, ValidatorSigningData,
+    SyncCommitteeBatchEntry, ValidatorSigningData,
 };
 use slashing_protection::{CheckSlashability, NotSafe, Safe, SlashingDatabase};
 use slot_clock::SlotClock;
@@ -68,16 +69,15 @@ use tokio::{
 use tracing::{Instrument, Span, debug, error, field, info, info_span, trace, warn};
 use tree_hash::TreeHash;
 use types::{
-    AbstractExecPayload, Address, AggregateAndProof, Attestation, BeaconBlock, BeaconBlockRef,
-    BlindedPayload, ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch, EthSpec,
-    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData,
-    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
-    SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
-    SignedExecutionPayloadEnvelope, SignedProposerPreferences, SignedRoot,
-    SignedValidatorRegistrationData, SignedVoluntaryExit, SingleAttestation, Slot, SlotData,
-    SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
-    SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
-    consts::gloas::BUILDER_INDEX_SELF_BUILD,
+    AbstractExecPayload, Address, AggregateAndProof, BeaconBlock, BeaconBlockRef, BlindedPayload,
+    ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch, EthSpec, ExecutionPayloadEnvelope,
+    ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData, PayloadAttestationMessage,
+    ProposerPreferences, SelectionProof, SignedAggregateAndProof, SignedBeaconBlock,
+    SignedBlindedBeaconBlock, SignedContributionAndProof, SignedExecutionPayloadEnvelope,
+    SignedProposerPreferences, SignedRoot, SignedValidatorRegistrationData, SignedVoluntaryExit,
+    SingleAttestation, Slot, SlotData, SyncAggregatorSelectionData, SyncCommitteeContribution,
+    SyncCommitteeMessage, SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
+    VoluntaryExit, consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
@@ -86,7 +86,10 @@ use validator_store::{
     ValidatorStore,
 };
 
-use crate::instrumentation::CollectionFailureClass;
+use crate::{
+    aggregator_post_consensus::AggregatorPostConsensusShared,
+    instrumentation::CollectionFailureClass,
+};
 
 /// Number of epochs of slashing protection history to keep.
 ///
@@ -124,6 +127,7 @@ const PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS: u32 = 2;
 ///
 /// The shared fields (`validator`, `signing_root`) drive `collect_prepared_signatures`,
 /// while `duty_data` carries duty-specific context needed by the assembly step.
+#[derive(Clone)]
 struct SigningRequest<T> {
     validator: ValidatorMetadata,
     signing_root: Hash256,
@@ -143,21 +147,49 @@ struct DecidedVote {
 }
 
 impl<T> SigningRequest<T> {
-    /// Look up this validator's collected signature, consuming the request.
+    /// Look up this request's collected signature, consuming the request.
     ///
     /// Returns `Ok((duty_data, signature))` on success, or `Err(pubkey)` if
     /// the validator index is missing or no signature was collected.
-    fn resolve(
-        self,
-        signatures: &HashMap<ValidatorIndex, Signature>,
-    ) -> Result<(T, Signature), PublicKeyBytes> {
+    ///
+    /// Keyed by `(index, root)` rather than index alone because one validator can hold several
+    /// distinct roots in a single batch (an `AggregatorCommittee` duty allows one aggregate plus
+    /// one contribution per subcommittee).
+    fn resolve(self, signatures: &CollectedSignatures) -> Result<(T, Signature), PublicKeyBytes> {
         let sig = self
             .validator
             .index
-            .and_then(|idx| signatures.get(&idx).cloned())
+            .and_then(|idx| signatures.get(&(idx, self.signing_root)).cloned())
             .ok_or(self.validator.public_key)?;
         Ok((self.duty_data, sig))
     }
+}
+
+/// Signatures collected for one committee batch, keyed by the request that produced each.
+type CollectedSignatures = HashMap<(ValidatorIndex, Hash256), Signature>;
+
+/// Drive signature collection to completion, keeping each result as it resolves.
+///
+/// Results are taken one at a time rather than as a group so that a root which never reaches
+/// quorum withholds only itself; callers surface missing roots through
+/// `SigningRequest::resolve` failing for the affected request.
+async fn drain_signatures<F, E>(mut pending: FuturesUnordered<F>) -> CollectedSignatures
+where
+    F: Future<Output = (ValidatorIndex, Hash256, Result<Signature, E>)>,
+    E: Debug,
+{
+    let mut signatures = HashMap::with_capacity(pending.len());
+    while let Some((index, signing_root, result)) = pending.next().await {
+        match result {
+            Ok(signature) => {
+                signatures.insert((index, signing_root), signature);
+            }
+            Err(e) => {
+                error!(?index, ?signing_root, error = ?e, "Failed to collect signature");
+            }
+        }
+    }
+    signatures
 }
 
 /// Handle committee signing errors with consistent timeout/failure metrics.
@@ -229,6 +261,16 @@ pub struct AnchorValidatorStore<
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
+    /// `(committee, slot)` keys whose Boole+ `AggregatorCommittee` post-consensus execution has
+    /// already been started.
+    ///
+    /// Registered by the slot pipeline in [`Self::update_aggregation_assignments`] before those
+    /// assignments are published, first-insert-only. That registration is the single writer, so
+    /// the complete decided worklist is signed and batched exactly once no matter how often the
+    /// pipeline runs. The execution handles themselves travel to their sole consumer (the
+    /// metadata service's publisher) through the registration's return value; this set only
+    /// provides registration idempotence across the retention window.
+    aggregator_post_consensus: Mutex<HashSet<(CommitteeId, Slot)>>,
 }
 
 /// How far into `slot` the clock currently is, or `None` if the clock cannot answer.
@@ -426,6 +468,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             strict_mfp,
             is_synced,
             task_executor,
+            aggregator_post_consensus: Mutex::new(HashSet::new()),
         })
     }
 
@@ -535,13 +578,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         validator_partial_signature_batch_size: usize,
         data_hash: Hash256,
         prepared: &[SigningRequest<D>],
-    ) -> Result<HashMap<ValidatorIndex, Signature>, Error> {
+    ) -> Result<CollectedSignatures, Error> {
         let collection_mode = CollectionMode::Committee {
             validator_partial_signature_batch_size,
             base_hash: data_hash,
         };
 
-        let futures: Vec<_> = prepared
+        let pending: FuturesUnordered<_> = prepared
             .iter()
             .filter_map(|item| {
                 let index = item.validator.index?;
@@ -558,45 +601,27 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                             slot,
                         )
                         .await;
-                    (index, result)
+                    (index, item.signing_root, result)
                 })
             })
             .collect();
 
-        let results = join_all(futures).await;
-
-        let mut signatures = HashMap::with_capacity(results.len());
-        for (index, result) in results {
-            match result {
-                Ok(sig) => {
-                    signatures.insert(index, sig);
-                }
-                Err(e) => {
-                    error!(?index, error = ?e, "Failed to collect signature for validator");
-                }
-            }
-        }
-
-        Ok(signatures)
+        Ok(drain_signatures(pending).await)
     }
 
     /// Run `AggregatorCommittee` QBFT consensus for a committee at 2/3 slot.
     ///
-    /// Shared by `sign_committee_aggregate_and_proofs` and
-    /// `sign_committee_sync_committee_contributions`.
-    async fn run_aggregator_committee_consensus(
+    /// Called once per `(committee, slot)` by the post-consensus execution in
+    /// [`crate::aggregator_post_consensus`], which supplies the value this operator proposes.
+    pub(crate) async fn run_aggregator_committee_consensus(
         &self,
         committee_id: CommitteeId,
         slot: Slot,
         cluster: &Cluster,
-        metric_label: &str,
+        our_consensus_data: &AggregatorCommitteeConsensusData<E>,
     ) -> Result<AggregatorCommitteeConsensusData<E>, Error> {
-        let aggregation_assignments = self.get_aggregation_assignments(slot).await?;
-        let our_consensus_data = aggregation_assignments
-            .get_consensus_data(&committee_id)
-            .ok_or(Error::SpecificError(SpecificError::ConsensusDataNotFound))?;
-
-        let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metric_label]);
+        let timer =
+            metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATOR_COMMITTEE]);
         let timeout_mode = TimeoutMode::SlotTime {
             round_deadline_origin: self
                 .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
@@ -609,7 +634,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     committee: committee_id,
                     instance_height: slot.as_usize().into(),
                 },
-                (*our_consensus_data).clone(),
+                our_consensus_data.clone(),
                 Box::new(AggregatorCommitteeDataValidator::new()),
                 timeout_mode,
                 &cluster.cluster_members,
@@ -643,7 +668,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         slot: Slot,
         callback_subnet: SyncSubnetId,
         position_counts: &HashMap<SyncSubnetId, usize>,
-    ) -> Result<Vec<SyncSelectionProofDescriptor>, SyncSelectionProofAssignmentError> {
+    ) -> Result<Vec<SyncCommitteeBatchEntry>, SyncSelectionProofAssignmentError> {
         if position_counts.is_empty() {
             return Err(SyncSelectionProofAssignmentError::Empty);
         }
@@ -681,10 +706,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         let mut descriptor = Vec::with_capacity(position_counts.len());
         for (&subnet_id, &position_count) in position_counts {
-            descriptor.push(SyncSelectionProofDescriptor {
+            descriptor.push(SyncCommitteeBatchEntry {
                 subnet_id,
                 signing_root: self.compute_sync_selection_root(slot, subnet_id.into()),
-                position_count,
+                multiplicity: position_count,
             });
         }
 
@@ -1101,8 +1126,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// Get aggregator voting assignments, waiting if not yet available for this slot.
     ///
     /// This method waits until `AggregationAssignments` for the requested slot becomes available.
-    /// Called by `sign_committee_aggregate_and_proofs` and
-    /// `produce_signed_contribution_and_proof_boole` at 2/3 slot.
+    /// Called by `run_aggregator_post_consensus` (via `run_aggregator_committee_consensus`)
+    /// at 2/3 slot.
     ///
     /// Returns an error if the requested slot has already passed or if the watch channel is closed.
     pub async fn get_aggregation_assignments(
@@ -1136,9 +1161,23 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// This publishes the `AggregationAssignments` to all subscribers via the watch channel.
     /// At 2/3 slot, selection proofs have been computed by Lighthouse, so
     /// `DutyAndProof.selection_proof.is_some()` accurately indicates `is_aggregator`.
-    pub fn update_aggregation_assignments(&self, info: AggregationAssignments<E>) {
+    ///
+    /// It also starts each Boole+ committee's post-consensus signing execution, before publishing,
+    /// so that every consumer able to observe these assignments can also observe the execution they
+    /// belong to. See [`crate::aggregator_post_consensus`].
+    ///
+    /// Returns the executions newly registered by this call, for the caller to hand to the
+    /// aggregate publisher. Only vacant insertions are returned, so repeated calls for one slot
+    /// cannot register a second publisher for the same `(committee, slot)`.
+    #[must_use = "dropping the returned executions disables Boole+ aggregate publication"]
+    pub(crate) fn update_aggregation_assignments(
+        self: &Arc<Self>,
+        info: AggregationAssignments<E>,
+    ) -> Vec<(CommitteeId, AggregatorPostConsensusShared<E>)> {
+        let new_executions = self.start_aggregator_post_consensus(&info);
         self.aggregation_assignments_tx
             .send_replace(Some(Arc::new(info)));
+        new_executions
     }
 
     /// Return [`SpecificError::Timeout`] if the given future does not complete at `delay` into the
@@ -1627,31 +1666,32 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let data = Contributions::<E>::from_ssz_bytes(&data.data_ssz)
                 .map_err(|e| Error::from(SpecificError::InvalidQbftData(e)))?;
 
-            let data = data
-                .into_iter()
-                .map(Contribution::from)
-                .find(|data| data.contribution.subcommittee_index == subcommittee_index)
-                .ok_or(SpecificError::NoDataAgreed)?;
+            let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
+            let PreparedSyncContributionBatch {
+                callback_message: message,
+                callback_signing_root: signing_root,
+                descriptor,
+            } = prepare_decided_sync_contributions(
+                data,
+                SyncSubnetId::new(subcommittee_index),
+                aggregator_index,
+                domain_hash,
+            )?;
 
             debug!(
-                slot = %data.contribution.slot,
-                block_root = ?data.contribution.beacon_block_root,
-                subcommittee_index = data.contribution.subcommittee_index,
-                num_set_aggregation_bits = data.contribution.aggregation_bits.num_set_bits(),
+                slot = %message.contribution.slot,
+                block_root = ?message.contribution.beacon_block_root,
+                subcommittee_index = message.contribution.subcommittee_index,
+                num_set_aggregation_bits = message.contribution.aggregation_bits.num_set_bits(),
                 "Decided on Contribution to sign"
             );
 
-            let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-            let message = ContributionAndProof {
-                aggregator_index,
-                contribution: data.contribution,
-                selection_proof: data.selection_proof_sig,
-            };
-            let signing_root = message.signing_root(domain_hash);
+            let collection_mode =
+                sync_committee_collection_mode(SyncSubnetId::new(subcommittee_index), descriptor);
             self.collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::SyncCommittee,
-                CollectionMode::SingleValidator,
+                collection_mode,
                 &validator,
                 &cluster,
                 signing_root,
@@ -1668,172 +1708,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         .await
     }
 
-    /// Boole+ committee-based contribution signing: single QBFT consensus per committee,
-    /// batch signature collection for all contributors.
+    /// Whether Lighthouse's callbacks own publication of aggregator-committee duties at `epoch`.
     ///
-    /// Cannot use `collect_prepared_signatures` because a validator in multiple subcommittees
-    /// needs multiple signatures with different signing roots, but that helper deduplicates
-    /// by `ValidatorIndex`. Uses `collect_signature` directly instead.
-    async fn sign_committee_sync_committee_contributions(
-        &self,
-        committee_id: CommitteeId,
-        cluster: Cluster,
-        contributions: Vec<(ValidatorMetadata, ContributionToSign<E>)>,
-    ) -> Result<Vec<SignedContributionAndProof<E>>, Error> {
-        let Some((_, first)) = contributions.first() else {
-            warn!("sign_committee_sync_committee_contributions called with empty contributions");
-            return Ok(vec![]);
-        };
-        let slot = first.contribution.slot;
-        let epoch = slot.epoch(E::slots_per_epoch());
-
-        let decided_data = self
-            .run_aggregator_committee_consensus(
-                committee_id,
-                slot,
-                &cluster,
-                metrics::SYNC_CONTRIBUTION_AND_PROOF,
-            )
-            .await?;
-
-        let domain_hash = self.get_domain(epoch, Domain::ContributionAndProof);
-
-        // Prepare all validators: find each in decided data, build ContributionAndProof
-        // (metadata already resolved by `group_by_committee`)
-        let mut prepared: Vec<SigningRequest<ContributionAndProof<E>>> =
-            Vec::with_capacity(contributions.len());
-
-        for (validator, contrib) in &contributions {
-            let validator_index = match validator.index {
-                Some(idx) => idx,
-                None => {
-                    debug!(
-                        pubkey = ?contrib.aggregator_pubkey,
-                        "Validator missing index, skipping contribution"
-                    );
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                    continue;
-                }
-            };
-
-            let subcommittee_index = contrib.contribution.subcommittee_index;
-
-            // Find this validator+subcommittee in the decided data
-            let Some(decided_contributor) = decided_data.contributors.iter().find(|c| {
-                c.validator_index == validator_index && c.committee_index == subcommittee_index
-            }) else {
-                debug!(
-                    ?validator_index,
-                    subcommittee_index,
-                    "Validator not in decided data, skipping due to divergent operator views"
-                );
-                validator_metrics::inc_counter_vec(
-                    &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                    &[metrics::OTHER_ERROR],
-                );
-                continue;
-            };
-
-            // Find the contribution for this subcommittee
-            let Some(decided_contribution) = decided_data
-                .sync_committee_contributions
-                .iter()
-                .find(|c| c.subcommittee_index == subcommittee_index)
-            else {
-                debug!(
-                    subcommittee_index,
-                    pubkey = ?contrib.aggregator_pubkey,
-                    "Contribution not in consensus data - likely filtered due to beacon API failure"
-                );
-                validator_metrics::inc_counter_vec(
-                    &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                    &[metrics::OTHER_ERROR],
-                );
-                continue;
-            };
-
-            let message = ContributionAndProof {
-                aggregator_index: contrib.aggregator_index,
-                contribution: decided_contribution.clone(),
-                selection_proof: decided_contributor.selection_proof.clone(),
-            };
-
-            let signing_root = message.signing_root(domain_hash);
-            prepared.push(SigningRequest {
-                validator: validator.clone(),
-                signing_root,
-                duty_data: message,
-            });
-        }
-
-        // Collect signatures — using `collect_signature` directly because a validator in
-        // multiple subcommittees produces multiple `SigningRequest`s with different signing
-        // roots, which `collect_prepared_signatures` cannot handle (it deduplicates by
-        // `ValidatorIndex`).
-        let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-        let validator_partial_signature_batch_size = decided_data
-            .post_consensus_signature_count(|idx| committee_validator_indices.contains(idx));
-        let data_hash = decided_data.hash();
-        let collection_mode = CollectionMode::Committee {
-            validator_partial_signature_batch_size,
-            base_hash: data_hash,
-        };
-
-        let sig_futures: Vec<_> = prepared
-            .iter()
-            .map(|req| {
-                self.collect_signature(
-                    PartialSignatureKind::PostConsensus,
-                    Role::AggregatorCommittee,
-                    collection_mode.clone(),
-                    &req.validator,
-                    &cluster,
-                    req.signing_root,
-                    slot,
-                )
-            })
-            .collect();
-
-        let signature_results = join_all(sig_futures).await;
-
-        // Assemble results
-        let mut results = Vec::with_capacity(prepared.len());
-        for (req, sig_result) in prepared.into_iter().zip(signature_results) {
-            match sig_result {
-                Ok(signature) => {
-                    let message = req.duty_data;
-                    debug!(
-                        aggregator_index = ?message.aggregator_index,
-                        slot = %message.contribution.slot,
-                        block_root = ?message.contribution.beacon_block_root,
-                        subcommittee_index = message.contribution.subcommittee_index,
-                        num_set_aggregation_bits = message.contribution.aggregation_bits.num_set_bits(),
-                        "Signed ContributionAndProof (Boole+ committee consensus)"
-                    );
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                        &[validator_metrics::SUCCESS],
-                    );
-                    results.push(SignedContributionAndProof { message, signature });
-                }
-                Err(e) => {
-                    error!(
-                        pubkey = ?req.validator.public_key,
-                        error = ?e,
-                        "Failed to collect signature for sync contribution"
-                    );
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                }
-            }
-        }
-
-        Ok(results)
+    /// Pre-Boole they do; from Boole the metadata service's publisher owns both classes
+    /// (aggregates and sync contributions) and the callbacks return empty batches. This is the
+    /// exact complement of the publisher's registration gate (consensus data is only built for
+    /// Boole+ slots), so exactly one path publishes for any duty. Both callbacks derive `epoch`
+    /// from the duty's own payload (the aggregate's target epoch, the contribution's slot),
+    /// which equal the duty slot's epoch by construction.
+    pub(crate) fn lighthouse_owns_publication(&self, epoch: Epoch) -> bool {
+        self.fork_schedule.active_fork(epoch) < Fork::Boole
     }
 
     /// Run the shared committee beacon-vote consensus with fork-correct data and timing.
@@ -2149,158 +2033,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     signature: AggregateSignature::from(&signature),
                 },
                 att.pubkey,
-            ));
-        }
-
-        Ok(results)
-    }
-
-    /// Resolve a single validator's aggregate from decided consensus data.
-    ///
-    /// Looks up the aggregator in decided data, finds the matching committee index,
-    /// decodes the aggregate attestation from SSZ, and builds an `AggregateAndProof`.
-    fn resolve_decided_aggregate(
-        decided_data: &AggregatorCommitteeConsensusData<E>,
-        validator: ValidatorMetadata,
-        agg: &AggregateToSign<E>,
-        domain_hash: Hash256,
-    ) -> Result<SigningRequest<(u64, AggregateAndProof<E>)>, String> {
-        let validator_index = validator.index.ok_or("Validator missing index")?;
-
-        // Find this validator in the decided data
-        let decided_aggregator = decided_data
-            .aggregators
-            .iter()
-            .find(|a| a.validator_index == validator_index)
-            .ok_or("Validator not in decided data")?;
-
-        let committee_index = decided_aggregator.committee_index;
-
-        // Find the position of this committee index in decided data
-        let decided_aggregate_idx = decided_data
-            .aggregator_committee_indexes
-            .iter()
-            .position(|&idx| idx == committee_index)
-            .ok_or("Committee index not found in decided data")?;
-
-        let decided_aggregate_bytes = decided_data
-            .aggregated_attestations
-            .get(decided_aggregate_idx)
-            .ok_or("Aggregate attestation bytes not found in decided data")?;
-
-        // Decode with the shape the decided version selects (Gloas merkleizes progressively,
-        // so the shape drives the signing root computed below).
-        let decided_aggregate: Attestation<E> = decided_data
-            .version
-            .decode_attestation(decided_aggregate_bytes)
-            .map_err(|e| format!("Failed to decode decided aggregate: {e}"))?;
-
-        let decided_selection_proof =
-            SelectionProof::from(decided_aggregator.selection_proof.clone());
-
-        let message = AggregateAndProof::from_attestation(
-            agg.aggregator_index,
-            decided_aggregate,
-            decided_selection_proof,
-        );
-
-        let signing_root = message.signing_root(domain_hash);
-        Ok(SigningRequest {
-            validator,
-            signing_root,
-            duty_data: (agg.aggregator_index, message),
-        })
-    }
-
-    /// Boole+ committee-based aggregate signing: single QBFT consensus per committee,
-    /// batch signature collection for all aggregators.
-    async fn sign_committee_aggregate_and_proofs(
-        &self,
-        committee_id: CommitteeId,
-        cluster: Cluster,
-        aggregates: Vec<(ValidatorMetadata, AggregateToSign<E>)>,
-    ) -> Result<Vec<SignedAggregateAndProof<E>>, Error> {
-        let Some((_, first)) = aggregates.first() else {
-            warn!("sign_committee_aggregate_and_proofs called with empty aggregates");
-            return Ok(vec![]);
-        };
-        let slot = first.aggregate.data().slot;
-        let signing_epoch = first.aggregate.data().target.epoch;
-
-        let decided_data = self
-            .run_aggregator_committee_consensus(
-                committee_id,
-                slot,
-                &cluster,
-                metrics::AGGREGATE_AND_PROOF,
-            )
-            .await?;
-
-        let domain_hash = self.get_domain(signing_epoch, Domain::AggregateAndProof);
-
-        // Prepare all validators: find each in decided data, decode aggregate, build message
-        // (metadata already resolved by `group_by_committee`)
-        let mut prepared: Vec<SigningRequest<(u64, AggregateAndProof<E>)>> =
-            Vec::with_capacity(aggregates.len());
-
-        for (validator, agg) in aggregates {
-            match Self::resolve_decided_aggregate(&decided_data, validator, &agg, domain_hash) {
-                Ok(request) => prepared.push(request),
-                Err(e) => {
-                    debug!(pubkey = ?agg.pubkey, error = e, "Skipping aggregate");
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                }
-            }
-        }
-
-        // Collect signatures and assemble results
-        let committee_validator_indices = self.get_committee_validator_indices(&committee_id);
-        let validator_partial_signature_batch_size = decided_data
-            .post_consensus_signature_count(|idx| committee_validator_indices.contains(idx));
-
-        let signatures = self
-            .collect_prepared_signatures(
-                Role::AggregatorCommittee,
-                slot,
-                &cluster,
-                validator_partial_signature_batch_size,
-                decided_data.hash(),
-                &prepared,
-            )
-            .await?;
-
-        let mut results = Vec::with_capacity(prepared.len());
-        for req in prepared {
-            let ((aggregator_index, message), signature) = match req.resolve(&signatures) {
-                Ok(resolved) => resolved,
-                Err(pubkey) => {
-                    warn!(
-                        ?pubkey,
-                        "Missing validator index or signature for aggregator, skipping"
-                    );
-                    validator_metrics::inc_counter_vec(
-                        &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                        &[metrics::OTHER_ERROR],
-                    );
-                    continue;
-                }
-            };
-
-            debug!(
-                ?aggregator_index,
-                data = ?message.aggregate().data(),
-                num_set_aggregation_bits = message.aggregate().num_set_aggregation_bits(),
-                "Signed AggregateAndProof (Boole+ committee consensus)"
-            );
-            validator_metrics::inc_counter_vec(
-                &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                &[validator_metrics::SUCCESS],
-            );
-            results.push(SignedAggregateAndProof::from_aggregate_and_proof(
-                message, signature,
             ));
         }
 
@@ -2914,14 +2646,73 @@ pub struct ContributionAndProofSigningData<E: EthSpec> {
     selection_proof: SyncSelectionProof,
 }
 
+struct PreparedSyncContributionBatch<E: EthSpec> {
+    callback_message: ContributionAndProof<E>,
+    callback_signing_root: Hash256,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
+}
+
+/// Prepares the exact decided sync contribution root multiset for every Lighthouse callback.
+fn prepare_decided_sync_contributions<E: EthSpec>(
+    contributions: Contributions<E>,
+    callback_subnet: SyncSubnetId,
+    aggregator_index: u64,
+    domain_hash: Hash256,
+) -> Result<PreparedSyncContributionBatch<E>, SpecificError> {
+    let mut callback = None;
+    let mut descriptor = Vec::with_capacity(contributions.len());
+
+    for contribution in contributions.into_iter().map(Contribution::from) {
+        let subnet_id = SyncSubnetId::new(contribution.contribution.subcommittee_index);
+        let message = ContributionAndProof {
+            aggregator_index,
+            contribution: contribution.contribution,
+            selection_proof: contribution.selection_proof_sig,
+        };
+        let signing_root = message.signing_root(domain_hash);
+
+        if callback.is_none() && subnet_id == callback_subnet {
+            callback = Some((message, signing_root));
+        }
+        descriptor.push(SyncCommitteeBatchEntry {
+            subnet_id,
+            signing_root,
+            multiplicity: 1,
+        });
+    }
+
+    let (callback_message, callback_signing_root) = callback.ok_or(SpecificError::NoDataAgreed)?;
+
+    descriptor.sort_unstable_by_key(|entry| (u64::from(entry.subnet_id), entry.signing_root));
+
+    let mut collapsed: Vec<SyncCommitteeBatchEntry> = Vec::with_capacity(descriptor.len());
+    for entry in descriptor {
+        match collapsed.last_mut() {
+            Some(previous)
+                if previous.subnet_id == entry.subnet_id
+                    && previous.signing_root == entry.signing_root =>
+            {
+                previous.multiplicity += entry.multiplicity;
+            }
+            _ => collapsed.push(entry),
+        }
+    }
+
+    Ok(PreparedSyncContributionBatch {
+        callback_message,
+        callback_signing_root,
+        descriptor: collapsed,
+    })
+}
+
 #[derive(Clone)]
 enum CollectionMode {
     SingleValidator,
     SingleValidatorBatch {
         /// Subnet requested by the current Lighthouse callback.
         subnet_id: SyncSubnetId,
-        /// Canonical descriptor for every unique subnet assigned to this validator and slot.
-        descriptor: Vec<SyncSelectionProofDescriptor>,
+        /// Canonical descriptor for every unique subnet and signing root pair in this batch.
+        descriptor: Vec<SyncCommitteeBatchEntry>,
     },
     Committee {
         /// The number of validator partial signatures this operator batches locally into the
@@ -2941,6 +2732,25 @@ pub struct DecidedRootConflict {
     pub slot: Slot,
     pub existing_root: Hash256,
     pub new_root: Hash256,
+}
+
+fn sync_committee_collection_mode(
+    callback_subnet: SyncSubnetId,
+    descriptor: Vec<SyncCommitteeBatchEntry>,
+) -> CollectionMode {
+    if descriptor
+        .iter()
+        .map(|entry| entry.multiplicity)
+        .sum::<usize>()
+        == 1
+    {
+        CollectionMode::SingleValidator
+    } else {
+        CollectionMode::SingleValidatorBatch {
+            subnet_id: callback_subnet,
+            descriptor,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3059,6 +2869,9 @@ pub enum SpecificError {
         local_root: Hash256,
         decided_root: Hash256,
     },
+    /// The detached `AggregatorCommittee` post-consensus execution died before producing a
+    /// result (executor shutdown, spawn refusal, or task panic)
+    PostConsensusAborted,
 }
 
 impl From<CollectionError> for SpecificError {
@@ -3531,53 +3344,43 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         aggregates: Vec<AggregateToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<SignedAggregateAndProof<E>>, Error>> + Send {
-        // Early return for empty input — no fork to determine, nothing to sign
-        let Some(first) = aggregates.first() else {
-            return Either::Right(FuturesUnordered::new());
-        };
+        let this = Arc::clone(self);
+        stream::once(async move {
+            // Empty input: nothing to sign and no fork to determine.
+            let Some(first) = aggregates.first() else {
+                return Ok(Vec::new());
+            };
 
-        if self
-            .fork_schedule
-            .active_fork(first.aggregate.data().target.epoch)
-            >= Fork::Boole
-        {
-            // Boole+: group by committee, stream per committee via FuturesUnordered
-            let _span = info_span!("sign_aggregate_and_proofs").entered();
-            let committee_mapping = self.group_by_committee(aggregates, |a| a.pubkey);
+            if !this.lighthouse_owns_publication(first.aggregate.data().target.epoch) {
+                // Boole+: hand Lighthouse an empty batch, which its publish loop drops silently.
+                // Publication ownership lives with the metadata service's publisher, which signs
+                // and publishes the decided worklist regardless of whether Lighthouse's duty
+                // snapshot saw the selection proofs in time. See
+                // [`crate::aggregator_post_consensus`].
+                //
+                // Lighthouse's request set is its snapshot's view of who aggregates; the
+                // publisher only ever sees the decided view. Logging the request set here keeps
+                // divergent operator views diagnosable by comparing the two.
+                debug!(
+                    slot = %first.aggregate.data().slot,
+                    requested = aggregates.len(),
+                    aggregators = ?aggregates
+                        .iter()
+                        .map(|agg| agg.aggregator_index)
+                        .collect::<Vec<_>>(),
+                    "Deferring Lighthouse-requested aggregates to the decided-value publisher"
+                );
+                return Ok(Vec::new());
+            }
 
-            let committee_futures: FuturesUnordered<_> = committee_mapping
-                .into_iter()
-                .map(|(committee_id, (cluster, aggregates))| {
-                    let this = Arc::clone(self);
-                    async move {
-                        run_committee_signing(
-                            committee_id,
-                            aggregates.len(),
-                            &validator_metrics::SIGNED_AGGREGATES_TOTAL,
-                            this.sign_committee_aggregate_and_proofs(
-                                committee_id,
-                                cluster,
-                                aggregates,
-                            ),
-                        )
-                        .await
-                    }
-                })
-                .collect();
-
-            Either::Right(committee_futures)
-        } else {
-            // Pre-Boole: per-validator processing, no committee grouping needed
-            let this = Arc::clone(self);
-            Either::Left(stream::once(async move {
-                let futures = aggregates.into_iter().map(|agg| {
-                    let this = Arc::clone(&this);
-                    async move { this.sign_single_aggregate_and_proof(agg).await }
-                });
-                let results = join_all(futures).await;
-                Ok(results.into_iter().filter_map(|r| r.ok()).collect())
-            }))
-        }
+            // Pre-Boole: per-validator processing, Lighthouse publishes the results
+            let futures = aggregates.into_iter().map(|agg| {
+                let this = Arc::clone(&this);
+                async move { this.sign_single_aggregate_and_proof(agg).await }
+            });
+            let results = join_all(futures).await;
+            Ok(results.into_iter().filter_map(|r| r.ok()).collect())
+        })
     }
 
     async fn produce_selection_proof(
@@ -3794,13 +3597,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                             },
                         )?;
 
+                    let collection_mode = sync_committee_collection_mode(subnet_id, descriptor);
                     self.collect_signature(
                         PartialSignatureKind::ContributionProofs,
                         Role::SyncCommittee,
-                        CollectionMode::SingleValidatorBatch {
-                            subnet_id,
-                            descriptor,
-                        },
+                        collection_mode,
                         &validator,
                         &cluster,
                         signing_root,
@@ -3857,51 +3658,48 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         self: &Arc<Self>,
         contributions: Vec<ContributionToSign<E>>,
     ) -> impl Stream<Item = Result<Vec<SignedContributionAndProof<E>>, Error>> + Send {
-        // Early return for empty input — no fork to determine, nothing to sign
-        let Some(first) = contributions.first() else {
-            return Either::Right(FuturesUnordered::new());
-        };
+        let this = Arc::clone(self);
+        stream::once(async move {
+            // Empty input: nothing to sign and no fork to determine.
+            let Some(first) = contributions.first() else {
+                return Ok(Vec::new());
+            };
 
-        let epoch = first.contribution.slot.epoch(E::slots_per_epoch());
+            if !this
+                .lighthouse_owns_publication(first.contribution.slot.epoch(E::slots_per_epoch()))
+            {
+                // Boole+: hand Lighthouse an empty batch, which its publish loop drops silently.
+                // Publication ownership lives with the metadata service's publisher, which signs
+                // and publishes the decided worklist regardless of whether Lighthouse's duty
+                // snapshot saw the sync selection proofs in time. See
+                // [`crate::aggregator_post_consensus`].
+                //
+                // Lighthouse's request set is its snapshot's view of who aggregates; the
+                // publisher only ever sees the decided view. Logging the request set here keeps
+                // divergent operator views diagnosable by comparing the two.
+                debug!(
+                    slot = %first.contribution.slot,
+                    // Lighthouse requests contributions per subnet, so one call is one subnet;
+                    // the publisher's logs key on subcommittee index, and this field is the join.
+                    subnet = first.contribution.subcommittee_index,
+                    requested = contributions.len(),
+                    aggregators = ?contributions
+                        .iter()
+                        .map(|contrib| contrib.aggregator_index)
+                        .collect::<Vec<_>>(),
+                    "Deferring Lighthouse-requested contributions to the decided-value publisher"
+                );
+                return Ok(Vec::new());
+            }
 
-        if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
-            // Boole+: group by committee, stream per committee via FuturesUnordered
-            let _span = info_span!("sign_sync_committee_contributions").entered();
-            let committee_mapping = self.group_by_committee(contributions, |c| c.aggregator_pubkey);
-
-            let committee_futures: FuturesUnordered<_> = committee_mapping
-                .into_iter()
-                .map(|(committee_id, (cluster, contributions))| {
-                    let this = Arc::clone(self);
-                    async move {
-                        run_committee_signing(
-                            committee_id,
-                            contributions.len(),
-                            &validator_metrics::SIGNED_SYNC_COMMITTEE_CONTRIBUTIONS_TOTAL,
-                            this.sign_committee_sync_committee_contributions(
-                                committee_id,
-                                cluster,
-                                contributions,
-                            ),
-                        )
-                        .await
-                    }
-                })
-                .collect();
-
-            Either::Right(committee_futures)
-        } else {
-            // Pre-Boole: per-validator processing, no committee grouping needed
-            let this = Arc::clone(self);
-            Either::Left(stream::once(async move {
-                let futures = contributions.into_iter().map(|contrib| {
-                    let this = Arc::clone(&this);
-                    async move { this.sign_single_sync_committee_contribution(contrib).await }
-                });
-                let results = join_all(futures).await;
-                Ok(results.into_iter().filter_map(|r| r.ok()).collect())
-            }))
-        }
+            // Pre-Boole: per-validator processing, Lighthouse publishes the results
+            let futures = contributions.into_iter().map(|contrib| {
+                let this = Arc::clone(&this);
+                async move { this.sign_single_sync_committee_contribution(contrib).await }
+            });
+            let results = join_all(futures).await;
+            Ok(results.into_iter().filter_map(|r| r.ok()).collect())
+        })
     }
 
     // stolen from lighthouse
