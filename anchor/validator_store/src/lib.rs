@@ -31,8 +31,9 @@ use openssl::{
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
-    AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider, ProposerInstanceId,
-    QbftError, QbftManager, TimeoutMode, ValidatorDutyKind,
+    AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider,
+    EnvelopeProposerInstanceId, ProposerInstanceId, QbftError, QbftManager, TimeoutMode,
+    ValidatorDutyKind,
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
@@ -46,11 +47,12 @@ use ssv_types::{
     OperatorId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
-        BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
-        BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
-        EnvelopeConsensusDataValidator, ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator,
-        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
-        ValidatorDuty,
+        BEACON_ROLE_ENVELOPE_PROPOSER, BEACON_ROLE_PROPOSER,
+        BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote, BeaconVoteValidator,
+        BlindedExecutionPayloadEnvelope, Contribution, ContributionWrapper, Contributions,
+        DataVersion, EnvelopeConsensusData, EnvelopeConsensusDataValidator, ForkDecodeError,
+        GloasBeaconVote, GloasBeaconVoteValidator, ProposerConsensusData,
+        ProposerConsensusDataValidator, QbftData, SelectionProofBatchId, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -65,6 +67,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 use tracing::{Instrument, Span, debug, error, field, info, info_span, trace, warn};
+use tree_hash::TreeHash;
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, BeaconBlock, BeaconBlockRef, BlindedPayload,
     ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch, EthSpec, ExecutionPayloadEnvelope,
@@ -74,7 +77,7 @@ use types::{
     SignedProposerPreferences, SignedRoot, SignedValidatorRegistrationData, SignedVoluntaryExit,
     SingleAttestation, Slot, SlotData, SyncAggregatorSelectionData, SyncCommitteeContribution,
     SyncCommitteeMessage, SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
-    VoluntaryExit,
+    VoluntaryExit, consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
@@ -971,7 +974,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// with no later insert, an old entry stays in the map.
     ///
     /// Reads are non-destructive and return the root by value.
-    #[cfg_attr(not(test), expect(dead_code))] // no non-test caller yet
     fn get_decided_block_root(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -1409,7 +1411,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     }
 
     /// Constructs the QBFT data validator for envelope-signing duties.
-    #[cfg_attr(not(test), expect(dead_code))] // no non-test caller yet
     fn create_envelope_consensus_data_validator(
         &self,
         validator_pubkey: PublicKeyBytes,
@@ -2863,7 +2864,7 @@ pub enum SpecificError {
         builder_index: u64,
     },
     /// Consensus decided an envelope another operator built. This is an intentional
-    /// non-publish, not a failure: the partial signature was already contributed.
+    /// non-publish, not a failure.
     EnvelopeNotBuiltLocally {
         local_root: Hash256,
         decided_root: Hash256,
@@ -3832,11 +3833,167 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
     async fn sign_execution_payload_envelope(
         &self,
-        _validator_pubkey: PublicKeyBytes,
-        _envelope: ExecutionPayloadEnvelope<E>,
+        validator_pubkey: PublicKeyBytes,
+        envelope: ExecutionPayloadEnvelope<E>,
     ) -> Result<SignedExecutionPayloadEnvelope<E>, Error> {
-        // TODO(gloas)
-        Err(Error::SpecificError(SpecificError::Unsupported))
+        let slot = envelope.slot();
+        let span = info_span!(
+            "sign_execution_payload_envelope",
+            slot = slot.as_u64(),
+            %validator_pubkey,
+            validator_index = field::Empty,
+            outcome = field::Empty,
+        );
+
+        async move {
+            if !*self.is_synced.borrow() {
+                return Err(Error::SpecificError(SpecificError::NotSynced));
+            }
+            let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+            let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
+            Span::current().record("validator_index", *validator_index);
+
+            let fork = self.spec.fork_name_at_slot::<E>(slot);
+            if !fork.gloas_enabled() {
+                return Err(Error::SpecificError(SpecificError::EnvelopeBeforeGloas {
+                    slot,
+                    fork,
+                }));
+            }
+            if envelope.builder_index != BUILDER_INDEX_SELF_BUILD {
+                return Err(Error::SpecificError(SpecificError::EnvelopeNotSelfBuild {
+                    builder_index: envelope.builder_index,
+                }));
+            }
+            let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+            if slot > current_slot {
+                return Err(Error::GreaterThanCurrentSlot { slot, current_slot });
+            }
+
+            let decided_block_root = self.get_decided_block_root(validator_pubkey, slot)?;
+            let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
+
+            let record_outcome = |outcome: &str| {
+                metrics::inc_counter_vec(&metrics::ENVELOPE_SIGNING_OUTCOMES, &[outcome]);
+                Span::current().record("outcome", outcome);
+            };
+
+            let consensus_data = EnvelopeConsensusData {
+                duty: ValidatorDuty {
+                    r#type: BEACON_ROLE_ENVELOPE_PROPOSER,
+                    pub_key: validator.public_key,
+                    slot,
+                    validator_index,
+                    committee_index: 0,
+                    committee_length: 0,
+                    committees_at_slot: 0,
+                    validator_committee_index: 0,
+                    validator_sync_committee_indices: Default::default(),
+                },
+                // The version participates in the QBFT value hash, so every operator must
+                // derive it from the slot.
+                version: DataVersion::from(fork),
+                data_ssz: try_to_variable_list(local_blinded.as_ssz_bytes(), |provided, max| {
+                    Error::SpecificError(SpecificError::DataTooLarge(format!(
+                        "Envelope data too large for consensus: {provided} > {max}"
+                    )))
+                })?,
+            };
+
+            let data_validator = self.create_envelope_consensus_data_validator(
+                validator.public_key,
+                validator_index,
+                slot,
+                decided_block_root,
+            );
+            let instance_id = EnvelopeProposerInstanceId {
+                validator: validator.public_key,
+                instance_height: slot.as_usize().into(),
+            };
+            let timeout_mode = TimeoutMode::Relative {
+                current_round_start_time: self.get_instant_in_slot(slot, Duration::ZERO)?,
+            };
+
+            let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::ENVELOPE]);
+            let completed = self
+                .consensus
+                .decide_instance(
+                    instance_id,
+                    consensus_data,
+                    data_validator,
+                    timeout_mode,
+                    &cluster.cluster_members,
+                )
+                .await;
+            drop(timer);
+
+            let decided = match completed {
+                Ok(Completed::Success(decided)) => decided,
+                Ok(Completed::TimedOut) => {
+                    warn!("Envelope consensus timed out");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    return Err(Error::SpecificError(SpecificError::Timeout));
+                }
+                Err(err) => {
+                    warn!(?err, "Envelope consensus failed");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    return Err(Error::SpecificError(SpecificError::from(err)));
+                }
+            };
+            let decided_blinded = decided.decode_blinded_envelope::<E>().map_err(|err| {
+                warn!(?err, "Failed to decode decided envelope");
+                record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                Error::SpecificError(SpecificError::InvalidQbftData(err))
+            })?;
+
+            // Sign before the content gate so every operator contributes its share and the
+            // builder can reconstruct the threshold signature.
+            let epoch = slot.epoch(E::slots_per_epoch());
+            let domain_hash = self.get_domain(epoch, Domain::BeaconBuilder);
+            let signing_root = decided_blinded.signing_root(domain_hash);
+            let signature = self
+                .collect_signature(
+                    PartialSignatureKind::PostConsensus,
+                    Role::EnvelopeProposer,
+                    CollectionMode::SingleValidator,
+                    &validator,
+                    &cluster,
+                    signing_root,
+                    slot,
+                )
+                .await
+                .inspect_err(|err| {
+                    warn!(?err, "Envelope signature collection failed");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                })?;
+
+            // Publish gate: the caller publishes every `Ok`, so only the operator whose local
+            // envelope matches the decided value may return one.
+            if local_blinded != decided_blinded {
+                let local_root = local_blinded.tree_hash_root();
+                let decided_root = decided_blinded.tree_hash_root();
+                info!(
+                    ?local_root,
+                    ?decided_root,
+                    "Cluster decided another operator's envelope, skipping publish (expected)"
+                );
+                record_outcome(metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY);
+                return Err(Error::SpecificError(
+                    SpecificError::EnvelopeNotBuiltLocally {
+                        local_root,
+                        decided_root,
+                    },
+                ));
+            }
+
+            record_outcome(metrics::ENVELOPE_OUTCOME_PUBLISHED);
+            Ok(SignedExecutionPayloadEnvelope {
+                message: envelope,
+                signature,
+            })
+        }
+        .instrument(span)
+        .await
     }
 
     async fn sign_payload_attestation(
