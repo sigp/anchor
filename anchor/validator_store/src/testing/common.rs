@@ -104,6 +104,14 @@ pub(super) struct CapturedDecideCall {
     pub(super) data_type: &'static str,
 }
 
+/// Forced outcome for `EnvelopeConsensusData` decide calls.
+pub(super) enum ForcedEnvelopeFailure {
+    /// Complete with `Completed::TimedOut`.
+    Timeout,
+    /// Fail with this error.
+    Error(QbftError),
+}
+
 /// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
 /// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
 ///
@@ -114,7 +122,8 @@ pub(super) struct CapturedDecideCall {
 /// unchanged, since their decided value carries no index.
 ///
 /// When `forced_envelope_decision` is `Some`, it replaces the echo for `EnvelopeConsensusData`
-/// seeds. Every `decide_instance` call is captured, regardless of the configured behavior.
+/// seeds; when `forced_envelope_failure` is `Some`, envelope seeds time out or fail instead.
+/// Every `decide_instance` call is captured, regardless of the configured behavior.
 ///
 /// When `fixed_decision` is `Some`, every seed decides as that SSZ-encoded value once `parties`
 /// callers have reached the barrier, modeling a cluster decision that differs from each caller's
@@ -123,6 +132,7 @@ pub(super) struct CapturedDecideCall {
 pub(super) struct MockConsensusDecider {
     forced_gloas_index: Option<u64>,
     forced_envelope_decision: Option<EnvelopeConsensusData>,
+    forced_envelope_failure: Option<ForcedEnvelopeFailure>,
     fixed_decision: Option<(Vec<u8>, Arc<Barrier>)>,
     captured: CapturedDecides,
 }
@@ -159,6 +169,15 @@ impl MockConsensusDecider {
         }
     }
 
+    /// Fails every `EnvelopeConsensusData` decide call with `failure`, modeling envelope
+    /// consensus that times out or errors. Non-envelope seeds keep the echo behavior.
+    pub(super) fn failing_envelope(failure: ForcedEnvelopeFailure) -> Self {
+        Self {
+            forced_envelope_failure: Some(failure),
+            ..Self::default()
+        }
+    }
+
     /// Handle to the captured `decide_instance` calls.
     pub(super) fn captured_decides(&self) -> CapturedDecides {
         Arc::clone(&self.captured)
@@ -183,6 +202,25 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
             let decided_any: Box<dyn Any> = Box::new(decided);
             if let Ok(decided_envelope) = decided_any.downcast::<D>() {
                 return Ok(Completed::Success(*decided_envelope));
+            }
+        }
+        if let Some(failure) = &self.forced_envelope_failure {
+            // Same soundness argument as below: `D: 'static`. Only an `EnvelopeConsensusData`
+            // seed triggers the forced failure; every other seed echoes back unchanged.
+            let boxed: Box<dyn Any> = Box::new(initial);
+            match boxed.downcast::<EnvelopeConsensusData>() {
+                Ok(_envelope_seed) => {
+                    return match failure {
+                        ForcedEnvelopeFailure::Timeout => Ok(Completed::TimedOut),
+                        ForcedEnvelopeFailure::Error(err) => Err(err.clone()),
+                    };
+                }
+                Err(original) => {
+                    let echoed = original
+                        .downcast::<D>()
+                        .expect("downcast back to original D always succeeds");
+                    return Ok(Completed::Success(*echoed));
+                }
             }
         }
         // `D: QbftDecidable<E>` requires `'static`, so this downcast is sound. Only the Gloas
@@ -525,8 +563,6 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
-    /// Not yet read by any harness-driven test; the envelope-signing e2e tests will consume it.
-    #[expect(dead_code)]
     pub(super) captured_decides: CapturedDecides,
     /// Set by [`Self::fail_signature_collection`]; read by the mock collector on every call.
     signature_collection_fails: Arc<AtomicBool>,
