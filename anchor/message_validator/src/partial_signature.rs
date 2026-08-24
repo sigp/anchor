@@ -2415,7 +2415,8 @@ mod tests {
     //      evict a live slot's dedup state;
     //   6. per-`proposal_slot` signing-root dedup capped at
     //      `MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS` (over-cap → `TooManyDistinctSigningRoots` /
-    //      Ignore, exact-dup → `DuplicatedMessage` / Reject).
+    //      Ignore, any repeat of a recorded root → `RelayedDuplicateMessage` / Ignore, regardless
+    //      of the propagation peer; SIP-94 §7).
 
     /// Epoch at which the Ethereum Gloas fork activates in the ProposerPreferences
     /// fork-gate tests. Message slots below `GLOAS_ACTIVATION_EPOCH * SLOTS_PER_EPOCH_TEST`
@@ -3194,10 +3195,10 @@ mod tests {
     }
 
     #[test]
-    fn test_proposer_preferences_duplicate_root_same_proposal_slot_rejected() {
-        // An exact-duplicate signing_root for the same `proposal_slot` is a resend and
-        // must be rejected as a `DuplicatedMessage` (Reject class), via the per-slot
-        // `seen_preferences` set.
+    fn test_proposer_preferences_duplicate_root_same_proposal_slot_ignored() {
+        // An exact-duplicate signing_root for the same `proposal_slot` is a repeat of a
+        // recorded root and must be IGNORE'd (`RelayedDuplicateMessage`) regardless of the
+        // propagation peer (SIP-94 §7), via the per-slot `seen_preferences` set.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
         let map =
@@ -3220,8 +3221,8 @@ mod tests {
             &map,
             proposal_slot,
         );
-        // The exact resend below must classify as a SAME-PEER duplicate (Reject), so both the
-        // first send and the duplicate come from the same peer.
+        // Deliver both from the same peer to pin the same-peer case: a repeat of a recorded
+        // root is IGNORE regardless of the propagation peer.
         let result_first = validate_partial_signature_message(
             context_first,
             &mut duty_state,
@@ -3252,8 +3253,8 @@ mod tests {
         // Assert
         assert_validation_error(
             result_dup,
-            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
-            "DuplicatedMessage (ProposerPreferences exact-duplicate root)",
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (ProposerPreferences exact-duplicate root)",
         );
     }
 
@@ -3275,7 +3276,7 @@ mod tests {
         let mut duty_state = DutyState::new(64);
 
         // Feed `CAP` distinct roots; all must be accepted. The FIRST root is delivered by
-        // `peer_a` so the later same-peer resend of it classifies as a Reject-class duplicate.
+        // `peer_a` so the later same-peer resend pins the peer-agnostic IGNORE verdict.
         for i in 0..CAP {
             let mut root_bytes = [0u8; 32];
             root_bytes[0..8].copy_from_slice(&(i as u64).to_le_bytes());
@@ -3300,8 +3301,8 @@ mod tests {
         }
 
         // While the set is exactly full (CAP distinct roots), a SAME-PEER resend of the FIRST
-        // already-seen root must be a Reject-class `DuplicatedMessage` — identity takes precedence
-        // over the cap, NOT the Ignore-class `TooManyDistinctSigningRoots`.
+        // already-seen root must be the Ignore-class `RelayedDuplicateMessage` — membership takes
+        // precedence over the cap, NOT `TooManyDistinctSigningRoots`.
         let mut first_root_bytes = [0u8; 32];
         first_root_bytes[0..8].copy_from_slice(&0u64.to_le_bytes());
         let signed_dup = create_signed_proposer_preferences_message(
@@ -3320,19 +3321,8 @@ mod tests {
         );
         assert_validation_error(
             result_dup,
-            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
-            "DuplicatedMessage (already-seen root takes precedence over cap)",
-        );
-        // Pin the Reject mapping so a future reclassification is caught here. `MessageAcceptance`
-        // has no `PartialEq`, so match on the variant.
-        assert!(
-            matches!(
-                MessageAcceptance::from(&ValidationFailure::DuplicatedMessage {
-                    got: String::new()
-                }),
-                MessageAcceptance::Reject
-            ),
-            "DuplicatedMessage must map to Reject"
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (already-seen root takes precedence over cap)",
         );
 
         // One more distinct root exceeds the cap and is rejected as an Ignore.
@@ -3366,18 +3356,17 @@ mod tests {
         );
     }
 
-    // ============ ProposerPreferences per-peer dedup matrix (#1131) ============
+    // ============ ProposerPreferences dedup matrix (#1131, #1254) ============
     //
-    // Each test below pins ONE acceptance criterion of the per-peer classification in
-    // `DutyState::update_for_partial_signature`:
-    //   - root present & stored-first-deliverer == received_from & received_from.is_some() ->
-    //     `DuplicatedMessage` (Reject)     [same peer resends]
-    //   - root present otherwise -> `RelayedDuplicateMessage` (Ignore) [another peer, or our own
-    //     `None` emission]
+    // Each test below pins ONE acceptance criterion of the classification in
+    // `DutyState::update_for_partial_signature` (SIP-94 §7: repetition does not prove peer
+    // fault, so the verdict is peer-agnostic):
+    //   - root present -> `RelayedDuplicateMessage` (Ignore), regardless of `received_from` [same
+    //     peer, another peer, or our own `None` emission]
     //   - root absent & set at cap -> `TooManyDistinctSigningRoots` (Ignore)
     //   - otherwise insert + Accept
-    // Membership is checked before capacity, so identity always wins over the cap. The map is
-    // populated ONLY on accept (after RSA verify + semantics).
+    // Membership is checked before capacity, so a recorded root always wins over the cap. The
+    // map is populated ONLY on accept (after RSA verify + semantics).
 
     /// A shared `MessageId`/operator/proposal_slot keeps every packet in these tests targeting the
     /// SAME `seen_preferences` set, so classification depends only on (root, received_from).
@@ -3445,9 +3434,9 @@ mod tests {
         );
     }
 
-    // ---- Criterion 2: same peer repeats the same root -> DuplicatedMessage (Reject). ----
+    // ---- Criterion 2: same peer repeats the same root -> RelayedDuplicateMessage (Ignore). ----
     #[test]
-    fn test_proposer_preferences_peer_a_repeat_root_rejected_as_duplicate() {
+    fn test_proposer_preferences_peer_a_repeat_root_ignored_as_duplicate() {
         // Arrange
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
@@ -3482,20 +3471,12 @@ mod tests {
             Some(peer_a()),
         );
 
-        // Assert: same-peer resend is spam -> DuplicatedMessage, which maps to Reject.
+        // Assert: a same-peer resend is a repeat of a recorded root -> RelayedDuplicateMessage
+        // (Ignore, SIP-94 §7). The canonical Ignore-mapping pin lives in criterion 3.
         assert_validation_error(
             repeat,
-            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
-            "DuplicatedMessage (peer A repeats its own root R)",
-        );
-        assert!(
-            matches!(
-                MessageAcceptance::from(&ValidationFailure::DuplicatedMessage {
-                    got: String::new()
-                }),
-                MessageAcceptance::Reject
-            ),
-            "DuplicatedMessage must map to Reject"
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (peer A repeats its own root R)",
         );
     }
 
@@ -3607,15 +3588,39 @@ mod tests {
             },
             "TooManyDistinctSigningRoots (5th distinct root exceeds cap of 4)",
         );
+
+        // Act 2: the SAME over-cap root retried (from a different peer). SIP-94 §7: roots from
+        // IGNORE'd messages MUST NOT be recorded, so the retry must hit the capacity branch
+        // again (`TooManyDistinctSigningRoots`), NOT the membership branch
+        // (`RelayedDuplicateMessage`), which would prove the rejected root had been recorded.
+        let over_cap_retry = deliver_proposer_preference(
+            &mut duty_state,
+            &committee_info,
+            &map,
+            &private_key,
+            proposal_slot,
+            dedup_root(CAP as u8),
+            Some(peer_a()),
+        );
+        assert_validation_error(
+            over_cap_retry,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyDistinctSigningRoots { .. }
+                )
+            },
+            "TooManyDistinctSigningRoots (retried 5th root was never recorded)",
+        );
     }
 
-    // ---- Criterion 5: with cap full, identity classification still wins over the cap. ----
+    // ---- Criterion 5: with cap full, membership classification still wins over the cap. ----
     #[test]
-    fn test_proposer_preferences_full_cap_identity_precedes_capacity() {
+    fn test_proposer_preferences_full_cap_membership_precedes_capacity() {
         use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST as CAP;
 
-        // Arrange: fill the set to exactly CAP. Root 0 is delivered by peer A so its resend is a
-        // same-peer duplicate; peer B will later relay it.
+        // Arrange: fill the set to exactly CAP. Root 0 is delivered by peer A; both a same-peer
+        // resend and a different-peer relay of it must classify as recorded-root repeats.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
         let map =
@@ -3640,7 +3645,8 @@ mod tests {
         }
 
         // Act 1 + Assert: same-peer (A) resend of the already-seen root 0, while the set is FULL,
-        // is still DuplicatedMessage (Reject) — membership is checked before capacity.
+        // is RelayedDuplicateMessage (Ignore) — membership is checked before capacity, so the
+        // verdict is the recorded-root Ignore, not TooManyDistinctSigningRoots.
         let same_peer_repeat = deliver_proposer_preference(
             &mut duty_state,
             &committee_info,
@@ -3652,8 +3658,8 @@ mod tests {
         );
         assert_validation_error(
             same_peer_repeat,
-            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
-            "DuplicatedMessage (full cap: same-peer resend still Reject, identity beats capacity)",
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (full cap: same-peer resend Ignore, membership beats capacity)",
         );
 
         // Act 2 + Assert: different-peer (B) relay of the already-seen root 0, while the set is
@@ -3757,7 +3763,9 @@ mod tests {
         );
     }
 
-    // ---- Criterion 7: own emission (`None`) is never Reject; relays/None repeats are Ignore. ----
+    // ---- Criterion 7: a `None` first delivery is accepted; every repeat of it is Ignore. ----
+    // (`None` is a test-only API input since #1193 moved outbound messages to the stateless
+    // path; the production receive path always passes `Some(propagation_source)`.)
     #[test]
     fn test_proposer_preferences_own_emission_then_relay_never_rejected() {
         // Arrange
@@ -3784,8 +3792,8 @@ mod tests {
             "Setup: own emission (None) must be accepted, got: {own:?}"
         );
 
-        // Act 1: peer B relays the root we emitted. Stored first-deliverer is `None`, incoming is
-        // `Some(peer_b)`, so this is RelayedDuplicateMessage (Ignore) — crucially NOT Reject.
+        // Act 1: peer B relays the root we emitted. Any repeat of a recorded root is
+        // RelayedDuplicateMessage (Ignore) — crucially NOT Reject.
         let relayed = deliver_proposer_preference(
             &mut duty_state,
             &committee_info,
@@ -3801,8 +3809,8 @@ mod tests {
             "RelayedDuplicateMessage (peer B relays our own emission — never Reject)",
         );
 
-        // Act 2: a second own emission (None again) of the same root. `received_from.is_some()` is
-        // false, so the same-peer Reject branch cannot fire; this is also Ignore.
+        // Act 2: a second `None` delivery of the same root. The verdict is peer-agnostic, so
+        // this is also Ignore.
         let own_again = deliver_proposer_preference(
             &mut duty_state,
             &committee_info,
@@ -4402,8 +4410,8 @@ mod tests {
             Hash256::from([0xA1; 32]),
         );
         let ctx_s1 = create_proposer_preferences_context(&signed_s1, &committee_info, &map, slot_s);
-        // Deliver the first `0xA1` root from `peer_a` so the same-peer exact-duplicate resend
-        // below stays a Reject-class `DuplicatedMessage`.
+        // Deliver the first `0xA1` root; its exact-duplicate resend below must classify as an
+        // Ignore-class `RelayedDuplicateMessage` (recorded-root repeat, peer-agnostic).
         assert!(
             validate_partial_signature_message(
                 ctx_s1,
@@ -4461,7 +4469,7 @@ mod tests {
         );
 
         // Cross-check that slot S really did accumulate two distinct roots (dedup state alive):
-        // an EXACT-duplicate of the first root at S is now rejected as a duplicate.
+        // an EXACT-duplicate of the first root at S is now an Ignore-class duplicate.
         let signed_dup = create_signed_proposer_preferences_message(
             signer_id,
             &private_key,
@@ -4478,8 +4486,8 @@ mod tests {
         );
         assert_validation_error(
             result_dup,
-            |failure| matches!(failure, ValidationFailure::DuplicatedMessage { .. }),
-            "DuplicatedMessage (slot S retained its first root across the far-slot write)",
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (slot S retained its first root across the far-slot write)",
         );
     }
 

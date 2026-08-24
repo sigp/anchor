@@ -195,6 +195,8 @@ pub enum ValidationFailure {
     TooManyDistinctSigningRoots {
         got: String,
     },
+    /// Any repeat of a recorded proposer-preferences signing root, regardless of the
+    /// propagation peer (SIP-94 §7). Ignore-class.
     RelayedDuplicateMessage {
         got: String,
     },
