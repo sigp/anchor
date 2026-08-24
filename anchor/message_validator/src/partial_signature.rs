@@ -2600,7 +2600,7 @@ mod tests {
         genesis + PROPOSER_PREFERENCES_SLOT_DURATION * (slot as u32)
     }
 
-    // ==================== ProposerPreferences per-peer dedup helpers ====================
+    // ==================== ProposerPreferences dedup helpers ====================
 
     /// Deterministic seed bytes for the three distinct test peers. Each seed is a valid
     /// secp256k1 secret key (any 32 non-zero bytes below the curve order qualifies), so the
@@ -3369,7 +3369,8 @@ mod tests {
     // map is populated ONLY on accept (after RSA verify + semantics).
 
     /// A shared `MessageId`/operator/proposal_slot keeps every packet in these tests targeting the
-    /// SAME `seen_preferences` set, so classification depends only on (root, received_from).
+    /// SAME `seen_preferences` set, so classification depends only on whether the root is
+    /// already recorded there.
     const DEDUP_SIGNER: OperatorId = OperatorId(1);
 
     /// Signs, contextualizes, and validates one ProposerPreferences packet for `root` delivered by
@@ -3869,8 +3870,8 @@ mod tests {
             "RelayedDuplicateMessage (peer B relays root R)",
         );
 
-        // Act 2 + Assert: peer C then relays R -> also Ignore. The stored first-deliverer remains
-        // peer A, so a third distinct peer is still a relayed duplicate, never Reject.
+        // Act 2 + Assert: peer C then relays R -> also Ignore. Root R is recorded, and membership
+        // alone decides the verdict, so a third distinct peer is still a duplicate, never Reject.
         let relay_c = deliver_proposer_preference(
             &mut duty_state,
             &committee_info,
