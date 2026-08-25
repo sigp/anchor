@@ -10,7 +10,10 @@ use eth2::{
     BeaconNodeHttpClient,
     types::{BlockId, SyncContributionData},
 };
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::{
+    FutureExt,
+    stream::{FuturesUnordered, StreamExt},
+};
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, ValidatorIndex, VariableList,
@@ -735,19 +738,27 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         // Uses `FuturesUnordered` internally to collect results as they complete.
         // After BEACON_API_FETCH_TIMEOUT (2s), returns whatever has been collected.
         // This ensures we don't block on slow beacon nodes while still getting partial data.
+        //
+        // Both arms are boxed to keep the `Send` proof for the spawned phase-3 task shallow. The
+        // trait solver otherwise walks the whole chain from `executor.spawn` down through
+        // `tokio::join!`'s `MaybeDone` nesting into these two futures, which exceeds the default
+        // recursion limit. `BoxFuture` is unconditionally `Send`, so the walk stops here. See
+        // https://github.com/rust-lang/rust/issues/159228.
         let (aggregated_attestations, sync_contributions) = tokio::join!(
             self.fetch_aggregated_attestations(
                 slot,
                 &voting_context.beacon_vote,
                 &attestation_committee_indexes,
                 BEACON_API_FETCH_TIMEOUT,
-            ),
+            )
+            .boxed(),
             self.fetch_sync_contributions(
                 slot,
                 voting_context.beacon_vote.block_root,
                 &all_subnet_ids,
                 BEACON_API_FETCH_TIMEOUT,
-            ),
+            )
+            .boxed(),
         );
 
         // Build consensus data per committee
