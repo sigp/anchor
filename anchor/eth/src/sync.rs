@@ -1,5 +1,5 @@
 use std::{
-    cmp::{max, min},
+    cmp::min,
     collections::{HashMap, VecDeque},
     sync::Arc,
 };
@@ -13,7 +13,7 @@ use alloy::{
     transports::{RpcError, TransportErrorKind},
 };
 use database::{NetworkDatabase, SlashingProtection};
-use futures::{FutureExt, Stream, StreamExt, stream::FuturesOrdered};
+use futures::{Stream, StreamExt, stream::FuturesOrdered};
 use reqwest::Url;
 use sensitive_url::SensitiveUrl;
 use ssv_network_config::SsvNetworkConfig;
@@ -545,7 +545,11 @@ impl SsvEventSyncer {
         Ok(())
     }
 
-    // Construct a future that will fetch logs in the range from_block..to_block
+    // Construct a future that will fetch logs in the range from_block..to_block.
+    //
+    // RPC providers cap the size of a `getLogs` response, so a range that is too busy is rejected
+    // rather than returned. When that happens the range is split in half and each half is fetched
+    // separately, repeating down to a single block before giving up.
     #[instrument(skip(self, deployment_address, events), level = "debug")]
     fn fetch_logs(
         &self,
@@ -556,84 +560,57 @@ impl SsvEventSyncer {
     ) -> impl Future<Output = Result<Vec<Log>, ExecutionError>> + Send {
         // Setup filter and rpc client
         let rpc_client = self.rpc_client.clone();
-        let filter = Filter::new()
-            .address(deployment_address)
-            .from_block(from_block)
-            .to_block(to_block)
-            .events(events);
+        let filter = Filter::new().address(deployment_address).events(events);
 
-        // Try to fetch logs with a retry upon error. Try up to MAX_RETRIES times and error if we
-        // exceed this as we can assume there is some underlying connection issue
         async move {
-            debug!("Fetching logs");
-            let timer = metrics::start_timer_vec(
-                &metrics::EXECUTION_LOG_FETCH_TIME,
-                &[format!("{}", to_block - from_block + 1).as_str()],
-            );
+            let mut logs = Vec::new();
+            // Ranges left to fetch. Kept as a stack so that `pop` walks the ranges in ascending
+            // block order, matching the order the caller expects the logs in.
+            let mut pending = vec![(from_block, to_block)];
 
-            match rpc_client.get_logs(&filter).await {
-                Ok(logs) => {
-                    debug!(log_count = logs.len(), "Successfully fetched logs");
-                    metrics::stop_timer(timer);
-                    Ok(logs)
-                }
-                Err(e) => {
-                    // Subdivide if we have tried more than one block and if the error may be some
-                    // kind of response size limit.
-                    let subdivide = from_block != to_block
-                        && matches!(
-                            &e,
-                            RpcError::Transport(TransportErrorKind::HttpError(_))
-                                | RpcError::ErrorResp(_)
-                        );
+            while let Some((from, to)) = pending.pop() {
+                debug!(from, to, "Fetching logs");
+                let timer = metrics::start_timer_vec(
+                    &metrics::EXECUTION_LOG_FETCH_TIME,
+                    &[format!("{}", to - from + 1).as_str()],
+                );
 
-                    if subdivide {
-                        self.subdivide_fetch_logs(
-                            from_block,
-                            to_block,
-                            deployment_address,
-                            events,
-                            2,
-                        )
-                        .boxed()
-                        .await
-                    } else {
-                        Err(ExecutionError::RpcError(format!(
-                            "Error fetching logs: {e}"
-                        )))
+                let filter = filter.clone().from_block(from).to_block(to);
+                match rpc_client.get_logs(&filter).await {
+                    Ok(fetched) => {
+                        debug!(log_count = fetched.len(), "Successfully fetched logs");
+                        metrics::stop_timer(timer);
+                        logs.extend(fetched);
+                    }
+                    Err(e) => {
+                        // Subdivide if we have tried more than one block and if the error may be
+                        // some kind of response size limit.
+                        let subdivide = from != to
+                            && matches!(
+                                &e,
+                                RpcError::Transport(TransportErrorKind::HttpError(_))
+                                    | RpcError::ErrorResp(_)
+                            );
+
+                        if !subdivide {
+                            return Err(ExecutionError::RpcError(format!(
+                                "Error fetching logs: {e}"
+                            )));
+                        }
+
+                        info!(from, to, "Subdividing log retrieval");
+                        // `from != to` guarantees at least two blocks, so both halves are
+                        // non-empty and strictly smaller than the range being split.
+                        let mid = from + (to - from + 1).div_ceil(2) - 1;
+                        // Push the upper half first so the lower half is fetched first.
+                        pending.push((mid + 1, to));
+                        pending.push((from, mid));
                     }
                 }
             }
+
+            Ok(logs)
         }
-    }
-
-    // Subdivide log fetching to avoid log response size limits
-    #[instrument(skip(self, deployment_address, events), level = "debug")]
-    async fn subdivide_fetch_logs(
-        &self,
-        from_block: u64,
-        to_block: u64,
-        deployment_address: Address,
-        events: &[&str],
-        subdivision_factor: u64,
-    ) -> Result<Vec<Log>, ExecutionError> {
-        info!("Subdividing log retrieval");
-
-        let num_blocks = (to_block - from_block) + 1;
-        let target_size = max(1, num_blocks.div_ceil(subdivision_factor));
-        let mut result = vec![];
-
-        let mut current = from_block;
-        while current <= to_block {
-            let to = min(current + (target_size - 1), to_block);
-            let logs = self
-                .fetch_logs(current, to, deployment_address, events)
-                .await?;
-            result.extend(logs);
-            current = to + 1;
-        }
-
-        Ok(result)
     }
 
     /// Exit logs need the block timestamps set. Ensure every exit in a batch of logs has a block
