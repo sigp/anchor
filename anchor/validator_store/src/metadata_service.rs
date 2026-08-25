@@ -10,7 +10,10 @@ use eth2::{
     BeaconNodeHttpClient,
     types::{BlockId, SyncContributionData},
 };
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::{
+    FutureExt,
+    stream::{FuturesUnordered, StreamExt},
+};
 use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, ValidatorIndex, VariableList,
@@ -879,17 +882,25 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
         // Fetch both categories concurrently. Each helper keeps the existing partial-result
         // behavior and one two-second deadline for all unique requests in its category.
+        //
+        // Both arms are boxed to keep the `Send` proof for the spawned phase-3 task shallow. The
+        // trait solver otherwise walks the whole chain from `executor.spawn` down through
+        // `tokio::join!`'s `MaybeDone` nesting into these two futures, which exceeds the default
+        // recursion limit. `BoxFuture` is unconditionally `Send`, so the walk stops here. See
+        // https://github.com/rust-lang/rust/issues/159228.
         let (aggregated_attestations, sync_contributions) = tokio::join!(
             self.fetch_aggregated_attestations(
                 slot,
                 &committee_requests.aggregate_attestation_keys,
                 BEACON_API_FETCH_TIMEOUT,
-            ),
+            )
+            .boxed(),
             self.fetch_sync_contributions(
                 slot,
                 &committee_requests.sync_contribution_keys,
                 BEACON_API_FETCH_TIMEOUT,
-            ),
+            )
+            .boxed(),
         );
         let fetch_results = AggregationFetchResults {
             aggregated_attestations,
