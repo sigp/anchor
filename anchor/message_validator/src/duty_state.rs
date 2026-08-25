@@ -29,9 +29,10 @@ use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 /// preference inputs change between emissions — chiefly a `dependent_root` shift under reorg (the
 /// SIP-94 §5 re-emission trigger), and also `target_gas_limit` / `fee_recipient` config changes
 /// across operator restarts. Per SIP-94 §7 the cap is policy headroom for a few realistic
-/// reorg-driven corrections while bounding spam — not a safety/consensus bound. That is why
-/// exceeding it is an Ignore (`TooManyDistinctSigningRoots`), whereas a repeat of an already-seen
-/// root stays a Reject-class duplicate.
+/// reorg-driven corrections while bounding spam, not a safety/consensus bound. Both exceeding
+/// the cap (`TooManyDistinctSigningRoots`) and repeating an already-recorded root
+/// (`RelayedDuplicateMessage`) are Ignore, regardless of the propagation peer; rationale at the
+/// enforcement site in `update_for_partial_signature`.
 const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS: usize = 4;
 
 /// Test-only, crate-visible mirror of the private cap so pipeline tests in sibling modules
@@ -134,17 +135,12 @@ impl DutyState {
                 .first()
                 .ok_or(ValidationFailure::NoPartialSignatureMessages)?
                 .signing_root;
-            // Same-peer repeat is spam (Reject); a relay of a seen root from another peer, or of
-            // our own emission, is not (Ignore). Membership is checked before capacity so a
-            // same-peer repeat stays Reject even when the set is full.
-            if let Some(first_deliverer) = signer_state.seen_preferences.get(&root) {
-                // `is_some()` guard: our own emission is stored as `None`, so without it a
-                // re-emission would match `None == None` and wrongly Reject itself.
-                if received_from.is_some() && *first_deliverer == received_from {
-                    return Err(ValidationFailure::DuplicatedMessage {
-                        got: format!("proposer-preferences root {root:?}"),
-                    });
-                }
+            // Any repeat of a recorded root is IGNORE regardless of the propagation peer
+            // (SIP-94 §7): an honest retry or restart can repeat an accepted root after the
+            // recipient's gossip duplicate cache expires, so repetition does not prove peer
+            // fault. Membership is checked before capacity so a recorded root stays IGNORE
+            // even when the set is full.
+            if signer_state.seen_preferences.contains_key(&root) {
                 return Err(ValidationFailure::RelayedDuplicateMessage {
                     got: format!("proposer-preferences root {root:?}"),
                 });
@@ -341,8 +337,9 @@ pub(crate) struct SignerState {
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
     /// Accepted ProposerPreferences signing roots for this (MessageId, operator, slot), each
-    /// mapped to its first deliverer (`None` = our own emission), to classify a repeat as a
-    /// same-peer duplicate (Reject) or a relay (Ignore).
+    /// mapped to its first deliverer (`None` = locally injected). The verdict for a repeat is
+    /// peer-agnostic Ignore (SIP-94 §7); the stored deliverer no longer affects classification
+    /// and is retained only because issue #1254 scopes the peer plumbing as unchanged.
     seen_preferences: HashMap<Hash256, Option<PeerId>>,
 }
 
