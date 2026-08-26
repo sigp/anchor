@@ -73,12 +73,7 @@ pub(crate) fn validate_partial_signature_message(
         .first()
         .ok_or(ValidationFailure::NoSigners)?;
 
-    duty_state.update_for_partial_signature(
-        &messages,
-        signer,
-        validation_context.slots_per_epoch,
-        received_from,
-    )?;
+    duty_state.update_for_partial_signature(&messages, signer, received_from)?;
 
     Ok(ValidatedSSVMessage::PartialSignatureMessages(messages))
 }
@@ -1668,7 +1663,7 @@ mod tests {
             .unwrap(),
         };
         duty_state
-            .update_for_partial_signature(&dummy_messages, &signer_id, 32, None)
+            .update_for_partial_signature(&dummy_messages, &signer_id, None)
             .unwrap();
 
         // Now validate a message for slot 1 (which is "old")
@@ -3988,7 +3983,7 @@ mod tests {
             .unwrap(),
         };
         duty_state
-            .update_for_partial_signature(&dummy, &signer_id, SLOTS_PER_EPOCH_TEST, None)
+            .update_for_partial_signature(&dummy, &signer_id, None)
             .unwrap();
 
         // Now an Aggregator message for an EARLIER slot (2) must be rejected.
@@ -4390,11 +4385,12 @@ mod tests {
         let ring = crate::stored_slot_count(Role::ProposerPreferences, SLOTS_PER_EPOCH_TEST, &spec);
         let mut duty_state = DutyState::new(ring);
 
-        // Guard: a representative non-role-8 role keeps the plain two-epoch default, confirming the
-        // lookahead expansion is specific to `ProposerPreferences`.
+        // Guard: a representative non-role-8 role keeps the count-exact default (two epochs plus
+        // the late-slot allowance plus a margin slot), confirming the lookahead expansion is
+        // specific to `ProposerPreferences`.
         assert_eq!(
             crate::stored_slot_count(Role::Proposer, SLOTS_PER_EPOCH_TEST, &spec),
-            (2 * SLOTS_PER_EPOCH_TEST) as usize,
+            (2 * SLOTS_PER_EPOCH_TEST + crate::LATE_SLOT_ALLOWANCE + 1) as usize,
         );
 
         let slot_s = Slot::new(1);
@@ -4490,6 +4486,79 @@ mod tests {
             |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
             "RelayedDuplicateMessage (slot S retained its first root across the far-slot write)",
         );
+    }
+
+    #[test]
+    fn test_proposer_preferences_saturated_epochs_not_conflated() {
+        // The devnet-visible regression this fix removes: role-8 duties legitimately spread
+        // across concurrent epochs (earliness allows a proposal_slot up to
+        // (1 + min_seed_lookahead) * spe ahead), and the deleted two-bucket counters conflated
+        // every epoch below the newest-seen one into a single bucket. With 32 duties spread
+        // over epochs 0 and 1 while an epoch-2 duty was recorded, that shared bucket hit the
+        // slots-per-epoch duty limit and a legitimate first message for a free epoch-1 slot
+        // was IGNORE'd as ExcessiveDutyCount. Ring-derived counts are per-epoch, so every
+        // message here must be accepted end to end through validate_partial_signature_message
+        // (epoch derived from the MESSAGE slot, first-message gate, ring occupancy).
+        // (Asserting ExcessiveDutyCount for role 8 is impossible under exact counting: the
+        // count only reaches the limit when every slot of the epoch is occupied, leaving no
+        // first message to reject.)
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let signer_id = OperatorId(1);
+
+        // Production ring-size selector: (1 + 1) * spe + 2 * spe = 128 on mainnet-based specs.
+        let spec = spec_with_gloas(None);
+        let ring = crate::stored_slot_count(Role::ProposerPreferences, SLOTS_PER_EPOCH_TEST, &spec);
+        let mut duty_state = DutyState::new(ring);
+
+        // Wall clock stays at slot 1 (epoch 0) throughout; every message slot below is inside
+        // the role-8 window [wall - 2, wall + 2 * spe].
+        let wall_slot = Slot::new(1);
+        let accept = |duty_state: &mut DutyState, slot: Slot| {
+            // One distinct root per slot; the dedup set is per (signer, slot).
+            let signed = create_signed_proposer_preferences_message(
+                signer_id,
+                &private_key,
+                slot,
+                Hash256::from([slot.as_u64() as u8; 32]),
+            );
+            let ctx =
+                create_proposer_preferences_context(&signed, &committee_info, &map, wall_slot);
+            let result = validate_partial_signature_message(
+                ctx,
+                duty_state,
+                Arc::new(MockDutiesProvider::default()),
+                None,
+            );
+            assert!(
+                result.is_ok(),
+                "expected acceptance at slot {slot}, got: {result:?}"
+            );
+        };
+
+        // 16 duties in epoch 0, 16 in epoch 1, then 1 in epoch 2, so the two nearer epochs
+        // keep receiving duties while a later epoch already holds recorded state. (The test
+        // clock has no start times for slots before the wall slot, so epoch 0 starts at 2.)
+        for slot in 2..18u64 {
+            accept(&mut duty_state, Slot::new(slot));
+        }
+        for slot in 32..48u64 {
+            accept(&mut duty_state, Slot::new(slot));
+        }
+        accept(&mut duty_state, Slot::new(64));
+
+        // 16 more duties across epochs 0 and 1. Under the old counters each of these landed
+        // in the shared older-epoch bucket, pushing it to 32 (= the role-8 duty limit).
+        for slot in 18..32u64 {
+            accept(&mut duty_state, Slot::new(slot));
+        }
+        for slot in 48..50u64 {
+            accept(&mut duty_state, Slot::new(slot));
+        }
+
+        // The load-bearing acceptance: a first message for a FREE epoch-1 slot. Epoch 1 holds
+        // only 18 duties, so exact per-epoch counting admits it; the old conflated bucket read
+        // 32 >= 32 here and dropped an honest preference share.
+        accept(&mut duty_state, Slot::new(50));
     }
 
     #[test]
@@ -4698,11 +4767,7 @@ mod tests {
 
         // Persist the accepted consensus so `max_slot == 1` before Act 2; without it the state
         // would stay at `max_slot == 0` and never exercise the equality boundary.
-        shared_duty_state.update_for_consensus_message(
-            &consensus_signed_msg,
-            &qbft_message,
-            SLOTS_PER_EPOCH_TEST,
-        );
+        shared_duty_state.update_for_consensus_message(&consensus_signed_msg, &qbft_message);
 
         // Act: same-slot PostConsensus partial sig against the now-advanced shared state.
         let partial_sig_signed_msg = create_signed_envelope_proposer_message(
@@ -4745,7 +4810,7 @@ mod tests {
             vec![],
             vec![],
         );
-        state.update_for_consensus_message(&signed_msg, &qbft, SLOTS_PER_EPOCH_TEST);
+        state.update_for_consensus_message(&signed_msg, &qbft);
     }
 
     #[test]
@@ -4812,7 +4877,7 @@ mod tests {
             PartialSignatureMessages::from_ssz_bytes(dummy_partial_sig.ssv_message().data())
                 .expect("dummy envelope message must decode");
         duty_state
-            .update_for_partial_signature(&messages, &OperatorId(1), SLOTS_PER_EPOCH_TEST, None)
+            .update_for_partial_signature(&messages, &OperatorId(1), None)
             .expect("seeding partial-signature state must succeed");
 
         // Arrange: Consensus message at height 5 (lower than 10).
@@ -4921,6 +4986,180 @@ mod tests {
                 )
             },
             "Repeated EnvelopeProposer PostConsensus for the same signer/slot must be rejected",
+        );
+    }
+
+    // ==================== Aggregator duty-limit helpers ====================
+
+    /// Slot layout for the Aggregator duty-limit test: three distinct duty slots inside
+    /// epoch 0, in ascending order because Aggregator is a monotonic-slot role.
+    const AGGREGATOR_SLOT_A: u64 = 1;
+    const AGGREGATOR_SLOT_B: u64 = 2;
+    const AGGREGATOR_SLOT_C: u64 = 3;
+
+    /// Helper to create a SignedSSVMessage for Aggregator testing at a chosen slot.
+    fn create_signed_aggregator_message(
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+        kind: PartialSignatureKind,
+        slot: Slot,
+    ) -> SignedSSVMessage {
+        let partial_sig_messages = PartialSignatureMessages {
+            kind,
+            slot,
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0u8; 32]),
+                signer: signer_id,
+                // ValidatorIndex(0) is in the test committee's validator_indices.
+                validator_index: ValidatorIndex(0),
+            }])
+            .unwrap(),
+        };
+
+        let msg_id = create_message_id_for_test(Role::Aggregator);
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            msg_id,
+            partial_sig_messages.as_ssz_bytes(),
+        )
+        .unwrap();
+
+        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
+        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
+        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
+
+        SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
+    }
+
+    /// Builds an Aggregator validation context whose genesis (slot 0) sits
+    /// `AGGREGATOR_SLOT_C` slots in the past, so every duty slot used by the test has
+    /// started by `received_at` (Aggregator has no earliness allowance) and none is
+    /// anywhere near the `slots_per_epoch + LATE_SLOT_ALLOWANCE` lateness bound.
+    fn create_aggregator_context<'a>(
+        signed_msg: &'a SignedSSVMessage,
+        committee_info: &'a crate::CommitteeInfo,
+        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
+    ) -> ValidationContext<'a, ManualSlotClock> {
+        let now = SystemTime::now();
+        let genesis = now - Duration::from_secs(12 * AGGREGATOR_SLOT_C);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            genesis.duration_since(UNIX_EPOCH).unwrap(),
+            Duration::from_secs(12),
+        );
+
+        ValidationContext {
+            signed_ssv_message: signed_msg,
+            committee_info,
+            role: Role::Aggregator,
+            received_at: now,
+            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys,
+            // Aggregator is deprecated at Boole; Alan keeps the role active.
+            fork_schedule: generate_fork_schedule(Fork::Alan),
+            spec: spec_with_gloas(None),
+        }
+    }
+
+    #[test]
+    fn test_aggregator_duty_limit_enforced_and_follow_ups_exempt() {
+        // Aggregator's per-epoch duty limit is 2, and only the FIRST message of a duty
+        // consumes it: follow-up messages for an already-counted slot are exempt, so the
+        // last allowed duty can still complete its post-consensus phase. This drives
+        // validate_partial_signature_message end to end and pins both halves: the
+        // follow-up exemption at the limit (step 4) and the enforcement of the
+        // ring-derived count against a fresh duty (step 5).
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let signer_id = OperatorId(1);
+
+        // Production ring-size selector: 2 * spe + LATE_SLOT_ALLOWANCE + 1 = 67 for
+        // Aggregator, shared across all five calls so counts accumulate.
+        let spec = spec_with_gloas(None);
+        let ring = crate::stored_slot_count(Role::Aggregator, SLOTS_PER_EPOCH_TEST, &spec);
+        let mut duty_state = DutyState::new(ring);
+
+        let run = |duty_state: &mut DutyState, kind: PartialSignatureKind, slot: u64| {
+            let signed =
+                create_signed_aggregator_message(signer_id, &private_key, kind, Slot::new(slot));
+            let ctx = create_aggregator_context(&signed, &committee_info, &map);
+            validate_partial_signature_message(
+                ctx,
+                duty_state,
+                Arc::new(MockDutiesProvider::default()),
+                None,
+            )
+        };
+
+        // 1) First duty at slot A: count 0 < 2, accepted.
+        let result = run(
+            &mut duty_state,
+            PartialSignatureKind::SelectionProofPartialSig,
+            AGGREGATOR_SLOT_A,
+        );
+        assert!(
+            result.is_ok(),
+            "first duty must be accepted, got: {result:?}"
+        );
+
+        // 2) Follow-up at slot A: same duty, exempt from the count.
+        let result = run(
+            &mut duty_state,
+            PartialSignatureKind::PostConsensus,
+            AGGREGATOR_SLOT_A,
+        );
+        assert!(
+            result.is_ok(),
+            "follow-up for the first duty must be accepted, got: {result:?}"
+        );
+
+        // 3) Second duty at slot B: count 1 < 2, accepted.
+        let result = run(
+            &mut duty_state,
+            PartialSignatureKind::SelectionProofPartialSig,
+            AGGREGATOR_SLOT_B,
+        );
+        assert!(
+            result.is_ok(),
+            "second duty must be accepted, got: {result:?}"
+        );
+
+        // 4) Follow-up at slot B: the derived count now equals the limit, but a follow-up
+        //    contributes no new duty and must not be re-checked against it.
+        let result = run(
+            &mut duty_state,
+            PartialSignatureKind::PostConsensus,
+            AGGREGATOR_SLOT_B,
+        );
+        assert!(
+            result.is_ok(),
+            "follow-up for the last allowed duty must be exempt from the duty limit, got: \
+             {result:?}"
+        );
+
+        // 5) Third duty at slot C: count 2 >= limit 2, rejected.
+        let result = run(
+            &mut duty_state,
+            PartialSignatureKind::SelectionProofPartialSig,
+            AGGREGATOR_SLOT_C,
+        );
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::ExcessiveDutyCount {
+                        got: 2,
+                        limit: 2,
+                        role: Role::Aggregator,
+                    }
+                )
+            },
+            "ExcessiveDutyCount with got=2, limit=2 (third Aggregator duty in the epoch)",
         );
     }
 }

@@ -742,20 +742,40 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 
 /// Number of slots the `DutyState` ring must retain for `role`.
 ///
-/// Default: keep the last two epochs. `ProposerPreferences` also spans the proposer lookahead into
-/// the future (its envelope slot is a future `proposal_slot`), so its ring must cover
-/// `lookahead + default`; otherwise a validly accepted future-slot write would evict a live slot's
-/// dedup state (the ring is indexed by `slot % len`).
+/// Two consumers rely on the sizing (the ring is indexed by `slot % len`):
+/// - Per-slot signer state (dedup, message counts): an entry must not be evicted while its slot is
+///   still inside the role's message acceptance window (earliness + lateness, see
+///   `early_slot_allowance` / `message_lateness`).
+/// - `OperatorState::get_duty_count`, which derives per-epoch duty counts from ring occupancy
+///   (SIP-94 §7 retention). Exactness needs MORE than the acceptance window: a count query for the
+///   epoch of the oldest acceptable slot probes back to that epoch's FIRST slot, so the ring must
+///   cover `earliness + lateness + slots_per_epoch`, plus one slot padding the sub-slot lateness
+///   margins (`LATE_MESSAGE_MARGIN` + `CLOCK_ERROR_TOLERANCE`).
+///
+/// The default arm covers the widest default-role window (lateness `slots_per_epoch +
+/// LATE_SLOT_ALLOWANCE`, no earliness). `ProposerPreferences` spans the proposer lookahead into
+/// the future (its envelope slot is a future `proposal_slot`) with a 2-slot lateness; its
+/// lookahead-sized ring exceeds its bound (`64 + 2 + 32 + 1 = 99 <= 128`) with headroom.
+///
+/// The match is exhaustive so adding a role forces an explicit sizing decision here; a silent
+/// default would under-size a wide-window role and quietly disable its duty limit.
 ///
 /// Shared by the production selector (`get_duty_state`) and its regression test so neither can
 /// drift from the other.
 pub(crate) fn stored_slot_count(role: Role, slots_per_epoch: u64, spec: &ChainSpec) -> usize {
-    let default = slots_per_epoch * 2;
     let count = match role {
         Role::ProposerPreferences => {
-            (1 + spec.min_seed_lookahead.as_u64()) * slots_per_epoch + default
+            (1 + spec.min_seed_lookahead.as_u64()) * slots_per_epoch + 2 * slots_per_epoch
         }
-        _ => default,
+        Role::Committee
+        | Role::Aggregator
+        | Role::Proposer
+        | Role::SyncCommittee
+        | Role::ValidatorRegistration
+        | Role::VoluntaryExit
+        | Role::PTCAttester
+        | Role::EnvelopeProposer
+        | Role::AggregatorCommittee => 2 * slots_per_epoch + LATE_SLOT_ALLOWANCE + 1,
     };
     count as usize
 }
@@ -1114,35 +1134,39 @@ fn message_lateness(
 pub(crate) fn validate_duty_count(
     validation_context: &ValidationContext<impl SlotClock>,
     slot: Slot,
-    signer_state: &mut OperatorState,
+    operator_state: &OperatorState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<(), ValidationFailure> {
-    if let Some(limit) = duty_limit(
+    let Some(limit) = duty_limit(
         validation_context,
         slot,
         &validation_context.committee_info.validator_indices,
         duty_provider,
-    )? {
-        // Get current duty count for this signer
-        let epoch = slot.epoch(validation_context.slots_per_epoch);
-        let duty_count = signer_state.get_duty_count(epoch);
+    )?
+    else {
+        return Ok(());
+    };
 
-        // Error if this validator has already been assigned at least as many duties
-        // as allowed for the target epoch. We perform this check *before* incrementing
-        // the in-memory count (so the very first duty will see count==0), hence the
-        // inclusive “>=” comparison.
-        // We only want to check the limit if this is the first message of that duty, as otherwise
-        // the check will fail for non-first messages of the last allowed duty. We do this by
-        // checking if there is a signer state already set for that slot. If so, we have already
-        // processed a message for this duty and the counter will not be increased further in
-        // `OperatorState::update`, so we skip the limit check here also.
-        if signer_state.is_first_message_for_duty(slot) && duty_count >= limit {
-            return Err(ValidationFailure::ExcessiveDutyCount {
-                got: duty_count,
-                limit,
-                role: validation_context.role,
-            });
-        }
+    // We only want to check the limit if this is the first message of that duty, as otherwise
+    // the check will fail for non-first messages of the last allowed duty. We do this by
+    // checking if there is a signer state already set for that slot. If so, we have already
+    // processed a message for this duty and it contributes no new count; skipping also
+    // avoids deriving the count from the ring for every follow-up message.
+    if !operator_state.is_first_message_for_duty(slot) {
+        return Ok(());
+    }
+
+    // Error if this validator has already been assigned at least as many duties as allowed
+    // for the target epoch. We perform this check *before* the duty is recorded in the ring
+    // (so the very first duty will see count==0), hence the inclusive “>=” comparison.
+    let epoch = slot.epoch(validation_context.slots_per_epoch);
+    let duty_count = operator_state.get_duty_count(epoch, validation_context.slots_per_epoch);
+    if duty_count >= limit {
+        return Err(ValidationFailure::ExcessiveDutyCount {
+            got: duty_count,
+            limit,
+            role: validation_context.role,
+        });
     }
 
     Ok(())
@@ -1422,6 +1446,7 @@ mod tests {
     // Helper struct for directly creating consensus messages for tests
     pub(crate) struct QbftMessageBuilder {
         msg_type: QbftMessageType,
+        height: u64,
         round: u64,
         identifier: MessageId,
         prepare_justification: Vec<SignedSSVMessage>,
@@ -1432,11 +1457,17 @@ mod tests {
         pub(crate) fn new(role: Role, msg_type: QbftMessageType) -> Self {
             Self {
                 msg_type,
+                height: 1,
                 round: 1,
                 identifier: create_message_id_for_test(role),
                 prepare_justification: vec![],
                 round_change_justification: vec![],
             }
+        }
+
+        pub(crate) fn with_height(mut self, height: u64) -> Self {
+            self.height = height;
+            self
         }
 
         pub(crate) fn with_round(mut self, round: u64) -> Self {
@@ -1493,7 +1524,7 @@ mod tests {
 
             QbftMessage {
                 qbft_message_type: self.msg_type,
-                height: 1,
+                height: self.height,
                 round: self.round,
                 identifier: (&self.identifier).into(),
                 root: Hash256::from([0u8; 32]),

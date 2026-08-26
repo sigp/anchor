@@ -59,11 +59,8 @@ pub(crate) fn validate_consensus_message(
         validation_context.operator_pub_keys,
     )?;
 
-    duty_state.update_for_consensus_message(
-        validation_context.signed_ssv_message,
-        &consensus_message,
-        validation_context.slots_per_epoch,
-    );
+    duty_state
+        .update_for_consensus_message(validation_context.signed_ssv_message, &consensus_message);
 
     // Return the validated message
     Ok(ValidatedSSVMessage::QbftMessage(consensus_message))
@@ -465,11 +462,11 @@ pub(crate) fn validate_qbft_message_by_duty_logic(
 
     // Rule: valid number of duties per epoch
     for &signer in signed_ssv_message.operator_ids() {
-        let signer_state = duty_state.get_or_create_operator(&signer);
+        let operator_state = duty_state.get_or_create_operator(&signer);
         validate_duty_count(
             validation_context,
             msg_slot,
-            signer_state,
+            operator_state,
             duty_provider.clone(),
         )?;
     }
@@ -1683,7 +1680,7 @@ mod tests {
             vec![],
             vec![],
         );
-        duty_state.update_for_consensus_message(&dummy_signed_msg, &dummy_qbft, 32);
+        duty_state.update_for_consensus_message(&dummy_signed_msg, &dummy_qbft);
 
         // Now validate a consensus message for height 1 (which is "old")
         let result = validate_qbft_message_by_duty_logic(
