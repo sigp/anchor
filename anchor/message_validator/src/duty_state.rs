@@ -1,7 +1,4 @@
-use std::{
-    cmp::Ordering,
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use libp2p::PeerId;
 use ssv_types::{
@@ -74,26 +71,18 @@ impl DutyState {
     /// Updates the duty state with new incoming messages.
     ///
     /// For each operator involved in the signed message, this method:
-    /// - Determines the corresponding slot and estimated epoch,
     /// - Retrieves or creates the operator's state,
     /// - And delegates the update to the operator's state.
     pub(crate) fn update_for_consensus_message(
         &mut self,
         signed_ssv_message: &SignedSSVMessage,
         consensus_message: &QbftMessage,
-        slots_per_epoch: u64,
     ) {
         let msg_slot = Slot::from(consensus_message.height);
-        let estimated_msg_epoch = Epoch::new(msg_slot.as_u64() / slots_per_epoch);
 
         for signer in signed_ssv_message.operator_ids() {
             let operator_state = self.get_or_create_operator(signer);
-            operator_state.update(
-                signed_ssv_message,
-                consensus_message,
-                &msg_slot,
-                &estimated_msg_epoch,
-            );
+            operator_state.update(signed_ssv_message, consensus_message, &msg_slot);
         }
     }
 
@@ -103,12 +92,10 @@ impl DutyState {
         &mut self,
         partial_signature_messages: &PartialSignatureMessages,
         signer: &OperatorId,
-        slots_per_epoch: u64,
         received_from: Option<PeerId>,
     ) -> Result<(), ValidationFailure> {
         let operator_state = self.get_or_create_operator(signer);
         let message_slot = partial_signature_messages.slot;
-        let message_epoch = Epoch::new(message_slot.as_u64() / slots_per_epoch);
 
         // Get or create a signer state for this slot
         let signer_state = match operator_state.get_signer_state_mut(&message_slot) {
@@ -116,11 +103,7 @@ impl DutyState {
             _ => {
                 // Create a new signer state
                 let new_signer_state = SignerState::new(message_slot, FIRST_ROUND);
-                operator_state.set_signer_state_for_first_round(
-                    &message_slot,
-                    &message_epoch,
-                    new_signer_state,
-                )
+                operator_state.set_signer_state(&message_slot, new_signer_state)
             }
         };
 
@@ -186,12 +169,6 @@ pub struct OperatorState {
     state: Vec<Option<SignerState>>,
     /// The highest slot number that has been processed for this operator.
     max_slot: Slot,
-    /// The highest epoch number that has been processed.
-    max_epoch: Epoch,
-    /// The count of duties processed in the current epoch.
-    curr_epoch_duties: u64,
-    /// The count of duties processed in the previous epoch.
-    prev_epoch_duties: u64,
 }
 
 impl OperatorState {
@@ -200,9 +177,6 @@ impl OperatorState {
         Self {
             state: vec![None; stored_slot_count],
             max_slot: Slot::new(0),
-            max_epoch: Epoch::new(0),
-            curr_epoch_duties: 0,
-            prev_epoch_duties: 0,
         }
     }
 
@@ -211,12 +185,16 @@ impl OperatorState {
         self.max_slot
     }
 
-    pub(crate) fn get_duty_count(&self, epoch: Epoch) -> u64 {
-        match epoch {
-            e if e == self.max_epoch => self.curr_epoch_duties,
-            e if e == self.max_epoch - 1 => self.prev_epoch_duties,
-            _ => 0, // unused because messages from too old epochs must be rejected in advance
-        }
+    /// Counts the duties recorded for `epoch` by probing the ring at each of the epoch's slots.
+    ///
+    /// The ring holds exactly one occupied entry per counted duty slot, so occupancy is an
+    /// exact per-epoch count (SIP-94 §7 retention) as long as the ring spans the role's whole
+    /// message acceptance window; `stored_slot_count` owns that sizing guarantee.
+    pub(crate) fn get_duty_count(&self, epoch: Epoch, slots_per_epoch: u64) -> u64 {
+        epoch
+            .slot_iter(slots_per_epoch)
+            .filter(|slot| self.get_signer_state(slot).is_some())
+            .count() as u64
     }
 
     /// Retrieves a mutable SignerState reference for a given slot.
@@ -235,17 +213,6 @@ impl OperatorState {
             .filter(|s| s.slot == *slot)
     }
 
-    /// Sets the signer state for a round change in the circular buffer at the computed index.
-    fn set_signer_state_for_round_change(
-        &mut self,
-        slot: &Slot,
-        signer_state: SignerState,
-    ) -> &mut SignerState {
-        let index = slot.as_usize() % self.state.len();
-        self.state[index] = Some(signer_state);
-        self.state[index].as_mut().unwrap()
-    }
-
     /// Returns true if we have not seen a message for a duty in `slot` yet.
     pub(crate) fn is_first_message_for_duty(&self, slot: Slot) -> bool {
         self.get_signer_state(&slot).is_none()
@@ -261,37 +228,30 @@ impl OperatorState {
         signed_ssv_message: &SignedSSVMessage,
         consensus_message: &QbftMessage,
         msg_slot: &Slot,
-        estimated_msg_epoch: &Epoch,
     ) {
         let maybe_signer_state = self.get_signer_state_mut(msg_slot);
 
         let signer_state = if let Some(signer_state) = maybe_signer_state {
             if consensus_message.round > signer_state.round {
                 let signer_state = SignerState::new(*msg_slot, consensus_message.round);
-                self.set_signer_state_for_round_change(msg_slot, signer_state)
+                self.set_signer_state(msg_slot, signer_state)
             } else {
                 signer_state
             }
         } else {
             let signer_state = SignerState::new(*msg_slot, consensus_message.round);
-            self.set_signer_state_for_first_round(msg_slot, estimated_msg_epoch, signer_state)
+            self.set_signer_state(msg_slot, signer_state)
         };
 
         signer_state.update(signed_ssv_message, consensus_message);
     }
 
-    /// Sets the SignerState for the first round of a slot and updates tracking for the maximum slot
-    /// and epoch.
+    /// Sets the SignerState for a slot (first message or round change alike) and updates
+    /// tracking for the maximum slot.
     ///
     /// - Inserts the signer state into the circular buffer.
     /// - Updates `max_slot` if the new slot is higher.
-    /// - Updates `max_epoch` and resets duty counters if the epoch has advanced.
-    fn set_signer_state_for_first_round(
-        &mut self,
-        msg_slot: &Slot,
-        estimated_msg_epoch: &Epoch,
-        signer_state: SignerState,
-    ) -> &mut SignerState {
+    fn set_signer_state(&mut self, msg_slot: &Slot, signer_state: SignerState) -> &mut SignerState {
         let index = msg_slot.as_usize() % self.state.len();
         self.state[index] = Some(signer_state);
 
@@ -299,22 +259,6 @@ impl OperatorState {
             self.max_slot = *msg_slot;
         }
 
-        match estimated_msg_epoch.cmp(&self.max_epoch) {
-            Ordering::Greater => {
-                self.max_epoch = *estimated_msg_epoch;
-                self.prev_epoch_duties = self.curr_epoch_duties;
-                self.curr_epoch_duties = 1;
-            }
-            Ordering::Equal => {
-                self.curr_epoch_duties += 1;
-            }
-            Ordering::Less => {
-                // Messages with epochs lower than the current max are aggregated into
-                // previous epoch duties. It is assumed that such messages have already
-                // been validated as not too outdated.
-                self.prev_epoch_duties += 1;
-            }
-        }
         self.state[index].as_mut().unwrap()
     }
 }
@@ -417,7 +361,7 @@ mod tests {
         );
 
         // Update the duty state
-        duty_state.update_for_consensus_message(&signed_ssv_message, &qbft_message, 32);
+        duty_state.update_for_consensus_message(&signed_ssv_message, &qbft_message);
 
         // Retrieve the operator state
         let operator_state = duty_state.get_or_create_operator(&operator_id);
@@ -460,7 +404,7 @@ mod tests {
         );
 
         // Update duty state with single-signer commit
-        duty_state.update_for_consensus_message(&signed_single_signer, &single_signer_commit, 32);
+        duty_state.update_for_consensus_message(&signed_single_signer, &single_signer_commit);
 
         // Create a commit message with multiple signers (decided message, should NOT be counted)
         let multi_signer_commit =
@@ -474,7 +418,7 @@ mod tests {
         );
 
         // Update duty state with multi-signer commit
-        duty_state.update_for_consensus_message(&signed_multi_signer, &multi_signer_commit, 32);
+        duty_state.update_for_consensus_message(&signed_multi_signer, &multi_signer_commit);
 
         // Retrieve the operator state
         let operator_state = duty_state.get_or_create_operator(&operator_id);
@@ -490,5 +434,168 @@ mod tests {
         } else {
             panic!("SignerState should exist for the slot");
         }
+    }
+
+    /// Slots per epoch used by the ring-derived duty-count tests.
+    const SLOTS_PER_EPOCH: u64 = 32;
+
+    /// Role-8 (`ProposerPreferences`) ring size via the production selector, so these tests
+    /// cannot drift from the sizing `get_duty_count`'s exactness depends on. Mainnet-shaped
+    /// params give `(1 + min_seed_lookahead) * spe + 2 * spe = 128`, four concurrent epochs.
+    fn role_8_ring() -> usize {
+        crate::stored_slot_count(
+            Role::ProposerPreferences,
+            SLOTS_PER_EPOCH,
+            &crate::tests::spec_with_gloas(None),
+        )
+    }
+
+    /// Records a duty for `operator_id` at `slot` by feeding a consensus message through the
+    /// production update path.
+    fn record_duty_at_slot(duty_state: &mut DutyState, operator_id: OperatorId, slot: Slot) {
+        let qbft_message =
+            QbftMessageBuilder::new(Role::ProposerPreferences, QbftMessageType::Proposal)
+                .with_height(slot.as_u64())
+                .build();
+        let signed_ssv_message = create_signed_consensus_message(
+            qbft_message.clone(),
+            vec![operator_id],
+            vec![],
+            vec![],
+        );
+        duty_state.update_for_consensus_message(&signed_ssv_message, &qbft_message);
+    }
+
+    #[test]
+    fn test_duty_counts_survive_later_epoch_acceptance() {
+        // Ring-derived counts must stay exact for EVERY epoch still inside the acceptance
+        // window, not just the newest one. The deleted two-bucket counters pinned only
+        // (max_epoch, max_epoch - 1): accepting an E+2 message advanced max_epoch to E+2,
+        // relabeling E's count as E+1's and zeroing reads for E.
+        let mut duty_state = DutyState::new(role_8_ring());
+        let operator_id = OperatorId(1);
+        let epoch = Epoch::new(10); // slots 320..=351
+
+        // 3 duties in E, 2 in E+1, then 1 in E+2 (the later-epoch acceptance).
+        let epoch_start = epoch.start_slot(SLOTS_PER_EPOCH);
+        for offset in [0, 7, 31] {
+            record_duty_at_slot(&mut duty_state, operator_id, epoch_start + offset);
+        }
+        let next_epoch_start = (epoch + 1).start_slot(SLOTS_PER_EPOCH);
+        for offset in [3, 20] {
+            record_duty_at_slot(&mut duty_state, operator_id, next_epoch_start + offset);
+        }
+        record_duty_at_slot(
+            &mut duty_state,
+            operator_id,
+            (epoch + 2).start_slot(SLOTS_PER_EPOCH) + 5,
+        );
+
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
+
+        // E's count survives the E+2 acceptance (the old bucket code returned 0 for E here).
+        assert_eq!(
+            operator_state.get_duty_count(epoch, SLOTS_PER_EPOCH),
+            3,
+            "epoch E count must survive acceptance of a later-epoch message"
+        );
+        assert_eq!(
+            operator_state.get_duty_count(epoch + 1, SLOTS_PER_EPOCH),
+            2,
+            "epoch E+1 count should be exact"
+        );
+        assert_eq!(
+            operator_state.get_duty_count(epoch + 2, SLOTS_PER_EPOCH),
+            1,
+            "epoch E+2 count should be exact"
+        );
+        assert_eq!(
+            operator_state.get_duty_count(epoch - 1, SLOTS_PER_EPOCH),
+            0,
+            "epoch E-1 has no recorded duties"
+        );
+        assert_eq!(
+            operator_state.get_duty_count(epoch + 3, SLOTS_PER_EPOCH),
+            0,
+            "epoch E+3 has no recorded duties"
+        );
+    }
+
+    #[test]
+    fn test_duty_counts_not_conflated_across_older_epochs() {
+        // Duties arriving for epochs older than the newest-seen one must be attributed to
+        // their own epochs. The deleted counters' Ordering::Less arm lumped every epoch below
+        // max_epoch into the single prev bucket: with max_epoch at E+2, the 2 duties in E and
+        // 3 in E+1 below would all read as 5 for E+1 and 0 for E.
+        let mut duty_state = DutyState::new(role_8_ring());
+        let operator_id = OperatorId(1);
+        let epoch = Epoch::new(10);
+
+        // 1 duty in E+2 first, so the newest-seen epoch sits two ahead of the others.
+        record_duty_at_slot(
+            &mut duty_state,
+            operator_id,
+            (epoch + 2).start_slot(SLOTS_PER_EPOCH) + 5,
+        );
+        // Then 2 duties in E and 3 in E+1.
+        let epoch_start = epoch.start_slot(SLOTS_PER_EPOCH);
+        for offset in [1, 30] {
+            record_duty_at_slot(&mut duty_state, operator_id, epoch_start + offset);
+        }
+        let next_epoch_start = (epoch + 1).start_slot(SLOTS_PER_EPOCH);
+        for offset in [0, 11, 31] {
+            record_duty_at_slot(&mut duty_state, operator_id, next_epoch_start + offset);
+        }
+
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
+
+        assert_eq!(
+            operator_state.get_duty_count(epoch, SLOTS_PER_EPOCH),
+            2,
+            "epoch E count must not be conflated into a shared older-epoch bucket"
+        );
+        assert_eq!(
+            operator_state.get_duty_count(epoch + 1, SLOTS_PER_EPOCH),
+            3,
+            "epoch E+1 count must not absorb epoch E's duties"
+        );
+        assert_eq!(
+            operator_state.get_duty_count(epoch + 2, SLOTS_PER_EPOCH),
+            1,
+            "epoch E+2 count should be exact"
+        );
+    }
+
+    #[test]
+    fn test_duty_counts_ignore_aliased_ring_entries() {
+        // The ring is modulo-indexed, so slots exactly `ring size` apart share an index. An
+        // occupied index only counts toward the epoch of the slot actually stored there:
+        // probing must check the stored slot, not raw index occupancy, or a stale entry left
+        // behind by an evicted epoch would be counted into a live epoch.
+        let mut duty_state = DutyState::new(role_8_ring());
+        let operator_id = OperatorId(1);
+
+        // One duty at slot 325 (epoch 10, offset 5), ring index 325 % 128 = 69.
+        record_duty_at_slot(
+            &mut duty_state,
+            operator_id,
+            Epoch::new(10).start_slot(SLOTS_PER_EPOCH) + 5,
+        );
+
+        let operator_state = duty_state.get_or_create_operator(&operator_id);
+
+        // Epoch 14 spans slots 448..=479, whose ring indices 64..=95 include index 69 (via
+        // slot 453). The entry stored there belongs to slot 325, so it must not be counted.
+        assert_eq!(
+            operator_state.get_duty_count(Epoch::new(14), SLOTS_PER_EPOCH),
+            0,
+            "an aliased ring entry from another epoch's slot must not be counted"
+        );
+        // Self-check: the same entry still counts toward its own epoch.
+        assert_eq!(
+            operator_state.get_duty_count(Epoch::new(10), SLOTS_PER_EPOCH),
+            1,
+            "the recorded duty must count toward the epoch of its stored slot"
+        );
     }
 }
