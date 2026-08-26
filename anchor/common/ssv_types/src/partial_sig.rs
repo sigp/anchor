@@ -44,6 +44,10 @@ pub enum PartialSignatureKind {
     // ProposerPreferences object (validator-scoped, non-QBFT; the reconstructed
     // SignedProposerPreferences is gossiped on the proposer_preferences topic)
     ProposerPreferences = 8,
+    // RequestAuthPartialSig is a standalone single-validator partial signature over a
+    // BuilderRequestAuth object (validator-scoped, non-QBFT; rides Role::ProposerPreferences
+    // as the role's second kind per SIP-94 §5's builder request auth extension)
+    RequestAuth = 9,
 }
 
 impl TryFrom<u64> for PartialSignatureKind {
@@ -60,6 +64,7 @@ impl TryFrom<u64> for PartialSignatureKind {
             6 => Ok(PartialSignatureKind::AggregatorCommitteePartialSig),
             7 => Ok(PartialSignatureKind::PTCAttester),
             8 => Ok(PartialSignatureKind::ProposerPreferences),
+            9 => Ok(PartialSignatureKind::RequestAuth),
             _ => Err(()),
         }
     }
@@ -198,6 +203,7 @@ mod tests {
             PartialSignatureKind::AggregatorCommitteePartialSig,
             PartialSignatureKind::PTCAttester,
             PartialSignatureKind::ProposerPreferences,
+            PartialSignatureKind::RequestAuth,
         ];
 
         for variant in variants {
@@ -232,6 +238,7 @@ mod tests {
             (PartialSignatureKind::AggregatorCommitteePartialSig, 6u64),
             (PartialSignatureKind::PTCAttester, 7u64),
             (PartialSignatureKind::ProposerPreferences, 8u64),
+            (PartialSignatureKind::RequestAuth, 9u64),
         ];
 
         for (variant, expected_value) in test_cases {
@@ -249,7 +256,7 @@ mod tests {
 
     #[test]
     fn partial_signature_kind_ssz_decode_invalid_variant() {
-        let invalid_value = 9u64.to_le_bytes();
+        let invalid_value = 10u64.to_le_bytes();
         let result = PartialSignatureKind::from_ssz_bytes(&invalid_value);
         assert!(matches!(result, Err(DecodeError::NoMatchingVariant)));
     }
@@ -321,11 +328,15 @@ mod tests {
             PartialSignatureKind::try_from(8u64).unwrap(),
             PartialSignatureKind::ProposerPreferences
         );
+        assert_eq!(
+            PartialSignatureKind::try_from(9u64).unwrap(),
+            PartialSignatureKind::RequestAuth
+        );
     }
 
     #[test]
     fn partial_signature_kind_try_from_u64_invalid_values() {
-        assert!(PartialSignatureKind::try_from(9u64).is_err());
+        assert!(PartialSignatureKind::try_from(10u64).is_err());
         assert!(PartialSignatureKind::try_from(100u64).is_err());
         assert!(PartialSignatureKind::try_from(u64::MAX).is_err());
     }
@@ -354,6 +365,7 @@ mod tests {
             PartialSignatureKind::AggregatorCommitteePartialSig,
             PartialSignatureKind::PTCAttester,
             PartialSignatureKind::ProposerPreferences,
+            PartialSignatureKind::RequestAuth,
         ];
 
         let hashes: Vec<_> = variants.iter().map(|v| v.tree_hash_root()).collect();

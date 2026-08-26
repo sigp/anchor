@@ -81,8 +81,9 @@ impl MessageCounts {
                     });
                 }
             }
-            // ProposerPreferences does not use the shared pre_consensus round cap
-            PartialSignatureKind::ProposerPreferences => {}
+            // ProposerPreferences and RequestAuth do not use the shared pre_consensus round
+            // cap: each has its own distinct-signing-root budget on `SignerState` instead
+            PartialSignatureKind::ProposerPreferences | PartialSignatureKind::RequestAuth => {}
         }
 
         Ok(())
@@ -115,8 +116,9 @@ impl MessageCounts {
             | PartialSignatureKind::AggregatorCommitteePartialSig
             | PartialSignatureKind::PTCAttester => self.pre_consensus += 1,
             PartialSignatureKind::PostConsensus => self.post_consensus += 1,
-            // Tracked per signing-root on `SignerState`, not via a shared counter.
-            PartialSignatureKind::ProposerPreferences => {}
+            // ProposerPreferences and RequestAuth are tracked per signing-root on
+            // `SignerState`, not via a shared counter.
+            PartialSignatureKind::ProposerPreferences | PartialSignatureKind::RequestAuth => {}
         }
     }
 }

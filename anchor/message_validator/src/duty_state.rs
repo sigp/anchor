@@ -29,19 +29,23 @@ use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 /// reorg-driven corrections while bounding spam, not a safety/consensus bound. Both exceeding
 /// the cap (`TooManyDistinctSigningRoots`) and repeating an already-recorded root
 /// (`RelayedDuplicateMessage`) are Ignore, regardless of the propagation peer; rationale at the
-/// enforcement site in `update_for_partial_signature`.
-const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS: usize = 4;
+/// enforcement site in `update_for_partial_signature`. Crate-visible so pipeline tests in
+/// sibling modules reference the real value instead of hardcoding it.
+pub(crate) const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS: usize = 4;
 
-/// Test-only, crate-visible mirror of the private cap so pipeline tests in sibling modules
-/// (e.g. `partial_signature`) can reference the real value instead of hardcoding `4`. The
-/// compile-time assertion below makes the mirror impossible to drift from production.
-#[cfg(test)]
-pub(crate) const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST: usize =
-    MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS;
-#[cfg(test)]
-const _: () = assert!(
-    MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST == MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS
-);
+/// Maximum distinct `BuilderRequestAuth` signing roots accepted per
+/// (`MessageId`, operator, `proposal_slot`).
+///
+/// One root per configured builder entry: SIP-94 §5 caps configured entries at 8 per
+/// validator (an SSV policy bound; the beacon-APIs wire container allows
+/// `MAX_BUILDER_ENTRIES = 64` entries), and entries sharing `data` share a root. Unlike the
+/// preferences cap above there is no re-emission headroom: auth roots are computed under a
+/// chain-independent domain with no `dependent_root`, so honest re-triggers reproduce
+/// byte-identical roots and a reorg never mints a new one. Budgeted separately from the
+/// preferences roots per SIP-94 §7 (neither kind consumes the other); violations are
+/// classified exactly like the preferences rules above, at the shared enforcement site in
+/// `update_for_partial_signature`.
+pub(crate) const MAX_REQUEST_AUTH_DISTINCT_ROOTS: usize = 8;
 
 /// DutyState manages the state for duty validation across operators and slots
 pub(crate) struct DutyState {
@@ -107,12 +111,15 @@ impl DutyState {
             }
         };
 
-        // ProposerPreferences-specific per-slot signing-root dedup (not the shared pre_consensus
-        // counter): the envelope slot is the duty's proposal_slot, and a validator may sign several
-        // distinct roots for one proposal_slot as its preference inputs change between emissions
-        // (chiefly a dependent_root shift under reorg). Track the distinct roots per
-        // (MessageId, operator, proposal_slot), capped at MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS.
-        if partial_signature_messages.kind == PartialSignatureKind::ProposerPreferences {
+        // ProposerPreferences/RequestAuth per-slot signing-root dedup (not the shared
+        // pre_consensus counter): the envelope slot is the duty's proposal_slot, and a validator
+        // may sign several distinct roots for one proposal_slot per kind (preference inputs
+        // change between emissions, chiefly a dependent_root shift under reorg; one auth root
+        // per configured builder entry). Distinct roots are tracked per
+        // (MessageId, operator, proposal_slot, kind), each kind under its own cap (SIP-94 §7:
+        // budgets are tracked per partial-signature kind; neither consumes the other).
+        let kind = partial_signature_messages.kind;
+        if let Some((seen_roots, cap)) = signer_state.root_budget(kind) {
             let root = partial_signature_messages
                 .messages
                 .first()
@@ -123,20 +130,17 @@ impl DutyState {
             // recipient's gossip duplicate cache expires, so repetition does not prove peer
             // fault. Membership is checked before capacity so a recorded root stays IGNORE
             // even when the set is full.
-            if signer_state.seen_preferences.contains_key(&root) {
+            if seen_roots.contains_key(&root) {
                 return Err(ValidationFailure::RelayedDuplicateMessage {
-                    got: format!("proposer-preferences root {root:?}"),
+                    got: format!("{kind:?} root {root:?}"),
                 });
             }
-            if signer_state.seen_preferences.len() >= MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS {
+            if seen_roots.len() >= cap {
                 return Err(ValidationFailure::TooManyDistinctSigningRoots {
-                    got: format!(
-                        "proposer-preferences distinct roots exceed cap \
-                         {MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS}"
-                    ),
+                    got: format!("{kind:?} distinct roots exceed cap {cap}"),
                 });
             }
-            signer_state.seen_preferences.insert(root, received_from);
+            seen_roots.insert(root, received_from);
         }
 
         // Record the partial signature (only once)
@@ -280,11 +284,23 @@ pub(crate) struct SignerState {
     pub(crate) proposal_hash: Option<[u8; 32]>,
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
-    /// Accepted ProposerPreferences signing roots for this (MessageId, operator, slot), each
-    /// mapped to its first deliverer (`None` = locally injected). The verdict for a repeat is
-    /// peer-agnostic Ignore (SIP-94 §7); the stored deliverer no longer affects classification
-    /// and is retained only because issue #1254 scopes the peer plumbing as unchanged.
-    seen_preferences: HashMap<Hash256, Option<PeerId>>,
+    /// Accepted signing roots for the root-budgeted kinds, boxed and lazily allocated on the
+    /// first such packet: every role's ring entries share this struct, but only
+    /// `Role::ProposerPreferences` messages can ever populate it
+    /// (`partial_signature_type_matches_role`), so the other roles pay one pointer instead of
+    /// two inline maps.
+    root_budgets: Option<Box<SigningRootBudgets>>,
+}
+
+/// Per-kind distinct-signing-root sets for the root-budgeted partial-signature kinds, each
+/// accepted root mapped to its first deliverer (`None` = locally injected). The verdict for a
+/// repeat is peer-agnostic Ignore (SIP-94 §7); the stored deliverer no longer affects
+/// classification and is retained only because issue #1254 scopes the peer plumbing as
+/// unchanged. The kinds are budgeted independently per SIP-94 §7: neither consumes the other.
+#[derive(Debug, Clone, Default)]
+struct SigningRootBudgets {
+    preferences: HashMap<Hash256, Option<PeerId>>,
+    request_auth: HashMap<Hash256, Option<PeerId>>,
 }
 
 impl SignerState {
@@ -296,7 +312,38 @@ impl SignerState {
             message_counts: MessageCounts::default(),
             proposal_hash: None,
             seen_signers: HashSet::new(),
-            seen_preferences: HashMap::new(),
+            root_budgets: None,
+        }
+    }
+
+    /// Per-kind distinct-signing-root budget (set, cap) for the two `Role::ProposerPreferences`
+    /// kinds; `None` for kinds tracked via the shared `message_counts` counters. Allocates the
+    /// backing store on first use, so signer states for other roles never pay for it.
+    fn root_budget(
+        &mut self,
+        kind: PartialSignatureKind,
+    ) -> Option<(&mut HashMap<Hash256, Option<PeerId>>, usize)> {
+        match kind {
+            PartialSignatureKind::ProposerPreferences => Some((
+                &mut self.root_budgets.get_or_insert_default().preferences,
+                MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS,
+            )),
+            PartialSignatureKind::RequestAuth => Some((
+                &mut self.root_budgets.get_or_insert_default().request_auth,
+                MAX_REQUEST_AUTH_DISTINCT_ROOTS,
+            )),
+            // Counter-tracked kinds (the shared caps in `MessageCounts`). Exhaustive so a new
+            // kind forces an explicit budgeting decision here; a wildcard would let a future
+            // kind bypass the counters via its `message_counts` no-op arm while silently
+            // getting no root budget either.
+            PartialSignatureKind::PostConsensus
+            | PartialSignatureKind::RandaoPartialSig
+            | PartialSignatureKind::SelectionProofPartialSig
+            | PartialSignatureKind::ContributionProofs
+            | PartialSignatureKind::ValidatorRegistration
+            | PartialSignatureKind::VoluntaryExit
+            | PartialSignatureKind::AggregatorCommitteePartialSig
+            | PartialSignatureKind::PTCAttester => None,
         }
     }
 

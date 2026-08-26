@@ -195,8 +195,9 @@ pub enum ValidationFailure {
     TooManyDistinctSigningRoots {
         got: String,
     },
-    /// Any repeat of a recorded proposer-preferences signing root, regardless of the
-    /// propagation peer (SIP-94 §7). Ignore-class.
+    /// Any repeat of a signing root already recorded for the message's
+    /// (`MessageId`, operator, slot, partial-signature kind), regardless of the propagation
+    /// peer (SIP-94 §7). Ignore-class.
     RelayedDuplicateMessage {
         got: String,
     },
@@ -1230,7 +1231,10 @@ fn duty_limit(
         // Proposer and SyncCommittee have no duty limit
         Role::Proposer | Role::SyncCommittee => Ok(None),
         // Per-proposal-slot roles: max duties capped at SLOTS_PER_EPOCH (one preferences packet /
-        // one self-build envelope per proposal slot). Overflow is IGNORE-classified.
+        // one self-build envelope per proposal slot). Overflow is IGNORE-classified. Both
+        // ProposerPreferences kinds (preferences and request-auth) share each proposal slot's
+        // single ring entry, so kind-9 packets add no distinct slots beyond kind-8's; this is
+        // the stricter reading of SIP-94 §7's "type-9 messages ride existing duty slots".
         Role::ProposerPreferences | Role::EnvelopeProposer => {
             Ok(Some(validation_context.slots_per_epoch))
         }

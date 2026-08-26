@@ -144,7 +144,10 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
     match role {
         Role::Committee => kind == PartialSignatureKind::PostConsensus,
         Role::PTCAttester => kind == PartialSignatureKind::PTCAttester,
-        Role::ProposerPreferences => kind == PartialSignatureKind::ProposerPreferences,
+        Role::ProposerPreferences => {
+            kind == PartialSignatureKind::ProposerPreferences
+                || kind == PartialSignatureKind::RequestAuth
+        }
         Role::EnvelopeProposer => kind == PartialSignatureKind::PostConsensus,
         Role::Aggregator => {
             kind == PartialSignatureKind::PostConsensus
@@ -2429,8 +2432,27 @@ mod tests {
         proposal_slot: Slot,
         signing_root: Hash256,
     ) -> SignedSSVMessage {
+        create_signed_proposer_preferences_message_with_kind(
+            PartialSignatureKind::ProposerPreferences,
+            signer_id,
+            private_key,
+            proposal_slot,
+            signing_root,
+        )
+    }
+
+    /// Shared builder for the two kinds riding `Role::ProposerPreferences`
+    /// (`ProposerPreferences` and `RequestAuth`): same `MessageId`, envelope `proposal_slot`,
+    /// and single-message packet shape; only the declared `kind` differs.
+    fn create_signed_proposer_preferences_message_with_kind(
+        kind: PartialSignatureKind,
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+        proposal_slot: Slot,
+        signing_root: Hash256,
+    ) -> SignedSSVMessage {
         let partial_sig_messages = PartialSignatureMessages {
-            kind: PartialSignatureKind::ProposerPreferences,
+            kind,
             slot: proposal_slot,
             messages: VariableList::new(vec![PartialSignatureMessage {
                 partial_signature: Signature::empty(),
@@ -2462,7 +2484,7 @@ mod tests {
     /// so it fails `verify_message_signature`. Everything else (role, slot, signing_root,
     /// validator_index) is well-formed, so validation reaches — and fails at — the RSA check,
     /// which sits AFTER semantics/duty logic but BEFORE `update_for_partial_signature`. Used to
-    /// prove a signature-invalid packet never poisons `seen_preferences`.
+    /// prove a signature-invalid packet never poisons the per-kind role-8 root set.
     fn create_bad_signature_proposer_preferences_message(
         signer_id: OperatorId,
         wrong_key: &Rsa<Private>,
@@ -2715,16 +2737,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_proposer_preferences_accepted_at_gloas() {
+    /// Shared body for the two accepted-at-Gloas tests: a packet of `kind` on
+    /// `Role::ProposerPreferences` must pass the full pipeline at/after Gloas activation.
+    fn assert_role8_kind_accepted_at_gloas(kind: PartialSignatureKind) {
         // Arrange: at/after Gloas activation the role passes the full pipeline.
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let signed_msg = create_signed_partial_sig_message(
             Role::ProposerPreferences,
-            PartialSignatureKind::ProposerPreferences,
+            kind,
             OperatorId(1),
             &private_key,
         );
@@ -2746,6 +2766,11 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "Expected ok but got: {result:?}");
+    }
+
+    #[test]
+    fn test_proposer_preferences_accepted_at_gloas() {
+        assert_role8_kind_accepted_at_gloas(PartialSignatureKind::ProposerPreferences);
     }
 
     #[test]
@@ -3193,7 +3218,7 @@ mod tests {
     fn test_proposer_preferences_duplicate_root_same_proposal_slot_ignored() {
         // An exact-duplicate signing_root for the same `proposal_slot` is a repeat of a
         // recorded root and must be IGNORE'd (`RelayedDuplicateMessage`) regardless of the
-        // propagation peer (SIP-94 §7), via the per-slot `seen_preferences` set.
+        // propagation peer (SIP-94 §7), via the per-slot role-8 `preferences` root set.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
         let map =
@@ -3260,7 +3285,7 @@ mod tests {
         // `MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS` (referenced, never hardcoded). Feeding
         // exactly that many distinct roots all pass; one more distinct root is an Ignore-class
         // `TooManyDistinctSigningRoots` (NOT the old `InvalidPartialSignatureTypeCount`).
-        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST as CAP;
+        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS as CAP;
 
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
@@ -3364,36 +3389,80 @@ mod tests {
     // map is populated ONLY on accept (after RSA verify + semantics).
 
     /// A shared `MessageId`/operator/proposal_slot keeps every packet in these tests targeting the
-    /// SAME `seen_preferences` set, so classification depends only on whether the root is
+    /// SAME per-kind role-8 root set, so classification depends only on whether the root is
     /// already recorded there.
     const DEDUP_SIGNER: OperatorId = OperatorId(1);
 
-    /// Signs, contextualizes, and validates one ProposerPreferences packet for `root` delivered by
-    /// `received_from`, against the shared `duty_state`. Centralizes the repeated construction so
-    /// each matrix test reads as a sequence of deliveries.
-    fn deliver_proposer_preference(
-        duty_state: &mut DutyState,
-        committee_info: &crate::CommitteeInfo,
-        map: &HashMap<OperatorId, Rsa<Public>>,
-        private_key: &Rsa<Private>,
+    /// Invariant fixture state shared by every role-8 dedup delivery: the four-node committee,
+    /// its operator keypair and pubkey map, and the one `proposal_slot` all packets target.
+    /// Tests own their `DutyState` (some assert across deliveries), so `deliver` names only
+    /// what varies per packet: the declared kind, the signing root, and the delivering peer.
+    struct Role8Fixture {
+        committee_info: crate::CommitteeInfo,
+        private_key: Rsa<Private>,
+        map: HashMap<OperatorId, Rsa<Public>>,
         proposal_slot: Slot,
-        root: Hash256,
-        received_from: Option<PeerId>,
-    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-        let signed = create_signed_proposer_preferences_message(
-            DEDUP_SIGNER,
-            private_key,
-            proposal_slot,
-            root,
-        );
-        let context =
-            create_proposer_preferences_context(&signed, committee_info, map, proposal_slot);
-        validate_partial_signature_message(
+    }
+
+    impl Role8Fixture {
+        fn new() -> Self {
+            let (committee_info, private_key, map) = four_node_committee_and_keypair();
+            Self {
+                committee_info,
+                private_key,
+                map,
+                proposal_slot: Slot::new(1),
+            }
+        }
+
+        /// Signs, contextualizes, and validates one role-8 packet of `kind` for `root` delivered
+        /// by `received_from`, against `duty_state`. Centralizes the repeated construction so
+        /// each matrix test reads as a sequence of deliveries. A RequestAuth packet (kind
+        /// selector 9, SSZ u64) is identical to a ProposerPreferences one except for the
+        /// declared kind (SIP-94: both ride `Role::ProposerPreferences`).
+        fn deliver(
+            &self,
+            duty_state: &mut DutyState,
+            kind: PartialSignatureKind,
+            root: Hash256,
+            received_from: Option<PeerId>,
+        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+            let signed = create_signed_proposer_preferences_message_with_kind(
+                kind,
+                DEDUP_SIGNER,
+                &self.private_key,
+                self.proposal_slot,
+                root,
+            );
+            let context = create_proposer_preferences_context(
+                &signed,
+                &self.committee_info,
+                &self.map,
+                self.proposal_slot,
+            );
+            validate_partial_signature_message(
+                context,
+                duty_state,
+                Arc::new(MockDutiesProvider::default()),
+                received_from,
+            )
+        }
+    }
+
+    /// Asserts that `result` failed with the Ignore-class `TooManyDistinctSigningRoots`,
+    /// the verdict for a distinct signing root beyond the per-kind cap. `context` names the
+    /// scenario for the failure message.
+    fn assert_too_many_roots<T>(result: Result<T, ValidationFailure>, context: &str) {
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyDistinctSigningRoots { .. }
+                )
+            },
             context,
-            duty_state,
-            Arc::new(MockDutiesProvider::default()),
-            received_from,
-        )
+        );
     }
 
     /// Fills all 32 bytes with `tag`, so distinct tags give distinct signing roots.
@@ -3405,20 +3474,13 @@ mod tests {
     #[test]
     fn test_proposer_preferences_peer_a_first_root_accepted() {
         // Arrange
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let mut duty_state = DutyState::new(64);
 
         // Act: peer A delivers root R for the first time.
-        let result = deliver_proposer_preference(
+        let result = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             dedup_root(0xA1),
             Some(peer_a()),
         );
@@ -3434,20 +3496,13 @@ mod tests {
     #[test]
     fn test_proposer_preferences_peer_a_repeat_root_ignored_as_duplicate() {
         // Arrange
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let root = dedup_root(0xA2);
         let mut duty_state = DutyState::new(64);
 
-        let first = deliver_proposer_preference(
+        let first = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_a()),
         );
@@ -3457,12 +3512,9 @@ mod tests {
         );
 
         // Act: peer A resends the SAME root R.
-        let repeat = deliver_proposer_preference(
+        let repeat = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_a()),
         );
@@ -3481,20 +3533,13 @@ mod tests {
     #[test]
     fn test_proposer_preferences_peer_b_relay_root_ignored_as_relayed_duplicate() {
         // Arrange
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let root = dedup_root(0xB3);
         let mut duty_state = DutyState::new(64);
 
-        let first = deliver_proposer_preference(
+        let first = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_a()),
         );
@@ -3504,12 +3549,9 @@ mod tests {
         );
 
         // Act: peer B relays the SAME root R that peer A first delivered.
-        let relayed = deliver_proposer_preference(
+        let relayed = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_b()),
         );
@@ -3535,24 +3577,17 @@ mod tests {
     // ---- Criterion 4: cap distinct roots accepted; one more -> TooManyDistinctSigningRoots. ----
     #[test]
     fn test_proposer_preferences_distinct_root_cap_then_over_cap_ignored() {
-        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST as CAP;
+        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS as CAP;
 
         // Arrange
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let mut duty_state = DutyState::new(64);
 
         // Act + Assert: CAP distinct roots, each from a distinct-enough delivery, all accepted.
         for i in 0..CAP {
-            let result = deliver_proposer_preference(
+            let result = fixture.deliver(
                 &mut duty_state,
-                &committee_info,
-                &map,
-                &private_key,
-                proposal_slot,
+                PartialSignatureKind::ProposerPreferences,
                 dedup_root(i as u8),
                 Some(peer_a()),
             );
@@ -3563,12 +3598,9 @@ mod tests {
         }
 
         // Act: one MORE distinct root (never seen) exceeds the cap.
-        let over_cap = deliver_proposer_preference(
+        let over_cap = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             dedup_root(CAP as u8),
             Some(peer_b()),
         );
@@ -3589,12 +3621,9 @@ mod tests {
         // IGNORE'd messages MUST NOT be recorded, so the retry must hit the capacity branch
         // again (`TooManyDistinctSigningRoots`), NOT the membership branch
         // (`RelayedDuplicateMessage`), which would prove the rejected root had been recorded.
-        let over_cap_retry = deliver_proposer_preference(
+        let over_cap_retry = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             dedup_root(CAP as u8),
             Some(peer_a()),
         );
@@ -3613,24 +3642,17 @@ mod tests {
     // ---- Criterion 5: with cap full, membership classification still wins over the cap. ----
     #[test]
     fn test_proposer_preferences_full_cap_membership_precedes_capacity() {
-        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS_FOR_TEST as CAP;
+        use crate::duty_state::MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS as CAP;
 
         // Arrange: fill the set to exactly CAP. Root 0 is delivered by peer A; both a same-peer
         // resend and a different-peer relay of it must classify as recorded-root repeats.
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let mut duty_state = DutyState::new(64);
 
         for i in 0..CAP {
-            let result = deliver_proposer_preference(
+            let result = fixture.deliver(
                 &mut duty_state,
-                &committee_info,
-                &map,
-                &private_key,
-                proposal_slot,
+                PartialSignatureKind::ProposerPreferences,
                 dedup_root(i as u8),
                 Some(peer_a()),
             );
@@ -3643,12 +3665,9 @@ mod tests {
         // Act 1 + Assert: same-peer (A) resend of the already-seen root 0, while the set is FULL,
         // is RelayedDuplicateMessage (Ignore) — membership is checked before capacity, so the
         // verdict is the recorded-root Ignore, not TooManyDistinctSigningRoots.
-        let same_peer_repeat = deliver_proposer_preference(
+        let same_peer_repeat = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             dedup_root(0),
             Some(peer_a()),
         );
@@ -3660,12 +3679,9 @@ mod tests {
 
         // Act 2 + Assert: different-peer (B) relay of the already-seen root 0, while the set is
         // FULL, is still RelayedDuplicateMessage (Ignore) — again membership beats capacity.
-        let relay_repeat = deliver_proposer_preference(
+        let relay_repeat = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             dedup_root(0),
             Some(peer_b()),
         );
@@ -3678,15 +3694,11 @@ mod tests {
 
     // ---- Criterion 6: signature-invalid and semantics-invalid packets never poison the map. ----
     #[test]
-    fn test_proposer_preferences_invalid_packets_do_not_poison_seen_preferences() {
-        // Arrange: `private_key`/`public_key` is the committee operator's real key. `wrong_key` is
+    fn test_proposer_preferences_invalid_packets_do_not_poison_root_set() {
+        // Arrange: the fixture holds the committee operator's real key. `wrong_key` is
         // an unrelated key used to forge a signature that fails RSA verification.
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
+        let fixture = Role8Fixture::new();
         let (wrong_key, _wrong_public) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
         let root = dedup_root(0xC6);
         let mut duty_state = DutyState::new(64);
 
@@ -3694,11 +3706,15 @@ mod tests {
         let bad_sig_msg = create_bad_signature_proposer_preferences_message(
             DEDUP_SIGNER,
             &wrong_key,
-            proposal_slot,
+            fixture.proposal_slot,
             root,
         );
-        let bad_sig_context =
-            create_proposer_preferences_context(&bad_sig_msg, &committee_info, &map, proposal_slot);
+        let bad_sig_context = create_proposer_preferences_context(
+            &bad_sig_msg,
+            &fixture.committee_info,
+            &fixture.map,
+            fixture.proposal_slot,
+        );
         let bad_sig_result = validate_partial_signature_message(
             bad_sig_context,
             &mut duty_state,
@@ -3719,15 +3735,15 @@ mod tests {
         // Act 2: a semantically-invalid packet (unknown validator_index) for the same root R.
         let bad_semantics_msg = create_semantically_invalid_proposer_preferences_message(
             DEDUP_SIGNER,
-            &private_key,
-            proposal_slot,
+            &fixture.private_key,
+            fixture.proposal_slot,
             root,
         );
         let bad_semantics_context = create_proposer_preferences_context(
             &bad_semantics_msg,
-            &committee_info,
-            &map,
-            proposal_slot,
+            &fixture.committee_info,
+            &fixture.map,
+            fixture.proposal_slot,
         );
         let bad_semantics_result = validate_partial_signature_message(
             bad_semantics_context,
@@ -3741,14 +3757,11 @@ mod tests {
             "ValidatorIndexMismatch (unknown validator_index for root R)",
         );
 
-        // Assert: neither invalid packet populated `seen_preferences`, so an honest first delivery
+        // Assert: neither invalid packet populated the role-8 root set, so an honest first delivery
         // of root R by peer A is ACCEPTED (not falsely classified as a duplicate).
-        let honest = deliver_proposer_preference(
+        let honest = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_a()),
         );
@@ -3765,21 +3778,14 @@ mod tests {
     #[test]
     fn test_proposer_preferences_own_emission_then_relay_never_rejected() {
         // Arrange
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let root = dedup_root(0xD7);
         let mut duty_state = DutyState::new(64);
 
         // Own emission: received_from = None stores the root with a `None` first-deliverer.
-        let own = deliver_proposer_preference(
+        let own = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             None,
         );
@@ -3790,12 +3796,9 @@ mod tests {
 
         // Act 1: peer B relays the root we emitted. Any repeat of a recorded root is
         // RelayedDuplicateMessage (Ignore) — crucially NOT Reject.
-        let relayed = deliver_proposer_preference(
+        let relayed = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_b()),
         );
@@ -3807,12 +3810,9 @@ mod tests {
 
         // Act 2: a second `None` delivery of the same root. The verdict is peer-agnostic, so
         // this is also Ignore.
-        let own_again = deliver_proposer_preference(
+        let own_again = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             None,
         );
@@ -3827,20 +3827,13 @@ mod tests {
     #[test]
     fn test_proposer_preferences_double_relay_both_ignored() {
         // Arrange: peer A first delivers root R (accepted).
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        let proposal_slot = Slot::new(1);
+        let fixture = Role8Fixture::new();
         let root = dedup_root(0xE8);
         let mut duty_state = DutyState::new(64);
 
-        let first = deliver_proposer_preference(
+        let first = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_a()),
         );
@@ -3850,12 +3843,9 @@ mod tests {
         );
 
         // Act 1 + Assert: peer B relays R -> Ignore.
-        let relay_b = deliver_proposer_preference(
+        let relay_b = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_b()),
         );
@@ -3867,12 +3857,9 @@ mod tests {
 
         // Act 2 + Assert: peer C then relays R -> also Ignore. Root R is recorded, and membership
         // alone decides the verdict, so a third distinct peer is still a duplicate, never Reject.
-        let relay_c = deliver_proposer_preference(
+        let relay_c = fixture.deliver(
             &mut duty_state,
-            &committee_info,
-            &map,
-            &private_key,
-            proposal_slot,
+            PartialSignatureKind::ProposerPreferences,
             root,
             Some(peer_c()),
         );
@@ -3880,6 +3867,251 @@ mod tests {
             relay_c,
             |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
             "RelayedDuplicateMessage (peer C relays root R after peer B)",
+        );
+    }
+
+    // ==================== RequestAuth tests (#1277) ====================
+    //
+    // RequestAuth (kind selector 9, SSZ u64) is the SECOND kind riding `Role::ProposerPreferences`
+    // (SIP-94): same MessageId/topic, envelope `proposal_slot`, fork gate, and per-packet cap
+    // as ProposerPreferences, but its per-`proposal_slot` signing-root dedup runs against its
+    // OWN `request_auth` root set budgeted at `MAX_REQUEST_AUTH_DISTINCT_ROOTS` (one auth root
+    // per configured builder entry), independent of the preferences budget. The role-keyed
+    // rules (fork gate, TTL, proposer-assignment arm, one-message cap) are already pinned by
+    // the kind-8 tests above; these tests pin only what kind 9 adds.
+
+    #[test]
+    fn test_request_auth_accepted_at_gloas() {
+        // A kind-9 packet passes the full pipeline at/after Gloas activation, exactly like
+        // its kind-8 sibling.
+        assert_role8_kind_accepted_at_gloas(PartialSignatureKind::RequestAuth);
+    }
+
+    #[test]
+    fn test_request_auth_kind_binds_only_proposer_preferences_role() {
+        // RequestAuth rides Role::ProposerPreferences as its second kind; every other role
+        // must reject it. Mapping to ValidationFailure::PartialSignatureTypeRoleMismatch is
+        // covered end-to-end by test_partial_signature_message_with_invalid_type_for_role.
+        //
+        // `Role`'s `strum::EnumIter` derive is `#[cfg_attr(test, ...)]` in ssv_types, so it is
+        // not available from this crate's tests; sweep an explicit list instead. Keep it in
+        // sync with the `Role` enum.
+        let all_roles = [
+            Role::Committee,
+            Role::Aggregator,
+            Role::Proposer,
+            Role::SyncCommittee,
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+            Role::AggregatorCommittee,
+            Role::PTCAttester,
+            Role::ProposerPreferences,
+            Role::EnvelopeProposer,
+        ];
+        // Compile-time guard tied to `all_roles` above: adding a `Role` variant breaks this
+        // match, forcing the array (and thus the sweep) to be extended rather than silently
+        // narrowing it.
+        fn _role_list_is_exhaustive(r: Role) {
+            match r {
+                Role::Committee
+                | Role::Aggregator
+                | Role::Proposer
+                | Role::SyncCommittee
+                | Role::ValidatorRegistration
+                | Role::VoluntaryExit
+                | Role::AggregatorCommittee
+                | Role::PTCAttester
+                | Role::ProposerPreferences
+                | Role::EnvelopeProposer => {}
+            }
+        }
+        for role in all_roles {
+            assert_eq!(
+                partial_signature_type_matches_role(PartialSignatureKind::RequestAuth, role),
+                matches!(role, Role::ProposerPreferences),
+                "RequestAuth must bind Role::ProposerPreferences and no other role (got {role:?})"
+            );
+        }
+
+        // ProposerPreferences still admits its original kind too.
+        assert!(partial_signature_type_matches_role(
+            PartialSignatureKind::ProposerPreferences,
+            Role::ProposerPreferences,
+        ));
+    }
+
+    #[test]
+    fn test_request_auth_root_cap_enforced() {
+        // The kind-9 distinct-root set for one (validator, operator, proposal_slot) is capped
+        // at `MAX_REQUEST_AUTH_DISTINCT_ROOTS` (referenced, never hardcoded). Feeding exactly
+        // that many distinct roots all pass; one more distinct root is an Ignore-class
+        // `TooManyDistinctSigningRoots`; retrying it fails the same way (roots from IGNORE'd
+        // messages are never recorded); and with the set full, a repeat of an accepted root is
+        // `RelayedDuplicateMessage` (membership is checked before capacity).
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+
+        // Feed `CAP` distinct roots; all must be accepted.
+        for i in 0..CAP {
+            let result = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                dedup_root(i as u8),
+                Some(peer_a()),
+            );
+            assert!(
+                result.is_ok(),
+                "Expected distinct root #{i} (within cap {CAP}) to be accepted, got: {result:?}"
+            );
+        }
+
+        // One more distinct root exceeds the cap and is rejected as an Ignore.
+        let over_cap = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root(CAP as u8),
+            Some(peer_b()),
+        );
+        assert_too_many_roots(
+            over_cap,
+            "TooManyDistinctSigningRoots (RequestAuth distinct-root cap exceeded)",
+        );
+
+        // The SAME over-cap root retried must hit the capacity branch again
+        // (`TooManyDistinctSigningRoots`), NOT the membership branch
+        // (`RelayedDuplicateMessage`), which would prove the rejected root had been recorded.
+        let over_cap_retry = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root(CAP as u8),
+            Some(peer_a()),
+        );
+        assert_too_many_roots(
+            over_cap_retry,
+            "TooManyDistinctSigningRoots (retried over-cap root was never recorded)",
+        );
+
+        // While the set is exactly full, a repeat of the FIRST already-seen root must be the
+        // Ignore-class `RelayedDuplicateMessage` — membership takes precedence over the cap.
+        let full_cap_repeat = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root(0),
+            Some(peer_a()),
+        );
+        assert_validation_error(
+            full_cap_repeat,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (already-seen root takes precedence over cap)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_and_proposer_preferences_budgets_independent() {
+        // SIP-94 §7: budgets are tracked per partial-signature kind; neither consumes the
+        // other. At ONE (MessageId, signer, proposal_slot), interleave kind-8 and kind-9
+        // packets: each kind keeps accepting distinct roots until ITS OWN cap is hit,
+        // regardless of the other kind's consumption.
+        use crate::duty_state::{
+            MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS as PREF_CAP,
+            MAX_REQUEST_AUTH_DISTINCT_ROOTS as REQ_CAP,
+        };
+        // The interleave below alternates kinds up to the smaller (preferences) cap, then
+        // continues with kind 9 alone (one cross-kind root plus fresh ones) up to the larger
+        // (request-auth) cap.
+        const _: () = assert!(PREF_CAP < REQ_CAP);
+
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+
+        // Disjoint tag spaces keep the two kinds' roots distinct, so an acceptance can only
+        // come from the kind's own budget, never from cross-kind membership.
+        let pref_root = |i: usize| dedup_root(0x80 + i as u8);
+        let req_root = |i: usize| dedup_root(i as u8);
+
+        // Alternate kinds: kind-8 roots 1..=PREF_CAP and kind-9 roots 1..=PREF_CAP all accept.
+        for i in 0..PREF_CAP {
+            let pref = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::ProposerPreferences,
+                pref_root(i),
+                Some(peer_a()),
+            );
+            assert!(
+                pref.is_ok(),
+                "Expected kind-8 distinct root #{i} (within cap {PREF_CAP}) to be accepted, \
+                 got: {pref:?}"
+            );
+
+            let req = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                req_root(i),
+                Some(peer_a()),
+            );
+            assert!(
+                req.is_ok(),
+                "Expected kind-9 distinct root #{i} (within cap {REQ_CAP}) to be accepted, \
+                 got: {req:?}"
+            );
+        }
+
+        // The next distinct kind-8 root exceeds the preferences cap...
+        let pref_over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::ProposerPreferences,
+            pref_root(PREF_CAP),
+            Some(peer_a()),
+        );
+        assert_too_many_roots(
+            pref_over,
+            "TooManyDistinctSigningRoots (kind-8 cap hit despite kind-9 headroom)",
+        );
+
+        // Membership is per-kind too: a root recorded under kind 8 is NOT a duplicate under
+        // kind 9, so delivering it as kind 9 (with kind-9 headroom left) is ACCEPTED, not
+        // `RelayedDuplicateMessage` — even though the kind-8 budget that recorded it is spent.
+        let cross_kind = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            pref_root(0),
+            Some(peer_a()),
+        );
+        assert!(
+            cross_kind.is_ok(),
+            "Expected a recorded kind-8 root to be accepted as a fresh kind-9 root \
+             (membership is per-kind), got: {cross_kind:?}"
+        );
+
+        // ...while further distinct kind-9 roots still accept up to ITS cap: the exhausted
+        // kind-8 budget consumed nothing from the kind-9 one. (The cross-kind acceptance
+        // above consumed one kind-9 slot, hence the range stops one short of REQ_CAP.)
+        for i in PREF_CAP..(REQ_CAP - 1) {
+            let req = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                req_root(i),
+                Some(peer_a()),
+            );
+            assert!(
+                req.is_ok(),
+                "Expected kind-9 distinct root #{i} (within cap {REQ_CAP}) to be accepted \
+                 after the kind-8 cap was hit, got: {req:?}"
+            );
+        }
+
+        // The next distinct kind-9 root then exceeds ITS cap.
+        let req_over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            req_root(REQ_CAP),
+            Some(peer_a()),
+        );
+        assert_too_many_roots(
+            req_over,
+            "TooManyDistinctSigningRoots (kind-9 cap hit on its own budget)",
         );
     }
 
@@ -4370,7 +4602,7 @@ mod tests {
         // validly accepted future-slot write cannot evict a live slot's dedup state. Two
         // accepted role-8 messages — one for the current slot S and one for S + 2*spe (the
         // earliness bound) — must retain DISTINCT per-slot signer states. Concretely, after the
-        // S + 2*spe message, a NEW distinct-root at S is still accepted (its `seen_preferences`
+        // S + 2*spe message, a NEW distinct-root at S is still accepted (its role-8 root set
         // survived), rather than being reset by a ring-index collision.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
@@ -4441,7 +4673,7 @@ mod tests {
             "Expected root at far slot S + 2*spe to be accepted"
         );
 
-        // 3) A NEW distinct root at slot S must still be accepted: slot S's `seen_preferences`
+        // 3) A NEW distinct root at slot S must still be accepted: slot S's role-8 root set
         //    survived the far-slot write (no ring-index collision reset it).
         let signed_s2 = create_signed_proposer_preferences_message(
             signer_id,
