@@ -1391,13 +1391,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     ///   reach the same proposer.
     /// - Current slot (block-production path): fail fast within
     ///   [`REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT`] so the proposal proceeds with a local payload.
-    /// - Past slot: decline, so the collection future is never constructed and no partial
-    ///   signature is broadcast. This is a steady-state path, not just a restart edge: the
-    ///   Lighthouse builder-preferences service revisits every current-epoch proposer on every
-    ///   slot tick (its published-entry dedup runs after signing) while its request-auth cache
-    ///   prunes elapsed slots each tick, so every elapsed proposal slot re-misses the cache each
-    ///   slot for the rest of its epoch. Declines are expected behavior and are kept out of the
-    ///   failure reporter so they cannot pollute the divergence metric.
+    /// - Past slot: decline, so the collection future is never constructed and no partial signature
+    ///   is broadcast. This is a steady-state path, not just a restart edge: the Lighthouse
+    ///   builder-preferences service revisits every current-epoch proposer on every slot tick (its
+    ///   published-entry dedup runs after signing) while its request-auth cache prunes elapsed
+    ///   slots each tick, so every elapsed proposal slot re-misses the cache each slot for the rest
+    ///   of its epoch. Declines are expected behavior and are kept out of the failure reporter so
+    ///   they cannot pollute the divergence metric.
     fn request_auth_collection_bound(
         &self,
         proposal_slot: Slot,
