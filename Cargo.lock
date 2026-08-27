@@ -1938,7 +1938,9 @@ version = "1.3.1"
 dependencies = [
  "anchor_validator_store",
  "beacon_node_fallback",
+ "bls",
  "builder_store",
+ "builder_types",
  "clap",
  "cli",
  "database",
@@ -1966,12 +1968,15 @@ dependencies = [
  "qbft_manager",
  "reqwest",
  "sensitive_url",
+ "serde",
  "signature_collector",
  "slashing_protection",
  "slot_clock",
  "ssv_types",
  "subnet_service",
  "task_executor",
+ "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tower-http",
  "tracing",
@@ -1979,6 +1984,7 @@ dependencies = [
  "validator_metrics",
  "validator_services",
  "version",
+ "yaml_serde",
  "zeroize",
 ]
 

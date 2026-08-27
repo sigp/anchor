@@ -1,3 +1,4 @@
+mod builder_definitions;
 pub mod config;
 mod key;
 mod metrics;
@@ -21,7 +22,6 @@ use beacon_node_fallback::{
     BeaconNodeFallback, CandidateBeaconNode, beacon_head_monitor::HeadEvent,
     start_fallback_updater_service,
 };
-use builder_store::BuilderStore;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
@@ -144,6 +144,18 @@ impl Client {
             key.e().to_owned().map_err(err)?,
         )
         .map_err(err)?;
+
+        // Load the builder definitions before spawning any service so an invalid file fails
+        // startup immediately rather than after the sync and doppelganger waits below. The
+        // store and the `RequestAuthCache` are required by `BlockServiceBuilder::build()` at
+        // this Lighthouse pin and are shared (via clones) with the builder-preferences
+        // service (#1280), the cache's only `prune()` caller. Lighthouse validates the file
+        // against the beacon-API bounds; the SSV constraints (SIP-94 §5) are enforced in
+        // `builder_definitions`.
+        let configured_builders = builder_definitions::open_and_validate(
+            &config.global_config.data_dir.builder_definitions_dir(),
+        )
+        .map_err(|e| format!("Failed to load builder definitions: {e}"))?;
 
         // Start the processor
         let processor_senders = processor::spawn(config.processor, executor.clone());
@@ -722,16 +734,6 @@ impl Client {
                 .monitor_blocking(config.operator_dg_wait_epochs)
                 .await?;
         }
-
-        // `BlockServiceBuilder::build()` requires both a `BuilderStore` and a `RequestAuthCache`
-        // at the new Lighthouse pin. The builder definitions file starts empty, so both are inert
-        // today: with no builders configured, nothing ever inserts into the cache. #1279 adds
-        // Anchor's config surface on top, and #1280 wires the builder-preferences service, which
-        // will share these instances (via clones here) and is the cache's only `prune()` caller;
-        // enabling builders before that prune caller exists would make the cache insert-only.
-        let configured_builders =
-            BuilderStore::open_or_create(config.global_config.data_dir.builder_definitions_dir())
-                .map_err(|e| format!("Unable to open or create builder definitions: {e:?}"))?;
 
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())

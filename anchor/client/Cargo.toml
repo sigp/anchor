@@ -39,12 +39,14 @@ processor = { workspace = true }
 qbft_manager = { workspace = true }
 reqwest = { workspace = true }
 sensitive_url = { workspace = true }
+serde = { workspace = true }
 signature_collector = { workspace = true }
 slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 subnet_service = { workspace = true }
 task_executor = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
@@ -52,4 +54,10 @@ types = { workspace = true }
 validator_metrics = { workspace = true }
 validator_services = { workspace = true }
 version = { workspace = true }
+yaml_serde = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+bls = { workspace = true }
+builder_types = { workspace = true }
+tempfile = { workspace = true }
