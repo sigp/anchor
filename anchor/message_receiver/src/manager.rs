@@ -80,7 +80,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                 let span = debug_span!("message_receiver", msg=%message_id);
                 let _enter = span.enter();
 
-                let result = receiver.validator.validate(&message.data, &topic_context, Some(propagation_source));
+                let result = receiver.validator.validate(&message.data, &topic_context);
 
                 let mut action = MessageAcceptance::from(&result);
 
