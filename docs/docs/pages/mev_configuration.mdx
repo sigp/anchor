@@ -113,7 +113,7 @@ Each entry supports:
 | `enabled` | Disabled entries never reach the wire, but the file must still validate; see Limits. |
 | `url` | The builder's URL, contacted by your beacon node. At most 2048 bytes. |
 | `auth_data` | Optional `0x`-hex authentication bytes agreed with the builder out of band, at most 4096 bytes. When omitted, it defaults to the UTF-8 bytes of `url`, exactly as written. |
-| `builder_pubkeys` | Optional list of builder BLS public keys allowed to sign this builder's bids. Empty accepts any. |
+| `builder_pubkeys` | Optional list of builder BLS public keys allowed to sign this builder's bids. Empty accepts any. At most 64 keys; see Limits. |
 | `max_execution_payment` | The maximum trusted (off-protocol) payment, in gwei, accepted from this builder. |
 | `min_bid`, `builder_boost_factor` | Optional per-builder overrides of the top-level values. |
 
@@ -130,9 +130,10 @@ starting with the divergent operator's own proposals. The drop surfaces only in 
 logs and reconstruction telemetry. When relying on the URL default, the URLs must match exactly;
 `https://builder.example.com` and `https://builder.example.com/` sign different bytes.
 
-Restrict the file's permissions as you would other node configuration. `auth_data` is not a
-secret (the cluster's signature is the actual authenticator), but builder URLs may embed
-credentials.
+Treat the file as sensitive and restrict its permissions accordingly. A custom `auth_data` value
+may be a shared secret agreed with the builder, so handle it as a credential. Anchor never writes
+auth data to its logs, but builder URLs do appear verbatim in logs, so do not embed credentials
+in the URL itself; authentication material belongs in `auth_data`.
 
 ### Limits
 
@@ -140,4 +141,7 @@ At most **8** entries may be enabled (an SSV protocol cap; the beacon API itself
 Anchor refuses to start above the cap: excess entries can exceed the per-slot signing budget
 other operators enforce on gossip, silently dropping builders in a per-peer, nondeterministic way.
 A zero-length `auth_data` (`"0x"` or an empty string) is also refused at startup, for disabled
-entries too; omit the field instead to use the URL default.
+entries too; omit the field instead to use the URL default. An entry listing more than **64**
+`builder_pubkeys` (a beacon-API bound) is likewise refused, disabled entries included: the file
+would otherwise load, and the builder would then be dropped, with only an error log, from every
+proposal.

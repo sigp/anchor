@@ -1,9 +1,9 @@
 //! SSV-specific validation of `builder_definitions.yml`, run once at startup after
 //! Lighthouse's `BuilderStore` has loaded and validated the same file.
 //!
-//! Lighthouse validates against the beacon-API wire bounds (64 enabled entries, URL
-//! shape and length, duplicate `(url, auth_data)` pairs), but it is SSV-unaware. Two
-//! constraints come from the SSV protocol instead and are enforced here:
+//! Lighthouse validates against most beacon-API wire bounds (64 enabled entries, URL
+//! shape and length, duplicate `(url, auth_data)` pairs), but it is SSV-unaware and its
+//! load validation skips one wire bound. Three constraints are enforced here instead:
 //!
 //! - SIP-94 §5 caps configured builder entries at 8 per validator. Excess entries load fine but
 //!   their request-auth signing roots exceed the gossip root budget peers enforce, so which
@@ -13,6 +13,12 @@
 //!   Lighthouse instead drops such a builder with an error log at every produce. Rejecting it at
 //!   startup keeps a config that go-ssv operators cannot even load from silently half-working on an
 //!   Anchor operator.
+//! - An entry's `builder_pubkeys` list is bounded at 64 (`MAX_BUILDER_PUBKEYS`) on the wire, but
+//!   Lighthouse's load validation never inspects it: an oversized list loads fine and
+//!   `builder_config` then omits the builder with an error log at every produce, exactly the
+//!   silent-drop failure mode above. Not an SSV constraint (go-ssv does not check it at load
+//!   either), just fail-fast for a bound Lighthouse misses; redundant the moment Lighthouse bounds
+//!   it at load, so revisit at the next pin bump.
 //!
 //! `BuilderStore`'s container type is crate-private, so the file is re-read here with a
 //! minimal wrapper over the exported [`BuilderDefinition`] and the same `yaml_serde`
@@ -36,7 +42,9 @@
 use std::{fs::File, path::Path};
 
 use builder_store::{BuilderDefinition, BuilderStore};
+use builder_types::MaxBuilderPubkeys;
 use serde::Deserialize;
+use typenum::Unsigned;
 
 /// SIP-94 §5: "SSV caps configured entries at `8` per validator, a sub-cap of the
 /// beacon-API's `MAX_BUILDER_ENTRIES` (64)."
@@ -94,29 +102,45 @@ pub enum Error {
          default to the URL bytes"
     )]
     ZeroLengthAuthData { index: usize },
+    /// The entry at `index` (file order, zero-based) configures more `builder_pubkeys`
+    /// than the wire's `MAX_BUILDER_PUBKEYS`. Lighthouse accepts the file and would then
+    /// omit the builder, with an error log, from every block-production request.
+    #[error(
+        "builder entry {index} configures {count} builder pubkeys, exceeding the wire cap \
+         of {max}"
+    )]
+    TooManyBuilderPubkeys {
+        index: usize,
+        count: usize,
+        max: usize,
+    },
 }
 
 /// Open (or create) `<dir>/builder_definitions.yml` through Lighthouse's `BuilderStore`,
-/// then enforce the SSV-specific constraints on the same file, returning the store for
+/// then enforce the additional constraints on the same file, returning the store for
 /// block-service wiring.
 ///
 /// The single entry point keeps the ordering structural: Lighthouse's own load
-/// validation always runs first (it also creates the file on first start), so the SSV
+/// validation always runs first (it also creates the file on first start), so this
 /// pass never sees a file Lighthouse has not just vetted.
 pub fn open_and_validate(builder_definitions_dir: &Path) -> Result<BuilderStore, Error> {
     let store = BuilderStore::open_or_create(builder_definitions_dir).map_err(Error::Store)?;
-    validate_ssv_builder_constraints(builder_definitions_dir)?;
+    validate_builder_constraints(builder_definitions_dir)?;
     Ok(store)
 }
 
-/// Enforce the SSV-specific builder-config constraints on `<dir>/builder_definitions.yml`.
+/// Enforce the builder-config constraints Lighthouse's load validation does not cover on
+/// `<dir>/builder_definitions.yml`.
 ///
-/// The zero-length check resolves auth `data` exactly the way `builder_config` and
-/// go-ssv do (explicit bytes, else `BuilderUrl::to_default_auth_data`) and covers ALL
-/// entries, disabled ones included, matching go-ssv, which has no disabled concept and
-/// validates everything. The entry cap counts ENABLED entries only: disabled entries
-/// never reach the wire, and Lighthouse's own 64-entry wire cap also counts enabled only.
-fn validate_ssv_builder_constraints(builder_definitions_dir: &Path) -> Result<(), Error> {
+/// The per-entry checks cover ALL entries, disabled ones included: for auth `data` this
+/// matches go-ssv, which has no disabled concept and validates everything, and the
+/// `builder_pubkeys` bound follows the same shape so a disabled entry cannot become a
+/// deferred failure when later enabled. The zero-length check resolves auth `data`
+/// exactly the way `builder_config` and go-ssv do (explicit bytes, else
+/// `BuilderUrl::to_default_auth_data`). The entry cap counts ENABLED entries only:
+/// disabled entries never reach the wire, and Lighthouse's own 64-entry wire cap also
+/// counts enabled only.
+fn validate_builder_constraints(builder_definitions_dir: &Path) -> Result<(), Error> {
     let path = builder_definitions_dir.join(BUILDER_DEFINITIONS_FILENAME);
     let file = File::open(&path).map_err(Error::UnableToRead)?;
     let config: BuilderDefinitionsFile =
@@ -129,6 +153,15 @@ fn validate_ssv_builder_constraints(builder_definitions_dir: &Path) -> Result<()
         };
         if resolved_auth_data_len == 0 {
             return Err(Error::ZeroLengthAuthData { index });
+        }
+
+        let count = definition.builder_pubkeys.len();
+        if count > MaxBuilderPubkeys::USIZE {
+            return Err(Error::TooManyBuilderPubkeys {
+                index,
+                count,
+                max: MaxBuilderPubkeys::USIZE,
+            });
         }
     }
 
@@ -151,7 +184,7 @@ fn validate_ssv_builder_constraints(builder_definitions_dir: &Path) -> Result<()
 mod tests {
     use std::sync::Arc;
 
-    use bls::Signature;
+    use bls::{PublicKeyBytes, Signature};
     use builder_types::{RequestAuth, RequestAuthData, SignedRequestAuth};
     use parking_lot::Mutex;
     use tempfile::TempDir;
@@ -261,7 +294,7 @@ mod tests {
         );
 
         // Act
-        let result = validate_ssv_builder_constraints(dir.path());
+        let result = validate_builder_constraints(dir.path());
 
         // Assert
         expect_too_many_enabled(result, over_cap);
@@ -280,7 +313,7 @@ mod tests {
         let (dir, _) = store_with(definitions);
 
         // Act
-        let result = validate_ssv_builder_constraints(dir.path());
+        let result = validate_builder_constraints(dir.path());
 
         // Assert
         assert!(
@@ -307,7 +340,7 @@ mod tests {
         ]);
 
         // Act + Assert
-        match validate_ssv_builder_constraints(dir.path()) {
+        match validate_builder_constraints(dir.path()) {
             Err(Error::ZeroLengthAuthData { index }) => {
                 assert_eq!(
                     index, 1,
@@ -326,13 +359,64 @@ mod tests {
         ]);
 
         // Act + Assert
-        match validate_ssv_builder_constraints(dir.path()) {
+        match validate_builder_constraints(dir.path()) {
             Err(Error::ZeroLengthAuthData { index }) => {
                 assert_eq!(index, 1, "the empty-URL default must also be caught");
             }
             other => {
                 panic!("expected ZeroLengthAuthData for the empty-URL default, got: {other:?}")
             }
+        }
+    }
+
+    // ==================== Builder-pubkeys bound tests ====================
+
+    /// A pubkey list of the given length. The bound only counts entries, so identical
+    /// keys are fine.
+    fn test_pubkeys(count: usize) -> Vec<PublicKeyBytes> {
+        vec![PublicKeyBytes::deserialize(&[1u8; 48]).expect("48 bytes is a valid pubkey"); count]
+    }
+
+    /// Exactly the wire cap of `builder_pubkeys` passes; one over fails at startup with
+    /// the entry's file-order index and both counts. The over-cap entry is DISABLED to pin
+    /// that the bound covers all entries (the enabled case follows a fortiori, since the
+    /// per-entry loop does not filter). Without this check the entry loads fine and
+    /// `builder_config` omits the builder, with only an error log, at every produce.
+    #[test]
+    fn builder_pubkeys_over_wire_cap_fail() {
+        // Arrange: an enabled entry at exactly the wire cap.
+        let mut at_cap = definition(true, TEST_URL, None);
+        at_cap.builder_pubkeys = test_pubkeys(MaxBuilderPubkeys::USIZE);
+        let (dir, store) = store_with(vec![at_cap]);
+
+        // Act + Assert: the cap itself passes.
+        let result = validate_builder_constraints(dir.path());
+        assert!(
+            result.is_ok(),
+            "exactly {} builder pubkeys should pass, got: {result:?}",
+            MaxBuilderPubkeys::USIZE
+        );
+
+        // Arrange: a DISABLED second entry one key over the cap. The insert succeeding is
+        // itself part of the pin: Lighthouse's own load validation never inspects
+        // `builder_pubkeys`, which is why this check exists.
+        let mut over_cap = definition(false, "https://disabled.example.com", None);
+        over_cap.builder_pubkeys = test_pubkeys(MaxBuilderPubkeys::USIZE + 1);
+        store
+            .insert(over_cap)
+            .expect("Lighthouse load validation does not bound builder_pubkeys");
+
+        // Act + Assert
+        match validate_builder_constraints(dir.path()) {
+            Err(Error::TooManyBuilderPubkeys { index, count, max }) => {
+                assert_eq!(
+                    index, 1,
+                    "the error should carry the file-order entry index"
+                );
+                assert_eq!(count, MaxBuilderPubkeys::USIZE + 1);
+                assert_eq!(max, MaxBuilderPubkeys::USIZE);
+            }
+            other => panic!("expected TooManyBuilderPubkeys, got: {other:?}"),
         }
     }
 
@@ -350,7 +434,7 @@ mod tests {
         let (dir, store) = store_with(vec![definition(true, &indexed_url(0), None)]);
 
         // Act + Assert: a store-written single-entry file passes.
-        let result = validate_ssv_builder_constraints(dir.path());
+        let result = validate_builder_constraints(dir.path());
         assert!(
             result.is_ok(),
             "a store-written single-entry file should pass, got: {result:?}"
@@ -367,7 +451,7 @@ mod tests {
 
         // Act + Assert: the check now counts exactly the inserted entries, proving it read
         // what the store wrote.
-        expect_too_many_enabled(validate_ssv_builder_constraints(dir.path()), over_cap);
+        expect_too_many_enabled(validate_builder_constraints(dir.path()), over_cap);
     }
 
     // ==================== Auth-data derivation vectors ====================
