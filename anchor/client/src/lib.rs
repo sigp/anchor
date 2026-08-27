@@ -21,6 +21,7 @@ use beacon_node_fallback::{
     BeaconNodeFallback, CandidateBeaconNode, beacon_head_monitor::HeadEvent,
     start_fallback_updater_service,
 };
+use builder_store::BuilderStore;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
@@ -58,12 +59,14 @@ use validator_metrics::set_gauge;
 use validator_services::{
     attestation_service::AttestationServiceBuilder,
     block_service::BlockServiceBuilder,
+    builder_preferences_service::BuilderPreferencesService,
     duties_service,
     duties_service::{DutiesServiceBuilder, SelectionProofConfig},
     latency_service::start_latency_service,
     payload_attestation_service::PayloadAttestationService,
     preparation_service::PreparationServiceBuilder,
     proposer_preferences_service::ProposerPreferencesService,
+    request_auth_cache::RequestAuthCache,
     sync_committee_service::SyncCommitteeService,
 };
 
@@ -721,12 +724,24 @@ impl Client {
                 .await?;
         }
 
+        // `BlockServiceBuilder::build()` requires both a `BuilderStore` and a `RequestAuthCache`
+        // at the new Lighthouse pin. Both types are Arc-backed, so the clones below share one
+        // store and one cache between the block service and the builder-preferences service,
+        // whose per-slot tick is the cache's only `prune()` caller; a second
+        // `RequestAuthCache::default()` here would leave the block service's cache insert-only.
+        let configured_builders =
+            BuilderStore::open_or_create(config.global_config.data_dir.builder_definitions_dir())
+                .map_err(|e| format!("Unable to open or create builder definitions: {e:?}"))?;
+        let request_auth_cache = RequestAuthCache::default();
+
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            .chain_spec(spec.clone());
+            .chain_spec(spec.clone())
+            .configured_builders(configured_builders.clone())
+            .request_auth_cache(request_auth_cache.clone());
 
         // If we have proposer nodes, add them to the block service builder.
         if proposer_nodes.num_total().await > 0 {
@@ -858,6 +873,21 @@ impl Client {
             )
             .start_update_service()
             .map_err(|e| format!("Unable to start proposer preferences service: {e}"))?;
+
+            // Publishes signed builder preferences ahead of time for known proposal duties
+            // (current and next epoch) and prunes the shared request-auth cache each slot.
+            BuilderPreferencesService::new(
+                duties_service.clone(),
+                validator_store.clone(),
+                slot_clock.clone(),
+                beacon_nodes.clone(),
+                configured_builders,
+                request_auth_cache,
+                executor.clone(),
+                spec.clone(),
+            )
+            .start_update_service()
+            .map_err(|e| format!("Unable to start builder preferences service: {e}"))?;
         }
 
         http_api_shared_state.write().database_state = Some(database.watch());

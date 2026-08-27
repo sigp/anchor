@@ -89,6 +89,13 @@ impl DataDir {
     pub fn default_logs_dir(&self) -> PathBuf {
         self.path.join("logs")
     }
+
+    /// Directory holding `builder_definitions.yml`, created on first use by Lighthouse's
+    /// `BuilderStore`. The datadir root, mirroring Lighthouse's placement of the file directly
+    /// in its validators dir.
+    pub fn builder_definitions_dir(&self) -> PathBuf {
+        self.path.clone()
+    }
 }
 
 impl Display for DataDir {
