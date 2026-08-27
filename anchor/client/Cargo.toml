@@ -12,6 +12,7 @@ path = "src/lib.rs"
 anchor_validator_store = { workspace = true }
 beacon_node_fallback = { workspace = true }
 builder_store = { workspace = true }
+builder_types = { workspace = true }
 clap = { workspace = true }
 cli = { workspace = true }
 database = { workspace = true }
@@ -50,6 +51,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }
 validator_metrics = { workspace = true }
 validator_services = { workspace = true }
@@ -59,5 +61,4 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 bls = { workspace = true }
-builder_types = { workspace = true }
 tempfile = { workspace = true }

@@ -1980,6 +1980,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
+ "typenum",
  "types",
  "validator_metrics",
  "validator_services",

@@ -150,7 +150,8 @@ impl Client {
         // store and the `RequestAuthCache` are required by `BlockServiceBuilder::build()` at
         // this Lighthouse pin and are shared (via clones) with the builder-preferences
         // service (#1280), the cache's only `prune()` caller. Lighthouse validates the file
-        // against the beacon-API bounds; the SSV constraints (SIP-94 §5) are enforced in
+        // against most beacon-API bounds; the SSV constraints (SIP-94 §5) and the
+        // `builder_pubkeys` bound its load validation misses are enforced in
         // `builder_definitions`.
         let configured_builders = builder_definitions::open_and_validate(
             &config.global_config.data_dir.builder_definitions_dir(),
