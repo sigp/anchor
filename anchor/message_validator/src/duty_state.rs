@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use libp2p::PeerId;
 use ssv_types::{
     CommitteeId, Epoch, OperatorId, Slot,
     consensus::{QbftMessage, QbftMessageType},
@@ -96,7 +95,6 @@ impl DutyState {
         &mut self,
         partial_signature_messages: &PartialSignatureMessages,
         signer: &OperatorId,
-        received_from: Option<PeerId>,
     ) -> Result<(), ValidationFailure> {
         let operator_state = self.get_or_create_operator(signer);
         let message_slot = partial_signature_messages.slot;
@@ -130,7 +128,7 @@ impl DutyState {
             // recipient's gossip duplicate cache expires, so repetition does not prove peer
             // fault. Membership is checked before capacity so a recorded root stays IGNORE
             // even when the set is full.
-            if seen_roots.contains_key(&root) {
+            if seen_roots.contains(&root) {
                 return Err(ValidationFailure::RelayedDuplicateMessage {
                     got: format!("{kind:?} root {root:?}"),
                 });
@@ -140,7 +138,7 @@ impl DutyState {
                     got: format!("{kind:?} distinct roots exceed cap {cap}"),
                 });
             }
-            seen_roots.insert(root, received_from);
+            seen_roots.insert(root);
         }
 
         // Record the partial signature (only once)
@@ -288,19 +286,17 @@ pub(crate) struct SignerState {
     /// first such packet: every role's ring entries share this struct, but only
     /// `Role::ProposerPreferences` messages can ever populate it
     /// (`partial_signature_type_matches_role`), so the other roles pay one pointer instead of
-    /// two inline maps.
+    /// two inline sets.
     root_budgets: Option<Box<SigningRootBudgets>>,
 }
 
-/// Per-kind distinct-signing-root sets for the root-budgeted partial-signature kinds, each
-/// accepted root mapped to its first deliverer (`None` = locally injected). The verdict for a
-/// repeat is peer-agnostic Ignore (SIP-94 §7); the stored deliverer no longer affects
-/// classification and is retained only because issue #1254 scopes the peer plumbing as
-/// unchanged. The kinds are budgeted independently per SIP-94 §7: neither consumes the other.
+/// Per-kind distinct-signing-root sets for the root-budgeted partial-signature kinds. The
+/// verdict for a repeat is peer-agnostic Ignore (SIP-94 §7), so membership is all that is
+/// tracked. The kinds are budgeted independently per SIP-94 §7: neither consumes the other.
 #[derive(Debug, Clone, Default)]
 struct SigningRootBudgets {
-    preferences: HashMap<Hash256, Option<PeerId>>,
-    request_auth: HashMap<Hash256, Option<PeerId>>,
+    preferences: HashSet<Hash256>,
+    request_auth: HashSet<Hash256>,
 }
 
 impl SignerState {
@@ -322,7 +318,7 @@ impl SignerState {
     fn root_budget(
         &mut self,
         kind: PartialSignatureKind,
-    ) -> Option<(&mut HashMap<Hash256, Option<PeerId>>, usize)> {
+    ) -> Option<(&mut HashSet<Hash256>, usize)> {
         match kind {
             PartialSignatureKind::ProposerPreferences => Some((
                 &mut self.root_budgets.get_or_insert_default().preferences,

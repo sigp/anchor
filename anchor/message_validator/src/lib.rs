@@ -14,7 +14,6 @@ use database::NetworkState;
 pub use duties_tracker::DutiesProvider;
 use duties_tracker::DutyAssignment;
 use fork::{Fork, ForkSchedule};
-use libp2p::PeerId;
 pub use libp2p::gossipsub::MessageAcceptance;
 use openssl::{
     hash::MessageDigest,
@@ -467,20 +466,11 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
     /// The `topic_context` provides information about which topic the message was
     /// received on, enabling validation of whether the message is on the correct
     /// subnet for its committee based on the topic's fork.
-    pub fn validate(
-        &self,
-        message_data: &[u8],
-        topic_context: &TopicContext,
-        received_from: Option<PeerId>,
-    ) -> ValidationResult {
+    pub fn validate(&self, message_data: &[u8], topic_context: &TopicContext) -> ValidationResult {
         match SignedSSVMessage::from_ssz_bytes(message_data) {
             Ok(signed_ssv_message) => {
                 trace!(msg = ?signed_ssv_message, "SignedSSVMessage deserialized");
-                match self.validate_decoded_message(
-                    &signed_ssv_message,
-                    topic_context,
-                    received_from,
-                ) {
+                match self.validate_decoded_message(&signed_ssv_message, topic_context) {
                     Ok(validated_message) => ValidationResult::Success(validated_message),
                     Err(failure) => {
                         ValidationResult::PostDecodeFailure(failure, signed_ssv_message)
@@ -497,7 +487,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
         &self,
         signed_ssv_message: &SignedSSVMessage,
         topic_context: &TopicContext,
-        received_from: Option<PeerId>,
     ) -> Result<ValidatedMessage, ValidationFailure> {
         let role = validate_structure_and_role(signed_ssv_message)?;
         let ssv_message = signed_ssv_message.ssv_message();
@@ -572,7 +561,6 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             validation_context,
             duty_state.value_mut(),
             self.duties_provider.clone(),
-            received_from,
         )
         .map(|validated| ValidatedMessage::new(signed_ssv_message.clone(), validated))
     }
@@ -785,7 +773,6 @@ fn validate_ssv_message(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
-    received_from: Option<PeerId>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
@@ -793,12 +780,9 @@ fn validate_ssv_message(
         MsgType::SSVConsensusMsgType => {
             validate_consensus_message(validation_context, duty_state, duty_provider)
         }
-        MsgType::SSVPartialSignatureMsgType => validate_partial_signature_message(
-            validation_context,
-            duty_state,
-            duty_provider,
-            received_from,
-        ),
+        MsgType::SSVPartialSignatureMsgType => {
+            validate_partial_signature_message(validation_context, duty_state, duty_provider)
+        }
     }
 }
 
