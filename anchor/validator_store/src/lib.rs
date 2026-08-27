@@ -14,6 +14,7 @@ use std::{
 };
 
 use bls::{AggregateSignature, PublicKeyBytes, SecretKey, Signature};
+use builder_types::{RequestAuth, SignedRequestAuth};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use eth2::types::{BlockContents, BlockContentsTuple, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
@@ -122,6 +123,29 @@ const SYNC_COMMITTEE_CONTRIBUTION_LOG_NAME: &str = "sync committee contribution"
 /// Upper bound, in slots, on how long `sign_proposer_preferences` waits for a validator's signature
 /// to be reconstructed.
 const PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS: u32 = 2;
+
+/// Upper bound, in slots, on how long `sign_request_auth_v1` waits when the proposal slot is in
+/// the future. Matches [`PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS`] and its rationale: the
+/// Lighthouse builder-preferences service awaits each proposer sequentially in a per-slot loop,
+/// so an unbounded no-quorum wait would head-of-line-block every later proposer.
+const REQUEST_AUTH_COLLECTION_TIMEOUT_SLOTS: u32 = 2;
+
+/// Upper bound on how long `sign_request_auth_v1` waits when the proposal slot is the current
+/// slot. This is the block-production path: Lighthouse resolves the whole builder config before
+/// requesting a block, so waiting longer costs the proposal itself, while failing fast merely
+/// omits the unsignable builder and lets the proposal proceed with a local payload. Quorum here
+/// is also unlikely on a cold cache: peers broadcast their partial signatures once, at
+/// duty-discovery time, and their request-auth cache suppresses re-signing.
+const REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Whether and how to bound a request-auth signature collection; see
+/// `request_auth_collection_bound` for the slot-aware policy.
+enum RequestAuthCollectionBound {
+    /// Run the collection, capped at the given duration.
+    Bounded(Duration),
+    /// The proposal slot has already passed: do not start a collection at all.
+    DeclinePastSlot,
+}
 
 /// A request to collect a committee signature for a single validator.
 ///
@@ -1355,6 +1379,87 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     proposal_slot = %preferences.proposal_slot,
                     ?error,
                     "Failed to sign ProposerPreferences"
+                );
+            }
+        }
+    }
+
+    /// Slot-aware bound for a request-auth signature collection.
+    ///
+    /// - Future proposal slot (cache-warming via the builder-preferences service): allow
+    ///   [`REQUEST_AUTH_COLLECTION_TIMEOUT_SLOTS`] for peers to sign as their own per-slot loops
+    ///   reach the same proposer.
+    /// - Current slot (block-production path): fail fast within
+    ///   [`REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT`] so the proposal proceeds with a local payload.
+    /// - Past slot: decline, so the collection future is never constructed and no partial signature
+    ///   is broadcast. This is a steady-state path, not just a restart edge: the Lighthouse
+    ///   builder-preferences service revisits every current-epoch proposer on every slot tick (its
+    ///   published-entry dedup runs after signing) while its request-auth cache prunes elapsed
+    ///   slots each tick, so every elapsed proposal slot re-misses the cache each slot for the rest
+    ///   of its epoch. Declines are expected behavior and are kept out of the failure reporter so
+    ///   they cannot pollute the divergence metric.
+    fn request_auth_collection_bound(
+        &self,
+        proposal_slot: Slot,
+    ) -> Result<RequestAuthCollectionBound, Error> {
+        let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+        Ok(if proposal_slot > current_slot {
+            RequestAuthCollectionBound::Bounded(
+                self.spec.get_slot_duration() * REQUEST_AUTH_COLLECTION_TIMEOUT_SLOTS,
+            )
+        } else if proposal_slot == current_slot {
+            RequestAuthCollectionBound::Bounded(REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT)
+        } else {
+            RequestAuthCollectionBound::DeclinePastSlot
+        })
+    }
+
+    /// Classify and report a RequestAuth signature-collection failure.
+    ///
+    /// `request_auth.data` is opaque builder authentication material agreed out of band; it is
+    /// logged only by length, never raw.
+    fn report_request_auth_collection_failure(
+        &self,
+        error: &Error,
+        validator_pubkey: &PublicKeyBytes,
+        request_auth: &RequestAuth,
+        signing_root: Hash256,
+    ) {
+        match instrumentation::classify_collection_failure(error) {
+            CollectionFailureClass::NoSignature => {
+                warn!(
+                    ?validator_pubkey,
+                    proposal_slot = %request_auth.slot,
+                    auth_data_len = request_auth.data.len(),
+                    ?signing_root,
+                    ?error,
+                    "Insufficient partial signatures to reconstruct SignedRequestAuth; possible \
+                     causes: too few operators reached the threshold, partial-signature delivery \
+                     loss, or operators diverged on the builder auth data"
+                );
+                metrics::inc_counter_vec(
+                    &metrics::REQUEST_AUTH_RECONSTRUCTION_FAILURES,
+                    &[metrics::REQUEST_AUTH_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES],
+                );
+            }
+            CollectionFailureClass::Infra => {
+                error!(
+                    ?validator_pubkey,
+                    proposal_slot = %request_auth.slot,
+                    ?error,
+                    "RequestAuth signature collection infrastructure failure"
+                );
+                metrics::inc_counter_vec(
+                    &metrics::REQUEST_AUTH_RECONSTRUCTION_FAILURES,
+                    &[metrics::REQUEST_AUTH_FAILURE_INFRA],
+                );
+            }
+            CollectionFailureClass::NonCollection => {
+                error!(
+                    ?validator_pubkey,
+                    proposal_slot = %request_auth.slot,
+                    ?error,
+                    "Failed to sign RequestAuth"
                 );
             }
         }
@@ -4080,6 +4185,26 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
     ) -> Result<SignedProposerPreferences, Error> {
         let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
+        // Decline elapsed proposal slots, mirroring the request-auth decline below: after a
+        // restart the Lighthouse proposer-preferences service re-signs every unpublished
+        // current-epoch duty, including slots that have already passed (its
+        // `preferences_to_publish` filters on the published set only, which a restart empties).
+        // Quorum for those is unreachable (peers broadcast once and will not re-sign), so
+        // waiting the bounded window per elapsed duty head-of-line-blocks the sequential loop
+        // and each failure would pollute the divergence metric. Same outcome as a timeout for
+        // the caller, minus the wait, the broadcast, and the reporter.
+        let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
+        if preferences.proposal_slot < current_slot {
+            debug!(
+                validator_index = preferences.validator_index,
+                proposal_slot = %preferences.proposal_slot,
+                "Declining proposer preferences signing for an elapsed proposal slot"
+            );
+            return Err(Error::SpecificError(
+                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout),
+            ));
+        }
+
         let epoch = preferences.proposal_slot.epoch(E::slots_per_epoch());
         let domain = self.get_domain(epoch, Domain::ProposerPreferences);
         let signing_root = preferences.signing_root(domain);
@@ -4128,6 +4253,78 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 
         Ok(SignedProposerPreferences {
             message: preferences,
+            signature,
+        })
+    }
+
+    async fn sign_request_auth_v1(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        request_auth_v1: RequestAuth,
+    ) -> Result<SignedRequestAuth, Error> {
+        let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
+
+        // Fixed application domain (builder-specs #165): genesis fork version, zeroed
+        // genesis_validators_root. Unlike `Domain::ProposerPreferences` it never varies across
+        // fork boundaries, so there is no epoch-keyed `get_domain` call here.
+        let domain_hash = self.spec.get_request_auth_domain();
+        let signing_root = request_auth_v1.signing_root(domain_hash);
+
+        // Envelope slot = the proposal slot the auth is for, as for ProposerPreferences: it
+        // becomes `PartialSignatureMessages.slot` on the wire, peers validate proposer assignment
+        // against it, and it keys the collector's lifetime. The slot is also tree-hashed into
+        // `signing_root` (as it is for ProposerPreferences), so a given root always carries the
+        // same slot.
+        let proposal_slot = request_auth_v1.slot;
+
+        let bound = match self.request_auth_collection_bound(proposal_slot)? {
+            RequestAuthCollectionBound::Bounded(bound) => bound,
+            RequestAuthCollectionBound::DeclinePastSlot => {
+                debug!(
+                    ?validator_pubkey,
+                    proposal_slot = %request_auth_v1.slot,
+                    "Declining request auth signing for an elapsed proposal slot"
+                );
+                return Err(Error::SpecificError(
+                    SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout),
+                ));
+            }
+        };
+
+        let collected = Self::collect_within(
+            bound,
+            self.collect_signature(
+                PartialSignatureKind::RequestAuth,
+                Role::ProposerPreferences,
+                CollectionMode::SingleValidator,
+                &validator,
+                &cluster,
+                signing_root,
+                proposal_slot,
+            ),
+        )
+        .await;
+
+        let signature = match collected {
+            Ok(signature) => signature,
+            Err(err) => {
+                self.report_request_auth_collection_failure(
+                    &err,
+                    &validator_pubkey,
+                    &request_auth_v1,
+                    signing_root,
+                );
+                return Err(err);
+            }
+        };
+
+        validator_metrics::inc_counter_vec(
+            &metrics::SIGNED_REQUEST_AUTH_TOTAL,
+            &[validator_metrics::SUCCESS],
+        );
+
+        Ok(SignedRequestAuth {
+            message: request_auth_v1,
             signature,
         })
     }
@@ -4713,8 +4910,8 @@ mod tests {
         }
     }
 
-    /// Anchors that `get_attestation_due` flips from `unaggregated_attestation_due`
-    /// to `unaggregated_attestation_due_gloas` at the Gloas activation boundary.
+    /// Anchors that `get_attestation_due` flips from the pre-Gloas attestation deadline to the
+    /// shorter Gloas one at the Gloas activation boundary.
     /// A LH bump that changes the fork-gating logic will surface here.
     #[test]
     fn attestation_due_switches_at_gloas_boundary() {
@@ -4730,8 +4927,19 @@ mod tests {
         let post = spec.get_attestation_due::<MainnetEthSpec>(first_gloas_slot);
 
         assert_ne!(pre, post);
-        assert_eq!(pre, spec.unaggregated_attestation_due);
-        assert_eq!(post, spec.unaggregated_attestation_due_gloas);
+        // Recompute each era's expected deadline from the public basis-point inputs (the derived
+        // duration fields are private): each value is its bps share of the slot duration, which
+        // pins the polarity of the flip, not just that a flip happened.
+        assert_eq!(
+            pre,
+            spec.compute_slot_component_duration(spec.attestation_due_bps)
+                .unwrap()
+        );
+        assert_eq!(
+            post,
+            spec.compute_slot_component_duration(spec.attestation_due_bps_gloas)
+                .unwrap()
+        );
     }
 
     // ==================== SlotVote accessor tests ====================

@@ -16,7 +16,7 @@
 //! (see `signature_collector::SignatureCollectorManager::create_message`), and that verbatim copy
 //! is covered by signature_collector's own tests; asserting `metadata.slot` therefore pins the
 //! input to that copy.
-use std::sync::LazyLock;
+use std::{sync::LazyLock, task::Poll};
 
 use signature_collector::{CollectionError, SignatureRequester};
 use ssv_types::{OperatorId, msgid::Role, partial_sig::PartialSignatureKind};
@@ -38,7 +38,7 @@ const TEST_GAS_LIMIT: u64 = 30_000_000;
 /// the envelope-slot test can rule out both alternatives.
 const LOOKAHEAD_EPOCHS: u64 = 2;
 
-/// Serializes the two metric tests against each other. Both read the same labels of the global
+/// Serializes the metric tests against each other. They read the same labels of the global
 /// prometheus `PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES` counter, so concurrent execution
 /// would make their cross-label delta assertions racy. A tokio mutex rather than std because the
 /// guard is held across awaits on a multi-thread runtime.
@@ -526,6 +526,94 @@ async fn proposer_preferences_no_quorum_hits_bounded_timeout() {
         captured.len(),
         1,
         "exactly one sign_and_collect call should have been captured before the collector hung"
+    );
+}
+
+/// An elapsed proposal slot is declined before any collection work: the call resolves on its very
+/// first poll (there is no await ahead of the decline) with the same `CollectionTimeout` error
+/// shape a timeout produces, the collector is never invoked (zero captured calls, so no partial
+/// signature is broadcast), and neither reconstruction-failure label moves (declines bypass
+/// `report_proposer_preferences_collection_failure`).
+///
+/// Why declining matters: after a restart, the Lighthouse proposer-preferences service re-signs
+/// every unpublished current-epoch duty including elapsed slots (its `preferences_to_publish`
+/// filters on the published set only, which a restart empties). Quorum for an elapsed slot is
+/// unreachable, so without the decline each such duty would burn the full
+/// `PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS` bound sequentially in LH's per-validator loop
+/// and pollute the divergence metric with structural noise. Only strictly earlier slots decline;
+/// an equal-to-current slot still collects, which this module's TEST_SLOT-based tests exercise.
+///
+/// Joins `METRIC_TEST_LOCK` because the zero-delta assertions read the same global labels the
+/// other metric tests assert deltas on.
+#[tokio::test(flavor = "multi_thread")]
+async fn proposer_preferences_elapsed_slot_declines_without_collection() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+
+    // Arrange. The hanging collector is a tripwire, not a timing device: if the decline
+    // regressed, the first poll would start a collection and come back Pending, tripping the
+    // first-poll panic below instead of quietly succeeding against the mock.
+    let our_operator_id = OperatorId(1);
+    let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+    let pubkey = committee.validators[0].public_key;
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        our_operator_id,
+        HarnessOptions {
+            collector_hangs: true,
+            disable_slashing_protection: true,
+            ..Default::default()
+        },
+    );
+    // Strictly before the clock's current slot (the harness clock sits inside TEST_SLOT = 1, so
+    // this does not underflow). Equal slots are NOT declined; only strictly earlier ones.
+    let elapsed_slot = Slot::new(TEST_SLOT - 1);
+    let preferences = create_proposer_preferences(STARTING_VALIDATOR_INDEX as u64, elapsed_slot);
+
+    let metric = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
+        .as_ref()
+        .expect("metric should be created");
+    let insufficient_counter = metric.with_label_values(&[
+        crate::metrics::PROPOSER_PREFERENCES_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
+    ]);
+    let infra_counter =
+        metric.with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_INFRA]);
+    let insufficient_before = insufficient_counter.get();
+    let infra_before = infra_counter.get();
+
+    // Act: poll by hand to pin that the decline resolves without any await.
+    let fut = harness
+        .validator_store
+        .sign_proposer_preferences(pubkey, preferences);
+    tokio::pin!(fut);
+    let Poll::Ready(result) = futures::poll!(fut.as_mut()) else {
+        panic!("an elapsed-slot decline must fail on the first poll");
+    };
+
+    // Assert
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(
+                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout)
+            ))
+        ),
+        "an elapsed proposal slot must decline with the CollectionTimeout error shape, got: \
+         {result:?}"
+    );
+    assert!(
+        harness.captured_calls.lock().is_empty(),
+        "an elapsed-slot decline must never reach the collector (no partial signature broadcast)"
+    );
+    assert_eq!(
+        insufficient_counter.get() - insufficient_before,
+        0,
+        "a decline must not increment the insufficient_partial_signatures reconstruction-failure \
+         label"
+    );
+    assert_eq!(
+        infra_counter.get() - infra_before,
+        0,
+        "a decline must not increment the infra reconstruction-failure label"
     );
 }
 

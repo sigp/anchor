@@ -38,6 +38,14 @@ pub static SIGNED_PROPOSER_PREFERENCES_TOTAL: LazyLock<Result<IntCounterVec>> =
         )
     });
 
+pub static SIGNED_REQUEST_AUTH_TOTAL: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {
+    try_create_int_counter_vec(
+        "anchor_signed_request_auth_total",
+        "Total count of RequestAuth signings",
+        &["status"],
+    )
+});
+
 /// The duty's `attester_index` differs from Anchor's stored validator index; indices are
 /// permanent once assigned, so this is never reorg drift.
 pub const IDENTITY_MISMATCH_ATTESTER_INDEX: &str = "attester_index";
@@ -253,6 +261,23 @@ pub static PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCoun
         try_create_int_counter_vec(
             "anchor_proposer_preferences_reconstruction_failures_total",
             "ProposerPreferences signature collection failures by reason",
+            &["reason"],
+        )
+    });
+
+/// The committee never reached the partial-signature threshold for a RequestAuth signing. As for
+/// ProposerPreferences, this single bucket covers every no-quorum cause, including operators
+/// diverging on the builder auth data.
+pub const REQUEST_AUTH_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES: &str =
+    "insufficient_partial_signatures";
+/// Local collection or reconstruction infrastructure fault.
+pub const REQUEST_AUTH_FAILURE_INFRA: &str = "infra";
+
+pub static REQUEST_AUTH_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>> =
+    LazyLock::new(|| {
+        try_create_int_counter_vec(
+            "anchor_request_auth_reconstruction_failures_total",
+            "RequestAuth signature collection failures by reason",
             &["reason"],
         )
     });

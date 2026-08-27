@@ -12,5 +12,6 @@ mod envelope_signing;
 mod payload_attestation;
 mod proposer_delay;
 mod proposer_preferences;
+mod request_auth;
 mod sync_contribution;
 mod sync_selection_proof;
