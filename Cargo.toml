@@ -73,23 +73,26 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse latest from unstable (e58ec88fe)
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "e58ec88fe" }
+# Lighthouse Gloas builder-API stack head, sigp/lighthouse#9807 (44f442479); re-pin to
+# unstable once the #9805-#9807 stack merges
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+builder_store = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+builder_types = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "44f442479d628ee4dcdcbd53db04791ec368057c" }
 
 alloy = { version = "1.2.1", features = [
     "sol-types",
@@ -175,6 +178,10 @@ tree_hash = "0.12.0"
 tree_hash_derive = "0.12.0"
 typenum = "1.18"
 unicode-normalization = "0.1.25"
+# The same YAML parser Lighthouse's `builder_store` uses (its root manifest pins the
+# same version), so client-side revalidation of `builder_definitions.yml` cannot
+# diverge in YAML dialect from what `BuilderStore` loaded.
+yaml_serde = "0.10"
 zeroize = "1.8.1"
 
 [patch.crates-io]

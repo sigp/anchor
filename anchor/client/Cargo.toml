@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 anchor_validator_store = { workspace = true }
 beacon_node_fallback = { workspace = true }
+builder_store = { workspace = true }
+builder_types = { workspace = true }
 clap = { workspace = true }
 cli = { workspace = true }
 database = { workspace = true }
@@ -38,17 +40,25 @@ processor = { workspace = true }
 qbft_manager = { workspace = true }
 reqwest = { workspace = true }
 sensitive_url = { workspace = true }
+serde = { workspace = true }
 signature_collector = { workspace = true }
 slashing_protection = { workspace = true }
 slot_clock = { workspace = true }
 ssv_types = { workspace = true }
 subnet_service = { workspace = true }
 task_executor = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
+typenum = { workspace = true }
 types = { workspace = true }
 validator_metrics = { workspace = true }
 validator_services = { workspace = true }
 version = { workspace = true }
+yaml_serde = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+bls = { workspace = true }
+tempfile = { workspace = true }

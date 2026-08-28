@@ -1,8 +1,10 @@
 # MEV Configuration
 
 MEV needs no flag. Anchor always creates validator registrations, so relays know about your
-validators by default. To use external builders, configure the builder or MEV-Boost connection on
-your beacon node.
+validators by default. Before the Gloas (ePBS) fork, external builders are configured on your
+beacon node (builder or MEV-Boost connection). From Gloas onward, direct builder connections are
+configured on Anchor itself instead; see
+[Direct builder connections](#direct-builder-connections-from-gloas) below.
 
 `--proposer-delay-ms` tunes *when* Anchor asks for a block. Asking later gives builders more time to
 bid, at the cost of leaving less of the slot for everything that follows.
@@ -78,3 +80,76 @@ command line flag in milliseconds, so `ProposerDelay: 300ms` becomes `--proposer
 The ePBS value maps the same way from the SSV node's `ProposerDelayEPBS` key or the
 `PROPOSER_DELAY_EPBS` environment variable: `ProposerDelayEPBS: 300ms` becomes
 `--proposer-delay-epbs-ms 300`. Both clients hard-cap it at one second.
+
+## Direct builder connections (from Gloas)
+
+From the Gloas fork onward, Anchor can request bids from specific builders directly, alongside the
+in-protocol p2p bids and the local build. This is configured per node in
+`<data_dir>/builder_definitions.yml`. Anchor creates the file on first start with an empty
+`builders` list; with no entries the feature is off and block production uses p2p bids and the local build only.
+
+To get started, either start Anchor once and edit the template it creates, then restart; or place
+a populated file in the data directory before first start, which Anchor picks up as-is. The latter
+fits clusters best: every operator must deploy byte-identical entries (see below), so distribute
+one canonical file. There is no flag or API for builder entries; the file is the whole surface.
+
+Edits apply on restart. There is no runtime reload, and the file is validated at every startup:
+an invalid file stops the node with an error identifying the offending entry by its position in
+the file (or the offending count).
+
+```yaml
+min_bid: 0
+builder_boost_factor: 100
+builders:
+  - enabled: true
+    url: "https://builder.example.com"
+    max_execution_payment: 1000000000
+```
+
+Each entry supports:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | Disabled entries never reach the wire, but the file must still validate; see Limits. |
+| `url` | The builder's URL, contacted by your beacon node. At most 2048 bytes. |
+| `auth_data` | Optional `0x`-hex authentication bytes agreed with the builder out of band, at most 4096 bytes. When omitted, it defaults to the UTF-8 bytes of `url`, exactly as written. |
+| `builder_pubkeys` | Optional list of builder BLS public keys allowed to sign this builder's bids. Empty accepts any. At most 64 keys; see Limits. |
+| `max_execution_payment` | The maximum trusted (off-protocol) payment, in gwei, accepted from this builder. |
+| `min_bid`, `builder_boost_factor` | Optional per-builder overrides of the top-level values. |
+
+The top-level `min_bid` and `builder_boost_factor` govern p2p bids and fill in any entry that
+omits its own.
+
+### The configuration must be byte-identical across the cluster
+
+Builder entries are cluster configuration. Every operator of a cluster MUST use byte-identical
+entries, `auth_data` included. Each builder's authentication is threshold-signed by the cluster,
+and the signed bytes include `auth_data`: a one-byte divergence fragments the signing roots, and a
+builder is **silently dropped** wherever fewer than a quorum of operators share its exact bytes,
+starting with the divergent operator's own proposals. The drop surfaces only in signing-failure
+logs and reconstruction telemetry. When relying on the URL default, the URLs must match exactly;
+`https://builder.example.com` and `https://builder.example.com/` sign different bytes.
+
+Treat the file as sensitive and restrict its permissions accordingly. A custom `auth_data` value
+may be a shared secret agreed with the builder, so handle it as a credential. Anchor never writes
+auth data to its logs, but builder URLs do appear verbatim in logs, so do not embed credentials
+in the URL itself; authentication material belongs in `auth_data`.
+
+### Set `auth_data` only when the builder agreed to that exact value
+
+The builder checks the value it receives against the one it agreed with you, and rejects a
+mismatch, dropping itself from that proposal. **Unless you have agreed a value out of band, omit
+the field**: the default is the URL, and builders that agreed nothing expect exactly that. A
+custom value the builder does not recognise fails every proposal, and it fails per builder rather
+than failing the file, so nothing is refused at startup.
+
+### Limits
+
+At most **8** entries may be enabled (an SSV protocol cap; the beacon API itself allows 64).
+Anchor refuses to start above the cap: excess entries can exceed the per-slot signing budget
+other operators enforce on gossip, silently dropping builders in a per-peer, nondeterministic way.
+A zero-length `auth_data` (`"0x"` or an empty string) is also refused at startup, for disabled
+entries too; omit the field instead to use the URL default. An entry listing more than **64**
+`builder_pubkeys` (a beacon-API bound) is likewise refused, disabled entries included: the file
+would otherwise load, and the builder would then be dropped, with only an error log, from every
+proposal.

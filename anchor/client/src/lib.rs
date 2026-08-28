@@ -1,3 +1,4 @@
+mod builder_definitions;
 pub mod config;
 mod key;
 mod metrics;
@@ -64,6 +65,7 @@ use validator_services::{
     payload_attestation_service::PayloadAttestationService,
     preparation_service::PreparationServiceBuilder,
     proposer_preferences_service::ProposerPreferencesService,
+    request_auth_cache::RequestAuthCache,
     sync_committee_service::SyncCommitteeService,
 };
 
@@ -142,6 +144,19 @@ impl Client {
             key.e().to_owned().map_err(err)?,
         )
         .map_err(err)?;
+
+        // Load the builder definitions before spawning any service so an invalid file fails
+        // startup immediately rather than after the sync and doppelganger waits below. The
+        // store and the `RequestAuthCache` are required by `BlockServiceBuilder::build()` at
+        // this Lighthouse pin and are shared (via clones) with the builder-preferences
+        // service (#1280), the cache's only `prune()` caller. Lighthouse validates the file
+        // against most beacon-API bounds; the SSV constraints (SIP-94 §5) and the
+        // `builder_pubkeys` bound its load validation misses are enforced in
+        // `builder_definitions`.
+        let configured_builders = builder_definitions::open_and_validate(
+            &config.global_config.data_dir.builder_definitions_dir(),
+        )
+        .map_err(|e| format!("Failed to load builder definitions: {e}"))?;
 
         // Start the processor
         let processor_senders = processor::spawn(config.processor, executor.clone());
@@ -726,7 +741,9 @@ impl Client {
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            .chain_spec(spec.clone());
+            .chain_spec(spec.clone())
+            .configured_builders(configured_builders)
+            .request_auth_cache(RequestAuthCache::default());
 
         // If we have proposer nodes, add them to the block service builder.
         if proposer_nodes.num_total().await > 0 {
