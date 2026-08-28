@@ -135,6 +135,14 @@ may be a shared secret agreed with the builder, so handle it as a credential. An
 auth data to its logs, but builder URLs do appear verbatim in logs, so do not embed credentials
 in the URL itself; authentication material belongs in `auth_data`.
 
+### Set `auth_data` only when the builder agreed to that exact value
+
+The builder checks the value it receives against the one it agreed with you, and rejects a
+mismatch, dropping itself from that proposal. **Unless you have agreed a value out of band, omit
+the field**: the default is the URL, and builders that agreed nothing expect exactly that. A
+custom value the builder does not recognise fails every proposal, and it fails per builder rather
+than failing the file, so nothing is refused at startup.
+
 ### Limits
 
 At most **8** entries may be enabled (an SSV protocol cap; the beacon API itself allows 64).
