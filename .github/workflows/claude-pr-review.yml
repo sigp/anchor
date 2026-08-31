@@ -121,7 +121,7 @@ jobs:
               timeout-minutes: 25
               env:
                   ACTIONS_STEP_DEBUG: true
-              uses: anthropics/claude-code-action@v1.0.127
+              uses: anthropics/claude-code-action@v1.0.210
               with:
                   github_token: ${{ steps.app-token.outputs.token }}
                   use_bedrock: "true"
