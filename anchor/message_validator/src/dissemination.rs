@@ -13,18 +13,21 @@ use crate::{
 
 /// Validates an envelope dissemination message (SIP-94 §6/§7).
 ///
-/// The class is structural-only at this layer: the checks binding the disseminated envelope
-/// to the block-QBFT decision are runner concerns, and validation never judges the envelope's
-/// content. Dedup is first-valid per (`MessageId`, slot): the first message passing all other
-/// rules is recorded, and further dissemination messages for the tuple are Ignore regardless
-/// of content or peer (an honest origin retry can repeat one after the recipient's gossip
-/// duplicate cache expires, so repetition does not prove peer fault).
+/// The class is structural-only at this layer: the inner envelope must SSZ-decode as a
+/// blinded execution payload envelope (shape, Reject-class), but the checks binding it to
+/// the block-QBFT decision are runner concerns, and validation never judges the envelope's
+/// content against the decision. Dedup is first-valid per (`MessageId`, slot): the first
+/// message passing all other rules is recorded, and further dissemination messages for the
+/// tuple are Ignore regardless of content or peer (an honest origin retry can repeat one
+/// after the recipient's gossip duplicate cache expires, so repetition does not prove peer
+/// fault).
 ///
 /// First-valid means first STRUCTURALLY valid, by design: SIP-94 accepts that a Byzantine
 /// committee member can consume a slot's dissemination budget with a decision-unbound or
-/// payload-unbound carrier, costing at most one missed self-build reveal (never a wrong
-/// payload on chain). Do not move semantic rejection into a replacement-capable store; the
-/// named hardening for that trade is sign-all, a protocol change.
+/// payload-unbound (but well-formed) carrier, costing at most one missed self-build reveal
+/// (never a wrong payload on chain). Do not move semantic rejection into a
+/// replacement-capable store; the named hardening for that trade is sign-all, a protocol
+/// change.
 pub(crate) fn validate_envelope_dissemination(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
@@ -42,6 +45,17 @@ pub(crate) fn validate_envelope_dissemination(
     )
     .map_err(ValidationFailure::UndecodableMessageData)?;
     let slot = dissemination.slot;
+
+    // Rule: the inner envelope bytes must decode as a blinded execution payload envelope
+    // (SIP-94 §7, Reject-class). Shape only; the decoded value is not compared to anything.
+    // Undecodable bytes must not reach the first-valid record below, where they would consume
+    // the slot's single dissemination budget and starve the honest dissemination. The Gloas
+    // envelope's SSZ shape is `EthSpec`-independent (its request lists are progressive, with
+    // no preset-derived bounds), so decoding under `MainnetEthSpec` accepts and rejects
+    // exactly the same byte strings for every preset.
+    dissemination
+        .blinded_envelope::<types::MainnetEthSpec>()
+        .map_err(ValidationFailure::UndecodableDisseminationEnvelope)?;
 
     validate_role_for_fork(slot, &validation_context)?;
 
@@ -138,6 +152,21 @@ mod tests {
     /// Message slot used by most tests; the clock genesis sits one slot before it.
     const TEST_SLOT: u64 = 1;
 
+    /// SSZ bytes of a minimal but well-formed blinded envelope: the inner-decode rule
+    /// admits shape, not content, so defaults suffice.
+    fn test_blinded_envelope_bytes() -> Vec<u8> {
+        use ssv_types::consensus::BlindedExecutionPayloadEnvelope;
+        use types::{ExecutionRequestsGloas, Hash256, MainnetEthSpec};
+        BlindedExecutionPayloadEnvelope::<MainnetEthSpec> {
+            payload_root: Hash256::ZERO,
+            execution_requests: ExecutionRequestsGloas::default(),
+            builder_index: 0,
+            beacon_block_root: Hash256::ZERO,
+            parent_beacon_block_root: Hash256::ZERO,
+        }
+        .as_ssz_bytes()
+    }
+
     /// Builds a signed dissemination message for `role`'s message ID at `slot`, signed by
     /// each of `signers` with `private_key`, carrying `full_data`.
     fn create_signed_dissemination_with(
@@ -147,9 +176,29 @@ mod tests {
         slot: Slot,
         full_data: Vec<u8>,
     ) -> SignedSSVMessage {
+        create_signed_dissemination_with_envelope(
+            role,
+            signers,
+            private_key,
+            slot,
+            full_data,
+            test_blinded_envelope_bytes(),
+        )
+    }
+
+    /// As `create_signed_dissemination_with`, but carrying `envelope_bytes` verbatim as the
+    /// inner envelope field.
+    fn create_signed_dissemination_with_envelope(
+        role: Role,
+        signers: Vec<OperatorId>,
+        private_key: &Rsa<Private>,
+        slot: Slot,
+        full_data: Vec<u8>,
+        envelope_bytes: Vec<u8>,
+    ) -> SignedSSVMessage {
         let dissemination = EnvelopeDissemination {
             slot,
-            envelope: VariableList::new(vec![0xAA; 64]).unwrap(),
+            envelope: VariableList::new(envelope_bytes).unwrap(),
         };
         let ssv_msg = SSVMessage::new(
             MsgType::SSVEnvelopeDisseminationMsgType,
@@ -552,5 +601,71 @@ mod tests {
             |failure| matches!(failure, ValidationFailure::FullDataNotInConsensusMessage),
             "FullDataNotInConsensusMessage",
         );
+    }
+
+    /// An inner envelope that does not SSZ-decode as a blinded envelope is Reject-class and
+    /// must not consume the slot's first-valid budget (SIP-94 §7 decode rule): the honest
+    /// dissemination arriving later is still accepted.
+    #[test]
+    fn undecodable_inner_envelope_rejected_without_consuming_budget() {
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let mut duty_state = DutyState::new(64);
+
+        let garbage = create_signed_dissemination_with_envelope(
+            Role::EnvelopeProposer,
+            vec![OperatorId(1)],
+            &private_key,
+            Slot::new(TEST_SLOT),
+            vec![],
+            vec![0xAA; 64],
+        );
+        let ctx = create_dissemination_context(
+            &garbage,
+            &committee_info,
+            Role::EnvelopeProposer,
+            &map,
+            1,
+            Some(0),
+        );
+        let result = validate_envelope_dissemination(
+            ctx,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        );
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::UndecodableDisseminationEnvelope(_)
+                )
+            },
+            "UndecodableDisseminationEnvelope (garbage inner bytes)",
+        );
+        assert_eq!(
+            MessageAcceptance::from(&ValidationFailure::UndecodableDisseminationEnvelope(
+                ssz::DecodeError::BytesInvalid("test".into()),
+            )),
+            MessageAcceptance::Reject,
+            "an undecodable inner envelope must be Reject, not Ignore",
+        );
+
+        // The budget was not consumed: a well-formed dissemination for the same slot passes.
+        let honest =
+            create_signed_dissemination(Role::EnvelopeProposer, OperatorId(1), &private_key);
+        let ctx = create_dissemination_context(
+            &honest,
+            &committee_info,
+            Role::EnvelopeProposer,
+            &map,
+            1,
+            Some(0),
+        );
+        validate_envelope_dissemination(
+            ctx,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        )
+        .expect("a well-formed dissemination after a rejected garbage one must be accepted");
     }
 }

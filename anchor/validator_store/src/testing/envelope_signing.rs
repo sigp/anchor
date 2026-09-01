@@ -159,9 +159,11 @@ struct OutcomeCounters {
     published: crate::metrics::IntCounter,
     not_built_locally: crate::metrics::IntCounter,
     failed: crate::metrics::IntCounter,
+    external_build: crate::metrics::IntCounter,
     published_before: u64,
     not_built_locally_before: u64,
     failed_before: u64,
+    external_build_before: u64,
 }
 
 impl OutcomeCounters {
@@ -173,18 +175,32 @@ impl OutcomeCounters {
         let not_built_locally =
             metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY]);
         let failed = metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_FAILED]);
+        let external_build =
+            metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_EXTERNAL_BUILD]);
         Self {
             published_before: published.get(),
             not_built_locally_before: not_built_locally.get(),
             failed_before: failed.get(),
+            external_build_before: external_build.get(),
             published,
             not_built_locally,
             failed,
+            external_build,
         }
     }
 
-    /// Asserts the delta of every outcome label since the snapshot.
+    /// Asserts the delta of every outcome label since the snapshot. `assert_deltas` pins
+    /// the external_build label to zero; external-build tests use `assert_external_build`.
+    fn assert_external_build(&self, external_build: u64) {
+        assert_eq!(
+            self.external_build.get() - self.external_build_before,
+            external_build,
+            "unexpected delta on the external_build outcome label"
+        );
+    }
+
     fn assert_deltas(&self, published: u64, not_built_locally: u64, failed: u64) {
+        self.assert_external_build(0);
         assert_eq!(
             self.published.get() - self.published_before,
             published,
@@ -564,6 +580,38 @@ async fn non_self_build_envelope_is_rejected_before_signing() {
         "a non-self-build envelope must be rejected with the dedicated error, got {result:?}"
     );
     assert_no_outward_action(&harness, "for a non-self-build envelope");
+}
+
+/// A decided context that committed to an external builder's bid short-circuits the duty
+/// before the non-builder path can wait for a dissemination that will never arrive: the
+/// runner returns the dedicated no-op sentinel immediately, with no outward action. The
+/// local BN's envelope is self-build here (the mixed case: this operator produced a
+/// self-build candidate, but consensus decided another operator's external-bid block).
+#[tokio::test(start_paused = true)]
+async fn external_build_decision_short_circuits_before_waiting() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+    let (harness, pubkey) = gloas_harness();
+    let counters = OutcomeCounters::snapshot();
+    let envelope = self_build_envelope(test_decided_root());
+    let mut context = context_for(&envelope, false);
+    context.builder_index = 7;
+    seed_context(&harness, pubkey, context);
+
+    // With a paused clock, a regression back into the dissemination wait would hang the
+    // test rather than pass it: nothing advances time and no dissemination is inserted.
+    let result = sign_envelope(&harness, pubkey, envelope).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(Error::SpecificError(SpecificError::EnvelopeExternalBuild {
+                builder_index: 7
+            }))
+        ),
+        "an external-build decision must return the no-op sentinel, got {result:?}"
+    );
+    assert_no_outward_action(&harness, "for an external-build decision");
+    counters.assert_external_build(1);
 }
 
 /// A future-slot envelope is rejected before any outward action.

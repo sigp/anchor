@@ -253,6 +253,9 @@ pub enum ValidationFailure {
     },
     /// A dissemination message with a signer count other than exactly one. Reject-class.
     DisseminationOneSigner,
+    /// A dissemination message whose inner envelope bytes do not SSZ-decode as a blinded
+    /// execution payload envelope (SIP-94 §7). Reject-class.
+    UndecodableDisseminationEnvelope(DecodeError),
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {

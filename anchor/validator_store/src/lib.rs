@@ -980,7 +980,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let decided_root = decided_block.canonical_root();
             let context = DecidedBlockContext {
                 beacon_block_root: decided_root,
-                parent_block_root: bid.message.parent_block_root,
+                // The block's own parent_root, per SIP-94 §6 (the bid carries an equal copy,
+                // enforced by process_execution_payload_bid, but the block is the source).
+                parent_block_root: decided_block.parent_root(),
                 execution_requests_root: bid.message.execution_requests_root,
                 builder_index: bid.message.builder_index,
                 block_hash: bid.message.block_hash,
@@ -2926,6 +2928,12 @@ pub enum SpecificError {
     EnvelopeNotSelfBuild {
         builder_index: u64,
     },
+    /// The decided block committed to an external builder's bid, so no self-build envelope
+    /// duty exists for the slot: nothing will be disseminated, and the reveal belongs to the
+    /// external builder. This is an intentional no-op, not a failure.
+    EnvelopeExternalBuild {
+        builder_index: u64,
+    },
     /// The builder operator disseminated an envelope this operator did not build. This is an
     /// intentional non-publish, not a failure.
     EnvelopeNotBuiltLocally {
@@ -3964,6 +3972,20 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 metrics::inc_counter_vec(&metrics::ENVELOPE_SIGNING_OUTCOMES, &[outcome]);
                 Span::current().record("outcome", outcome);
             };
+
+            // The decided bid names an external builder: no self-build envelope duty exists
+            // for the slot. Nothing will be disseminated (the reveal belongs to the external
+            // builder), so return before the non-builder path can wait for it (SIP-94 §6).
+            if context.builder_index != BUILDER_INDEX_SELF_BUILD {
+                info!(
+                    builder_index = context.builder_index,
+                    "Decided block used an external builder's bid, skipping the self-build envelope duty (expected)"
+                );
+                record_outcome(metrics::ENVELOPE_OUTCOME_EXTERNAL_BUILD);
+                return Err(Error::SpecificError(SpecificError::EnvelopeExternalBuild {
+                    builder_index: context.builder_index,
+                }));
+            }
 
             // One absolute deadline at the payload-due mark (50% of the slot, SIP-94 §6):
             // past it the envelope cannot satisfy this slot, so neither dissemination nor

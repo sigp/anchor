@@ -261,6 +261,9 @@ pub const ENVELOPE_OUTCOME_PUBLISHED: &str = "published";
 /// A non-builder signed the disseminated envelope and intentionally skipped publication;
 /// never a failure.
 pub const ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY: &str = "not_built_locally";
+/// The decided block committed to an external builder's bid: no self-build envelope duty
+/// exists for the slot, so the operator neither waits nor signs; never a failure.
+pub const ENVELOPE_OUTCOME_EXTERNAL_BUILD: &str = "external_build";
 /// The duty failed: deadline passed, dissemination missing/undecodable/mismatched, the
 /// builder's envelope was inconsistent, broadcast failed, or signature collection failed.
 pub const ENVELOPE_OUTCOME_FAILED: &str = "failed";
