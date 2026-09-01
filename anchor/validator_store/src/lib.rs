@@ -99,13 +99,24 @@ const SLASHING_PROTECTION_HISTORY_EPOCHS: u64 = 512;
 /// Number of slots a decided block root stays readable.
 const MAX_DECIDED_ROOT_AGE_SLOTS: u64 = 4;
 
-/// Key for the decided-block-root handoff store.
+/// Key for the decided-block handoff store.
 ///
 /// The store serves many validators, so the slot alone cannot identify a duty.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-struct DecidedBlockRootKey {
+struct DecidedBlockKey {
     validator: PublicKeyBytes,
     slot: Slot,
+}
+
+/// The block-QBFT decision fields the envelope duty validates a dissemination against
+/// (SIP-94 §6): the decided block root plus the bid commitments recoverable only from
+/// the decided block itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecidedBlockContext {
+    pub beacon_block_root: Hash256,
+    pub parent_block_root: Hash256,
+    pub execution_requests_root: Hash256,
+    pub builder_index: u64,
 }
 
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
@@ -234,8 +245,8 @@ pub struct AnchorValidatorStore<
 > {
     database: Arc<NetworkDatabase>,
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
-    /// Beacon block roots decided by block QBFT, keyed `(validator, slot)`.
-    decided_block_roots: Mutex<HashMap<DecidedBlockRootKey, Hash256>>,
+    /// Block-QBFT decision contexts, keyed `(validator, slot)`.
+    decided_block_contexts: Mutex<HashMap<DecidedBlockKey, DecidedBlockContext>>,
     signature_collector: Box<dyn SignatureCollecting>,
     consensus: Arc<C>,
     slashing_protection: Arc<SlashingDatabase>,
@@ -447,7 +458,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Arc::new(Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
-            decided_block_roots: Mutex::new(HashMap::new()),
+            decided_block_contexts: Mutex::new(HashMap::new()),
             signature_collector,
             consensus,
             slashing_protection,
@@ -905,59 +916,66 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let unsigned_block = decode_decided_block(&completed_data)
             .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))?;
 
-        // Record the decided root for later reads. This point is reached holding the consensus
+        // Record the decided context for later reads. This point is reached holding the consensus
         // decided value and each operator's own local proposal. Every participating
-        // operator records the same root. Post-Gloas only.
+        // operator records the same context. Post-Gloas only.
         if ForkName::from(completed_data.version) >= ForkName::Gloas
             && let UnsignedBlock::Full(FullBlockContents::Block(block)) = &unsigned_block
+            && let Ok(bid) = block.body().signed_execution_payload_bid()
         {
-            self.record_decided_block_root(validator.public_key, slot, block.canonical_root())
+            let context = DecidedBlockContext {
+                beacon_block_root: block.canonical_root(),
+                parent_block_root: bid.message.parent_block_root,
+                execution_requests_root: bid.message.execution_requests_root,
+                builder_index: bid.message.builder_index,
+            };
+            self.record_decided_block_context(validator.public_key, slot, context)
                 .map_err(Error::SpecificError)?;
         }
 
         Ok(unsigned_block)
     }
 
-    /// Record the block-QBFT-decided beacon block root for `(validator_pubkey, slot)`.
+    /// Record the block-QBFT decision context for `(validator_pubkey, slot)`.
     ///
-    /// First-write-wins. A repeat write of the same root is idempotent. A write of a different
-    /// root is a hard error that keeps the first root.
+    /// First-write-wins. A repeat write of the same context is idempotent. A write of a different
+    /// context is a hard error that keeps the first.
     ///
     /// Entries older than `MAX_DECIDED_ROOT_AGE_SLOTS` relative to the inserted slot are dropped
     /// on insert. A write for an old slot cannot evict a newer entry. This eviction mechanism only
-    /// restricts the map from storing old roots.
-    fn record_decided_block_root(
+    /// restricts the map from storing old contexts.
+    fn record_decided_block_context(
         &self,
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
-        root: Hash256,
+        context: DecidedBlockContext,
     ) -> Result<(), SpecificError> {
-        let key = DecidedBlockRootKey {
+        let key = DecidedBlockKey {
             validator: validator_pubkey,
             slot,
         };
 
-        let mut decided_block_roots = self.decided_block_roots.lock();
+        let mut decided_block_contexts = self.decided_block_contexts.lock();
 
         // Addition on the stored side, so an early slot cannot underflow.
-        decided_block_roots
+        decided_block_contexts
             .retain(|stored_key, _| stored_key.slot + MAX_DECIDED_ROOT_AGE_SLOTS >= slot);
 
-        match decided_block_roots.entry(key) {
+        match decided_block_contexts.entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(root);
+                entry.insert(context);
                 Ok(())
             }
             std::collections::hash_map::Entry::Occupied(entry) => {
-                if entry.get() == &root {
+                if entry.get() == &context {
                     Ok(())
                 } else {
                     Err(SpecificError::DecidedRootConflict(Box::new(
                         DecidedRootConflict {
                             validator_pubkey,
                             slot,
-                            existing_root: *entry.get(),
-                            new_root: root,
+                            existing_root: entry.get().beacon_block_root,
+                            new_root: context.beacon_block_root,
                         },
                     )))
                 }
@@ -965,7 +983,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         }
     }
 
-    /// Read the decided beacon block root for `(validator_pubkey, slot)`.
+    /// Read the block-QBFT decision context for `(validator_pubkey, slot)`.
     ///
     /// The current slot comes from `self.slot_clock`, never from the caller, so untrusted input
     /// cannot bypass the staleness check.
@@ -973,12 +991,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// The staleness check runs before the lookup. Eviction alone cannot reject a stale entry:
     /// with no later insert, an old entry stays in the map.
     ///
-    /// Reads are non-destructive and return the root by value.
-    fn get_decided_block_root(
+    /// Reads are non-destructive and return the context by value.
+    fn get_decided_block_context(
         &self,
         validator_pubkey: PublicKeyBytes,
         slot: Slot,
-    ) -> Result<Hash256, Error> {
+    ) -> Result<DecidedBlockContext, Error> {
         let current_slot = self.slot_clock.now().ok_or(SpecificError::SlotClock)?;
 
         if slot + MAX_DECIDED_ROOT_AGE_SLOTS < current_slot {
@@ -989,9 +1007,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             }));
         }
 
-        self.decided_block_roots
+        self.decided_block_contexts
             .lock()
-            .get(&DecidedBlockRootKey {
+            .get(&DecidedBlockKey {
                 validator: validator_pubkey,
                 slot,
             })
@@ -3870,7 +3888,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 return Err(Error::GreaterThanCurrentSlot { slot, current_slot });
             }
 
-            let decided_block_root = self.get_decided_block_root(validator_pubkey, slot)?;
+            let decided_block_root = self
+                .get_decided_block_context(validator_pubkey, slot)?
+                .beacon_block_root;
             let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
 
             let record_outcome = |outcome: &str| {

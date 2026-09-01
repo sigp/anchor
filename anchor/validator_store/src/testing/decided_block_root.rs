@@ -1,6 +1,6 @@
 //! Tests for the decided-block-root handoff store.
 //!
-//! These tests call the private `record_decided_block_root` / `get_decided_block_root` helpers
+//! These tests call the private `record_decided_block_context` / `get_decided_block_context` helpers
 //! directly. The behavior under test is the store's own contract: first-write-wins, read-side
 //! staleness, and slot-bounded eviction.
 use bls::PublicKeyBytes;
@@ -8,7 +8,20 @@ use ssv_types::OperatorId;
 use types::{Hash256, Slot};
 
 use super::common::*;
-use crate::{DecidedBlockRootKey, Error, MAX_DECIDED_ROOT_AGE_SLOTS, SpecificError};
+use crate::{
+    DecidedBlockContext, DecidedBlockKey, Error, MAX_DECIDED_ROOT_AGE_SLOTS, SpecificError,
+};
+
+/// Builds a context whose four fields all derive distinctly from `seed`, so a test that
+/// passes with any field dropped or swapped would fail on equality.
+fn test_context(seed: u8) -> DecidedBlockContext {
+    DecidedBlockContext {
+        beacon_block_root: Hash256::from([seed; 32]),
+        parent_block_root: Hash256::from([seed.wrapping_add(1); 32]),
+        execution_requests_root: Hash256::from([seed.wrapping_add(2); 32]),
+        builder_index: seed as u64,
+    }
+}
 
 /// Distinct from `TEST_SLOT`, so a test cannot pass against a store that ignores the slot.
 const RECORD_SLOT: u64 = 10;
@@ -32,9 +45,9 @@ fn set_clock_to_slot(harness: &ValidatorStoreTestHarness, slot: u64) {
 struct ValidatorStoreTestState {
     harness: ValidatorStoreTestHarness,
     pubkey: PublicKeyBytes,
-    root: Hash256,
-    /// A second, distinct root for conflict and eviction tests.
-    other_root: Hash256,
+    context: DecidedBlockContext,
+    /// A second, distinct context for conflict and eviction tests.
+    other_context: DecidedBlockContext,
 }
 
 impl ValidatorStoreTestState {
@@ -44,8 +57,8 @@ impl ValidatorStoreTestState {
         ValidatorStoreTestState {
             harness,
             pubkey,
-            root: Hash256::from([0xAB; 32]),
-            other_root: Hash256::from([0xCD; 32]),
+            context: test_context(0xAB),
+            other_context: test_context(0xCD),
         }
     }
 }
@@ -59,20 +72,20 @@ async fn record_then_read_returns_the_recorded_root() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
     let read = validator_store_state
         .harness
         .validator_store
-        .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
+        .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
 
     assert_eq!(
         read.expect("a root recorded at the current slot should be readable"),
-        validator_store_state.root,
+        validator_store_state.context,
         "the store must return the exact root that was recorded"
     );
 }
@@ -86,7 +99,7 @@ async fn missing_root_is_unavailable_not_a_default() {
     let read = validator_store_state
         .harness
         .validator_store
-        .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
+        .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
 
     assert!(
         matches!(
@@ -108,17 +121,17 @@ async fn roots_are_isolated_across_validators() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
     let read = validator_store_state
         .harness
         .validator_store
-        .get_decided_block_root(other_validator, Slot::new(RECORD_SLOT));
+        .get_decided_block_context(other_validator, Slot::new(RECORD_SLOT));
 
     assert!(
         matches!(
@@ -139,10 +152,10 @@ async fn roots_are_isolated_across_slots() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
@@ -151,7 +164,7 @@ async fn roots_are_isolated_across_slots() {
     let read = validator_store_state
         .harness
         .validator_store
-        .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT + 1));
+        .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT + 1));
 
     assert!(
         matches!(
@@ -172,20 +185,20 @@ async fn same_root_rewrite_is_idempotent() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
     let second_write = validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         );
 
     assert!(
@@ -196,9 +209,9 @@ async fn same_root_rewrite_is_idempotent() {
         validator_store_state
             .harness
             .validator_store
-            .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT))
+            .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT))
             .expect("the root must still be readable after an idempotent rewrite"),
-        validator_store_state.root,
+        validator_store_state.context,
         "an idempotent rewrite must leave the stored root unchanged"
     );
 }
@@ -212,30 +225,30 @@ async fn conflicting_root_errors_and_keeps_the_first_root() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
     let conflict = validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.other_root,
+            validator_store_state.other_context,
         );
 
     match conflict {
         Err(SpecificError::DecidedRootConflict(data)) => {
             assert_eq!(
-                data.existing_root, validator_store_state.root,
+                data.existing_root, validator_store_state.context.beacon_block_root,
                 "the conflict error must report the first root as the existing one"
             );
             assert_eq!(
-                data.new_root, validator_store_state.other_root,
+                data.new_root, validator_store_state.other_context.beacon_block_root,
                 "the conflict error must report the rejected root as the new one"
             );
         }
@@ -246,9 +259,9 @@ async fn conflicting_root_errors_and_keeps_the_first_root() {
         validator_store_state
             .harness
             .validator_store
-            .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT))
+            .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT))
             .expect("the first root must remain readable after a rejected conflicting write"),
-        validator_store_state.root,
+        validator_store_state.context,
         "a rejected conflicting write must not replace the first root"
     );
 }
@@ -262,10 +275,10 @@ async fn stale_read_is_rejected_while_the_entry_is_still_present() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
@@ -278,7 +291,7 @@ async fn stale_read_is_rejected_while_the_entry_is_still_present() {
     let read = validator_store_state
         .harness
         .validator_store
-        .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
+        .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
 
     assert!(
         matches!(
@@ -291,9 +304,9 @@ async fn stale_read_is_rejected_while_the_entry_is_still_present() {
         validator_store_state
             .harness
             .validator_store
-            .decided_block_roots
+            .decided_block_contexts
             .lock()
-            .contains_key(&DecidedBlockRootKey {
+            .contains_key(&DecidedBlockKey {
                 validator: validator_store_state.pubkey,
                 slot: Slot::new(RECORD_SLOT),
             }),
@@ -311,10 +324,10 @@ async fn read_at_exactly_the_max_age_is_served() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
     set_clock_to_slot(
@@ -325,11 +338,11 @@ async fn read_at_exactly_the_max_age_is_served() {
     let read = validator_store_state
         .harness
         .validator_store
-        .get_decided_block_root(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
+        .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT));
 
     assert_eq!(
         read.expect("an entry at exactly the max age must still be served"),
-        validator_store_state.root,
+        validator_store_state.context,
         "the age window is inclusive at MAX_DECIDED_ROOT_AGE_SLOTS"
     );
 }
@@ -349,37 +362,37 @@ async fn insert_evicts_entries_older_than_the_age_window() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             old_slot,
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             new_slot,
-            validator_store_state.other_root,
+            validator_store_state.other_context,
         )
         .expect("recording a root at a later slot should succeed");
 
     let stored = validator_store_state
         .harness
         .validator_store
-        .decided_block_roots
+        .decided_block_contexts
         .lock();
     assert!(
-        !stored.contains_key(&DecidedBlockRootKey {
+        !stored.contains_key(&DecidedBlockKey {
             validator: validator_store_state.pubkey,
             slot: old_slot,
         }),
         "an insert past the age window must evict the older entry"
     );
     assert!(
-        stored.contains_key(&DecidedBlockRootKey {
+        stored.contains_key(&DecidedBlockKey {
             validator: validator_store_state.pubkey,
             slot: new_slot,
         }),
@@ -399,10 +412,10 @@ async fn insert_keeps_entries_at_exactly_the_maximum_number_window() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             old_slot,
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("recording a root into an empty store should succeed");
 
@@ -410,10 +423,10 @@ async fn insert_keeps_entries_at_exactly_the_maximum_number_window() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             maximum_slot_number,
-            validator_store_state.other_root,
+            validator_store_state.other_context,
         )
         .expect("recording a root at the maximum slot number should succeed");
 
@@ -421,9 +434,9 @@ async fn insert_keeps_entries_at_exactly_the_maximum_number_window() {
         validator_store_state
             .harness
             .validator_store
-            .decided_block_roots
+            .decided_block_contexts
             .lock()
-            .contains_key(&DecidedBlockRootKey {
+            .contains_key(&DecidedBlockKey {
                 validator: validator_store_state.pubkey,
                 slot: old_slot,
             }),
@@ -437,22 +450,22 @@ async fn insert_keeps_entries_at_exactly_the_maximum_number_window() {
 async fn out_of_order_old_insert_does_not_disturb_a_newer_root() {
     let validator_store_state = ValidatorStoreTestState::new(1);
     let new_slot = Slot::new(RECORD_SLOT + MAX_DECIDED_ROOT_AGE_SLOTS + 1);
-    let newer_root = validator_store_state.other_root;
+    let newer_root = validator_store_state.other_context;
     set_clock_to_slot(&validator_store_state.harness, new_slot.as_u64());
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(validator_store_state.pubkey, new_slot, newer_root)
+        .record_decided_block_context(validator_store_state.pubkey, new_slot, newer_root)
         .expect("recording a root into an empty store should succeed");
 
     // A write for a much older slot arrives late.
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(
+        .record_decided_block_context(
             validator_store_state.pubkey,
             Slot::new(RECORD_SLOT),
-            validator_store_state.root,
+            validator_store_state.context,
         )
         .expect("a late write for an older slot should still succeed");
 
@@ -460,7 +473,7 @@ async fn out_of_order_old_insert_does_not_disturb_a_newer_root() {
         validator_store_state
             .harness
             .validator_store
-            .get_decided_block_root(validator_store_state.pubkey, new_slot)
+            .get_decided_block_context(validator_store_state.pubkey, new_slot)
             .expect("the newer root must survive an out-of-order older insert"),
         newer_root,
         "an out-of-order older insert must not evict or alter a newer live root"

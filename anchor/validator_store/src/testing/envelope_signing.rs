@@ -28,7 +28,7 @@ use types::{
 use validator_store::{UnsignedBlock, ValidatorStore};
 
 use super::common::*;
-use crate::{Error, SpecificError};
+use crate::{DecidedBlockContext, Error, SpecificError};
 
 /// Validator index the single-validator committee starts at.
 const STARTING_VALIDATOR_INDEX: usize = 5;
@@ -134,8 +134,17 @@ fn seed_decided_root(harness: &ValidatorStoreTestHarness, pubkey: PublicKeyBytes
     let decided_root = test_decided_root();
     harness
         .validator_store
-        .record_decided_block_root(pubkey, Slot::new(TEST_SLOT), decided_root)
-        .expect("seeding the decided root must succeed");
+        .record_decided_block_context(
+            pubkey,
+            Slot::new(TEST_SLOT),
+            DecidedBlockContext {
+                beacon_block_root: decided_root,
+                parent_block_root: Hash256::ZERO,
+                execution_requests_root: Hash256::ZERO,
+                builder_index: BUILDER_INDEX_SELF_BUILD,
+            },
+        )
+        .expect("seeding the decided context must succeed");
     decided_root
 }
 

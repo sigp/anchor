@@ -23,7 +23,7 @@ use types::{
 use validator_store::{UnsignedBlock, ValidatorStore};
 
 use super::common::*;
-use crate::{DecidedBlockRootKey, Error, SpecificError};
+use crate::{DecidedBlockContext, DecidedBlockKey, Error, SpecificError};
 
 /// Slot the block duty runs at. The harness clock sits at `TEST_SLOT`, and `sign_block` rejects
 /// a block whose slot is beyond the current slot.
@@ -85,6 +85,19 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
     let pubkey = validator_store_state.pubkey;
     let block = validator_store_state.gloas_block();
     let expected_root = block.canonical_root();
+    let expected_context = {
+        let bid = &block
+            .body()
+            .signed_execution_payload_bid()
+            .expect("a Gloas block carries a bid")
+            .message;
+        DecidedBlockContext {
+            beacon_block_root: expected_root,
+            parent_block_root: bid.parent_block_root,
+            execution_requests_root: bid.execution_requests_root,
+            builder_index: bid.builder_index,
+        }
+    };
 
     // The echoing mock decides exactly the value the store proposes, so the wrapper the store
     // builds internally is reproducible here for the negative assertion.
@@ -119,9 +132,9 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
     let stored = validator_store_state
         .harness
         .validator_store
-        .decided_block_roots
+        .decided_block_contexts
         .lock()
-        .get(&DecidedBlockRootKey {
+        .get(&DecidedBlockKey {
             validator: pubkey,
             slot: Slot::new(DUTY_SLOT),
         })
@@ -129,11 +142,12 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
         .expect("a Gloas block duty must record a decided root");
 
     assert_eq!(
-        stored, expected_root,
-        "the stored root must be the decoded decided block's canonical_root()"
+        stored, expected_context,
+        "the stored context must carry the decoded decided block's canonical_root() and bid \
+         commitments"
     );
     assert_ne!(
-        stored, wrapper_hash,
+        stored.beacon_block_root, wrapper_hash,
         "the stored root must not be ProposerConsensusData::hash(), the QBFT wrapper hash"
     );
 }
@@ -151,8 +165,17 @@ async fn conflicting_root_aborts_before_threshold_signing() {
     validator_store_state
         .harness
         .validator_store
-        .record_decided_block_root(pubkey, Slot::new(DUTY_SLOT), Hash256::from([0xEE; 32]))
-        .expect("pre-seeding a root into an empty store should succeed");
+        .record_decided_block_context(
+            pubkey,
+            Slot::new(DUTY_SLOT),
+            DecidedBlockContext {
+                beacon_block_root: Hash256::from([0xEE; 32]),
+                parent_block_root: Hash256::ZERO,
+                execution_requests_root: Hash256::ZERO,
+                builder_index: 0,
+            },
+        )
+        .expect("pre-seeding a context into an empty store should succeed");
 
     let result = validator_store_state
         .harness
@@ -210,7 +233,7 @@ async fn pre_gloas_duty_creates_no_entry() {
         validator_store_state
             .harness
             .validator_store
-            .decided_block_roots
+            .decided_block_contexts
             .lock()
             .is_empty(),
         "a pre-Gloas duty must create no decided-root entry"
