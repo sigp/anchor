@@ -2557,6 +2557,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dissemination_store"
+version = "0.1.0"
+dependencies = [
+ "bls",
+ "parking_lot",
+ "ssv_types",
+ "tokio",
+ "types",
+]
+
+[[package]]
 name = "docgen"
 version = "0.1.0"
 dependencies = [

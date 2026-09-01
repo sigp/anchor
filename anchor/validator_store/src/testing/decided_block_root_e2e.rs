@@ -17,8 +17,8 @@ use ssv_types::{
 use ssz::Encode;
 use ssz_types::VariableList;
 use types::{
-    BeaconBlock, BeaconBlockElectra, BeaconBlockGloas, ChainSpec, EmptyBlock, ForkName, Hash256,
-    MainnetEthSpec, Slot,
+    BeaconBlock, BeaconBlockElectra, BeaconBlockGloas, ChainSpec, EmptyBlock, ExecutionBlockHash,
+    ForkName, Hash256, MainnetEthSpec, Slot,
 };
 use validator_store::{UnsignedBlock, ValidatorStore};
 
@@ -96,6 +96,10 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
             parent_block_root: bid.parent_block_root,
             execution_requests_root: bid.execution_requests_root,
             builder_index: bid.builder_index,
+            block_hash: bid.block_hash,
+            // The echoing mock decides exactly the proposed block, so the write site must
+            // observe the local proposal as the decided one.
+            built_locally: true,
         }
     };
 
@@ -173,6 +177,8 @@ async fn conflicting_root_aborts_before_threshold_signing() {
                 parent_block_root: Hash256::ZERO,
                 execution_requests_root: Hash256::ZERO,
                 builder_index: 0,
+                block_hash: ExecutionBlockHash::zero(),
+                built_locally: false,
             },
         )
         .expect("pre-seeding a context into an empty store should succeed");

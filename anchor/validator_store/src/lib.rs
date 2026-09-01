@@ -70,14 +70,15 @@ use tracing::{Instrument, Span, debug, error, field, info, info_span, trace, war
 use tree_hash::TreeHash;
 use types::{
     AbstractExecPayload, Address, AggregateAndProof, BeaconBlock, BeaconBlockRef, BlindedPayload,
-    ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch, EthSpec, ExecutionPayloadEnvelope,
-    ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData, PayloadAttestationMessage,
-    ProposerPreferences, SelectionProof, SignedAggregateAndProof, SignedBeaconBlock,
-    SignedBlindedBeaconBlock, SignedContributionAndProof, SignedExecutionPayloadEnvelope,
-    SignedProposerPreferences, SignedRoot, SignedValidatorRegistrationData, SignedVoluntaryExit,
-    SingleAttestation, Slot, SlotData, SyncAggregatorSelectionData, SyncCommitteeContribution,
-    SyncCommitteeMessage, SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData,
-    VoluntaryExit, consts::gloas::BUILDER_INDEX_SELF_BUILD,
+    ChainSpec, Checkpoint, ContributionAndProof, Domain, Epoch, EthSpec, ExecutionBlockHash,
+    ExecutionPayloadEnvelope, ForkName, FullPayload, Graffiti, Hash256, PayloadAttestationData,
+    PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
+    SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
+    SignedExecutionPayloadEnvelope, SignedProposerPreferences, SignedRoot,
+    SignedValidatorRegistrationData, SignedVoluntaryExit, SingleAttestation, Slot, SlotData,
+    SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
+    SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
+    consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 use validator_metrics::IntCounterVec;
 use validator_store::{
@@ -110,13 +111,35 @@ struct DecidedBlockKey {
 
 /// The block-QBFT decision fields the envelope duty validates a dissemination against
 /// (SIP-94 §6): the decided block root plus the bid commitments recoverable only from
-/// the decided block itself.
+/// the decided block itself, and whether this operator's own proposal was the decided
+/// block (builder provenance for the envelope duty).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecidedBlockContext {
     pub beacon_block_root: Hash256,
     pub parent_block_root: Hash256,
     pub execution_requests_root: Hash256,
     pub builder_index: u64,
+    /// The decided bid's execution `block_hash`. Only the builder can check it (it requires
+    /// the full payload), guarding the honest builder path against a stale or inconsistent
+    /// local BN response that repeats the expected beacon root over a different payload.
+    pub block_hash: ExecutionBlockHash,
+    /// True if this operator's local block proposal was the decided block. Operator-local
+    /// (never crosses the wire), excluded from conflict identity, and merged with OR on
+    /// re-record: a repeat duty invocation can supply a different local candidate while
+    /// QBFT returns the already-decided value, so the bit is monotonic rather than stable.
+    pub built_locally: bool,
+}
+
+impl DecidedBlockContext {
+    /// True if `other` carries the same decision bindings, ignoring the operator-local
+    /// `built_locally` bit.
+    fn same_decision(&self, other: &DecidedBlockContext) -> bool {
+        self.beacon_block_root == other.beacon_block_root
+            && self.parent_block_root == other.parent_block_root
+            && self.execution_requests_root == other.execution_requests_root
+            && self.builder_index == other.builder_index
+            && self.block_hash == other.block_hash
+    }
 }
 
 const MAX_VALIDATORS_PER_OPERATOR: NonZeroUsize =
@@ -920,14 +943,17 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         // decided value and each operator's own local proposal. Every participating
         // operator records the same context. Post-Gloas only.
         if ForkName::from(completed_data.version) >= ForkName::Gloas
-            && let UnsignedBlock::Full(FullBlockContents::Block(block)) = &unsigned_block
-            && let Ok(bid) = block.body().signed_execution_payload_bid()
+            && let UnsignedBlock::Full(FullBlockContents::Block(decided_block)) = &unsigned_block
+            && let Ok(bid) = decided_block.body().signed_execution_payload_bid()
         {
+            let decided_root = decided_block.canonical_root();
             let context = DecidedBlockContext {
-                beacon_block_root: block.canonical_root(),
+                beacon_block_root: decided_root,
                 parent_block_root: bid.message.parent_block_root,
                 execution_requests_root: bid.message.execution_requests_root,
                 builder_index: bid.message.builder_index,
+                block_hash: bid.message.block_hash,
+                built_locally: block.tree_hash_root() == decided_root,
             };
             self.record_decided_block_context(validator.public_key, slot, context)
                 .map_err(Error::SpecificError)?;
@@ -966,8 +992,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 entry.insert(context);
                 Ok(())
             }
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                if entry.get() == &context {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if entry.get().same_decision(&context) {
+                    // `built_locally` is excluded from conflict identity and merged with
+                    // OR: a repeat invocation can recompute it against a different local
+                    // candidate while the decision itself is unchanged.
+                    entry.get_mut().built_locally |= context.built_locally;
                     Ok(())
                 } else {
                     Err(SpecificError::DecidedRootConflict(Box::new(

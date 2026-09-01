@@ -21,9 +21,10 @@ use ssz::Encode;
 use ssz_types::VariableList;
 use tokio::time::Instant;
 use types::{
-    BeaconBlock, BeaconBlockGloas, Domain, EmptyBlock, EthSpec, ExecutionPayloadEnvelope,
-    ExecutionPayloadGloas, ExecutionRequestsGloas, ForkName, Hash256, MainnetEthSpec,
-    SignedExecutionPayloadEnvelope, SignedRoot, Slot, consts::gloas::BUILDER_INDEX_SELF_BUILD,
+    BeaconBlock, BeaconBlockGloas, Domain, EmptyBlock, EthSpec, ExecutionBlockHash,
+    ExecutionPayloadEnvelope, ExecutionPayloadGloas, ExecutionRequestsGloas, ForkName, Hash256,
+    MainnetEthSpec, SignedExecutionPayloadEnvelope, SignedRoot, Slot,
+    consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 use validator_store::{UnsignedBlock, ValidatorStore};
 
@@ -142,6 +143,8 @@ fn seed_decided_root(harness: &ValidatorStoreTestHarness, pubkey: PublicKeyBytes
                 parent_block_root: Hash256::ZERO,
                 execution_requests_root: Hash256::ZERO,
                 builder_index: BUILDER_INDEX_SELF_BUILD,
+                block_hash: ExecutionBlockHash::zero(),
+                built_locally: true,
             },
         )
         .expect("seeding the decided context must succeed");

@@ -19,6 +19,12 @@ use crate::{
 /// rules is recorded, and further dissemination messages for the tuple are Ignore regardless
 /// of content or peer (an honest origin retry can repeat one after the recipient's gossip
 /// duplicate cache expires, so repetition does not prove peer fault).
+///
+/// First-valid means first STRUCTURALLY valid, by design: SIP-94 accepts that a Byzantine
+/// committee member can consume a slot's dissemination budget with a decision-unbound or
+/// payload-unbound carrier, costing at most one missed self-build reveal (never a wrong
+/// payload on chain). Do not move semantic rejection into a replacement-capable store; the
+/// named hardening for that trade is sign-all, a protocol change.
 pub(crate) fn validate_envelope_dissemination(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,

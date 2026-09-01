@@ -5,7 +5,7 @@
 //! staleness, and slot-bounded eviction.
 use bls::PublicKeyBytes;
 use ssv_types::OperatorId;
-use types::{Hash256, Slot};
+use types::{ExecutionBlockHash, Hash256, Slot};
 
 use super::common::*;
 use crate::{
@@ -20,6 +20,8 @@ fn test_context(seed: u8) -> DecidedBlockContext {
         parent_block_root: Hash256::from([seed.wrapping_add(1); 32]),
         execution_requests_root: Hash256::from([seed.wrapping_add(2); 32]),
         builder_index: seed as u64,
+        block_hash: ExecutionBlockHash::from_root(Hash256::from([seed.wrapping_add(3); 32])),
+        built_locally: false,
     }
 }
 
@@ -264,6 +266,50 @@ async fn conflicting_root_errors_and_keeps_the_first_root() {
         validator_store_state.context,
         "a rejected conflicting write must not replace the first root"
     );
+}
+
+/// `built_locally` is excluded from conflict identity and merged with OR: a repeat record
+/// with the same decision bindings but a different bit is non-conflicting and finishes true,
+/// in both orders.
+#[tokio::test]
+async fn built_locally_merges_with_or_in_both_orders() {
+    for (first_bit, second_bit) in [(true, false), (false, true)] {
+        let validator_store_state = ValidatorStoreTestState::new(1);
+        set_clock_to_slot(&validator_store_state.harness, RECORD_SLOT);
+        let mut first = validator_store_state.context;
+        first.built_locally = first_bit;
+        let mut second = validator_store_state.context;
+        second.built_locally = second_bit;
+
+        validator_store_state
+            .harness
+            .validator_store
+            .record_decided_block_context(
+                validator_store_state.pubkey,
+                Slot::new(RECORD_SLOT),
+                first,
+            )
+            .expect("first record should succeed");
+        validator_store_state
+            .harness
+            .validator_store
+            .record_decided_block_context(
+                validator_store_state.pubkey,
+                Slot::new(RECORD_SLOT),
+                second,
+            )
+            .expect("a repeat with the same decision bindings must not conflict on the bit");
+
+        let stored = validator_store_state
+            .harness
+            .validator_store
+            .get_decided_block_context(validator_store_state.pubkey, Slot::new(RECORD_SLOT))
+            .expect("the context must be readable");
+        assert!(
+            stored.built_locally,
+            "built_locally must merge with OR (order {first_bit}/{second_bit})"
+        );
+    }
 }
 
 /// A stale read is rejected while the entry is still in the map. With no later insert, nothing
