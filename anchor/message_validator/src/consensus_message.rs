@@ -498,7 +498,7 @@ mod tests {
         duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            create_operator_pub_keys, generate_random_rsa_public_keys,
+            create_operator_pub_keys, generate_random_rsa_public_keys, generate_test_key_pair,
         },
         validate_ssv_message,
     };
@@ -531,17 +531,6 @@ mod tests {
             Err(e) => panic!("{context}: Expected QbftMessage to be accepted, got error: {e:?}"),
             Ok(other) => panic!("{context}: Expected QbftMessage variant, got: {other:?}"),
         }
-    }
-
-    // Extract common key generation into a helper
-    fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
-        (private_key, public_key)
     }
 
     fn generate_fork_schedule() -> Arc<ForkSchedule> {
@@ -1447,7 +1436,7 @@ mod tests {
 
     use fork::ForkSchedule;
     use openssl::{
-        pkey::{PKey, Private, Public},
+        pkey::PKey,
         rsa::Rsa,
         sign::Signer,
     };

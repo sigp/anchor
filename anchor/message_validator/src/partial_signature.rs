@@ -13,7 +13,7 @@ use types::consts::altair::SYNC_COMMITTEE_SUBNET_COUNT;
 use crate::{
     ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
     validate_beacon_duty, validate_duty_count, validate_role_for_fork, validate_slot_time,
-    verify_message_signature,
+    verify_single_signer,
 };
 
 // Constants for validation rules
@@ -46,23 +46,7 @@ pub(crate) fn validate_partial_signature_message(
         duty_provider,
     )?;
 
-    let operator_pub_keys = validation_context.operator_pub_keys.get(&signer).ok_or(
-        ValidationFailure::OperatorNotFound {
-            operator_id: signer,
-        },
-    )?;
-
-    let signature = validation_context
-        .signed_ssv_message
-        .signatures()
-        .first()
-        .ok_or(ValidationFailure::NoSignatures)?;
-
-    verify_message_signature(
-        validation_context.signed_ssv_message,
-        operator_pub_keys,
-        signature,
-    )?;
+    verify_single_signer(&validation_context, signer)?;
 
     // Update the duty state with information about this partial signature message
     let signer = validation_context
@@ -146,7 +130,7 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
             kind == PartialSignatureKind::ProposerPreferences
                 || kind == PartialSignatureKind::RequestAuth
         }
-        Role::EnvelopeProposer => kind == PartialSignatureKind::PostConsensus,
+        Role::EnvelopeProposer => kind == PartialSignatureKind::Envelope,
         Role::Aggregator => {
             kind == PartialSignatureKind::PostConsensus
                 || kind == PartialSignatureKind::SelectionProofPartialSig
@@ -367,7 +351,8 @@ mod tests {
         tests::{
             FOUR_NODE_COMMITTEE, MockDutiesProvider, assert_validation_error,
             create_committee_info, create_message_id_for_test, create_operator_pub_keys,
-            generate_random_rsa_public_keys, spec_with_gloas,
+            four_node_committee_and_keypair, generate_fork_schedule,
+            generate_random_rsa_public_keys, generate_test_key_pair, spec_with_gloas,
         },
     };
 
@@ -440,16 +425,6 @@ mod tests {
     }
 
     // Import helper function from consensus_message tests or redefine here
-    fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
-        (private_key, public_key)
-    }
-
     // Helper function to create a ValidationContext for testing
     fn create_test_validation_context<'a>(
         signed_msg: &'a SignedSSVMessage,
@@ -493,10 +468,6 @@ mod tests {
             fork_schedule,
             spec: spec_with_gloas(None),
         }
-    }
-
-    fn generate_fork_schedule(fork: Fork) -> Arc<ForkSchedule> {
-        Arc::new(ForkSchedule::new(fork, DomainType::default(), "testing"))
     }
 
     #[test]
@@ -2109,22 +2080,9 @@ mod tests {
 
     // ==================== EnvelopeProposer partial-signature tests ====================
     //
-    // `EnvelopeProposer` (wire byte [9,0,0,0]) is the validator-scoped, QBFT self-build role:
-    // binds `PostConsensus`, gated to the Ethereum Gloas (ePBS) fork, caps its packet at one
-    // message, and uses the SHORT `1 + LATE_SLOT_ALLOWANCE` (3-slot) lateness bucket.
-
-    /// Standard single-signer four-node fixture (committee info + keypair + pubkey map).
-    fn four_node_committee_and_keypair() -> (
-        crate::CommitteeInfo,
-        Rsa<Private>,
-        HashMap<OperatorId, Rsa<Public>>,
-    ) {
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-        (committee_info, private_key, map)
-    }
+    // `EnvelopeProposer` (wire byte [9,0,0,0]) is the validator-scoped self-build role:
+    // binds the `Envelope` kind, gated to the Ethereum Gloas (ePBS) fork, caps its packet at
+    // one message, and uses the SHORT `1 + LATE_SLOT_ALLOWANCE` (3-slot) lateness bucket.
 
     /// Helper to create a SignedSSVMessage for EnvelopeProposer testing.
     fn create_signed_envelope_proposer_message(
@@ -2134,7 +2092,7 @@ mod tests {
         signing_root: Hash256,
     ) -> SignedSSVMessage {
         let partial_sig_messages = PartialSignatureMessages {
-            kind: PartialSignatureKind::PostConsensus,
+            kind: PartialSignatureKind::Envelope,
             slot,
             messages: VariableList::new(vec![PartialSignatureMessage {
                 partial_signature: Signature::empty(),
@@ -2192,18 +2150,18 @@ mod tests {
         }
     }
 
-    /// `EnvelopeProposer` only accepts the `PostConsensus` kind (the Gloas fork gate is
+    /// `EnvelopeProposer` only accepts the `Envelope` kind (the Gloas fork gate is
     /// covered once in `consensus_message.rs` via the shared `validate_role_for_fork`).
     /// Asserts that this kind mismatch maps to
     /// `ValidationFailure::PartialSignatureTypeRoleMismatch` and is rejected (not ignored).
     #[test]
-    fn envelope_proposer_binds_post_consensus_kind() {
+    fn envelope_proposer_binds_envelope_kind() {
         assert!(
             partial_signature_type_matches_role(
-                PartialSignatureKind::PostConsensus,
+                PartialSignatureKind::Envelope,
                 Role::EnvelopeProposer,
             ),
-            "EnvelopeProposer must accept PostConsensus"
+            "EnvelopeProposer must accept the Envelope kind"
         );
         assert_eq!(
             MessageAcceptance::from(&ValidationFailure::PartialSignatureTypeRoleMismatch),
@@ -2212,16 +2170,16 @@ mod tests {
         );
         assert!(
             !partial_signature_type_matches_role(
-                PartialSignatureKind::RandaoPartialSig,
+                PartialSignatureKind::PostConsensus,
                 Role::EnvelopeProposer,
             ),
-            "EnvelopeProposer must reject non-PostConsensus kinds"
+            "EnvelopeProposer must reject non-Envelope kinds, including PostConsensus"
         );
     }
 
     #[test]
     fn envelope_proposer_rejects_multiple_messages_per_packet() {
-        // EnvelopeProposer is validator-scoped: exactly one PostConsensus message per packet.
+        // EnvelopeProposer is validator-scoped: exactly one Envelope message per packet.
         // The per-validator `> 1` bound rejects a second message, which also subsumes the
         // validator-index occurrence cap (two messages for the same index would already trip
         // `> 1`).
@@ -2239,7 +2197,7 @@ mod tests {
             .collect();
 
         let partial_sig_messages = PartialSignatureMessages {
-            kind: PartialSignatureKind::PostConsensus,
+            kind: PartialSignatureKind::Envelope,
             slot: Slot::new(1),
             messages: VariableList::new(messages).unwrap(),
         };
@@ -2299,7 +2257,7 @@ mod tests {
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let signed_msg = create_signed_partial_sig_message(
             Role::EnvelopeProposer,
-            PartialSignatureKind::PostConsensus,
+            PartialSignatureKind::Envelope,
             OperatorId(1),
             &private_key,
         );
@@ -2334,7 +2292,7 @@ mod tests {
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let signed_msg = create_signed_partial_sig_message(
             Role::EnvelopeProposer,
-            PartialSignatureKind::PostConsensus,
+            PartialSignatureKind::Envelope,
             OperatorId(1),
             &private_key,
         );
@@ -4546,7 +4504,7 @@ mod tests {
 
         assert!(
             partial_sig_result.is_ok(),
-            "EnvelopeProposer PostConsensus at slot 1 must be accepted when the shared state's max_slot already equals 1 (equality boundary of the strict monotonic guard)"
+            "EnvelopeProposer Envelope partial at slot 1 must be accepted when the shared state's max_slot already equals 1 (equality boundary of the strict monotonic guard)"
         );
     }
 
@@ -4608,7 +4566,7 @@ mod tests {
                     crate::ValidationFailure::SlotAlreadyAdvanced { .. }
                 )
             },
-            "EnvelopeProposer PostConsensus below advanced consensus slot must be SlotAlreadyAdvanced",
+            "EnvelopeProposer Envelope partial below advanced consensus slot must be SlotAlreadyAdvanced",
         );
     }
 
@@ -4671,20 +4629,20 @@ mod tests {
                     crate::ValidationFailure::SlotAlreadyAdvanced { .. }
                 )
             },
-            "EnvelopeProposer consensus below advanced PostConsensus slot must be SlotAlreadyAdvanced",
+            "EnvelopeProposer consensus below advanced Envelope-partial slot must be SlotAlreadyAdvanced",
         );
     }
 
     #[test]
-    fn envelope_proposer_repeated_post_consensus_rejected() {
-        // Validate an EnvelopeProposer PostConsensus at slot 5 (accepted; records the
-        // post-consensus count), then validate a second PostConsensus for the same
-        // signer/slot against the same DutyState. The inherited post-consensus seen-message
+    fn envelope_proposer_repeated_envelope_partial_rejected() {
+        // Validate an EnvelopeProposer Envelope partial at slot 5 (accepted; records the
+        // pre-consensus count), then validate a second Envelope partial for the same
+        // signer/slot against the same DutyState. The shared pre-consensus seen-message
         // guard must reject the second as InvalidPartialSignatureTypeCount.
 
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
 
-        // Arrange: First PostConsensus message at slot 5.
+        // Arrange: First Envelope partial at slot 5.
         let first_signed_msg = create_signed_envelope_proposer_message(
             OperatorId(1),
             &private_key,
@@ -4707,10 +4665,10 @@ mod tests {
         );
         assert!(
             first_result.is_ok(),
-            "First EnvelopeProposer PostConsensus must be accepted"
+            "First EnvelopeProposer Envelope partial must be accepted"
         );
 
-        // A second PostConsensus for the same signer/slot (only the root differs).
+        // A second Envelope partial for the same signer/slot (only the root differs).
         let second_signed_msg = create_signed_envelope_proposer_message(
             OperatorId(1),
             &private_key,
@@ -4737,7 +4695,7 @@ mod tests {
                     crate::ValidationFailure::InvalidPartialSignatureTypeCount { .. }
                 )
             },
-            "Repeated EnvelopeProposer PostConsensus for the same signer/slot must be rejected",
+            "Repeated EnvelopeProposer Envelope partial for the same signer/slot must be rejected",
         );
     }
 

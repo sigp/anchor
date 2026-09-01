@@ -195,6 +195,11 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                             error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
                         }
                     }
+                    ValidatedSSVMessage::EnvelopeDissemination(dissemination) => {
+                        //todo(epbs): route to the envelope duty's dissemination store once the
+                        // disseminate-and-sign runner lands; dropped until then.
+                        debug!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, slot = ?dissemination.slot, "Dropping envelope dissemination: no consumer wired yet");
+                    }
                 }
             },
             RECEIVER_NAME,
