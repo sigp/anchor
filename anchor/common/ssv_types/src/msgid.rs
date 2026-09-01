@@ -81,19 +81,21 @@ impl Role {
         // https://github.com/ssvlabs/ssv/blob/d2352a3dba3e7b309ef090b7a23f4cac1d9002d1/message/validation/consensus_validation.go#L434-L443
         match self {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
-            Role::Proposer | Role::EnvelopeProposer => Some(2),
+            Role::Proposer => Some(2),
             Role::SyncCommittee => Some(6),
-            // These roles don't use QBFT consensus
+            // These roles don't use QBFT consensus. EnvelopeProposer disseminates and
+            // threshold-signs the decided envelope without a consensus round (SIP-94 §6).
             Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences => None,
+            | Role::ProposerPreferences
+            | Role::EnvelopeProposer => None,
         }
     }
 
     /// Returns true if this role runs a QBFT consensus round, i.e. it has a
-    /// max QBFT round. The validator-scoped roles that do not
-    /// (ValidatorRegistration, VoluntaryExit, PTCAttester) return false.
+    /// max QBFT round. The roles that do not (ValidatorRegistration, VoluntaryExit,
+    /// PTCAttester, ProposerPreferences, EnvelopeProposer) return false.
     pub fn is_qbft_role(self) -> bool {
         self.max_round().is_some()
     }
@@ -423,7 +425,6 @@ mod tests {
             Role::AggregatorCommittee,
             Role::Proposer,
             Role::SyncCommittee,
-            Role::EnvelopeProposer,
         ] {
             assert!(role.is_qbft_role(), "{role:?} runs QBFT");
             assert!(role.max_round().is_some(), "{role:?} must have a max round");
@@ -433,6 +434,7 @@ mod tests {
             Role::VoluntaryExit,
             Role::PTCAttester,
             Role::ProposerPreferences,
+            Role::EnvelopeProposer,
         ] {
             assert!(!role.is_qbft_role(), "{role:?} must not run QBFT");
             assert!(
@@ -476,22 +478,22 @@ mod tests {
         }
     }
 
-    /// Tests that EnvelopeProposer is a validator-scoped QBFT role with
-    /// round cut-off 2.
+    /// Tests that EnvelopeProposer is a validator-scoped non-QBFT role: the envelope
+    /// duty disseminates and threshold-signs without a consensus round (SIP-94 §6).
     #[test]
-    fn envelope_proposer_is_validator_scoped_qbft_with_round_cutoff_two() {
+    fn envelope_proposer_is_validator_scoped_non_qbft_role() {
         assert!(
             !Role::EnvelopeProposer.is_committee_role(),
             "EnvelopeProposer is per-validator, not a committee role"
         );
         assert_eq!(
             Role::EnvelopeProposer.max_round(),
-            Some(2),
-            "Envelope QBFT cut-off round must be 2"
+            None,
+            "EnvelopeProposer has no consensus round"
         );
         assert!(
-            Role::EnvelopeProposer.is_qbft_role(),
-            "EnvelopeProposer runs QBFT (max_round is Some)"
+            !Role::EnvelopeProposer.is_qbft_role(),
+            "EnvelopeProposer does not run QBFT (max_round is None)"
         );
         assert!(
             Role::EnvelopeProposer.monotonic_slot_role(),
