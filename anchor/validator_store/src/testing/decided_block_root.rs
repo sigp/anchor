@@ -1,8 +1,8 @@
 //! Tests for the decided-block-root handoff store.
 //!
-//! These tests call the private `record_decided_block_context` / `get_decided_block_context` helpers
-//! directly. The behavior under test is the store's own contract: first-write-wins, read-side
-//! staleness, and slot-bounded eviction.
+//! These tests call the private `record_decided_block_context` / `get_decided_block_context`
+//! helpers directly. The behavior under test is the store's own contract: first-write-wins,
+//! read-side staleness, and slot-bounded eviction.
 use bls::PublicKeyBytes;
 use ssv_types::OperatorId;
 use types::{ExecutionBlockHash, Hash256, Slot};

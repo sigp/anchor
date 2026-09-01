@@ -17,12 +17,12 @@ use std::{
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::{NetworkDatabase, PendingStateUpdates};
+use dissemination_store::DisseminationStore;
 use fork::{Fork, ForkSchedule};
 use futures::StreamExt;
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{ConsensusDecider, QbftDecidable, QbftError, TimeoutMode};
-use dissemination_store::DisseminationStore;
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
     ValidatorSigningData,
@@ -32,9 +32,7 @@ use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share,
     ValidatorIndex, ValidatorMetadata,
-    consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, QbftDataValidator,
-    },
+    consensus::{AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, QbftDataValidator},
     dissemination::EnvelopeDissemination,
 };
 use ssz::Encode;
@@ -136,7 +134,6 @@ impl MockConsensusDecider {
             ..Self::default()
         }
     }
-
 }
 
 impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
@@ -290,11 +287,13 @@ impl SignatureCollecting for MockSignatureCollector {
         if let Some(failure) = self.dissemination_failure.clone() {
             return Err(failure);
         }
-        self.captured_disseminations.lock().push(CapturedDissemination {
-            validator_pubkey,
-            committee_id,
-            dissemination,
-        });
+        self.captured_disseminations
+            .lock()
+            .push(CapturedDissemination {
+                validator_pubkey,
+                committee_id,
+                dissemination,
+            });
         Ok(())
     }
 }

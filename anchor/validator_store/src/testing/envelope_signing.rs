@@ -7,11 +7,8 @@ use eth2::types::FullBlockContents;
 use signature_collector::CollectionError;
 use slashing_protection::Safe;
 use ssv_types::{
-    OperatorId,
-    consensus::BlindedExecutionPayloadEnvelope,
-    dissemination::EnvelopeDissemination,
-    msgid::Role,
-    partial_sig::PartialSignatureKind,
+    OperatorId, consensus::BlindedExecutionPayloadEnvelope, dissemination::EnvelopeDissemination,
+    msgid::Role, partial_sig::PartialSignatureKind,
 };
 use ssz::Encode;
 use ssz_types::VariableList;
@@ -379,9 +376,11 @@ async fn builder_with_binding_mismatch_broadcasts_nothing() {
     assert!(
         matches!(
             result,
-            Err(Error::SpecificError(SpecificError::EnvelopeBindingMismatch {
-                field: "parent_beacon_block_root"
-            }))
+            Err(Error::SpecificError(
+                SpecificError::EnvelopeBindingMismatch {
+                    field: "parent_beacon_block_root"
+                }
+            ))
         ),
         "a binding mismatch must be rejected with the mismatching field, got {result:?}"
     );
@@ -450,9 +449,9 @@ async fn non_builder_without_dissemination_times_out() {
     assert!(
         matches!(
             result,
-            Err(Error::SpecificError(SpecificError::DisseminationTimeout {
-                ..
-            }))
+            Err(Error::SpecificError(
+                SpecificError::DisseminationTimeout { .. }
+            ))
         ),
         "a missing dissemination must time out with the dedicated error, got {result:?}"
     );
@@ -478,9 +477,11 @@ async fn non_builder_rejects_binding_mismatched_dissemination() {
     assert!(
         matches!(
             result,
-            Err(Error::SpecificError(SpecificError::EnvelopeBindingMismatch {
-                field: "beacon_block_root"
-            }))
+            Err(Error::SpecificError(
+                SpecificError::EnvelopeBindingMismatch {
+                    field: "beacon_block_root"
+                }
+            ))
         ),
         "a binding-mismatched dissemination must be rejected, got {result:?}"
     );

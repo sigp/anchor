@@ -1644,7 +1644,11 @@ mod tests {
     }
 
     pub(crate) fn generate_fork_schedule(fork: fork::Fork) -> Arc<fork::ForkSchedule> {
-        Arc::new(fork::ForkSchedule::new(fork, DomainType::default(), "testing"))
+        Arc::new(fork::ForkSchedule::new(
+            fork,
+            DomainType::default(),
+            "testing",
+        ))
     }
 
     /// Standard single-signer four-node fixture (committee info + keypair + pubkey map).

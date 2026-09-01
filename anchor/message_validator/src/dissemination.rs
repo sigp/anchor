@@ -463,7 +463,12 @@ mod tests {
 
         assert_validation_error(
             result,
-            |failure| matches!(failure, ValidationFailure::RoleNotActiveBeforeEthFork { .. }),
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeEthFork { .. }
+                )
+            },
             "RoleNotActiveBeforeEthFork (dissemination before Gloas)",
         );
     }

@@ -16,7 +16,6 @@ use std::{
 use bls::{AggregateSignature, PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
 use dissemination_store::DisseminationStore;
-use ssv_types::dissemination::EnvelopeDissemination;
 use eth2::types::{BlockContents, BlockContentsTuple, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
 use futures::{
@@ -33,9 +32,8 @@ use openssl::{
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
-    AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider,
-    ProposerInstanceId, QbftError, QbftManager, TimeoutMode,
-    ValidatorDutyKind,
+    AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider, ProposerInstanceId,
+    QbftError, QbftManager, TimeoutMode, ValidatorDutyKind,
 };
 use safe_arith::{ArithError, SafeArith};
 use signature_collector::{
@@ -55,6 +53,7 @@ use ssv_types::{
         ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
         ValidatorDuty,
     },
+    dissemination::EnvelopeDissemination,
     msgid::Role,
     partial_sig::PartialSignatureKind,
     try_to_variable_list,
@@ -3974,9 +3973,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
             if Instant::now() >= deadline {
                 record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                return Err(Error::SpecificError(SpecificError::EnvelopeDeadlinePassed {
-                    slot,
-                }));
+                return Err(Error::SpecificError(
+                    SpecificError::EnvelopeDeadlinePassed { slot },
+                ));
             }
 
             // The value every operator signs: the builder operator disseminates its own
