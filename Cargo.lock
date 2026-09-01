@@ -785,6 +785,7 @@ dependencies = [
  "beacon_node_fallback",
  "bls",
  "database",
+ "dissemination_store",
  "eth2",
  "ethereum_ssz",
  "fork",
@@ -1882,6 +1883,7 @@ dependencies = [
  "clap",
  "cli",
  "database",
+ "dissemination_store",
  "duties_tracker",
  "eth",
  "eth2",
@@ -5130,6 +5132,7 @@ name = "message_receiver"
 version = "0.1.0"
 dependencies = [
  "database",
+ "dissemination_store",
  "hex",
  "libp2p",
  "message_validator",

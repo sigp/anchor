@@ -15,6 +15,8 @@ use std::{
 
 use bls::{AggregateSignature, PublicKeyBytes, SecretKey, Signature};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
+use dissemination_store::DisseminationStore;
+use ssv_types::dissemination::EnvelopeDissemination;
 use eth2::types::{BlockContents, BlockContentsTuple, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
 use futures::{
@@ -32,7 +34,7 @@ use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{
     AggregatorCommitteeInstanceId, CommitteeInstanceId, ConsensusDecider,
-    EnvelopeProposerInstanceId, ProposerInstanceId, QbftError, QbftManager, TimeoutMode,
+    ProposerInstanceId, QbftError, QbftManager, TimeoutMode,
     ValidatorDutyKind,
 };
 use safe_arith::{ArithError, SafeArith};
@@ -47,12 +49,11 @@ use ssv_types::{
     OperatorId, ValidatorIndex, ValidatorMetadata,
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
-        BEACON_ROLE_ENVELOPE_PROPOSER, BEACON_ROLE_PROPOSER,
-        BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote, BeaconVoteValidator,
-        BlindedExecutionPayloadEnvelope, Contribution, ContributionWrapper, Contributions,
-        DataVersion, EnvelopeConsensusData, EnvelopeConsensusDataValidator, ForkDecodeError,
-        GloasBeaconVote, GloasBeaconVoteValidator, ProposerConsensusData,
-        ProposerConsensusDataValidator, QbftData, SelectionProofBatchId, ValidatorDuty,
+        BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
+        BeaconVoteValidator, BlindedExecutionPayloadEnvelope, Contribution, ContributionWrapper,
+        Contributions, DataVersion, ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator,
+        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
+        ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -131,6 +132,33 @@ pub struct DecidedBlockContext {
 }
 
 impl DecidedBlockContext {
+    /// Validates a blinded envelope's decision bindings against this context (SIP-94 §6).
+    /// `payload_root` has no binding here by design: it is trusted from the builder operator.
+    fn validate_blinded<E: EthSpec>(
+        &self,
+        blinded: &BlindedExecutionPayloadEnvelope<E>,
+    ) -> Result<(), SpecificError> {
+        let mismatch = |field| SpecificError::EnvelopeBindingMismatch { field };
+        if blinded.beacon_block_root != self.beacon_block_root {
+            return Err(mismatch("beacon_block_root"));
+        }
+        if blinded.parent_beacon_block_root != self.parent_block_root {
+            return Err(mismatch("parent_beacon_block_root"));
+        }
+        // An externally built decision has no self-build envelope duty at all; reject the
+        // context side before comparing the envelope's copy.
+        if self.builder_index != BUILDER_INDEX_SELF_BUILD {
+            return Err(mismatch("context_builder_index"));
+        }
+        if blinded.builder_index != self.builder_index {
+            return Err(mismatch("builder_index"));
+        }
+        if blinded.execution_requests.tree_hash_root() != self.execution_requests_root {
+            return Err(mismatch("execution_requests_root"));
+        }
+        Ok(())
+    }
+
     /// True if `other` carries the same decision bindings, ignoring the operator-local
     /// `built_locally` bit.
     fn same_decision(&self, other: &DecidedBlockContext) -> bool {
@@ -270,6 +298,8 @@ pub struct AnchorValidatorStore<
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
     /// Block-QBFT decision contexts, keyed `(validator, slot)`.
     decided_block_contexts: Mutex<HashMap<DecidedBlockKey, DecidedBlockContext>>,
+    /// Handoff store for SIP-94 §6 envelope disseminations (written by the message receiver).
+    dissemination_store: Arc<DisseminationStore>,
     signature_collector: Box<dyn SignatureCollecting>,
     consensus: Arc<C>,
     slashing_protection: Arc<SlashingDatabase>,
@@ -462,6 +492,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     pub fn new(
         database: Arc<NetworkDatabase>,
         signature_collector: Box<dyn SignatureCollecting>,
+        dissemination_store: Arc<DisseminationStore>,
         consensus: Arc<C>,
         slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
@@ -482,6 +513,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
             decided_block_contexts: Mutex::new(HashMap::new()),
+            dissemination_store,
             signature_collector,
             consensus,
             slashing_protection,
@@ -1455,22 +1487,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             validator_attestation_committees,
             self.genesis_validators_root,
             self.strict_mfp,
-        ))
-    }
-
-    /// Constructs the QBFT data validator for envelope-signing duties.
-    fn create_envelope_consensus_data_validator(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        validator_index: ValidatorIndex,
-        slot: Slot,
-        decided_block_root: Hash256,
-    ) -> Box<EnvelopeConsensusDataValidator<E>> {
-        Box::new(EnvelopeConsensusDataValidator::new(
-            validator_pubkey,
-            validator_index,
-            slot,
-            decided_block_root,
         ))
     }
 
@@ -2911,11 +2927,35 @@ pub enum SpecificError {
     EnvelopeNotSelfBuild {
         builder_index: u64,
     },
-    /// Consensus decided an envelope another operator built. This is an intentional
-    /// non-publish, not a failure.
+    /// The builder operator disseminated an envelope this operator did not build. This is an
+    /// intentional non-publish, not a failure.
     EnvelopeNotBuiltLocally {
         local_root: Hash256,
-        decided_root: Hash256,
+        disseminated_root: Hash256,
+    },
+    /// The envelope duty started at or after the payload-due deadline (50% of the slot), past
+    /// which the envelope cannot satisfy this slot.
+    EnvelopeDeadlinePassed {
+        slot: Slot,
+    },
+    /// No dissemination arrived before the payload-due deadline.
+    DisseminationTimeout {
+        slot: Slot,
+    },
+    /// The disseminated envelope bytes did not decode as a blinded envelope.
+    DisseminationUndecodable(ssz::DecodeError),
+    /// Building or sending the builder's dissemination broadcast failed.
+    DisseminationBroadcastFailed(CollectionError),
+    /// A blinded envelope failed a decision binding against the decided block context
+    /// (SIP-94 §6). Carries the first mismatching field.
+    EnvelopeBindingMismatch {
+        field: &'static str,
+    },
+    /// The builder's local BN returned an envelope whose payload block hash differs from the
+    /// decided bid's; disseminating it would spread a payload the decision does not commit to.
+    EnvelopeBuilderInconsistent {
+        local: ExecutionBlockHash,
+        decided: ExecutionBlockHash,
     },
     /// The detached `AggregatorCommittee` post-consensus execution died before producing a
     /// result (executor shutdown, spawn refusal, or task panic)
@@ -3918,9 +3958,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 return Err(Error::GreaterThanCurrentSlot { slot, current_slot });
             }
 
-            let decided_block_root = self
-                .get_decided_block_context(validator_pubkey, slot)?
-                .beacon_block_root;
+            let context = self.get_decided_block_context(validator_pubkey, slot)?;
             let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
 
             let record_outcome = |outcome: &str| {
@@ -3928,110 +3966,134 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 Span::current().record("outcome", outcome);
             };
 
-            let consensus_data = EnvelopeConsensusData {
-                duty: ValidatorDuty {
-                    r#type: BEACON_ROLE_ENVELOPE_PROPOSER,
-                    pub_key: validator.public_key,
-                    slot,
-                    validator_index,
-                    committee_index: 0,
-                    committee_length: 0,
-                    committees_at_slot: 0,
-                    validator_committee_index: 0,
-                    validator_sync_committee_indices: Default::default(),
-                },
-                // The version participates in the QBFT value hash, so every operator must
-                // derive it from the slot.
-                version: DataVersion::from(fork),
-                data_ssz: try_to_variable_list(local_blinded.as_ssz_bytes(), |provided, max| {
-                    Error::SpecificError(SpecificError::DataTooLarge(format!(
-                        "Envelope data too large for consensus: {provided} > {max}"
-                    )))
-                })?,
-            };
-
-            let data_validator = self.create_envelope_consensus_data_validator(
-                validator.public_key,
-                validator_index,
-                slot,
-                decided_block_root,
-            );
-            let instance_id = EnvelopeProposerInstanceId {
-                validator: validator.public_key,
-                instance_height: slot.as_usize().into(),
-            };
-            let timeout_mode = TimeoutMode::Relative {
-                current_round_start_time: self.get_instant_in_slot(slot, Duration::ZERO)?,
-            };
-
-            let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::ENVELOPE]);
-            let completed = self
-                .consensus
-                .decide_instance(
-                    instance_id,
-                    consensus_data,
-                    data_validator,
-                    timeout_mode,
-                    &cluster.cluster_members,
-                )
-                .await;
-            drop(timer);
-
-            let decided = match completed {
-                Ok(Completed::Success(decided)) => decided,
-                Ok(Completed::TimedOut) => {
-                    warn!("Envelope consensus timed out");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    return Err(Error::SpecificError(SpecificError::Timeout));
-                }
-                Err(err) => {
-                    warn!(?err, "Envelope consensus failed");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    return Err(Error::SpecificError(SpecificError::from(err)));
-                }
-            };
-            let decided_blinded = decided.decode_blinded_envelope::<E>().map_err(|err| {
-                warn!(?err, "Failed to decode decided envelope");
+            // One absolute deadline at the payload-due mark (50% of the slot, SIP-94 §6):
+            // past it the envelope cannot satisfy this slot, so neither dissemination nor
+            // collection should proceed or continue.
+            let deadline = self
+                .get_instant_in_slot(slot, self.spec.get_slot_duration() / 2)
+                .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
+            if Instant::now() >= deadline {
                 record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                Error::SpecificError(SpecificError::InvalidQbftData(err))
-            })?;
+                return Err(Error::SpecificError(SpecificError::EnvelopeDeadlinePassed {
+                    slot,
+                }));
+            }
 
-            // Sign before the content gate so every operator contributes its share and the
-            // builder can reconstruct the threshold signature.
+            // The value every operator signs: the builder operator disseminates its own
+            // blinded envelope; everyone else awaits and validates the disseminated one
+            // (SIP-94 §6).
+            let signed_blinded = if context.built_locally {
+                // Bind the local BN's envelope to the decided bid before disseminating: a
+                // stale or inconsistent BN response must not go out under our signature.
+                if envelope.payload.block_hash != context.block_hash {
+                    warn!(
+                        local = ?envelope.payload.block_hash,
+                        decided = ?context.block_hash,
+                        "Local envelope's execution block hash differs from the decided bid"
+                    );
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    return Err(Error::SpecificError(
+                        SpecificError::EnvelopeBuilderInconsistent {
+                            local: envelope.payload.block_hash,
+                            decided: context.block_hash,
+                        },
+                    ));
+                }
+                context.validate_blinded(&local_blinded).map_err(|err| {
+                    warn!(?err, "Local envelope failed the decision bindings");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    Error::SpecificError(err)
+                })?;
+
+                let dissemination = EnvelopeDissemination {
+                    slot,
+                    envelope: try_to_variable_list(
+                        local_blinded.as_ssz_bytes(),
+                        |provided, max| {
+                            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                            Error::SpecificError(SpecificError::DataTooLarge(format!(
+                                "Envelope too large for dissemination: {provided} > {max}"
+                            )))
+                        },
+                    )?,
+                };
+                self.signature_collector
+                    .broadcast_dissemination(
+                        validator_pubkey,
+                        cluster.committee_id(),
+                        dissemination,
+                    )
+                    .map_err(|err| {
+                        warn!(?err, "Envelope dissemination broadcast failed");
+                        record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                        Error::SpecificError(SpecificError::DisseminationBroadcastFailed(err))
+                    })?;
+                local_blinded.clone()
+            } else {
+                let Some(dissemination) = self
+                    .dissemination_store
+                    .wait(validator_pubkey, slot, deadline)
+                    .await
+                else {
+                    warn!("No envelope dissemination arrived before the payload-due deadline");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    return Err(Error::SpecificError(SpecificError::DisseminationTimeout {
+                        slot,
+                    }));
+                };
+                let disseminated = dissemination.blinded_envelope::<E>().map_err(|err| {
+                    warn!(?err, "Disseminated envelope bytes did not decode");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    Error::SpecificError(SpecificError::DisseminationUndecodable(err))
+                })?;
+                context.validate_blinded(&disseminated).map_err(|err| {
+                    warn!(?err, "Disseminated envelope failed the decision bindings");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    Error::SpecificError(err)
+                })?;
+                disseminated
+            };
+
+            // Sign before the publish gate so every operator contributes its share and the
+            // builder can reconstruct the threshold signature. `payload_root` is trusted from
+            // the builder operator by design (SIP-94 §6).
             let epoch = slot.epoch(E::slots_per_epoch());
             let domain_hash = self.get_domain(epoch, Domain::BeaconBuilder);
-            let signing_root = decided_blinded.signing_root(domain_hash);
-            let signature = self
-                .collect_signature(
-                    PartialSignatureKind::PostConsensus,
+            let signing_root = signed_blinded.signing_root(domain_hash);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let signature = Self::collect_within(
+                remaining,
+                self.collect_signature(
+                    PartialSignatureKind::Envelope,
                     Role::EnvelopeProposer,
                     CollectionMode::SingleValidator,
                     &validator,
                     &cluster,
                     signing_root,
                     slot,
-                )
-                .await
-                .inspect_err(|err| {
-                    warn!(?err, "Envelope signature collection failed");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                })?;
+                ),
+            )
+            .await
+            .inspect_err(|err| {
+                warn!(?err, "Envelope signature collection failed");
+                record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+            })?;
 
-            // Publish gate: the caller publishes every `Ok`, so only the operator whose local
-            // envelope matches the decided value may return one.
-            if local_blinded != decided_blinded {
+            // Publish gate: the caller publishes every `Ok`, so only the builder operator may
+            // return one.
+            if !context.built_locally {
                 let local_root = local_blinded.tree_hash_root();
-                let decided_root = decided_blinded.tree_hash_root();
+                let disseminated_root = signed_blinded.tree_hash_root();
                 info!(
                     ?local_root,
-                    ?decided_root,
-                    "Cluster decided another operator's envelope, skipping publish (expected)"
+                    ?disseminated_root,
+                    "Signed another operator's envelope, skipping publish (expected)"
                 );
                 record_outcome(metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY);
                 return Err(Error::SpecificError(
                     SpecificError::EnvelopeNotBuiltLocally {
                         local_root,
-                        decided_root,
+                        disseminated_root,
                     },
                 ));
             }

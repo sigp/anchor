@@ -5,6 +5,7 @@ use libp2p::{
     PeerId,
     gossipsub::{Message, MessageAcceptance, MessageId},
 };
+use dissemination_store::DisseminationStore;
 use message_validator::{
     DutiesProvider, TopicContext, ValidatedMessage, ValidatedSSVMessage, ValidationResult,
     Validator,
@@ -32,6 +33,7 @@ pub struct NetworkMessageReceiver<E: types::EthSpec, S: SlotClock, D: DutiesProv
     processor: processor::Senders,
     qbft_manager: Arc<QbftManager<E, S>>,
     signature_collector: Arc<SignatureCollectorManager<S>>,
+    dissemination_store: Arc<DisseminationStore>,
     network_state_rx: watch::Receiver<NetworkState>,
     is_synced: watch::Receiver<bool>,
     outcome_tx: mpsc::Sender<Outcome>,
@@ -45,6 +47,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessag
         processor: processor::Senders,
         qbft_manager: Arc<QbftManager<E, S>>,
         signature_collector: Arc<SignatureCollectorManager<S>>,
+        dissemination_store: Arc<DisseminationStore>,
         network_state_rx: watch::Receiver<NetworkState>,
         is_synced: watch::Receiver<bool>,
         outcome_tx: mpsc::Sender<Outcome>,
@@ -55,6 +58,7 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> NetworkMessag
             processor,
             qbft_manager,
             signature_collector,
+            dissemination_store,
             network_state_rx,
             is_synced,
             outcome_tx,
@@ -196,9 +200,18 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                         }
                     }
                     ValidatedSSVMessage::EnvelopeDissemination(dissemination) => {
-                        //todo(epbs): route to the envelope duty's dissemination store once the
-                        // disseminate-and-sign runner lands; dropped until then.
-                        debug!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, slot = ?dissemination.slot, "Dropping envelope dissemination: no consumer wired yet");
+                        // Validation admits the class only for validator-scoped role-9 message
+                        // IDs, so the duty executor is always a validator public key.
+                        match msg_id.duty_executor() {
+                            Some(DutyExecutor::Validator(validator_pubkey)) => {
+                                receiver
+                                    .dissemination_store
+                                    .insert(validator_pubkey, dissemination);
+                            }
+                            _ => {
+                                error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Envelope dissemination without a validator duty executor");
+                            }
+                        }
                     }
                 }
             },
