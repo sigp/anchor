@@ -6,6 +6,7 @@ members = [
     "anchor/client",
     "anchor/common/api_types",
     "anchor/common/bls_lagrange",
+    "anchor/common/dissemination_store",
     "anchor/common/fork",
     "anchor/common/global_config",
     "anchor/common/operator_key",
@@ -51,6 +52,7 @@ database = { path = "anchor/database" }
 docgen = { path = "anchor/docgen" }
 duties_tracker = { path = "anchor/duties_tracker" }
 eth = { path = "anchor/eth" }
+dissemination_store = { path = "anchor/common/dissemination_store" }
 fork = { path = "anchor/common/fork" }
 global_config = { path = "anchor/common/global_config" }
 http_api = { path = "anchor/http_api" }
