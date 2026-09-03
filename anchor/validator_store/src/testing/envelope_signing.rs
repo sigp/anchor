@@ -1086,3 +1086,71 @@ async fn sign_block_with_external_build_decision_spawns_no_non_builder_task() {
         "an external-build decision carries no self-build envelope duty"
     );
 }
+
+/// Lighthouse can invoke `sign_block` twice for one slot: a second block-service notification
+/// for the same slot was observed on a devnet. The repeat must fail slashing protection inside
+/// `sign_abstract_block` as `SameData` before `sign_block` reaches the non-builder spawn, so only
+/// the first call's task signs. This pins the spawn's placement after `sign_abstract_block`: the
+/// other spawn-path tests disable slashing protection and call `sign_block` once, so a spawn
+/// moved above the slashing check would pass them and double-sign on the devnet.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_sign_block_for_the_same_slot_spawns_one_non_builder_task() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+    let (committee, pubkey) = single_validator_committee();
+    let spec = gloas_at_genesis_spec();
+    let decided_block = gloas_block_with_bid(&spec, BUILDER_INDEX_SELF_BUILD);
+    let decided = decided_consensus_data(&committee, pubkey, &decided_block);
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        OperatorId(1),
+        HarnessOptions {
+            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
+            disable_slashing_protection: false,
+            ..gloas_options()
+        },
+    );
+    let local_block = gloas_block_with_bid(&spec, 7);
+    assert_ne!(
+        local_block.canonical_root(),
+        decided_block.canonical_root(),
+        "the fixture must model a decided block this operator did not build"
+    );
+    // Stored up front so the legitimately spawned task signs immediately, and a wrongly spawned
+    // second task would too.
+    insert_dissemination(&harness, pubkey, &envelope_for_block(&decided_block));
+
+    harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(local_block.clone())),
+            Slot::new(TEST_SLOT),
+        )
+        .await
+        .expect("the first Gloas block duty must sign successfully");
+    wait_for_envelope_signing_root(&harness).await;
+
+    let repeat = harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(local_block)),
+            Slot::new(TEST_SLOT),
+        )
+        .await;
+    assert!(
+        matches!(repeat, Err(Error::SameData)),
+        "a repeated sign_block for the same slot must be rejected by slashing protection as SameData, got {repeat:?}"
+    );
+    let_spawned_tasks_run().await;
+
+    assert_eq!(
+        envelope_collection_count(&harness),
+        1,
+        "a repeated sign_block must not spawn a second non-builder task"
+    );
+    assert!(
+        harness.captured_disseminations.lock().is_empty(),
+        "a non-builder must never broadcast a dissemination"
+    );
+}

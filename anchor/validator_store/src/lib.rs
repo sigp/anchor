@@ -4093,7 +4093,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
 
             let context = self.get_decided_block_context(validator_pubkey, slot)?;
-            let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
 
             let record_outcome = |outcome: &str| {
                 metrics::inc_counter_vec(&metrics::ENVELOPE_SIGNING_OUTCOMES, &[outcome]);
@@ -4151,6 +4150,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     },
                 ));
             }
+            // Blind here rather than up front: hashing the full payload is the costly step, and
+            // only this builder path uses the result.
+            let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
             context.validate_blinded(&local_blinded).map_err(|err| {
                 warn!(?err, "Local envelope failed the decision bindings");
                 record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
