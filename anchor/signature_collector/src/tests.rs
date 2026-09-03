@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc, Condvar, LazyLock, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
@@ -20,13 +20,13 @@ use processor::{Config as ProcessorConfig, spawn as spawn_processor};
 use rand::{prelude::*, rngs::StdRng};
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
-    ENCRYPTED_KEY_LENGTH, Share, ValidatorIndex, ValidatorMetadata, domain_type::DomainType,
-    message::SignedSSVMessage,
+    ENCRYPTED_KEY_LENGTH, Share, ValidatorIndex, ValidatorMetadata, VariableList,
+    domain_type::DomainType, message::SignedSSVMessage,
 };
 use ssz::Decode;
 use task_executor::test_utils::TestRuntime;
 use tokio::sync::{Mutex, oneshot};
-use types::{Graffiti, SyncSubnetId};
+use types::{Epoch, Graffiti, SyncSubnetId};
 
 use super::*;
 
@@ -334,7 +334,23 @@ impl BatchScenario {
         Self::new_with_max_workers(message_sender, 4)
     }
 
+    fn new_with_fork_schedule(
+        message_sender: Arc<dyn MessageSender>,
+        fork_schedule: Arc<ForkSchedule>,
+    ) -> Self {
+        Self::new_with_max_workers_and_fork_schedule(message_sender, 4, fork_schedule)
+    }
+
     fn new_with_max_workers(message_sender: Arc<dyn MessageSender>, max_workers: usize) -> Self {
+        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
+        Self::new_with_max_workers_and_fork_schedule(message_sender, max_workers, fork_schedule)
+    }
+
+    fn new_with_max_workers_and_fork_schedule(
+        message_sender: Arc<dyn MessageSender>,
+        max_workers: usize,
+        fork_schedule: Arc<ForkSchedule>,
+    ) -> Self {
         let runtime = TestRuntime::default();
         let processor = spawn_processor(
             ProcessorConfig {
@@ -348,7 +364,6 @@ impl BatchScenario {
             NetworkDatabase::new_in_memory(&rsa_pubkey, TEST_NETWORK)
                 .expect("in-memory database should open"),
         );
-        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
         let slot_clock = ManualSlotClock::new(
             Slot::new(0),
             Duration::from_secs(0),
@@ -598,6 +613,76 @@ async fn register_manager_notifier(
         .await
         .expect("late notifier should resolve promptly")
         .expect("collector should remain active")
+}
+
+#[test]
+fn broadcast_dissemination_builds_fork_aware_wire_message() {
+    let alan_domain = DomainType([0, 0, 0, 1]);
+    let boole_domain = DomainType([0, 0, 0, 2]);
+    let mut fork_configs = BTreeMap::new();
+    fork_configs.insert(Fork::Alan, (Epoch::new(0), alan_domain));
+    fork_configs.insert(Fork::Boole, (Epoch::new(2), boole_domain));
+    let fork_schedule = Arc::new(
+        ForkSchedule::from_fork_configs(fork_configs, "test")
+            .expect("two-fork schedule should be valid"),
+    );
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = BatchScenario::new_with_fork_schedule(
+        Arc::clone(&sender) as Arc<dyn MessageSender>,
+        fork_schedule,
+    );
+    let cases = [
+        (
+            EnvelopeDissemination {
+                slot: Slot::new(63),
+                envelope: VariableList::new(vec![0xAA])
+                    .expect("Alan envelope should fit the wire payload"),
+            },
+            alan_domain,
+        ),
+        (
+            EnvelopeDissemination {
+                slot: Slot::new(64),
+                envelope: VariableList::new(vec![0xBB, 0xCC])
+                    .expect("Boole envelope should fit the wire payload"),
+            },
+            boole_domain,
+        ),
+    ];
+
+    for (dissemination, _) in &cases {
+        scenario
+            .manager
+            .broadcast_dissemination(
+                scenario.validator_pubkey,
+                scenario.metadata.committee_id,
+                dissemination.clone(),
+            )
+            .expect("dissemination should be broadcast");
+    }
+
+    assert_eq!(sender.attempts(), cases.len());
+    let messages = sender.messages();
+    assert_eq!(messages.len(), cases.len());
+    for (message, (expected_dissemination, expected_domain)) in messages.iter().zip(&cases) {
+        assert_eq!(
+            message.ssv_message.msg_type(),
+            &MsgType::SSVEnvelopeDisseminationMsgType
+        );
+        assert!(message.full_data.is_empty());
+
+        let message_id = message.ssv_message.msg_id();
+        assert_eq!(message_id.domain(), *expected_domain);
+        assert_eq!(message_id.role(), Some(Role::EnvelopeProposer));
+        assert_eq!(
+            message_id.duty_executor(),
+            Some(DutyExecutor::Validator(scenario.validator_pubkey))
+        );
+
+        let decoded = EnvelopeDissemination::from_ssz_bytes(message.ssv_message.data())
+            .expect("wire payload should decode as an envelope dissemination");
+        assert_eq!(&decoded, expected_dissemination);
+    }
 }
 
 #[test]
