@@ -9,10 +9,7 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     str::from_utf8,
-    sync::{
-        Arc, LazyLock, Weak,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, LazyLock, Weak},
     time::Duration,
 };
 
@@ -1134,35 +1131,37 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         // costing the reveal by merely winning the race. A candidate whose envelope does not
         // decode is unreachable through gossip, which decodes it before accepting, and is
         // skipped on the same principle rather than ending the duty.
-        let rejected = AtomicUsize::new(0);
+        let mut rejected = 0usize;
         let Some(disseminated) = self
             .dissemination_store
             .wait_matching(
                 validator.public_key,
                 slot,
                 deadline,
-                |signer, dissemination| match dissemination.blinded_envelope::<E>() {
-                    Ok(blinded) => match context.validate_blinded(&blinded) {
-                        Ok(()) => Some(blinded),
-                        Err(err) => {
-                            rejected.fetch_add(1, Ordering::Relaxed);
+                |signer, dissemination| {
+                    let blinded = dissemination
+                        .blinded_envelope::<E>()
+                        .inspect_err(|err| {
+                            rejected += 1;
+                            warn!(
+                                %signer,
+                                ?err,
+                                "Skipping a disseminated envelope whose bytes did not decode"
+                            );
+                        })
+                        .ok()?;
+                    context
+                        .validate_blinded(&blinded)
+                        .inspect_err(|err| {
+                            rejected += 1;
                             warn!(
                                 %signer,
                                 ?err,
                                 "Skipping a disseminated envelope that failed the decision bindings"
                             );
-                            None
-                        }
-                    },
-                    Err(err) => {
-                        rejected.fetch_add(1, Ordering::Relaxed);
-                        warn!(
-                            %signer,
-                            ?err,
-                            "Skipping a disseminated envelope whose bytes did not decode"
-                        );
-                        None
-                    }
+                        })
+                        .ok()?;
+                    Some(blinded)
                 },
             )
             .await
@@ -1171,7 +1170,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             // which the error alone cannot say and the spawn boundary never sees.
             warn!(
                 %slot,
-                rejected = rejected.load(Ordering::Relaxed),
+                rejected,
                 "No envelope dissemination matching the decision arrived before the payload-due deadline"
             );
             record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);

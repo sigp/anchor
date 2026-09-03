@@ -107,25 +107,16 @@ fn insert_dissemination_from(
     envelope: &ExecutionPayloadEnvelope<MainnetEthSpec>,
 ) -> BlindedExecutionPayloadEnvelope<MainnetEthSpec> {
     let blinded = BlindedExecutionPayloadEnvelope::from_full(envelope);
-    insert_dissemination_bytes(harness, pubkey, signer, blinded.as_ssz_bytes());
-    blinded
-}
-
-/// Inserts raw candidate bytes, for the undecodable case the message receiver cannot produce.
-fn insert_dissemination_bytes(
-    harness: &ValidatorStoreTestHarness,
-    pubkey: PublicKeyBytes,
-    signer: OperatorId,
-    bytes: Vec<u8>,
-) {
     harness.dissemination_store.insert(
         pubkey,
         signer,
         EnvelopeDissemination {
             slot: Slot::new(TEST_SLOT),
-            envelope: VariableList::new(bytes).expect("candidate bytes should fit"),
+            envelope: VariableList::new(blinded.as_ssz_bytes())
+                .expect("blinded envelope bytes should fit"),
         },
     );
+    blinded
 }
 
 /// A single-validator committee over `test_operator_ids()` and its validator's public key.
@@ -643,8 +634,16 @@ async fn non_builder_task_skips_unusable_candidates_and_signs_the_binding_one() 
     seed_context(&harness, pubkey, context);
 
     // Ahead of the honest candidate: bytes that do not decode, then a decodable envelope
-    // bound to a different beacon block root.
-    insert_dissemination_bytes(&harness, pubkey, OperatorId(1), vec![0xFF; 3]);
+    // bound to a different beacon block root. The receiver cannot produce undecodable bytes
+    // (pubsub decodes before accepting), so they go in directly.
+    harness.dissemination_store.insert(
+        pubkey,
+        OperatorId(1),
+        EnvelopeDissemination {
+            slot: Slot::new(TEST_SLOT),
+            envelope: VariableList::new(vec![0xFF; 3]).expect("garbage bytes should fit"),
+        },
+    );
     let mut mismatched = builder_envelope.clone();
     mismatched.beacon_block_root = Hash256::repeat_byte(0xDD);
     insert_dissemination_from(&harness, pubkey, OperatorId(2), &mismatched);

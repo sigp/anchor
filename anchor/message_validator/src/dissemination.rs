@@ -114,11 +114,12 @@ pub(crate) fn validate_envelope_dissemination(
 
     // Record only after every other rule passed, so a rejected message cannot consume this
     // signer's dissemination budget for the slot.
-    duty_state
-        .get_or_create_operator(&signer)
-        .record_dissemination(slot);
+    operator_state.record_dissemination(slot);
 
-    Ok(ValidatedSSVMessage::EnvelopeDissemination(dissemination))
+    Ok(ValidatedSSVMessage::EnvelopeDissemination {
+        signer,
+        dissemination,
+    })
 }
 
 #[cfg(test)]
@@ -292,7 +293,9 @@ mod tests {
         );
 
         match result {
-            Ok(ValidatedSSVMessage::EnvelopeDissemination(d)) => {
+            Ok(ValidatedSSVMessage::EnvelopeDissemination {
+                dissemination: d, ..
+            }) => {
                 assert_eq!(d.slot, Slot::new(TEST_SLOT));
             }
             other => panic!("expected accepted dissemination, got {other:?}"),

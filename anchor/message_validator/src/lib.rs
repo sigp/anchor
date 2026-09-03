@@ -329,7 +329,12 @@ impl From<SignedSSVMessageError> for ValidationFailure {
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
     PartialSignatureMessages(PartialSignatureMessages),
-    EnvelopeDissemination(EnvelopeDissemination),
+    /// The carrier plus the committee member that signed it. Validation proves there is
+    /// exactly one signer, and the envelope duty names it when rejecting a candidate.
+    EnvelopeDissemination {
+        signer: OperatorId,
+        dissemination: EnvelopeDissemination,
+    },
 }
 
 #[derive(Debug)]

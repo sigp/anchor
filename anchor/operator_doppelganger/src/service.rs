@@ -18,7 +18,7 @@ fn extract_message_slot(validated_message: &ValidatedSSVMessage) -> Slot {
     match validated_message {
         ValidatedSSVMessage::QbftMessage(msg) => Slot::new(msg.height),
         ValidatedSSVMessage::PartialSignatureMessages(msg) => msg.slot,
-        ValidatedSSVMessage::EnvelopeDissemination(msg) => msg.slot,
+        ValidatedSSVMessage::EnvelopeDissemination { dissemination, .. } => dissemination.slot,
     }
 }
 
@@ -213,7 +213,7 @@ impl OperatorDoppelgangerService {
                      Another instance of this operator is running. Shutting down to prevent equivocation."
                 );
             }
-            ValidatedSSVMessage::EnvelopeDissemination(_) => {
+            ValidatedSSVMessage::EnvelopeDissemination { .. } => {
                 error!(
                     operator_id = *own_operator_id,
                     duty_executor = ?msg_id.duty_executor(),

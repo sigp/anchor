@@ -199,24 +199,22 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                             error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
                         }
                     }
-                    ValidatedSSVMessage::EnvelopeDissemination(dissemination) => {
+                    ValidatedSSVMessage::EnvelopeDissemination {
+                        signer,
+                        dissemination,
+                    } => {
                         // Validation admits the class only for validator-scoped role-9 message
-                        // IDs with exactly one signer, so both lookups always resolve. The
-                        // signer keys the store's candidates so the runner can name the
-                        // operator behind a dissemination it rejects (SIP-94 §6).
-                        match (
-                            msg_id.duty_executor(),
-                            signed_ssv_message.operator_ids().first(),
-                        ) {
-                            (Some(DutyExecutor::Validator(validator_pubkey)), Some(signer)) => {
+                        // IDs, so the duty executor is always a validator public key.
+                        match msg_id.duty_executor() {
+                            Some(DutyExecutor::Validator(validator_pubkey)) => {
                                 receiver.dissemination_store.insert(
                                     validator_pubkey,
-                                    *signer,
+                                    signer,
                                     dissemination,
                                 );
                             }
                             _ => {
-                                error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Envelope dissemination without a validator duty executor and a single signer");
+                                error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, "Envelope dissemination without a validator duty executor");
                             }
                         }
                     }

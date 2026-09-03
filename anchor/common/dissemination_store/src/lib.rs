@@ -1,13 +1,14 @@
 //! Handoff store for SIP-94 §6 envelope disseminations.
 //!
 //! The message receiver writes every validator-accepted `EnvelopeDissemination` for a
-//! `(validator, slot)`; the envelope duty runner scans them in arrival order for the first
-//! whose envelope binds to its own §4 decision. Message validation admits at most one
-//! dissemination per (`MessageId`, signer, slot) (SIP-94 §7) and only from committee members,
-//! so the candidate list is bounded by committee size on the validated path. The store itself
-//! enforces neither: it is a handoff, and validation is its only production writer.
+//! `(validator, slot)`; the envelope duty runner scans them in arrival order and selects one by
+//! content (see `sign_disseminated_envelope` for why selection cannot be by arrival). Message
+//! validation admits at most one dissemination per (`MessageId`, signer, slot) (SIP-94 §7) and
+//! only from committee members, so the candidate list is bounded by committee size on the
+//! validated path. The store enforces neither: it is a handoff, and validation is its only
+//! production writer.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use bls::PublicKeyBytes;
 use parking_lot::Mutex;
@@ -24,25 +25,20 @@ struct Key {
     slot: Slot,
 }
 
-/// The candidates accepted for one key, and a counter that wakes waiters when one lands.
+/// The candidates accepted for one key, and a signal that wakes waiters when one lands.
+#[derive(Default)]
 struct Entry {
     /// Accepted disseminations in arrival order, tagged with the operator that signed each.
-    candidates: Vec<(OperatorId, EnvelopeDissemination)>,
-    /// Set to `candidates.len()` on every push. A `watch` receiver treats the value present
-    /// when it subscribes as already seen, so a waiter must subscribe while holding the same
-    /// lock it reads `candidates` under. Subscribing after releasing the lock would miss a
-    /// candidate pushed in between and could sleep to its deadline with a match already in
-    /// the vector.
-    version: watch::Sender<usize>,
-}
-
-impl Default for Entry {
-    fn default() -> Self {
-        Self {
-            candidates: Vec::new(),
-            version: watch::Sender::new(0),
-        }
-    }
+    /// `Arc` so a waiter's visit is a refcount bump: a candidate carries up to
+    /// `SSVMessageDataLen` bytes, and cloning it would copy them under the lock the receiver
+    /// also takes, letting the sender's byte count set this node's lock-hold time.
+    candidates: Vec<(OperatorId, Arc<EnvelopeDissemination>)>,
+    /// Bumped on every push; the value carries nothing, only the change matters. A `watch`
+    /// receiver treats the version present when it subscribes as already seen, so a waiter must
+    /// subscribe while holding the same lock it reads `candidates` under. Subscribing after
+    /// releasing the lock would miss a candidate pushed in between and could sleep to its
+    /// deadline with a match already in the vector.
+    version: watch::Sender<()>,
 }
 
 /// Shared store connecting the message receiver (writer) to the envelope duty runner (reader).
@@ -59,10 +55,8 @@ impl DisseminationStore {
     /// Appends an accepted dissemination for `(validator, slot)` and wakes the waiters.
     ///
     /// Every accepted candidate is kept, because the runner selects by content rather than by
-    /// arrival: discarding here would hand a Byzantine committee member the slot by letting it
-    /// win the race. Entries older than `MAX_DISSEMINATION_AGE_SLOTS` relative to the inserted
-    /// slot are dropped on insert (addition on the stored side, so an early slot cannot
-    /// underflow).
+    /// arrival. Entries older than `MAX_DISSEMINATION_AGE_SLOTS` relative to the inserted slot
+    /// are dropped on insert (addition on the stored side, so an early slot cannot underflow).
     pub fn insert(
         &self,
         validator: PublicKeyBytes,
@@ -74,8 +68,8 @@ impl DisseminationStore {
         Self::sweep(&mut inner, slot);
 
         let entry = inner.entry(Key { validator, slot }).or_default();
-        entry.candidates.push((signer, dissemination));
-        entry.version.send_replace(entry.candidates.len());
+        entry.candidates.push((signer, Arc::new(dissemination)));
+        entry.version.send_replace(());
     }
 
     /// Returns the first candidate for `(validator, slot)` that `predicate` accepts, waiting
@@ -94,11 +88,14 @@ impl DisseminationStore {
         let key = Key { validator, slot };
         let mut cursor = 0;
 
+        // Once per call: `slot` is fixed, so a key surviving this cannot go stale during the
+        // wait, and a candidate arriving meanwhile was already swept against its own slot.
+        Self::sweep(&mut self.inner.lock(), slot);
+
         loop {
             // One critical section for both, per the `version` note above.
             let (candidate, mut version) = {
                 let mut inner = self.inner.lock();
-                Self::sweep(&mut inner, slot);
                 let entry = inner.entry(key).or_default();
                 (
                     entry.candidates.get(cursor).cloned(),
@@ -148,6 +145,7 @@ mod tests {
         }
     }
 
+    /// The default-tagged candidate, for tests that never compare two candidates.
     fn dissemination(slot: u64) -> EnvelopeDissemination {
         tagged(slot, 0xAA)
     }
@@ -178,7 +176,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn stored_candidate_matches_without_waiting() {
         let store = DisseminationStore::new();
         store.insert(pubkey(1), OperatorId(1), dissemination(5));
@@ -189,7 +187,7 @@ mod tests {
         assert_eq!(got, Some(dissemination(5)));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn candidates_accumulate_in_arrival_order() {
         let store = DisseminationStore::new();
         store.insert(pubkey(1), OperatorId(1), tagged(5, 0xAA));
@@ -272,7 +270,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn wait_times_out_when_nothing_matches() {
         let store = DisseminationStore::new();
         store.insert(pubkey(1), OperatorId(1), tagged(5, 0xAA));
@@ -307,7 +305,7 @@ mod tests {
         assert_eq!(w2.await.unwrap(), Some(dissemination(5)));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn timed_out_wait_can_retry_against_the_backlog() {
         let store = DisseminationStore::new();
 
@@ -327,7 +325,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn keys_are_isolated() {
         let store = DisseminationStore::new();
         store.insert(pubkey(1), OperatorId(1), dissemination(5));
@@ -346,7 +344,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn insert_evicts_entries_past_the_age_window() {
         let store = DisseminationStore::new();
         store.insert(pubkey(1), OperatorId(1), dissemination(5));
@@ -365,7 +363,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn unanswered_waits_stay_bounded() {
         let store = DisseminationStore::new();
         // Many timed-out waits across distinct slots, no inserts at all.
