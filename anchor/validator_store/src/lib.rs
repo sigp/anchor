@@ -1131,6 +1131,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         // costing the reveal by merely winning the race. A candidate whose envelope does not
         // decode is unreachable through gossip, which decodes it before accepting, and is
         // skipped on the same principle rather than ending the duty.
+        //
+        // Arrival order is node-local, so the accepted residual (`payload_root` is unchecked)
+        // still splits operators across two binding-passing roots when a forgery races the
+        // honest carrier. The symptom is then a signature collection timeout below, not the
+        // dissemination timeout in this block: each root collects some shares and neither
+        // reaches threshold. Costs the reveal, never a wrong payload.
         let mut rejected = 0usize;
         let Some(disseminated) = self
             .dissemination_store

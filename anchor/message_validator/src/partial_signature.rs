@@ -4483,6 +4483,50 @@ mod tests {
     }
 
     #[test]
+    fn dissemination_does_not_reset_an_earlier_partial_sig_budget() {
+        // `record_dissemination` keeps an existing SignerState rather than replacing it, because
+        // both message classes share one per-(signer, slot) entry and gossip orders them freely.
+        // Replacing it would hand back the signer's spent Envelope partial-signature budget, so
+        // a signer whose share arrives before its dissemination could send a second share.
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let mut duty_state = crate::duty_state::DutyState::new(64);
+        let share = |root: u8| {
+            create_signed_envelope_proposer_message(
+                OperatorId(1),
+                &private_key,
+                Slot::new(1),
+                Hash256::from([root; 32]),
+            )
+        };
+
+        // Arrange: the signer's one Envelope share for the slot, before its dissemination.
+        let first = share(0x33);
+        validate_partial_signature_message(
+            create_envelope_proposer_context(&first, &committee_info, &map, Slot::new(1)),
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        )
+        .expect("the signer's first Envelope share must be accepted");
+
+        // Act: its dissemination for the same slot lands afterwards.
+        duty_state
+            .get_or_create_operator(&OperatorId(1))
+            .record_dissemination(Slot::new(1));
+
+        // Assert: the spent share budget survives, so a second share is still refused.
+        let second = share(0x44);
+        let result = validate_partial_signature_message(
+            create_envelope_proposer_context(&second, &committee_info, &map, Slot::new(1)),
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        );
+        assert!(
+            result.is_err(),
+            "a dissemination must not reset the signer's Envelope partial-signature budget for the slot, so the second share must still be refused, got: {result:?}"
+        );
+    }
+
+    #[test]
     fn envelope_proposer_dissemination_advances_blocks_lower_partial_sig() {
         // §7 monotonic-slot rule, dissemination-advances direction: a dissemination at slot 10
         // must block a later Envelope partial sig at the lower slot 5.

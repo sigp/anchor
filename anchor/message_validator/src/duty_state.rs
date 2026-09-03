@@ -307,6 +307,12 @@ pub(crate) struct SignerState {
     seen_signers: HashSet<CommitteeId>,
     /// True once an envelope dissemination from this signer was accepted for this slot
     /// (SIP-94 §7). Only `Role::EnvelopeProposer` message IDs ever set it.
+    ///
+    /// Nothing clears it, and that rests on role 9 having no consensus path: `OperatorState::
+    /// update` is the one writer that replaces a `SignerState` outright, and it is reachable
+    /// only for QBFT roles, which `Role::EnvelopeProposer` is not (`max_round()` is `None`, so
+    /// consensus messages for it are rejected before any state update). A future role that both
+    /// disseminates and runs QBFT would need this bit carried across the replacement.
     dissemination_recorded: bool,
     /// Accepted signing roots for the root-budgeted kinds, boxed and lazily allocated on the
     /// first such packet: every role's ring entries share this struct, but only
@@ -412,6 +418,30 @@ mod tests {
         hash_data,
         tests::{QbftMessageBuilder, create_signed_consensus_message},
     };
+
+    /// The dissemination flag lives in a slot ring, so a read for a slot that merely aliases a
+    /// recorded one must not inherit its flag. Without the ring's stored-slot filter an honest
+    /// dissemination exactly `stored_slot_count` slots later would be silently Ignored, and the
+    /// monotonic-slot guard would not catch it because the incoming slot is higher.
+    #[test]
+    fn dissemination_record_does_not_alias_across_the_ring() {
+        const RING: usize = 64;
+        let mut duty_state = DutyState::new(RING);
+        let recorded = Slot::new(5);
+        let aliased = recorded + RING as u64;
+
+        let operator_state = duty_state.get_or_create_operator(&OperatorId(1));
+        operator_state.record_dissemination(recorded);
+
+        assert!(
+            operator_state.is_dissemination_recorded(recorded),
+            "the recorded slot must read as recorded"
+        );
+        assert!(
+            !operator_state.is_dissemination_recorded(aliased),
+            "slot {aliased} shares a ring index with the recorded slot {recorded} and must read as absent"
+        );
+    }
 
     #[test]
     fn test_duty_state_update() {

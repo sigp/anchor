@@ -25,26 +25,22 @@ struct Key {
     slot: Slot,
 }
 
-/// The candidates accepted for one key, and a signal that wakes waiters when one lands.
-#[derive(Default)]
-struct Entry {
-    /// Accepted disseminations in arrival order, tagged with the operator that signed each.
-    /// `Arc` so a waiter's visit is a refcount bump: a candidate carries up to
-    /// `SSVMessageDataLen` bytes, and cloning it would copy them under the lock the receiver
-    /// also takes, letting the sender's byte count set this node's lock-hold time.
-    candidates: Vec<(OperatorId, Arc<EnvelopeDissemination>)>,
-    /// Bumped on every push; the value carries nothing, only the change matters. A `watch`
-    /// receiver treats the version present when it subscribes as already seen, so a waiter must
-    /// subscribe while holding the same lock it reads `candidates` under. Subscribing after
-    /// releasing the lock would miss a candidate pushed in between and could sleep to its
-    /// deadline with a match already in the vector.
-    version: watch::Sender<()>,
-}
+/// Accepted disseminations for one key, in arrival order, tagged with the operator that signed
+/// each. `Arc` so a waiter's visit is a refcount bump: a candidate carries up to
+/// `SSVMessageDataLen` bytes, and cloning it would copy them under the lock the receiver also
+/// takes, letting the sender's byte count set this node's lock-hold time.
+type Candidates = Vec<(OperatorId, Arc<EnvelopeDissemination>)>;
 
 /// Shared store connecting the message receiver (writer) to the envelope duty runner (reader).
 #[derive(Default)]
 pub struct DisseminationStore {
-    inner: Mutex<HashMap<Key, Entry>>,
+    inner: Mutex<HashMap<Key, Candidates>>,
+    /// Bumped on every insert; the value carries nothing, only the change matters. Store-level
+    /// rather than per key so a waiter can subscribe before it first reads, which is what makes
+    /// the wakeup sound: a `watch` receiver treats the version present at subscription as seen,
+    /// so a candidate pushed between a read and a later subscribe would be missed. It also
+    /// outlives every entry, so a swept entry cannot strand a waiter on a dropped sender.
+    version: watch::Sender<()>,
 }
 
 impl DisseminationStore {
@@ -64,12 +60,16 @@ impl DisseminationStore {
         dissemination: EnvelopeDissemination,
     ) {
         let slot = dissemination.slot;
-        let mut inner = self.inner.lock();
-        Self::sweep(&mut inner, slot);
-
-        let entry = inner.entry(Key { validator, slot }).or_default();
-        entry.candidates.push((signer, Arc::new(dissemination)));
-        entry.version.send_replace(());
+        {
+            let mut inner = self.inner.lock();
+            Self::sweep(&mut inner, slot);
+            inner
+                .entry(Key { validator, slot })
+                .or_default()
+                .push((signer, Arc::new(dissemination)));
+        }
+        // Outside the lock: waking a waiter that would immediately contend on it helps nobody.
+        self.version.send_replace(());
     }
 
     /// Returns the first candidate for `(validator, slot)` that `predicate` accepts, waiting
@@ -88,21 +88,23 @@ impl DisseminationStore {
         let key = Key { validator, slot };
         let mut cursor = 0;
 
+        // Before the first read, so no insert can slip between them and be treated as seen.
+        let mut version = self.version.subscribe();
+
         // Once per call: `slot` is fixed, so a key surviving this cannot go stale during the
         // wait, and a candidate arriving meanwhile was already swept against its own slot.
         Self::sweep(&mut self.inner.lock(), slot);
 
         loop {
-            // One critical section for both, per the `version` note above.
-            let (candidate, mut version) = {
-                let mut inner = self.inner.lock();
-                let entry = inner.entry(key).or_default();
-                (
-                    entry.candidates.get(cursor).cloned(),
-                    entry.version.subscribe(),
-                )
-            };
+            // Reads only: a waiter never creates an entry, so waiting for a slot that never
+            // receives a dissemination leaves nothing behind.
+            let candidate = self
+                .inner
+                .lock()
+                .get(&key)
+                .and_then(|candidates| candidates.get(cursor).cloned());
 
+            // Outside the lock: the predicate decodes and validates the envelope.
             if let Some((signer, dissemination)) = candidate {
                 cursor += 1;
                 if let Some(accepted) = predicate(signer, &dissemination) {
@@ -111,19 +113,22 @@ impl DisseminationStore {
                 continue;
             }
 
-            match tokio::time::timeout_at(deadline, version.changed()).await {
-                // A candidate landed; read it on the next pass.
-                Ok(Ok(())) => {}
-                // The entry was swept while waiting, so nothing more can arrive under it.
-                Ok(Err(_sender_dropped)) => return None,
-                Err(_elapsed) => return None,
+            // An insert for an unrelated key also wakes this, costing one re-read of a cursor
+            // that has not moved. Inserts run about once per proposal slot, so that is free.
+            // `changed()` errors only if the sender dropped, which cannot happen while this
+            // borrow of the store is alive.
+            if tokio::time::timeout_at(deadline, version.changed())
+                .await
+                .is_err()
+            {
+                return None;
             }
         }
     }
 
     /// Drops entries older than `MAX_DISSEMINATION_AGE_SLOTS` relative to `slot`. A call for
     /// an old slot cannot evict a newer entry.
-    fn sweep(inner: &mut HashMap<Key, Entry>, slot: Slot) {
+    fn sweep(inner: &mut HashMap<Key, Candidates>, slot: Slot) {
         inner.retain(|stored_key, _| stored_key.slot + MAX_DISSEMINATION_AGE_SLOTS >= slot);
     }
 }
@@ -364,7 +369,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn unanswered_waits_stay_bounded() {
+    async fn unanswered_waits_create_nothing() {
         let store = DisseminationStore::new();
         // Many timed-out waits across distinct slots, no inserts at all.
         for slot in 0..100u64 {
@@ -373,15 +378,58 @@ mod tests {
                 .await;
         }
 
-        let inner = store.inner.lock();
         assert!(
-            inner.len() as u64 <= MAX_DISSEMINATION_AGE_SLOTS + 1,
-            "wait-created entries must be swept; got {} keys",
-            inner.len()
+            store.inner.lock().is_empty(),
+            "a wait must not create an entry, so unanswered waits leave the store empty"
         );
-        assert!(
-            inner.values().all(|entry| entry.candidates.is_empty()),
-            "a wait must not create candidates"
+    }
+
+    /// A waiter that has already drained the backlog still sees a candidate that arrives after
+    /// it parks. This is the wakeup path, and it is the reason the store owns the signal.
+    #[tokio::test]
+    async fn parked_waiter_wakes_on_a_later_arrival() {
+        let store = Arc::new(DisseminationStore::new());
+        // Seed one candidate the predicate will refuse, so the waiter drains and then parks.
+        store.insert(pubkey(1), OperatorId(1), tagged(5, 0xAA));
+
+        let waiter = tokio::spawn({
+            let store = store.clone();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            async move {
+                store
+                    .wait_matching(pubkey(1), Slot::new(5), deadline, accept_tag(0xBB))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        store.insert(pubkey(1), OperatorId(2), tagged(5, 0xBB));
+
+        assert_eq!(waiter.await.unwrap(), Some(tagged(5, 0xBB)));
+    }
+
+    /// An insert for an unrelated key wakes every waiter; the woken waiter must re-park rather
+    /// than treat the wake as a candidate.
+    #[tokio::test]
+    async fn insert_for_another_key_does_not_satisfy_a_waiter() {
+        let store = Arc::new(DisseminationStore::new());
+        let waiter = tokio::spawn({
+            let store = store.clone();
+            let deadline = Instant::now() + Duration::from_millis(300);
+            async move {
+                store
+                    .wait_matching(pubkey(1), Slot::new(5), deadline, accept_any)
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        store.insert(pubkey(2), OperatorId(1), dissemination(5));
+
+        assert_eq!(
+            waiter.await.unwrap(),
+            None,
+            "another key's insert must not end this wait"
         );
     }
 }
