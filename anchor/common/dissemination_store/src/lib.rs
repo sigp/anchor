@@ -1,8 +1,8 @@
 //! Handoff store for SIP-94 §6 envelope disseminations.
 //!
 //! The message receiver writes every validator-accepted `EnvelopeDissemination` for a
-//! `(validator, slot)`; the envelope duty runner scans them in arrival order and selects one by
-//! content (see `sign_disseminated_envelope` for why selection cannot be by arrival). Message
+//! `(validator, slot)`; the envelope duty runner scans them in insertion order and selects one by
+//! content (see `sign_disseminated_envelope` for why selection cannot be by order). Message
 //! validation admits at most one dissemination per (`MessageId`, signer, slot) (SIP-94 §7) and
 //! only from committee members, so the candidate list is bounded by committee size on the
 //! validated path. The store enforces neither: it is a handoff, and validation is its only
@@ -25,7 +25,7 @@ struct Key {
     slot: Slot,
 }
 
-/// Accepted disseminations for one key, in arrival order, tagged with the operator that signed
+/// Accepted disseminations for one key, in insertion order, tagged with the operator that signed
 /// each. `Arc` so a waiter's visit is a refcount bump: a candidate carries up to
 /// `SSVMessageDataLen` bytes, and cloning it would copy them under the lock the receiver also
 /// takes, letting the sender's byte count set this node's lock-hold time.
@@ -75,7 +75,9 @@ impl DisseminationStore {
     /// Returns the first candidate for `(validator, slot)` that `predicate` accepts, waiting
     /// for later arrivals until `deadline`.
     ///
-    /// Candidates are visited once each, in arrival order, starting from those already stored.
+    /// Candidates are visited once each, in insertion order, starting from those already stored.
+    /// That is the order the receiver's worker pool finished validating them in, which need not be
+    /// the order they arrived from the network, and differs between operators either way.
     /// `predicate` runs outside the store lock, so it may decode and validate the envelope.
     /// Returns `None` when the deadline passes with no candidate accepted.
     pub async fn wait_matching<T>(
@@ -91,8 +93,11 @@ impl DisseminationStore {
         // Before the first read, so no insert can slip between them and be treated as seen.
         let mut version = self.version.subscribe();
 
-        // Once per call: `slot` is fixed, so a key surviving this cannot go stale during the
-        // wait, and a candidate arriving meanwhile was already swept against its own slot.
+        // Once per call. A later insert can only evict this key by carrying a slot at least
+        // `MAX_DISSEMINATION_AGE_SLOTS` + 1 ahead, and every caller's deadline falls inside `slot`
+        // itself (`envelope_deadline`), so the wait is long over by then. A deadline allowed to
+        // outlive that window would reintroduce the case this rules out: the key would be swept
+        // and could then be re-created empty, leaving `cursor` past candidates it never visited.
         Self::sweep(&mut self.inner.lock(), slot);
 
         loop {
@@ -211,7 +216,7 @@ mod tests {
         assert_eq!(
             *seen.lock(),
             vec![(OperatorId(1), 0xAA), (OperatorId(2), 0xBB)],
-            "candidates must be visited in arrival order, each tagged with its signer"
+            "candidates must be visited in insertion order, each tagged with its signer"
         );
     }
 
