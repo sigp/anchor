@@ -122,6 +122,7 @@ mod tests {
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
+    use bls::Signature;
     use duties_tracker::DutyAssignment;
     use fork::Fork;
     use openssl::{
@@ -132,11 +133,12 @@ mod tests {
     };
     use slot_clock::ManualSlotClock;
     use ssv_types::{
-        OperatorId, VariableList,
+        OperatorId, ValidatorIndex, VariableList,
         message::{MsgType, SSVMessage, SignedSSVMessage},
+        partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
     };
     use ssz::Encode;
-    use types::Slot;
+    use types::{Hash256, Slot};
 
     use super::*;
     use crate::{
@@ -458,6 +460,53 @@ mod tests {
             result,
             |failure| matches!(failure, ValidationFailure::SlotAlreadyAdvanced { .. }),
             "SlotAlreadyAdvanced (monotonic-slot role)",
+        );
+    }
+
+    #[test]
+    fn dissemination_below_advanced_partial_sig_slot_ignored() {
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let mut duty_state = DutyState::new(64);
+
+        // An Envelope partial sig at slot 2 advances the signer's max_slot (both message
+        // classes share it): seed through the state update the partial-signature validator
+        // applies.
+        let partial_sig_messages = PartialSignatureMessages {
+            kind: PartialSignatureKind::Envelope,
+            slot: Slot::new(TEST_SLOT + 1),
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: Signature::empty(),
+                signing_root: Hash256::from([0x99; 32]),
+                signer: OperatorId(1),
+                validator_index: ValidatorIndex(0),
+            }])
+            .unwrap(),
+        };
+        duty_state
+            .update_for_partial_signature(&partial_sig_messages, &OperatorId(1))
+            .expect("seeding partial-signature state must succeed");
+
+        // The same signer's dissemination for the earlier slot is now stale.
+        let earlier =
+            create_signed_dissemination(Role::EnvelopeProposer, OperatorId(1), &private_key);
+        let ctx = create_dissemination_context(
+            &earlier,
+            &committee_info,
+            Role::EnvelopeProposer,
+            &map,
+            2,
+            Some(0),
+        );
+        let result = validate_envelope_dissemination(
+            ctx,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::SlotAlreadyAdvanced { .. }),
+            "SlotAlreadyAdvanced (§7 monotonic-slot rule, partial-sig-advances direction: a dissemination below the signer's Envelope-partial slot is stale)",
         );
     }
 

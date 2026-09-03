@@ -4438,105 +4438,59 @@ mod tests {
     }
 
     #[test]
-    fn envelope_proposer_shared_state_accepts_consensus_then_partial_sig() {
-        // Consensus and PostConsensus share one DutyState per MessageId. Validate a consensus
-        // message at slot 1, persist it (the outer `validate_consensus_message` does this via
-        // `update_for_consensus_message`; `validate_qbft_message_by_duty_logic` alone does not),
-        // then validate a same-slot PostConsensus. The guard is strict (`max_slot > message_slot`),
-        // so the `max_slot == message_slot` equality boundary must be tolerated (Ok).
-
-        // Arrange: EnvelopeProposer consensus message at slot 1 (the builder defaults height to 1).
+    fn envelope_proposer_partial_sig_accepted_at_disseminated_slot() {
+        // Envelope disseminations and Envelope partial sigs share one max_slot per signer (both
+        // create the signer state for a new slot). Record a dissemination at slot 1, then
+        // validate a same-slot Envelope partial. The guard is strict (`max_slot > message_slot`),
+        // so the `max_slot == message_slot` equality boundary must be tolerated (Ok): that is the
+        // builder's normal same-slot dissemination-then-share sequence.
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
 
-        let qbft_message = crate::tests::QbftMessageBuilder::new(
-            Role::EnvelopeProposer,
-            ssv_types::consensus::QbftMessageType::Prepare,
-        )
-        .build();
-        let consensus_signed_msg = crate::tests::create_signed_consensus_message(
-            qbft_message.clone(),
-            vec![OperatorId(1)],
-            vec![],
-            vec![private_key.clone()],
-        );
-        let consensus_context = create_envelope_proposer_context(
-            &consensus_signed_msg,
-            &committee_info,
-            &map,
-            Slot::new(1),
-        );
+        // Arrange: Seed DutyState at slot 1 with the state effect the dissemination validator
+        // applies once all its rules pass (those rules are covered in `dissemination.rs`; what
+        // this test pins is the shared max_slot).
+        let mut duty_state = crate::duty_state::DutyState::new(64);
+        duty_state.record_dissemination(Slot::new(1), &OperatorId(1));
 
-        let mut shared_duty_state = crate::duty_state::DutyState::new(64);
-
-        let consensus_result = crate::consensus_message::validate_qbft_message_by_duty_logic(
-            &consensus_context,
-            &qbft_message,
-            &mut shared_duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
-        assert!(
-            consensus_result.is_ok(),
-            "EnvelopeProposer consensus at slot 1 must be accepted"
-        );
-
-        // Persist the accepted consensus so `max_slot == 1` before Act 2; without it the state
-        // would stay at `max_slot == 0` and never exercise the equality boundary.
-        shared_duty_state.update_for_consensus_message(&consensus_signed_msg, &qbft_message);
-
-        // Act: same-slot PostConsensus partial sig against the now-advanced shared state.
+        // Arrange: Envelope partial sig at slot 1 (equal to the disseminated slot).
         let partial_sig_signed_msg = create_signed_envelope_proposer_message(
             OperatorId(1),
             &private_key,
             Slot::new(1),
             Hash256::from([0x33; 32]),
         );
-        let partial_sig_context = create_envelope_proposer_context(
+        let validation_context = create_envelope_proposer_context(
             &partial_sig_signed_msg,
             &committee_info,
             &map,
             Slot::new(1),
         );
-        let partial_sig_result = validate_partial_signature_message(
-            partial_sig_context,
-            &mut shared_duty_state,
+
+        // Act: Validate the same-slot Envelope partial sig against the seeded DutyState.
+        let result = validate_partial_signature_message(
+            validation_context,
+            &mut duty_state,
             Arc::new(MockDutiesProvider::default()),
         );
 
+        // Assert: Must be accepted at the equality boundary.
         assert!(
-            partial_sig_result.is_ok(),
-            "EnvelopeProposer Envelope partial at slot 1 must be accepted when the shared state's max_slot already equals 1 (equality boundary of the strict monotonic guard)"
+            result.is_ok(),
+            "EnvelopeProposer Envelope partial at slot 1 must be accepted when the signer's disseminated max_slot already equals 1: the strict monotonic guard (max_slot > message_slot) must tolerate the max_slot == message_slot equality boundary, the builder's normal same-slot dissemination-then-share sequence, got: {result:?}"
         );
-    }
-
-    /// Seeds `state` with an accepted `EnvelopeProposer` consensus message at `height` for
-    /// `OperatorId(1)`, advancing that signer's max slot.
-    fn seed_state_via_consensus(state: &mut crate::duty_state::DutyState, height: u64) {
-        let mut qbft = crate::tests::QbftMessageBuilder::new(
-            Role::EnvelopeProposer,
-            ssv_types::consensus::QbftMessageType::Prepare,
-        )
-        .build();
-        qbft.height = height;
-        let signed_msg = crate::tests::create_signed_consensus_message(
-            qbft.clone(),
-            vec![OperatorId(1)],
-            vec![],
-            vec![],
-        );
-        state.update_for_consensus_message(&signed_msg, &qbft);
     }
 
     #[test]
-    fn envelope_proposer_consensus_advances_blocks_lower_partial_sig() {
-        // §7 monotonic-slot rule, consensus-advances direction: a consensus message at slot 10
-        // must block a later PostConsensus partial sig at the lower slot 5.
+    fn envelope_proposer_dissemination_advances_blocks_lower_partial_sig() {
+        // §7 monotonic-slot rule, dissemination-advances direction: a dissemination at slot 10
+        // must block a later Envelope partial sig at the lower slot 5.
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
 
-        // Arrange: Seed DutyState at slot 10 via consensus update.
+        // Arrange: Seed DutyState at slot 10 via the dissemination validator's state effect.
         let mut duty_state = crate::duty_state::DutyState::new(64);
-        seed_state_via_consensus(&mut duty_state, 10);
+        duty_state.record_dissemination(Slot::new(10), &OperatorId(1));
 
-        // Arrange: PostConsensus partial sig at slot 5 (lower than 10).
+        // Arrange: Envelope partial sig at slot 5 (lower than 10).
         let partial_sig_signed_msg = create_signed_envelope_proposer_message(
             OperatorId(1),
             &private_key,
@@ -4550,7 +4504,7 @@ mod tests {
             Slot::new(10),
         );
 
-        // Act: Validate PostConsensus partial sig at slot 5 against advanced DutyState.
+        // Act: Validate Envelope partial sig at slot 5 against advanced DutyState.
         let result = validate_partial_signature_message(
             validation_context,
             &mut duty_state,
@@ -4566,70 +4520,7 @@ mod tests {
                     crate::ValidationFailure::SlotAlreadyAdvanced { .. }
                 )
             },
-            "EnvelopeProposer Envelope partial below advanced consensus slot must be SlotAlreadyAdvanced",
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_partial_sig_advances_blocks_lower_consensus() {
-        // §7 monotonic-slot rule, partial-sig-advances direction: seeding via a PostConsensus
-        // partial sig at slot 10 must block a later consensus message at the lower height 5.
-        // The seeding mechanism (partial sig, not consensus) is the point of this direction.
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-
-        // Arrange: Seed DutyState at slot 10 via partial-sig update.
-        let mut duty_state = crate::duty_state::DutyState::new(64);
-        let dummy_partial_sig = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(10),
-            Hash256::from([0x99; 32]),
-        );
-        let messages =
-            PartialSignatureMessages::from_ssz_bytes(dummy_partial_sig.ssv_message().data())
-                .expect("dummy envelope message must decode");
-        duty_state
-            .update_for_partial_signature(&messages, &OperatorId(1))
-            .expect("seeding partial-signature state must succeed");
-
-        // Arrange: Consensus message at height 5 (lower than 10).
-        let mut qbft_message = crate::tests::QbftMessageBuilder::new(
-            Role::EnvelopeProposer,
-            ssv_types::consensus::QbftMessageType::Prepare,
-        )
-        .build();
-        qbft_message.height = 5;
-        let consensus_signed_msg = crate::tests::create_signed_consensus_message(
-            qbft_message.clone(),
-            vec![OperatorId(1)],
-            vec![],
-            vec![private_key.clone()],
-        );
-        let validation_context = create_envelope_proposer_context(
-            &consensus_signed_msg,
-            &committee_info,
-            &map,
-            Slot::new(10),
-        );
-
-        // Act: Validate consensus message at height 5 against advanced DutyState.
-        let result = crate::consensus_message::validate_qbft_message_by_duty_logic(
-            &validation_context,
-            &qbft_message,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
-
-        // Assert: Must be rejected as SlotAlreadyAdvanced.
-        assert_validation_error(
-            result,
-            |failure| {
-                matches!(
-                    failure,
-                    crate::ValidationFailure::SlotAlreadyAdvanced { .. }
-                )
-            },
-            "EnvelopeProposer consensus below advanced Envelope-partial slot must be SlotAlreadyAdvanced",
+            "EnvelopeProposer Envelope partial below the signer's disseminated slot must be SlotAlreadyAdvanced",
         );
     }
 
