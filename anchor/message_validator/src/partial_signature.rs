@@ -4450,7 +4450,9 @@ mod tests {
         // applies once all its rules pass (those rules are covered in `dissemination.rs`; what
         // this test pins is the shared max_slot).
         let mut duty_state = crate::duty_state::DutyState::new(64);
-        duty_state.record_dissemination(Slot::new(1), &OperatorId(1));
+        duty_state
+            .get_or_create_operator(&OperatorId(1))
+            .record_dissemination(Slot::new(1));
 
         // Arrange: Envelope partial sig at slot 1 (equal to the disseminated slot).
         let partial_sig_signed_msg = create_signed_envelope_proposer_message(
@@ -4488,7 +4490,9 @@ mod tests {
 
         // Arrange: Seed DutyState at slot 10 via the dissemination validator's state effect.
         let mut duty_state = crate::duty_state::DutyState::new(64);
-        duty_state.record_dissemination(Slot::new(10), &OperatorId(1));
+        duty_state
+            .get_or_create_operator(&OperatorId(1))
+            .record_dissemination(Slot::new(10));
 
         // Arrange: Envelope partial sig at slot 5 (lower than 10).
         let partial_sig_signed_msg = create_signed_envelope_proposer_message(

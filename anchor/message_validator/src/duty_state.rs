@@ -52,11 +52,6 @@ pub(crate) struct DutyState {
     operators: HashMap<OperatorId, OperatorState>,
     /// The number of slots for which state is stored (defines the size of the circular buffer)
     stored_slot_count: usize,
-    /// Slot-indexed ring recording whether an envelope dissemination was already accepted for a
-    /// slot of this `MessageId` (SIP-94 §7 first-valid dedup: one dissemination per
-    /// (`MessageId`, slot), signer-independent). Allocated on first record: only
-    /// `Role::EnvelopeProposer` message IDs ever populate it.
-    disseminated_slots: Vec<Option<Slot>>,
 }
 
 impl DutyState {
@@ -65,30 +60,6 @@ impl DutyState {
         Self {
             operators: HashMap::new(),
             stored_slot_count,
-            disseminated_slots: Vec::new(),
-        }
-    }
-
-    /// True if a dissemination was already recorded for `slot` (SIP-94 §7: further
-    /// dissemination messages for the tuple are Ignore, regardless of content or peer).
-    pub(crate) fn is_dissemination_recorded(&self, slot: Slot) -> bool {
-        !self.disseminated_slots.is_empty()
-            && self.disseminated_slots[slot.as_usize() % self.disseminated_slots.len()]
-                == Some(slot)
-    }
-
-    /// Records the accepted dissemination for `slot` and creates the sender's signer state so
-    /// the duty counts toward `signer`'s per-epoch ring occupancy.
-    pub(crate) fn record_dissemination(&mut self, slot: Slot, signer: &OperatorId) {
-        if self.disseminated_slots.is_empty() {
-            self.disseminated_slots = vec![None; self.stored_slot_count];
-        }
-        let index = slot.as_usize() % self.disseminated_slots.len();
-        self.disseminated_slots[index] = Some(slot);
-
-        let operator_state = self.get_or_create_operator(signer);
-        if operator_state.is_first_message_for_duty(slot) {
-            operator_state.set_signer_state(&slot, SignerState::new(slot, FIRST_ROUND));
         }
     }
 
@@ -249,6 +220,29 @@ impl OperatorState {
         self.get_signer_state(&slot).is_none()
     }
 
+    /// True if this signer already had a dissemination accepted for `slot` (SIP-94 §7 dedup,
+    /// one per (`MessageId`, signer, slot): further disseminations for the tuple are Ignore,
+    /// regardless of content or peer). A ring entry held by a different slot reads as absent,
+    /// like every other per-slot lookup here.
+    pub(crate) fn is_dissemination_recorded(&self, slot: Slot) -> bool {
+        self.get_signer_state(&slot)
+            .is_some_and(|state| state.dissemination_recorded)
+    }
+
+    /// Records this signer's accepted dissemination for `slot`, creating its signer state
+    /// when the dissemination is the duty's first message so the duty counts toward the
+    /// per-epoch ring occupancy and advances `max_slot`, exactly as a first partial signature
+    /// would. An existing state is kept, not replaced: a partial signature may have arrived
+    /// first, and its counts must survive.
+    pub(crate) fn record_dissemination(&mut self, slot: Slot) {
+        if self.is_first_message_for_duty(slot) {
+            self.set_signer_state(&slot, SignerState::new(slot, FIRST_ROUND));
+        }
+        if let Some(state) = self.get_signer_state_mut(&slot) {
+            state.dissemination_recorded = true;
+        }
+    }
+
     /// Updates the SignerState for the given slot.
     ///
     /// If a state already exists and the incoming consensus round is higher,
@@ -311,6 +305,9 @@ pub(crate) struct SignerState {
     pub(crate) proposal_hash: Option<[u8; 32]>,
     /// A set of CommitteeIds indicating which committees have already been seen.
     seen_signers: HashSet<CommitteeId>,
+    /// True once an envelope dissemination from this signer was accepted for this slot
+    /// (SIP-94 §7). Only `Role::EnvelopeProposer` message IDs ever set it.
+    dissemination_recorded: bool,
     /// Accepted signing roots for the root-budgeted kinds, boxed and lazily allocated on the
     /// first such packet: every role's ring entries share this struct, but only
     /// `Role::ProposerPreferences` messages can ever populate it
@@ -337,6 +334,7 @@ impl SignerState {
             message_counts: MessageCounts::default(),
             proposal_hash: None,
             seen_signers: HashSet::new(),
+            dissemination_recorded: false,
             root_budgets: None,
         }
     }

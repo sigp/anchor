@@ -16,18 +16,19 @@ use crate::{
 /// The class is structural-only at this layer: the inner envelope must SSZ-decode as a
 /// blinded execution payload envelope (shape, Reject-class), but the checks binding it to
 /// the block-QBFT decision are runner concerns, and validation never judges the envelope's
-/// content against the decision. Dedup is first-valid per (`MessageId`, slot): the first
-/// message passing all other rules is recorded, and further dissemination messages for the
+/// content against the decision. Dedup is one per (`MessageId`, signer, slot): a signer's
+/// first message passing all other rules is recorded, and its further disseminations for the
 /// tuple are Ignore regardless of content or peer (an honest origin retry can repeat one
 /// after the recipient's gossip duplicate cache expires, so repetition does not prove peer
-/// fault).
+/// fault). Another committee member's dissemination for the same slot is admitted on its own
+/// budget.
 ///
-/// First-valid means first STRUCTURALLY valid, by design: SIP-94 accepts that a Byzantine
-/// committee member can consume a slot's dissemination budget with a decision-unbound or
-/// payload-unbound (but well-formed) carrier, costing at most one missed self-build reveal
-/// (never a wrong payload on chain). Do not move semantic rejection into a
-/// replacement-capable store; the named hardening for that trade is sign-all, a protocol
-/// change.
+/// Admitting one per signer is what lets the runner pick by content (SIP-94 §6: it signs the
+/// first dissemination that passes the decision bindings, not the first that arrives), so a
+/// Byzantine committee member cannot cost the reveal merely by winning the race with a
+/// well-formed but decision-unbound carrier. Forwarding stays bounded because only committee
+/// members pass validation. The residual is a binding-passing forgery, whose `payload_root` no
+/// operator can check; the named hardening for that is sign-all, a protocol change.
 pub(crate) fn validate_envelope_dissemination(
     validation_context: ValidationContext<impl SlotClock>,
     duty_state: &mut DutyState,
@@ -92,10 +93,13 @@ pub(crate) fn validate_envelope_dissemination(
         duty_provider.clone(),
     )?;
 
-    // Rule: first-valid dedup per (`MessageId`, slot), signer-independent. Ignore-class.
-    if duty_state.is_dissemination_recorded(slot) {
+    // Rule: dedup per (`MessageId`, signer, slot). Ignore-class.
+    if duty_state
+        .get_or_create_operator(&signer)
+        .is_dissemination_recorded(slot)
+    {
         return Err(ValidationFailure::RelayedDuplicateMessage {
-            got: format!("envelope dissemination for slot {slot}"),
+            got: format!("envelope dissemination for slot {slot} from operator {signer}"),
         });
     }
 
@@ -108,9 +112,11 @@ pub(crate) fn validate_envelope_dissemination(
 
     verify_single_signer(&validation_context, signer)?;
 
-    // Record only after every other rule passed, so a rejected message cannot consume the
-    // slot's single dissemination budget.
-    duty_state.record_dissemination(slot, &signer);
+    // Record only after every other rule passed, so a rejected message cannot consume this
+    // signer's dissemination budget for the slot.
+    duty_state
+        .get_or_create_operator(&signer)
+        .record_dissemination(slot);
 
     Ok(ValidatedSSVMessage::EnvelopeDissemination(dissemination))
 }
@@ -325,12 +331,10 @@ mod tests {
     }
 
     #[test]
-    fn second_dissemination_for_slot_ignored_regardless_of_signer() {
-        let (committee_info, private_key, mut map) = four_node_committee_and_keypair();
-        // A second operator with its own key, so the dedup is proven signer-independent.
-        let (private_key_2, public_key_2) = generate_test_key_pair();
-        map.insert(OperatorId(2), public_key_2);
+    fn second_dissemination_from_the_same_signer_ignored() {
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let mut duty_state = DutyState::new(64);
+        let provider = Arc::new(MockDutiesProvider::default());
 
         let first =
             create_signed_dissemination(Role::EnvelopeProposer, OperatorId(1), &private_key);
@@ -342,12 +346,57 @@ mod tests {
             1,
             Some(0),
         );
-        validate_envelope_dissemination(
-            ctx,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        )
-        .expect("first dissemination must be accepted");
+        validate_envelope_dissemination(ctx, &mut duty_state, provider.clone())
+            .expect("first dissemination must be accepted");
+
+        // Same signer, same slot: the signer's budget for the tuple is spent.
+        let second =
+            create_signed_dissemination(Role::EnvelopeProposer, OperatorId(1), &private_key);
+        let ctx = create_dissemination_context(
+            &second,
+            &committee_info,
+            Role::EnvelopeProposer,
+            &map,
+            1,
+            Some(0),
+        );
+        let result = validate_envelope_dissemination(ctx, &mut duty_state, provider);
+
+        match &result {
+            Err(failure @ ValidationFailure::RelayedDuplicateMessage { .. }) => {
+                assert_eq!(
+                    MessageAcceptance::from(failure),
+                    MessageAcceptance::Ignore,
+                    "a signer's further dissemination for a recorded slot must be Ignore, not Reject: an honest retry can repeat one after the gossip duplicate cache expires"
+                );
+            }
+            other => panic!("expected RelayedDuplicateMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dissemination_from_a_second_signer_accepted_for_the_same_slot() {
+        // SIP-94 §7 dedup is per (`MessageId`, signer, slot). Admitting one carrier per
+        // committee member is what lets the runner choose by content instead of by arrival, so
+        // a first carrier that fails the decision bindings cannot cost the slot's reveal.
+        let (committee_info, private_key, mut map) = four_node_committee_and_keypair();
+        let (private_key_2, public_key_2) = generate_test_key_pair();
+        map.insert(OperatorId(2), public_key_2);
+        let mut duty_state = DutyState::new(64);
+        let provider = Arc::new(MockDutiesProvider::default());
+
+        let first =
+            create_signed_dissemination(Role::EnvelopeProposer, OperatorId(1), &private_key);
+        let ctx = create_dissemination_context(
+            &first,
+            &committee_info,
+            Role::EnvelopeProposer,
+            &map,
+            1,
+            Some(0),
+        );
+        validate_envelope_dissemination(ctx, &mut duty_state, provider.clone())
+            .expect("first dissemination must be accepted");
 
         let second =
             create_signed_dissemination(Role::EnvelopeProposer, OperatorId(2), &private_key_2);
@@ -359,22 +408,9 @@ mod tests {
             1,
             Some(0),
         );
-        let result = validate_envelope_dissemination(
-            ctx,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
 
-        match &result {
-            Err(failure @ ValidationFailure::RelayedDuplicateMessage { .. }) => {
-                assert_eq!(
-                    MessageAcceptance::from(failure),
-                    MessageAcceptance::Ignore,
-                    "a further dissemination for a recorded slot must be Ignore, not Reject"
-                );
-            }
-            other => panic!("expected RelayedDuplicateMessage, got {other:?}"),
-        }
+        validate_envelope_dissemination(ctx, &mut duty_state, provider)
+            .expect("a second committee member's dissemination must be accepted on its own budget");
     }
 
     #[test]

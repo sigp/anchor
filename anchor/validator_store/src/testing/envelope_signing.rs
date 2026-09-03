@@ -95,16 +95,37 @@ fn insert_dissemination(
     pubkey: PublicKeyBytes,
     envelope: &ExecutionPayloadEnvelope<MainnetEthSpec>,
 ) -> BlindedExecutionPayloadEnvelope<MainnetEthSpec> {
+    insert_dissemination_from(harness, pubkey, OperatorId(1), envelope)
+}
+
+/// [`insert_dissemination`] attributed to a specific committee member, for the tests that
+/// need several candidates for one slot (SIP-94 §7 admits one per signer).
+fn insert_dissemination_from(
+    harness: &ValidatorStoreTestHarness,
+    pubkey: PublicKeyBytes,
+    signer: OperatorId,
+    envelope: &ExecutionPayloadEnvelope<MainnetEthSpec>,
+) -> BlindedExecutionPayloadEnvelope<MainnetEthSpec> {
     let blinded = BlindedExecutionPayloadEnvelope::from_full(envelope);
+    insert_dissemination_bytes(harness, pubkey, signer, blinded.as_ssz_bytes());
+    blinded
+}
+
+/// Inserts raw candidate bytes, for the undecodable case the message receiver cannot produce.
+fn insert_dissemination_bytes(
+    harness: &ValidatorStoreTestHarness,
+    pubkey: PublicKeyBytes,
+    signer: OperatorId,
+    bytes: Vec<u8>,
+) {
     harness.dissemination_store.insert(
         pubkey,
+        signer,
         EnvelopeDissemination {
             slot: Slot::new(TEST_SLOT),
-            envelope: VariableList::new(blinded.as_ssz_bytes())
-                .expect("blinded envelope bytes should fit"),
+            envelope: VariableList::new(bytes).expect("candidate bytes should fit"),
         },
     );
-    blinded
 }
 
 /// A single-validator committee over `test_operator_ids()` and its validator's public key.
@@ -611,18 +632,56 @@ async fn non_builder_without_dissemination_times_out() {
     assert_no_outward_action(&harness, "when no dissemination arrives");
 }
 
-/// A disseminated envelope that fails a decision binding is never signed.
+/// Selection is by content, not arrival (SIP-94 §6): unusable candidates that arrive first
+/// are skipped, so a Byzantine committee member cannot cost the reveal by winning the race.
 #[tokio::test(flavor = "multi_thread")]
-async fn non_builder_rejects_binding_mismatched_dissemination() {
+async fn non_builder_task_skips_unusable_candidates_and_signs_the_binding_one() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+    let (harness, pubkey) = gloas_harness();
+    let builder_envelope = self_build_envelope(test_decided_root());
+    let context = context_for(&builder_envelope, false);
+    seed_context(&harness, pubkey, context);
+
+    // Ahead of the honest candidate: bytes that do not decode, then a decodable envelope
+    // bound to a different beacon block root.
+    insert_dissemination_bytes(&harness, pubkey, OperatorId(1), vec![0xFF; 3]);
+    let mut mismatched = builder_envelope.clone();
+    mismatched.beacon_block_root = Hash256::repeat_byte(0xDD);
+    insert_dissemination_from(&harness, pubkey, OperatorId(2), &mismatched);
+    let honest = insert_dissemination_from(&harness, pubkey, OperatorId(3), &builder_envelope);
+    let counters = OutcomeCounters::snapshot();
+
+    let domain_hash = envelope_domain_hash(&harness);
+    run_non_builder_task(&harness, pubkey, context)
+        .await
+        .expect("the task must sign the binding candidate behind the unusable ones");
+
+    counters.assert_deltas(0, 1, 0);
+    let captured = harness.captured_calls.lock();
+    assert_eq!(
+        captured.len(),
+        1,
+        "exactly one signature share is contributed"
+    );
+    assert_eq!(
+        captured[0].signing_root,
+        honest.signing_root(domain_hash),
+        "the signed root must be the binding candidate's, not either unusable one's"
+    );
+}
+
+/// With candidates present but none binding to the decision, the task abstains at the
+/// deadline rather than signing one of them.
+#[tokio::test(start_paused = true)]
+async fn non_builder_task_times_out_when_no_candidate_binds() {
     let _guard = METRIC_TEST_LOCK.lock().await;
     let (harness, pubkey) = gloas_harness();
     let local_envelope = self_build_envelope(test_decided_root());
     let context = context_for(&local_envelope, false);
     seed_context(&harness, pubkey, context);
-    // Disseminated envelope binds to a different beacon block root.
-    let mut forged = local_envelope.clone();
-    forged.beacon_block_root = Hash256::repeat_byte(0xDD);
-    insert_dissemination(&harness, pubkey, &forged);
+    let mut mismatched = local_envelope.clone();
+    mismatched.beacon_block_root = Hash256::repeat_byte(0xDD);
+    insert_dissemination_from(&harness, pubkey, OperatorId(1), &mismatched);
     let counters = OutcomeCounters::snapshot();
 
     let result = run_non_builder_task(&harness, pubkey, context).await;
@@ -631,47 +690,50 @@ async fn non_builder_rejects_binding_mismatched_dissemination() {
         matches!(
             result,
             Err(Error::SpecificError(
-                SpecificError::EnvelopeBindingMismatch {
-                    field: "beacon_block_root"
-                }
+                SpecificError::DisseminationTimeout { .. }
             ))
         ),
-        "a binding-mismatched dissemination must be rejected, got {result:?}"
+        "a slot of non-binding candidates must time out, got {result:?}"
     );
     counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "for a binding-mismatched dissemination");
+    assert_no_outward_action(&harness, "when no candidate binds to the decision");
 }
 
-/// Disseminated bytes that do not decode as a blinded envelope are never signed.
+/// Pins the residual SIP-94 §6 accepts: `payload_root` is unchecked, so a forgery that passes
+/// all four bindings and arrives first is signed. Sign-all is the named hardening; adopting it
+/// flips this test rather than a comment.
 #[tokio::test(flavor = "multi_thread")]
-async fn non_builder_rejects_undecodable_dissemination() {
+async fn non_builder_task_signs_a_binding_forgery_that_arrives_first() {
     let _guard = METRIC_TEST_LOCK.lock().await;
     let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    let context = context_for(&envelope, false);
+    let mut builder_envelope = self_build_envelope(test_decided_root());
+    builder_envelope.payload.block_number = 42;
+    let context = context_for(&builder_envelope, false);
     seed_context(&harness, pubkey, context);
-    harness.dissemination_store.insert(
-        pubkey,
-        EnvelopeDissemination {
-            slot: Slot::new(TEST_SLOT),
-            envelope: VariableList::new(vec![0xFF; 3]).expect("garbage bytes should fit"),
-        },
+
+    // Same four bindings, different payload: only `payload_root` differs, and nothing checks it.
+    let mut forged = builder_envelope.clone();
+    forged.payload.block_number = 99;
+    let forged_blinded = insert_dissemination_from(&harness, pubkey, OperatorId(1), &forged);
+    let honest = insert_dissemination_from(&harness, pubkey, OperatorId(2), &builder_envelope);
+    assert_ne!(
+        forged_blinded.payload_root, honest.payload_root,
+        "the forgery must differ from the honest envelope only in payload_root"
     );
     let counters = OutcomeCounters::snapshot();
 
-    let result = run_non_builder_task(&harness, pubkey, context).await;
+    let domain_hash = envelope_domain_hash(&harness);
+    run_non_builder_task(&harness, pubkey, context)
+        .await
+        .expect("a binding-passing candidate is signed");
 
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::DisseminationUndecodable { .. }
-            ))
-        ),
-        "undecodable disseminated bytes must be rejected, got {result:?}"
+    counters.assert_deltas(0, 1, 0);
+    let captured = harness.captured_calls.lock();
+    assert_eq!(
+        captured[0].signing_root,
+        forged_blinded.signing_root(domain_hash),
+        "the first binding-passing candidate is signed, forged payload_root included"
     );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "for an undecodable dissemination");
 }
 
 // ==================== Gate tests ====================

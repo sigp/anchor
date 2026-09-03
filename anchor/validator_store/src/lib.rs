@@ -9,7 +9,10 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     str::from_utf8,
-    sync::{Arc, LazyLock, Weak},
+    sync::{
+        Arc, LazyLock, Weak,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -1108,8 +1111,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// runs detached from Lighthouse's envelope callback on purpose: that callback first fetches
     /// this operator's own envelope from its beacon node and never reaches the store when the
     /// node holds none (its local bid was external), so a non-builder share must not depend on
-    /// it. Awaits the builder operator's dissemination until the payload-due deadline, validates
-    /// it against the decided context, and contributes this operator's partial signature.
+    /// it. Awaits disseminations until the payload-due deadline, signs the first whose envelope
+    /// passes the decided context's bindings, and contributes this operator's partial signature.
     /// Publishes nothing: only the builder operator holds the payload bytes.
     pub(crate) async fn sign_disseminated_envelope(
         self: Arc<Self>,
@@ -1125,24 +1128,57 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             .envelope_deadline(slot)
             .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
 
-        let Some(dissemination) = self
+        // Selection is by content, not by arrival (SIP-94 §6): each committee member may
+        // disseminate once per slot, and this signs the first candidate that binds to the
+        // decided block. Skipping a failing candidate is what stops a Byzantine member from
+        // costing the reveal by merely winning the race. A candidate whose envelope does not
+        // decode is unreachable through gossip, which decodes it before accepting, and is
+        // skipped on the same principle rather than ending the duty.
+        let rejected = AtomicUsize::new(0);
+        let Some(disseminated) = self
             .dissemination_store
-            .wait(validator.public_key, slot, deadline)
+            .wait_matching(
+                validator.public_key,
+                slot,
+                deadline,
+                |signer, dissemination| match dissemination.blinded_envelope::<E>() {
+                    Ok(blinded) => match context.validate_blinded(&blinded) {
+                        Ok(()) => Some(blinded),
+                        Err(err) => {
+                            rejected.fetch_add(1, Ordering::Relaxed);
+                            warn!(
+                                %signer,
+                                ?err,
+                                "Skipping a disseminated envelope that failed the decision bindings"
+                            );
+                            None
+                        }
+                    },
+                    Err(err) => {
+                        rejected.fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            %signer,
+                            ?err,
+                            "Skipping a disseminated envelope whose bytes did not decode"
+                        );
+                        None
+                    }
+                },
+            )
             .await
         else {
+            // The count separates "nothing arrived" from "only unusable candidates arrived",
+            // which the error alone cannot say and the spawn boundary never sees.
+            warn!(
+                %slot,
+                rejected = rejected.load(Ordering::Relaxed),
+                "No envelope dissemination matching the decision arrived before the payload-due deadline"
+            );
             record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
             return Err(Error::SpecificError(SpecificError::DisseminationTimeout {
                 slot,
             }));
         };
-        let disseminated = dissemination.blinded_envelope::<E>().map_err(|err| {
-            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-            Error::SpecificError(SpecificError::DisseminationUndecodable(err))
-        })?;
-        context.validate_blinded(&disseminated).map_err(|err| {
-            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-            Error::SpecificError(err)
-        })?;
 
         // `payload_root` is trusted from the builder operator by design (SIP-94 §6).
         let domain_hash = self.get_domain(slot.epoch(E::slots_per_epoch()), Domain::BeaconBuilder);
@@ -3070,12 +3106,10 @@ pub enum SpecificError {
     EnvelopeDeadlinePassed {
         slot: Slot,
     },
-    /// No dissemination arrived before the payload-due deadline.
+    /// No dissemination binding to the decided block arrived before the payload-due deadline.
     DisseminationTimeout {
         slot: Slot,
     },
-    /// The disseminated envelope bytes did not decode as a blinded envelope.
-    DisseminationUndecodable(ssz::DecodeError),
     /// Building or sending the builder's dissemination broadcast failed.
     DisseminationBroadcastFailed(CollectionError),
     /// A blinded envelope failed a decision binding against the decided block context
