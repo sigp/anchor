@@ -9,7 +9,7 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     str::from_utf8,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Weak},
     time::Duration,
 };
 
@@ -324,6 +324,9 @@ pub struct AnchorValidatorStore<
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
+    /// Self-reference for work that outlives a `&self` trait call: the detached non-builder
+    /// envelope signing task spawned from [`Self::sign_block`].
+    weak_self: Weak<Self>,
     /// `(committee, slot)` keys whose Boole+ `AggregatorCommittee` post-consensus execution has
     /// already been started.
     ///
@@ -508,7 +511,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         is_synced: watch::Receiver<bool>,
         task_executor: TaskExecutor,
     ) -> Arc<AnchorValidatorStore<T, E, C>> {
-        Arc::new(Self {
+        Arc::new_cyclic(|weak_self| Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
             decided_block_contexts: Mutex::new(HashMap::new()),
@@ -533,6 +536,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             strict_mfp,
             is_synced,
             task_executor,
+            weak_self: weak_self.clone(),
             aggregator_post_consensus: Mutex::new(HashSet::new()),
         })
     }
@@ -1083,6 +1087,126 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                     slot,
                 },
             ))
+    }
+
+    /// The payload-due deadline for `slot` (50% of the slot, SIP-94 §6). Past it the envelope
+    /// cannot satisfy the slot, so neither dissemination nor collection may start or continue.
+    fn envelope_deadline(&self, slot: Slot) -> Result<Instant, Error> {
+        let deadline = self.get_instant_in_slot(slot, self.spec.get_slot_duration() / 2)?;
+        if Instant::now() >= deadline {
+            return Err(Error::SpecificError(
+                SpecificError::EnvelopeDeadlinePassed { slot },
+            ));
+        }
+        Ok(deadline)
+    }
+
+    /// Sign another operator's envelope for `(validator, slot)`: the SIP-94 §6 non-builder path.
+    ///
+    /// Spawned by [`Self::sign_block`] once the decided block is threshold-signed, when the
+    /// decided bid is self-build and the decided block is not this operator's own proposal. It
+    /// runs detached from Lighthouse's envelope callback on purpose: that callback first fetches
+    /// this operator's own envelope from its beacon node and never reaches the store when the
+    /// node holds none (its local bid was external), so a non-builder share must not depend on
+    /// it. Awaits the builder operator's dissemination until the payload-due deadline, validates
+    /// it against the decided context, and contributes this operator's partial signature.
+    /// Publishes nothing: only the builder operator holds the payload bytes.
+    pub(crate) async fn sign_disseminated_envelope(
+        self: Arc<Self>,
+        validator: ValidatorMetadata,
+        cluster: Cluster,
+        context: DecidedBlockContext,
+        slot: Slot,
+    ) -> Result<(), Error> {
+        let record_outcome = |outcome: &str| {
+            metrics::inc_counter_vec(&metrics::ENVELOPE_SIGNING_OUTCOMES, &[outcome]);
+        };
+        let deadline = self
+            .envelope_deadline(slot)
+            .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
+
+        let Some(dissemination) = self
+            .dissemination_store
+            .wait(validator.public_key, slot, deadline)
+            .await
+        else {
+            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+            return Err(Error::SpecificError(SpecificError::DisseminationTimeout {
+                slot,
+            }));
+        };
+        let disseminated = dissemination.blinded_envelope::<E>().map_err(|err| {
+            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+            Error::SpecificError(SpecificError::DisseminationUndecodable(err))
+        })?;
+        context.validate_blinded(&disseminated).map_err(|err| {
+            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+            Error::SpecificError(err)
+        })?;
+
+        // `payload_root` is trusted from the builder operator by design (SIP-94 §6).
+        let domain_hash = self.get_domain(slot.epoch(E::slots_per_epoch()), Domain::BeaconBuilder);
+        let signing_root = disseminated.signing_root(domain_hash);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        Self::collect_within(
+            remaining,
+            self.collect_signature(
+                PartialSignatureKind::Envelope,
+                Role::EnvelopeProposer,
+                CollectionMode::SingleValidator,
+                &validator,
+                &cluster,
+                signing_root,
+                slot,
+            ),
+        )
+        .await
+        .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
+
+        info!(
+            %slot,
+            validator_pubkey = %validator.public_key,
+            disseminated_root = ?disseminated.tree_hash_root(),
+            "Signed another operator's envelope"
+        );
+        record_outcome(metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY);
+        Ok(())
+    }
+
+    /// Start [`Self::sign_disseminated_envelope`] for `(validator, slot)` when the recorded
+    /// decision calls for it: a self-build bid on a block another operator built. No-op
+    /// otherwise (no Gloas context recorded, external build, or this operator is the builder and
+    /// signs from Lighthouse's envelope callback). Detached; a terminal failure is logged here
+    /// because nothing awaits the task.
+    fn spawn_non_builder_envelope_signing(
+        &self,
+        validator: &ValidatorMetadata,
+        cluster: &Cluster,
+        slot: Slot,
+    ) {
+        let Ok(context) = self.get_decided_block_context(validator.public_key, slot) else {
+            return;
+        };
+        if context.builder_index != BUILDER_INDEX_SELF_BUILD || context.built_locally {
+            return;
+        }
+        let Some(store) = self.weak_self.upgrade() else {
+            return;
+        };
+        let validator = validator.clone();
+        let cluster = cluster.clone();
+        let validator_pubkey = validator.public_key;
+        self.task_executor.spawn(
+            async move {
+                if let Err(error) = store
+                    .sign_disseminated_envelope(validator, cluster, context, slot)
+                    .await
+                {
+                    warn!(?error, %slot, %validator_pubkey, "Non-builder envelope signing failed");
+                }
+            },
+            "envelope_non_builder_signing",
+        );
     }
 
     async fn sign_abstract_block(
@@ -2934,11 +3058,12 @@ pub enum SpecificError {
     EnvelopeExternalBuild {
         builder_index: u64,
     },
-    /// The builder operator disseminated an envelope this operator did not build. This is an
-    /// intentional non-publish, not a failure.
-    EnvelopeNotBuiltLocally {
-        local_root: Hash256,
-        disseminated_root: Hash256,
+    /// Another operator built the decided block. This operator's envelope share is signed by
+    /// the detached non-builder task started from `sign_block`, not from Lighthouse's envelope
+    /// callback, which has nothing to publish here. This is an intentional non-publish, not a
+    /// failure.
+    EnvelopeNonBuilderDelegated {
+        slot: Slot,
     },
     /// The envelope duty started at or after the payload-due deadline (50% of the slot), past
     /// which the envelope cannot satisfy this slot.
@@ -3330,6 +3455,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     checkpoint = instrumentation::checkpoints::BLOCK_SIGNED,
                     "Block threshold signature completed"
                 );
+
+                self.spawn_non_builder_envelope_signing(&validator, &cluster, blinded_block.slot());
 
                 let publish_decision =
                     select_publish_block(signed_block, &blinded_block, local_full_block);
@@ -3966,7 +4093,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             }
 
             let context = self.get_decided_block_context(validator_pubkey, slot)?;
-            let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
 
             let record_outcome = |outcome: &str| {
                 metrics::inc_counter_vec(&metrics::ENVELOPE_SIGNING_OUTCOMES, &[outcome]);
@@ -3987,100 +4113,79 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 }));
             }
 
-            // One absolute deadline at the payload-due mark (50% of the slot, SIP-94 §6):
-            // past it the envelope cannot satisfy this slot, so neither dissemination nor
-            // collection should proceed or continue.
-            let deadline = self
-                .get_instant_in_slot(slot, self.spec.get_slot_duration() / 2)
-                .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
-            if Instant::now() >= deadline {
-                record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+            // Another operator built the decided block. Its envelope reaches this operator by
+            // dissemination and is signed by the task `sign_block` spawned once the block was
+            // threshold-signed (`sign_disseminated_envelope`); that task needs nothing from this
+            // callback, which Lighthouse only reaches after fetching this operator's own envelope
+            // from its beacon node. The caller publishes every `Ok`, and there is nothing to
+            // publish, so return the sentinel (SIP-94 §6).
+            if !context.built_locally {
+                info!(
+                    "Decided block was built by another operator, its envelope is signed by the non-builder task (expected)"
+                );
                 return Err(Error::SpecificError(
-                    SpecificError::EnvelopeDeadlinePassed { slot },
+                    SpecificError::EnvelopeNonBuilderDelegated { slot },
                 ));
             }
 
-            // The value every operator signs: the builder operator disseminates its own
-            // blinded envelope; everyone else awaits and validates the disseminated one
-            // (SIP-94 §6).
-            let signed_blinded = if context.built_locally {
-                // Bind the local BN's envelope to the decided bid before disseminating: a
-                // stale or inconsistent BN response must not go out under our signature.
-                if envelope.payload.block_hash != context.block_hash {
-                    warn!(
-                        local = ?envelope.payload.block_hash,
-                        decided = ?context.block_hash,
-                        "Local envelope's execution block hash differs from the decided bid"
-                    );
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    return Err(Error::SpecificError(
-                        SpecificError::EnvelopeBuilderInconsistent {
-                            local: envelope.payload.block_hash,
-                            decided: context.block_hash,
-                        },
-                    ));
-                }
-                context.validate_blinded(&local_blinded).map_err(|err| {
-                    warn!(?err, "Local envelope failed the decision bindings");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    Error::SpecificError(err)
-                })?;
+            let deadline = self
+                .envelope_deadline(slot)
+                .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
 
-                let dissemination = EnvelopeDissemination {
-                    slot,
-                    envelope: try_to_variable_list(
-                        local_blinded.as_ssz_bytes(),
-                        |provided, max| {
-                            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                            Error::SpecificError(SpecificError::DataTooLarge(format!(
-                                "Envelope too large for dissemination: {provided} > {max}"
-                            )))
-                        },
-                    )?,
-                };
-                self.signature_collector
-                    .broadcast_dissemination(
-                        validator_pubkey,
-                        cluster.committee_id(),
-                        dissemination,
-                    )
-                    .map_err(|err| {
-                        warn!(?err, "Envelope dissemination broadcast failed");
+            // The builder operator disseminates its own blinded envelope and signs it; the
+            // other operators sign the disseminated copy from their non-builder task (SIP-94 §6).
+            // Bind the local BN's envelope to the decided bid before disseminating: a
+            // stale or inconsistent BN response must not go out under our signature.
+            if envelope.payload.block_hash != context.block_hash {
+                warn!(
+                    local = ?envelope.payload.block_hash,
+                    decided = ?context.block_hash,
+                    "Local envelope's execution block hash differs from the decided bid"
+                );
+                record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                return Err(Error::SpecificError(
+                    SpecificError::EnvelopeBuilderInconsistent {
+                        local: envelope.payload.block_hash,
+                        decided: context.block_hash,
+                    },
+                ));
+            }
+            // Blind here rather than up front: hashing the full payload is the costly step, and
+            // only this builder path uses the result.
+            let local_blinded = BlindedExecutionPayloadEnvelope::from_full(&envelope);
+            context.validate_blinded(&local_blinded).map_err(|err| {
+                warn!(?err, "Local envelope failed the decision bindings");
+                record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                Error::SpecificError(err)
+            })?;
+
+            let dissemination = EnvelopeDissemination {
+                slot,
+                envelope: try_to_variable_list(
+                    local_blinded.as_ssz_bytes(),
+                    |provided, max| {
                         record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                        Error::SpecificError(SpecificError::DisseminationBroadcastFailed(err))
-                    })?;
-                local_blinded.clone()
-            } else {
-                let Some(dissemination) = self
-                    .dissemination_store
-                    .wait(validator_pubkey, slot, deadline)
-                    .await
-                else {
-                    warn!("No envelope dissemination arrived before the payload-due deadline");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    return Err(Error::SpecificError(SpecificError::DisseminationTimeout {
-                        slot,
-                    }));
-                };
-                let disseminated = dissemination.blinded_envelope::<E>().map_err(|err| {
-                    warn!(?err, "Disseminated envelope bytes did not decode");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    Error::SpecificError(SpecificError::DisseminationUndecodable(err))
-                })?;
-                context.validate_blinded(&disseminated).map_err(|err| {
-                    warn!(?err, "Disseminated envelope failed the decision bindings");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    Error::SpecificError(err)
-                })?;
-                disseminated
+                        Error::SpecificError(SpecificError::DataTooLarge(format!(
+                            "Envelope too large for dissemination: {provided} > {max}"
+                        )))
+                    },
+                )?,
             };
+            self.signature_collector
+                .broadcast_dissemination(
+                    validator_pubkey,
+                    cluster.committee_id(),
+                    dissemination,
+                )
+                .map_err(|err| {
+                    warn!(?err, "Envelope dissemination broadcast failed");
+                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
+                    Error::SpecificError(SpecificError::DisseminationBroadcastFailed(err))
+                })?;
 
-            // Sign before the publish gate so every operator contributes its share and the
-            // builder can reconstruct the threshold signature. `payload_root` is trusted from
-            // the builder operator by design (SIP-94 §6).
             let epoch = slot.epoch(E::slots_per_epoch());
             let domain_hash = self.get_domain(epoch, Domain::BeaconBuilder);
-            let signing_root = signed_blinded.signing_root(domain_hash);
+            let signing_root = local_blinded.signing_root(domain_hash);
             let remaining = deadline.saturating_duration_since(Instant::now());
             let signature = Self::collect_within(
                 remaining,
@@ -4099,25 +4204,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 warn!(?err, "Envelope signature collection failed");
                 record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
             })?;
-
-            // Publish gate: the caller publishes every `Ok`, so only the builder operator may
-            // return one.
-            if !context.built_locally {
-                let local_root = local_blinded.tree_hash_root();
-                let disseminated_root = signed_blinded.tree_hash_root();
-                info!(
-                    ?local_root,
-                    ?disseminated_root,
-                    "Signed another operator's envelope, skipping publish (expected)"
-                );
-                record_outcome(metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY);
-                return Err(Error::SpecificError(
-                    SpecificError::EnvelopeNotBuiltLocally {
-                        local_root,
-                        disseminated_root,
-                    },
-                ));
-            }
 
             record_outcome(metrics::ENVELOPE_OUTCOME_PUBLISHED);
             Ok(SignedExecutionPayloadEnvelope {
