@@ -22,6 +22,7 @@ use ssv_types::typenum::Unsigned;
 pub use ssv_types::{
     CommitteeId, OperatorId, ValidatorIndex,
     consensus::UnsignedSSVMessage,
+    dissemination::EnvelopeDissemination,
     domain_type::DomainType,
     message::{MsgType, SSVMessage, SSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
@@ -617,6 +618,39 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         injection_messages
     }
 
+    /// Broadcasts an envelope dissemination for the builder operator (SIP-94 §6); see the
+    /// `SignatureCollecting` method of the same name.
+    fn broadcast_dissemination(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        committee_id: CommitteeId,
+        dissemination: EnvelopeDissemination,
+    ) -> Result<(), CollectionError> {
+        let domain = self.domain_type_for_slot(dissemination.slot);
+        let message_id = MessageId::new(
+            &domain,
+            Role::EnvelopeProposer,
+            &DutyExecutor::Validator(validator_pubkey),
+        );
+        let ssv_message = SSVMessage::new(
+            MsgType::SSVEnvelopeDisseminationMsgType,
+            message_id,
+            dissemination.as_ssz_bytes(),
+        )
+        .map_err(|err| CollectionError::DisseminationSendFailed(err.to_string()))?;
+
+        self.message_sender
+            .sign_and_send(
+                UnsignedSSVMessage {
+                    ssv_message,
+                    full_data: vec![],
+                },
+                committee_id,
+                None,
+            )
+            .map_err(|err| CollectionError::DisseminationSendFailed(format!("{err:?}")))
+    }
+
     fn create_message(
         &self,
         metadata: &SignatureMetadata,
@@ -886,6 +920,8 @@ pub enum CollectionError {
     EmptySignature,
     OwnOperatorIdUnknown,
     RecoverError(bls_lagrange::Error),
+    /// Building or sending an envelope dissemination failed (SIP-94 §6).
+    DisseminationSendFailed(String),
 }
 
 impl From<Error> for CollectionError {
@@ -920,6 +956,15 @@ pub trait SignatureCollecting: Send + Sync {
         requester: SignatureRequester,
         signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>>;
+
+    /// Broadcasts an envelope dissemination for the builder operator (SIP-94 §6): the
+    /// operator-signed carrier every committee member validates and threshold-signs over.
+    fn broadcast_dissemination(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        committee_id: CommitteeId,
+        dissemination: EnvelopeDissemination,
+    ) -> Result<(), CollectionError>;
 }
 
 impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollectorManager<S>> {
@@ -935,6 +980,20 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
             requester,
             signing_data,
         ))
+    }
+
+    fn broadcast_dissemination(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        committee_id: CommitteeId,
+        dissemination: EnvelopeDissemination,
+    ) -> Result<(), CollectionError> {
+        SignatureCollectorManager::broadcast_dissemination(
+            self,
+            validator_pubkey,
+            committee_id,
+            dissemination,
+        )
     }
 }
 

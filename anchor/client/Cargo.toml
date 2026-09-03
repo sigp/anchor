@@ -14,6 +14,7 @@ beacon_node_fallback = { workspace = true }
 clap = { workspace = true }
 cli = { workspace = true }
 database = { workspace = true }
+dissemination_store = { workspace = true }
 duties_tracker = { workspace = true }
 eth = { workspace = true }
 eth2 = { workspace = true }

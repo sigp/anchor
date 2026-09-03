@@ -18,6 +18,7 @@ fn extract_message_slot(validated_message: &ValidatedSSVMessage) -> Slot {
     match validated_message {
         ValidatedSSVMessage::QbftMessage(msg) => Slot::new(msg.height),
         ValidatedSSVMessage::PartialSignatureMessages(msg) => msg.slot,
+        ValidatedSSVMessage::EnvelopeDissemination(msg) => msg.slot,
     }
 }
 
@@ -209,6 +210,16 @@ impl OperatorDoppelgangerService {
                     partial_sig_kind = ?msg.kind,
                     num_messages = msg.messages.len(),
                     "OPERATOR DOPPELGÄNGER DETECTED: Received partial signature message signed with our operator ID for slot after startup. \
+                     Another instance of this operator is running. Shutting down to prevent equivocation."
+                );
+            }
+            ValidatedSSVMessage::EnvelopeDissemination(_) => {
+                error!(
+                    operator_id = *own_operator_id,
+                    duty_executor = ?msg_id.duty_executor(),
+                    msg_slot = msg_slot.as_u64(),
+                    startup_slot = self.startup_slot.as_u64(),
+                    "OPERATOR DOPPELGÄNGER DETECTED: Received envelope dissemination signed with our operator ID for slot after startup. \
                      Another instance of this operator is running. Shutting down to prevent equivocation."
                 );
             }

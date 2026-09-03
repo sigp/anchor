@@ -498,7 +498,7 @@ mod tests {
         duty_limit,
         tests::{
             FOUR_NODE_COMMITTEE, SINGLE_NODE_COMMITTEE, create_committee_info,
-            create_operator_pub_keys, generate_random_rsa_public_keys,
+            create_operator_pub_keys, generate_random_rsa_public_keys, generate_test_key_pair,
         },
         validate_ssv_message,
     };
@@ -531,17 +531,6 @@ mod tests {
             Err(e) => panic!("{context}: Expected QbftMessage to be accepted, got error: {e:?}"),
             Ok(other) => panic!("{context}: Expected QbftMessage variant, got: {other:?}"),
         }
-    }
-
-    // Extract common key generation into a helper
-    fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
-        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
-        let public_key = Rsa::from_public_components(
-            private_key.n().to_owned().unwrap(),
-            private_key.e().to_owned().unwrap(),
-        )
-        .expect("Failed to extract public key");
-        (private_key, public_key)
     }
 
     fn generate_fork_schedule() -> Arc<ForkSchedule> {
@@ -1037,12 +1026,14 @@ mod tests {
         let committee_info = create_committee_info(SINGLE_NODE_COMMITTEE);
 
         // Every non-QBFT role must reject consensus messages, including
-        // PTCAttester and ProposerPreferences (both leaderless, no QBFT round).
+        // PTCAttester, ProposerPreferences, and EnvelopeProposer (all leaderless,
+        // no QBFT round).
         for role in [
             Role::ValidatorRegistration,
             Role::VoluntaryExit,
             Role::PTCAttester,
             Role::ProposerPreferences,
+            Role::EnvelopeProposer,
         ] {
             let msg_id = create_message_id_for_test(role);
             let qbft_message = QbftMessageBuilder::new(role, QbftMessageType::Proposal)
@@ -1446,11 +1437,7 @@ mod tests {
     // ---------------------------------------------------------------------
 
     use fork::ForkSchedule;
-    use openssl::{
-        pkey::{PKey, Private, Public},
-        rsa::Rsa,
-        sign::Signer,
-    };
+    use openssl::{pkey::PKey, rsa::Rsa, sign::Signer};
     use slot_clock::ManualSlotClock;
     use types::Epoch;
 
@@ -1955,8 +1942,12 @@ mod tests {
             Role::EnvelopeProposer,
             &DutyExecutor::Validator(PublicKeyBytes::empty()),
         );
-        let ssv_msg = SSVMessage::new(MsgType::SSVConsensusMsgType, msg_id, vec![1, 2, 3])
-            .expect("SSVMessage should be created");
+        let ssv_msg = SSVMessage::new(
+            MsgType::SSVEnvelopeDisseminationMsgType,
+            msg_id,
+            vec![1, 2, 3],
+        )
+        .expect("SSVMessage should be created");
         let signed_msg = SignedSSVMessage::new(
             vec![[0xAA; RSA_SIGNATURE_SIZE]],
             vec![OperatorId(1)],

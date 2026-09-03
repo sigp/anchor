@@ -1,4 +1,5 @@
 mod consensus_message;
+mod dissemination;
 mod duty_state;
 mod message_counts;
 mod partial_signature;
@@ -27,6 +28,7 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
+    dissemination::EnvelopeDissemination,
     message::{MsgType, SSVMessageError, SignedSSVMessage, SignedSSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
@@ -40,6 +42,7 @@ use types::{ChainSpec, Epoch, ForkName, Slot};
 
 use crate::{
     consensus_message::validate_consensus_message,
+    dissemination::validate_envelope_dissemination,
     duty_state::{DutyState, OperatorState},
     partial_signature::validate_partial_signature_message,
 };
@@ -243,6 +246,16 @@ pub enum ValidationFailure {
         current_fork: ForkName,
         deprecated_since_fork: ForkName,
     },
+    /// An envelope dissemination message for a role other than `EnvelopeProposer`, the only
+    /// role that admits the class (SIP-94 §7). Reject-class.
+    UnexpectedDisseminationMessage {
+        role: Role,
+    },
+    /// A dissemination message with a signer count other than exactly one. Reject-class.
+    DisseminationOneSigner,
+    /// A dissemination message whose inner envelope bytes do not SSZ-decode as a blinded
+    /// execution payload envelope (SIP-94 §7). Reject-class.
+    UndecodableDisseminationEnvelope(DecodeError),
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -316,6 +329,7 @@ impl From<SignedSSVMessageError> for ValidationFailure {
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
     PartialSignatureMessages(PartialSignatureMessages),
+    EnvelopeDissemination(EnvelopeDissemination),
 }
 
 #[derive(Debug)]
@@ -783,6 +797,9 @@ fn validate_ssv_message(
         MsgType::SSVPartialSignatureMsgType => {
             validate_partial_signature_message(validation_context, duty_state, duty_provider)
         }
+        MsgType::SSVEnvelopeDisseminationMsgType => {
+            validate_envelope_dissemination(validation_context, duty_state, duty_provider)
+        }
     }
 }
 
@@ -818,6 +835,30 @@ fn verify_message_signature(
             reason: format!("Signature verification error: {e}"),
         }),
     }
+}
+
+/// Looks up `signer`'s RSA key and verifies the message's first signature against it, the
+/// shared tail of the single-signer validation paths (partial signatures and envelope
+/// disseminations).
+pub(crate) fn verify_single_signer(
+    validation_context: &ValidationContext<impl SlotClock>,
+    signer: OperatorId,
+) -> Result<(), ValidationFailure> {
+    let operator_pub_key = validation_context.operator_pub_keys.get(&signer).ok_or(
+        ValidationFailure::OperatorNotFound {
+            operator_id: signer,
+        },
+    )?;
+    let signature = validation_context
+        .signed_ssv_message
+        .signatures()
+        .first()
+        .ok_or(ValidationFailure::NoSignatures)?;
+    verify_message_signature(
+        validation_context.signed_ssv_message,
+        operator_pub_key,
+        signature,
+    )
 }
 
 /// Verifies all signatures in a signed SSV message
@@ -1365,6 +1406,10 @@ mod tests {
         for (msg_type, role) in [
             (MsgType::SSVConsensusMsgType, Role::Committee),
             (MsgType::SSVPartialSignatureMsgType, Role::Proposer),
+            (
+                MsgType::SSVEnvelopeDisseminationMsgType,
+                Role::EnvelopeProposer,
+            ),
         ] {
             let signed_message =
                 signed_test_message(msg_type, create_message_id_for_test(role), vec![0x01]);
@@ -1591,6 +1636,37 @@ mod tests {
     }
 
     // Create a committee info object for tests
+    pub(crate) fn generate_test_key_pair() -> (Rsa<Private>, Rsa<Public>) {
+        let private_key = Rsa::generate(2048).expect("Failed to generate RSA key");
+        let public_key = Rsa::from_public_components(
+            private_key.n().to_owned().unwrap(),
+            private_key.e().to_owned().unwrap(),
+        )
+        .expect("Failed to extract public key");
+        (private_key, public_key)
+    }
+
+    pub(crate) fn generate_fork_schedule(fork: fork::Fork) -> Arc<fork::ForkSchedule> {
+        Arc::new(fork::ForkSchedule::new(
+            fork,
+            DomainType::default(),
+            "testing",
+        ))
+    }
+
+    /// Standard single-signer four-node fixture (committee info + keypair + pubkey map).
+    pub(crate) fn four_node_committee_and_keypair() -> (
+        CommitteeInfo,
+        Rsa<Private>,
+        HashMap<OperatorId, Rsa<Public>>,
+    ) {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let (private_key, public_key) = generate_test_key_pair();
+        let map =
+            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        (committee_info, private_key, map)
+    }
+
     pub(crate) fn create_committee_info(committee_size: usize) -> CommitteeInfo {
         let mut members = IndexSet::new();
         for i in 0..committee_size {

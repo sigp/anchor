@@ -67,7 +67,8 @@ impl MessageCounts {
             | PartialSignatureKind::ValidatorRegistration
             | PartialSignatureKind::VoluntaryExit
             | PartialSignatureKind::AggregatorCommitteePartialSig
-            | PartialSignatureKind::PTCAttester => {
+            | PartialSignatureKind::PTCAttester
+            | PartialSignatureKind::Envelope => {
                 if self.pre_consensus >= MAX_MESSAGES_PER_ROUND {
                     return Err(ValidationFailure::InvalidPartialSignatureTypeCount {
                         got: format!("pre-consensus, having {self:?}"),
@@ -114,7 +115,8 @@ impl MessageCounts {
             | PartialSignatureKind::ValidatorRegistration
             | PartialSignatureKind::VoluntaryExit
             | PartialSignatureKind::AggregatorCommitteePartialSig
-            | PartialSignatureKind::PTCAttester => self.pre_consensus += 1,
+            | PartialSignatureKind::PTCAttester
+            | PartialSignatureKind::Envelope => self.pre_consensus += 1,
             PartialSignatureKind::PostConsensus => self.post_consensus += 1,
             // ProposerPreferences and RequestAuth are tracked per signing-root on
             // `SignerState`, not via a shared counter.

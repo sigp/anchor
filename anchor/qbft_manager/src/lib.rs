@@ -14,8 +14,8 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeId, IndexSet, OperatorId,
     consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, EnvelopeConsensusData, GloasBeaconVote,
-        ProposerConsensusData, QbftData, QbftDataValidator,
+        AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, ProposerConsensusData,
+        QbftData, QbftDataValidator,
     },
     domain_type::DomainType,
     message::SignedSSVMessage,
@@ -96,14 +96,6 @@ pub enum ValidatorDutyKind {
     SyncCommitteeAggregator,
 }
 
-/// Unique identifier for an envelope-proposer QBFT instance (SIP-94 §6). Envelope
-/// signing is a single per-slot duty, so no `ValidatorDutyKind` discriminator.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct EnvelopeProposerInstanceId {
-    pub validator: PublicKeyBytes,
-    pub instance_height: InstanceHeight,
-}
-
 // Message that is passed around the QbftManager
 pub struct QbftMessage<D: QbftData> {
     pub kind: QbftMessageKind<D>,
@@ -156,8 +148,6 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     // QBFT instances for AggregatorCommitteeConsensusData
     aggregator_committee_instances:
         Map<AggregatorCommitteeInstanceId, AggregatorCommitteeConsensusData<E>>,
-    // QBFT instances voting on Gloas self-build envelope consensus data (SIP-94 §6)
-    envelope_consensus_data_instances: Map<EnvelopeProposerInstanceId, EnvelopeConsensusData>,
     // Utility to sign and serialize network messages
     message_sender: Arc<dyn MessageSender>,
     // Number of slots per epoch
@@ -188,7 +178,6 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             beacon_vote_instances: DashMap::new(),
             gloas_beacon_vote_instances: DashMap::new(),
             aggregator_committee_instances: DashMap::new(),
-            envelope_consensus_data_instances: DashMap::new(),
             message_sender,
             slots_per_epoch,
             fork_schedule,
@@ -299,31 +288,11 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Proposer) => ValidatorDutyKind::Proposal,
                     Some(Role::Aggregator) => ValidatorDutyKind::Aggregator,
                     Some(Role::SyncCommittee) => ValidatorDutyKind::SyncCommitteeAggregator,
-                    Some(Role::EnvelopeProposer) => {
-                        let slot = types::Slot::new(qbft_message.height);
-                        // Defense in depth behind `validate_role_for_fork`: envelope QBFT
-                        // exists only post-Gloas.
-                        if !self.gloas_enabled_at_slot(slot) {
-                            warn!(%slot, "Ignoring EnvelopeProposer message before Gloas fork");
-                            return Err(QbftError::RoleNotActive);
-                        }
-                        let id = EnvelopeProposerInstanceId {
-                            validator,
-                            instance_height,
-                        };
-                        return self.pass_to_instance::<EnvelopeConsensusData>(
-                            id,
-                            WrappedQbftMessage {
-                                signed_message: full_message,
-                                qbft_message,
-                            },
-                        );
-                    }
                     // Committee roles use DutyExecutor::Committee, not Validator
                     Some(Role::Committee | Role::AggregatorCommittee)
                     // These roles don't use QBFT consensus
                     | Some(
-                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences | Role::EnvelopeProposer,
                     )
                     | None => {
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
@@ -388,15 +357,10 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     }
                     // Validator roles should use DutyExecutor::Validator, not
                     // Committee
-                    Some(
-                        Role::Aggregator
-                        | Role::Proposer
-                        | Role::SyncCommittee
-                        | Role::EnvelopeProposer,
-                    )
+                    Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
                     // These roles don't use QBFT consensus
                     | Some(
-                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences | Role::EnvelopeProposer,
                     )
                     | None => Err(QbftError::InconsistentMessageId),
                 }
@@ -446,8 +410,6 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             self.proposer_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
             self.aggregator_committee_instances
-                .retain(|k, _| *k.instance_height >= cutoff.as_usize());
-            self.envelope_consensus_data_instances
                 .retain(|k, _| *k.instance_height >= cutoff.as_usize());
         }
     }
@@ -589,26 +551,6 @@ impl<E: EthSpec> QbftDecidable<E> for AggregatorCommitteeConsensusData<E> {
             domain,
             Role::AggregatorCommittee,
             &DutyExecutor::Committee(id.committee),
-        )
-    }
-}
-
-impl<E: EthSpec> QbftDecidable<E> for EnvelopeConsensusData {
-    type Id = EnvelopeProposerInstanceId;
-
-    fn get_map<S: SlotClock>(manager: &QbftManager<E, S>) -> &Map<Self::Id, Self> {
-        &manager.envelope_consensus_data_instances
-    }
-
-    fn instance_height(&self, id: &Self::Id) -> InstanceHeight {
-        id.instance_height
-    }
-
-    fn message_id(domain: &DomainType, id: &Self::Id) -> MessageId {
-        MessageId::new(
-            domain,
-            Role::EnvelopeProposer,
-            &DutyExecutor::Validator(id.validator),
         )
     }
 }

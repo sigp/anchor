@@ -17,6 +17,7 @@ use std::{
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::{NetworkDatabase, PendingStateUpdates};
+use dissemination_store::DisseminationStore;
 use fork::{Fork, ForkSchedule};
 use futures::StreamExt;
 use parking_lot::Mutex;
@@ -31,10 +32,8 @@ use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share,
     ValidatorIndex, ValidatorMetadata,
-    consensus::{
-        AggregatorCommitteeConsensusData, BeaconVote, EnvelopeConsensusData, GloasBeaconVote,
-        QbftDataValidator,
-    },
+    consensus::{AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, QbftDataValidator},
+    dissemination::EnvelopeDissemination,
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
@@ -95,23 +94,6 @@ pub(super) async fn run_sign_attestations(
 
 // ==================== Mock consensus decider ====================
 
-/// Shared storage for captured `decide_instance` calls.
-pub(super) type CapturedDecides = Arc<Mutex<Vec<CapturedDecideCall>>>;
-
-/// One captured `decide_instance` call.
-pub(super) struct CapturedDecideCall {
-    /// Type name of the proposed consensus data, identifying which duty started consensus.
-    pub(super) data_type: &'static str,
-}
-
-/// Forced outcome for `EnvelopeConsensusData` decide calls.
-pub(super) enum ForcedEnvelopeFailure {
-    /// Complete with `Completed::TimedOut`.
-    Timeout,
-    /// Fail with this error.
-    Error(QbftError),
-}
-
 /// Mock that instantly returns `Completed::Success(initial)`, echoing back the proposed data.
 /// Removes the need for `QbftManager` infrastructure and lets the signing pipeline run fully.
 ///
@@ -121,20 +103,13 @@ pub(super) enum ForcedEnvelopeFailure {
 /// exactly the case `#1027` must apply. Non-Gloas seeds (`BeaconVote`) are always echoed back
 /// unchanged, since their decided value carries no index.
 ///
-/// When `forced_envelope_decision` is `Some`, it replaces the echo for `EnvelopeConsensusData`
-/// seeds; when `forced_envelope_failure` is `Some`, envelope seeds time out or fail instead.
-/// Every `decide_instance` call is captured, regardless of the configured behavior.
-///
 /// When `fixed_decision` is `Some`, every seed decides as that SSZ-encoded value once `parties`
 /// callers have reached the barrier, modeling a cluster decision that differs from each caller's
 /// own proposal.
 #[derive(Default)]
 pub(super) struct MockConsensusDecider {
     forced_gloas_index: Option<u64>,
-    forced_envelope_decision: Option<EnvelopeConsensusData>,
-    forced_envelope_failure: Option<ForcedEnvelopeFailure>,
     fixed_decision: Option<(Vec<u8>, Arc<Barrier>)>,
-    captured: CapturedDecides,
 }
 
 impl MockConsensusDecider {
@@ -159,29 +134,6 @@ impl MockConsensusDecider {
             ..Self::default()
         }
     }
-
-    /// Decides every `EnvelopeConsensusData` seed as `decided`, modeling a cluster that
-    /// decided another operator's envelope. Non-envelope seeds keep the echo behavior.
-    pub(super) fn deciding_envelope(decided: EnvelopeConsensusData) -> Self {
-        Self {
-            forced_envelope_decision: Some(decided),
-            ..Self::default()
-        }
-    }
-
-    /// Fails every `EnvelopeConsensusData` decide call with `failure`, modeling envelope
-    /// consensus that times out or errors. Non-envelope seeds keep the echo behavior.
-    pub(super) fn failing_envelope(failure: ForcedEnvelopeFailure) -> Self {
-        Self {
-            forced_envelope_failure: Some(failure),
-            ..Self::default()
-        }
-    }
-
-    /// Handle to the captured `decide_instance` calls.
-    pub(super) fn captured_decides(&self) -> CapturedDecides {
-        Arc::clone(&self.captured)
-    }
 }
 
 impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
@@ -193,36 +145,6 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
         _timeout_mode: TimeoutMode,
         _committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
-        self.captured.lock().push(CapturedDecideCall {
-            data_type: std::any::type_name::<D>(),
-        });
-        if let Some(decided) = self.forced_envelope_decision.clone() {
-            // Same soundness argument as below: `D: 'static`. Only an `EnvelopeConsensusData`
-            // seed downcasts; every other `D` falls through to the existing behavior.
-            let decided_any: Box<dyn Any> = Box::new(decided);
-            if let Ok(decided_envelope) = decided_any.downcast::<D>() {
-                return Ok(Completed::Success(*decided_envelope));
-            }
-        }
-        if let Some(failure) = &self.forced_envelope_failure {
-            // Same soundness argument as below: `D: 'static`. Only an `EnvelopeConsensusData`
-            // seed triggers the forced failure; every other seed echoes back unchanged.
-            let boxed: Box<dyn Any> = Box::new(initial);
-            match boxed.downcast::<EnvelopeConsensusData>() {
-                Ok(_envelope_seed) => {
-                    return match failure {
-                        ForcedEnvelopeFailure::Timeout => Ok(Completed::TimedOut),
-                        ForcedEnvelopeFailure::Error(err) => Err(err.clone()),
-                    };
-                }
-                Err(original) => {
-                    let echoed = original
-                        .downcast::<D>()
-                        .expect("downcast back to original D always succeeds");
-                    return Ok(Completed::Success(*echoed));
-                }
-            }
-        }
         // `D: QbftDecidable<E>` requires `'static`, so this downcast is sound. Only the Gloas
         // seed type carries `attestation_data_index`; every other `D` falls through to the echo.
         if let Some(index) = self.forced_gloas_index {
@@ -263,6 +185,17 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
 
 // ==================== Mock signature collector ====================
 
+/// One captured `broadcast_dissemination` call.
+#[derive(Debug, Clone)]
+pub(super) struct CapturedDissemination {
+    pub(super) validator_pubkey: PublicKeyBytes,
+    pub(super) committee_id: CommitteeId,
+    pub(super) dissemination: EnvelopeDissemination,
+}
+
+/// Shared storage for captured `broadcast_dissemination` calls.
+pub(super) type CapturedDisseminations = Arc<Mutex<Vec<CapturedDissemination>>>;
+
 /// Shared storage for captured `sign_and_collect` calls.
 pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 
@@ -293,6 +226,9 @@ type FailingPubkeys = Arc<Mutex<HashSet<PublicKeyBytes>>>;
 /// over both failure modes.
 struct MockSignatureCollector {
     captured: CapturedCalls,
+    captured_disseminations: CapturedDisseminations,
+    /// Set from `HarnessOptions::dissemination_failure`; every broadcast fails with this error.
+    dissemination_failure: Option<CollectionError>,
     /// Set from `HarnessOptions::collector_failure`; every call fails with this error.
     failure: Option<CollectionError>,
     fails: Arc<AtomicBool>,
@@ -341,32 +277,63 @@ impl SignatureCollecting for MockSignatureCollector {
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
     }
+
+    fn broadcast_dissemination(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+        committee_id: CommitteeId,
+        dissemination: EnvelopeDissemination,
+    ) -> Result<(), CollectionError> {
+        if let Some(failure) = self.dissemination_failure.clone() {
+            return Err(failure);
+        }
+        self.captured_disseminations
+            .lock()
+            .push(CapturedDissemination {
+                validator_pubkey,
+                committee_id,
+                dissemination,
+            });
+        Ok(())
+    }
 }
 
 /// Creates a mock signature collector, returning the shared captured calls and failure-mode
 /// handles.
 fn create_mock_collector(
     failure: Option<CollectionError>,
+    dissemination_failure: Option<CollectionError>,
     hang: bool,
 ) -> (
     Box<dyn SignatureCollecting>,
     CapturedCalls,
+    CapturedDisseminations,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     FailingPubkeys,
 ) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
+    let captured_disseminations: CapturedDisseminations = Arc::new(Mutex::new(Vec::new()));
     let fails = Arc::new(AtomicBool::new(false));
     let hangs = Arc::new(AtomicBool::new(hang));
     let failing_pubkeys: FailingPubkeys = Arc::new(Mutex::new(HashSet::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
+        captured_disseminations: Arc::clone(&captured_disseminations),
+        dissemination_failure,
         failure,
         fails: Arc::clone(&fails),
         hangs: Arc::clone(&hangs),
         failing_pubkeys: Arc::clone(&failing_pubkeys),
     };
-    (Box::new(mock), captured, fails, hangs, failing_pubkeys)
+    (
+        Box::new(mock),
+        captured,
+        captured_disseminations,
+        fails,
+        hangs,
+        failing_pubkeys,
+    )
 }
 
 // ==================== Committee setup ====================
@@ -490,6 +457,8 @@ pub(super) fn create_committee_setup(
 pub(super) struct HarnessOptions {
     /// When set, every `sign_and_collect` call fails with this error after being captured.
     pub(super) collector_failure: Option<CollectionError>,
+    /// Every `broadcast_dissemination` call fails with this error.
+    pub(super) dissemination_failure: Option<CollectionError>,
     /// When `true`, every `sign_and_collect` call captures the call and then returns a future that
     /// never resolves, modeling a quorum that never forms. Used to drive the production
     /// collection-timeout path. Takes precedence over `collector_failure`.
@@ -515,6 +484,7 @@ impl Default for HarnessOptions {
     fn default() -> Self {
         Self {
             collector_failure: None,
+            dissemination_failure: None,
             collector_hangs: false,
             // Slashing protection is disabled by default; most tests do not exercise it. When a
             // test enables it, the harness registers every configured validator in the slashing
@@ -563,7 +533,10 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
-    pub(super) captured_decides: CapturedDecides,
+    pub(super) captured_disseminations: CapturedDisseminations,
+    /// The dissemination handoff store the store awaits on; tests insert into it to stand in
+    /// for the message receiver.
+    pub(super) dissemination_store: Arc<DisseminationStore>,
     /// Set by [`Self::fail_signature_collection`]; read by the mock collector on every call.
     signature_collection_fails: Arc<AtomicBool>,
     /// Filled by [`Self::hang_signature_collection`]; read by the mock collector on every call.
@@ -655,10 +628,17 @@ impl ValidatorStoreTestHarness {
         let (
             mock_collector,
             captured_calls,
+            captured_disseminations,
             signature_collection_fails,
             signature_collection_hangs,
             failing_pubkeys,
-        ) = create_mock_collector(options.collector_failure, options.collector_hangs);
+        ) = create_mock_collector(
+            options.collector_failure,
+            options.dissemination_failure,
+            options.collector_hangs,
+        );
+
+        let dissemination_store = Arc::new(DisseminationStore::new());
 
         // Database
         let database = Arc::new(
@@ -736,7 +716,6 @@ impl ValidatorStoreTestHarness {
         let (is_synced_tx, is_synced_rx) = watch::channel(true);
 
         let decider = options.decider;
-        let captured_decides = decider.captured_decides();
 
         let spec = Arc::clone(&options.spec);
         let genesis_validators_root = Hash256::zero();
@@ -744,6 +723,7 @@ impl ValidatorStoreTestHarness {
         let validator_store = AnchorValidatorStore::new(
             database,
             mock_collector,
+            Arc::clone(&dissemination_store),
             Arc::new(decider),
             Arc::clone(&slashing_protection),
             options.disable_slashing_protection,
@@ -765,7 +745,8 @@ impl ValidatorStoreTestHarness {
             validator_store,
             committee_setups,
             captured_calls,
-            captured_decides,
+            captured_disseminations,
+            dissemination_store,
             signature_collection_fails,
             signature_collection_hangs,
             failing_pubkeys,
