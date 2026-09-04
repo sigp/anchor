@@ -2513,7 +2513,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     "Publish path selected"
                 );
 
-                Ok(publish_decision.signed_block)
+                Ok(publish_decision)
             }
             .await;
 
@@ -2542,12 +2542,21 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         }
         .instrument(span);
 
-        run_and_update_metrics(
+        let publish_decision = run_and_update_metrics(
             BLOCK_LOG_NAME,
             &validator_metrics::SIGNED_BLOCKS_TOTAL,
             future,
         )
-        .await
+        .await?;
+
+        // Lighthouse's `ValidatorStore` API has no explicit "signed, do not publish" outcome.
+        // Its block service treats `UnknownPubkey` as a benign cancellation and returns without
+        // publishing, whereas every other error is surfaced as a block-production failure. Keep
+        // this integration signal outside the signing instrumentation so the completed threshold
+        // signature and the selected non-leader path are recorded as successful.
+        publish_decision
+            .signed_block
+            .ok_or(Error::UnknownPubkey(validator_pubkey))
     }
 
     async fn sign_validator_registration_data(
@@ -3125,7 +3134,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
 }
 
 struct PublishDecision<E: EthSpec> {
-    signed_block: SignedBlock<E>,
+    signed_block: Option<SignedBlock<E>>,
     proposal_matched: bool,
     publish_path: &'static str,
 }
@@ -3133,6 +3142,8 @@ struct PublishDecision<E: EthSpec> {
 const PUBLISH_PATH_RECONSTRUCTED_FULL_BLOCK_AS_LEADER: &str = "reconstructed_full_block_as_leader";
 const PUBLISH_PATH_BLINDED_BLOCK_AS_LEADER: &str = "blinded_block_as_leader";
 const PUBLISH_PATH_BLINDED_BLOCK_NOT_LEADER: &str = "blinded_block_not_leader";
+const PUBLISH_PATH_SKIPPED_BLINDED_BLOCK_NOT_LEADER_PRE_GLOAS: &str =
+    "skipped_blinded_block_not_leader_pre_gloas";
 const PUBLISH_PATH_FULL_BLOCK_DIRECTLY: &str = "full_block_directly";
 
 fn select_publish_block<E: EthSpec>(
@@ -3145,9 +3156,25 @@ fn select_publish_block<E: EthSpec>(
             let proposal_matched = signed_blinded_block.signed_block_header().message
                 == original_blinded_block.block_header();
 
+            // An unmatched local full block cannot safely reconstruct the decided proposal, and a
+            // separate pre-Gloas beacon node cannot unblind a payload built by another operator.
+            // Use the locally requested fork so peer-decided data cannot change this boundary.
+            if !proposal_matched
+                && !original_blinded_block
+                    .to_ref()
+                    .fork_name_unchecked()
+                    .gloas_enabled()
+            {
+                return PublishDecision {
+                    signed_block: None,
+                    proposal_matched,
+                    publish_path: PUBLISH_PATH_SKIPPED_BLINDED_BLOCK_NOT_LEADER_PRE_GLOAS,
+                };
+            }
+
             if !proposal_matched {
                 return PublishDecision {
-                    signed_block: SignedBlock::Blinded(signed_blinded_block),
+                    signed_block: Some(SignedBlock::Blinded(signed_blinded_block)),
                     proposal_matched,
                     publish_path: PUBLISH_PATH_BLINDED_BLOCK_NOT_LEADER,
                 };
@@ -3161,23 +3188,23 @@ fn select_publish_block<E: EthSpec>(
                     );
 
                     PublishDecision {
-                        signed_block: SignedBlock::Full(PublishBlockRequest::new(
+                        signed_block: Some(SignedBlock::Full(PublishBlockRequest::new(
                             Arc::new(signed_full_block),
                             proofs_and_blobs,
-                        )),
+                        ))),
                         proposal_matched,
                         publish_path: PUBLISH_PATH_RECONSTRUCTED_FULL_BLOCK_AS_LEADER,
                     }
                 }
                 None => PublishDecision {
-                    signed_block: SignedBlock::Blinded(signed_blinded_block),
+                    signed_block: Some(SignedBlock::Blinded(signed_blinded_block)),
                     proposal_matched,
                     publish_path: PUBLISH_PATH_BLINDED_BLOCK_AS_LEADER,
                 },
             }
         }
         SignedBlock::Full(signed_block) => PublishDecision {
-            signed_block: SignedBlock::Full(signed_block),
+            signed_block: Some(SignedBlock::Full(signed_block)),
             proposal_matched: false,
             publish_path: PUBLISH_PATH_FULL_BLOCK_DIRECTLY,
         },
@@ -3240,7 +3267,201 @@ mod testing;
 
 #[cfg(test)]
 mod tests {
+    use types::{BeaconBlockFulu, BeaconBlockGloas, EmptyBlock, MainnetEthSpec};
+
     use super::*;
+
+    type TestFullBlock = BeaconBlock<MainnetEthSpec, FullPayload<MainnetEthSpec>>;
+    type TestBlindedBlock = BeaconBlock<MainnetEthSpec, BlindedPayload<MainnetEthSpec>>;
+
+    fn fulu_block(state_root: Hash256) -> TestFullBlock {
+        let spec = ForkName::Fulu.make_genesis_spec(MainnetEthSpec::default_spec());
+        let mut block = BeaconBlockFulu::empty(&spec);
+        block.state_root = state_root;
+        BeaconBlock::Fulu(block)
+    }
+
+    fn gloas_block(state_root: Hash256) -> TestFullBlock {
+        let spec = ForkName::Gloas.make_genesis_spec(MainnetEthSpec::default_spec());
+        let mut block = BeaconBlockGloas::empty(&spec);
+        block.state_root = state_root;
+        BeaconBlock::Gloas(block)
+    }
+
+    fn blinded(block: &TestFullBlock) -> TestBlindedBlock {
+        block.to_ref().into()
+    }
+
+    fn signed_blinded(
+        block: TestBlindedBlock,
+        signature: Signature,
+    ) -> SignedBlock<MainnetEthSpec> {
+        SignedBlock::Blinded(Arc::new(SignedBlindedBeaconBlock::from_block(
+            block, signature,
+        )))
+    }
+
+    #[test]
+    fn select_publish_block_reconstructs_matching_pre_gloas_leader_block() {
+        // Arrange
+        let full_block = fulu_block(Hash256::repeat_byte(1));
+        let original_blinded_block = blinded(&full_block);
+        let signature = Signature::empty();
+        let signed_block = signed_blinded(original_blinded_block.clone(), signature.clone());
+
+        // Act
+        let decision = select_publish_block(
+            signed_block,
+            &original_blinded_block,
+            Some((full_block, None)),
+        );
+
+        // Assert
+        assert!(decision.proposal_matched);
+        assert_eq!(
+            decision.publish_path,
+            PUBLISH_PATH_RECONSTRUCTED_FULL_BLOCK_AS_LEADER
+        );
+        let Some(SignedBlock::Full(publish_request)) = decision.signed_block else {
+            panic!("matching pre-Gloas leader block should be reconstructed in full");
+        };
+        assert_eq!(
+            publish_request.signed_block().message().block_header(),
+            original_blinded_block.block_header()
+        );
+        assert_eq!(publish_request.signed_block().signature(), &signature);
+    }
+
+    #[test]
+    fn select_publish_block_skips_unmatched_pre_gloas_non_leader_block() {
+        // Arrange
+        let local_full_block = fulu_block(Hash256::repeat_byte(1));
+        let original_blinded_block = blinded(&local_full_block);
+        let decided_blinded_block = blinded(&fulu_block(Hash256::repeat_byte(2)));
+        let signed_block = signed_blinded(decided_blinded_block, Signature::empty());
+
+        // Act
+        let decision = select_publish_block(
+            signed_block,
+            &original_blinded_block,
+            Some((local_full_block, None)),
+        );
+
+        // Assert
+        assert!(!decision.proposal_matched);
+        assert_eq!(
+            decision.publish_path,
+            PUBLISH_PATH_SKIPPED_BLINDED_BLOCK_NOT_LEADER_PRE_GLOAS
+        );
+        assert!(decision.signed_block.is_none());
+    }
+
+    #[test]
+    fn select_publish_block_uses_local_pre_gloas_fork_when_decided_block_is_gloas() {
+        // Arrange
+        let local_full_block = fulu_block(Hash256::repeat_byte(1));
+        let original_blinded_block = blinded(&local_full_block);
+        let decided_blinded_block = blinded(&gloas_block(Hash256::repeat_byte(2)));
+        let signed_block = signed_blinded(decided_blinded_block, Signature::empty());
+
+        // Act
+        let decision = select_publish_block(
+            signed_block,
+            &original_blinded_block,
+            Some((local_full_block, None)),
+        );
+
+        // Assert
+        assert!(!decision.proposal_matched);
+        assert_eq!(
+            decision.publish_path,
+            PUBLISH_PATH_SKIPPED_BLINDED_BLOCK_NOT_LEADER_PRE_GLOAS
+        );
+        assert!(decision.signed_block.is_none());
+    }
+
+    #[test]
+    fn select_publish_block_keeps_unmatched_gloas_non_leader_block_publishable() {
+        // Arrange
+        let local_full_block = gloas_block(Hash256::repeat_byte(1));
+        let original_blinded_block = blinded(&local_full_block);
+        let decided_blinded_block = blinded(&gloas_block(Hash256::repeat_byte(2)));
+        let signed_block = signed_blinded(decided_blinded_block, Signature::empty());
+
+        // Act
+        let decision = select_publish_block(
+            signed_block,
+            &original_blinded_block,
+            Some((local_full_block, None)),
+        );
+
+        // Assert
+        assert!(!decision.proposal_matched);
+        assert_eq!(decision.publish_path, PUBLISH_PATH_BLINDED_BLOCK_NOT_LEADER);
+        let Some(SignedBlock::Blinded(signed_blinded_block)) = decision.signed_block else {
+            panic!("unmatched Gloas block should retain the existing blinded publish path");
+        };
+        assert!(
+            signed_blinded_block
+                .as_ref()
+                .clone()
+                .try_into_full_block(None)
+                .is_some(),
+            "Gloas blocks must remain reconstructable without an execution payload"
+        );
+    }
+
+    #[test]
+    fn select_publish_block_uses_local_gloas_fork_when_decided_block_is_pre_gloas() {
+        // Arrange
+        let local_full_block = gloas_block(Hash256::repeat_byte(1));
+        let original_blinded_block = blinded(&local_full_block);
+        let decided_blinded_block = blinded(&fulu_block(Hash256::repeat_byte(2)));
+        let signed_block = signed_blinded(decided_blinded_block, Signature::empty());
+
+        // Act
+        let decision = select_publish_block(
+            signed_block,
+            &original_blinded_block,
+            Some((local_full_block, None)),
+        );
+
+        // Assert
+        assert!(!decision.proposal_matched);
+        assert_eq!(decision.publish_path, PUBLISH_PATH_BLINDED_BLOCK_NOT_LEADER);
+        assert!(matches!(
+            decision.signed_block,
+            Some(SignedBlock::Blinded(_))
+        ));
+    }
+
+    #[test]
+    fn select_publish_block_keeps_full_gloas_block_direct() {
+        // Arrange
+        let original_blinded_block = blinded(&gloas_block(Hash256::repeat_byte(1)));
+        let full_block = gloas_block(Hash256::repeat_byte(2));
+        let expected_header = full_block.block_header();
+        let signature = Signature::empty();
+        let signed_block = SignedBlock::Full(PublishBlockRequest::new(
+            Arc::new(SignedBeaconBlock::from_block(full_block, signature.clone())),
+            None,
+        ));
+
+        // Act
+        let decision = select_publish_block(signed_block, &original_blinded_block, None);
+
+        // Assert
+        assert!(!decision.proposal_matched);
+        assert_eq!(decision.publish_path, PUBLISH_PATH_FULL_BLOCK_DIRECTLY);
+        let Some(SignedBlock::Full(publish_request)) = decision.signed_block else {
+            panic!("full Gloas block should remain on the direct publish path");
+        };
+        assert_eq!(
+            publish_request.signed_block().message().block_header(),
+            expected_header
+        );
+        assert_eq!(publish_request.signed_block().signature(), &signature);
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // Proposer delay
