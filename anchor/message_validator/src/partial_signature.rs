@@ -4763,3 +4763,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "ptc_tests.rs"]
+mod ptc_tests;

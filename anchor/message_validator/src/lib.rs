@@ -969,6 +969,16 @@ pub(crate) fn validate_beacon_duty(
         }
     }
 
+    // Only a fetched PTC view covering this validator can establish that it has no duty.
+    // Missing local index metadata is also an unknown assignment, not a peer fault.
+    if role == Role::PTCAttester
+        && let Some(&validator_index) = validation_context.committee_info.validator_indices.first()
+        && duty_provider.ptc_assignment_at_slot(slot, validator_index)
+            == DutyAssignment::NotAssigned
+    {
+        return Err(ValidationFailure::NoDuty);
+    }
+
     // Rule: For a sync committee duty message, check if the validator is assigned
     if role == Role::SyncCommittee {
         let period =
@@ -1754,6 +1764,8 @@ mod tests {
         /// so pre-existing tests keep the "assigned proposer" behavior; new tests
         /// set it explicitly to drive the three cases.
         pub(crate) proposer_assignment: DutyAssignment,
+        /// PTC membership known by the receive-side tracker.
+        pub(crate) ptc_assignment: DutyAssignment,
     }
 
     // Manual `Default` (not derived) so the proposer flags default to their
@@ -1767,11 +1779,20 @@ mod tests {
                 epoch_known_for_proposers: true,
                 validator_is_proposer: true,
                 proposer_assignment: DutyAssignment::Assigned,
+                ptc_assignment: DutyAssignment::Assigned,
             }
         }
     }
 
     impl DutiesProvider for MockDutiesProvider {
+        fn ptc_assignment_at_slot(
+            &self,
+            _slot: Slot,
+            _validator_index: ValidatorIndex,
+        ) -> DutyAssignment {
+            self.ptc_assignment
+        }
+
         fn is_validator_in_sync_committee(
             &self,
             _committee_period: u64,

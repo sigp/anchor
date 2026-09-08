@@ -28,4 +28,10 @@ typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
+beacon_node_fallback = { workspace = true }
+database = { workspace = true, features = ["test-utils"] }
+eth2 = { workspace = true }
+serde_json = { workspace = true }
+sensitive_url = { workspace = true }
 bls = { workspace = true }

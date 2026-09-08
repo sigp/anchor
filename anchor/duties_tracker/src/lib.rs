@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
-use eth2::types::{DutiesResponse, ProposerData};
+use eth2::types::{DutiesResponse, ProposerData, PtcDuty};
 use parking_lot::RwLock;
 use ssv_types::ValidatorIndex;
 use thiserror::Error;
@@ -181,6 +181,8 @@ pub struct Duties {
     pub proposers: RwLock<ProposerMap>,
     /// Map from validator index to sync committee duties.
     pub sync_duties: SyncCommitteePerPeriod,
+    /// PTC snapshots include every queried index, including validators with no duty.
+    pub(crate) ptc: RwLock<HashMap<Epoch, PtcSchedule>>,
 }
 
 impl Duties {
@@ -188,6 +190,7 @@ impl Duties {
         Self {
             proposers: RwLock::new(HashMap::new()),
             sync_duties: SyncCommitteePerPeriod::new(),
+            ptc: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -199,17 +202,64 @@ impl Default for Duties {
 }
 
 /// Whether a validator holds a duty at a slot, as one atomic verdict over the stored duty view.
-///
-/// A retained view is never revoked by a failed or malformed refresh, a local registry change,
-/// `execution_optimistic`, or a reorg. It changes only when a complete schedule replaces it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DutyAssignment {
-    /// A complete fetched view assigns the validator at this slot.
+    /// A fetched view covering this validator assigns it at this slot.
     Assigned,
-    /// A complete fetched view proves the validator is not assigned at this slot.
+    /// A fetched view covering this validator proves it is not assigned at this slot.
     NotAssigned,
-    /// The view cannot answer: no completed fetch for the slot's epoch.
+    /// No fetched view covers this validator for the slot's epoch.
     Unknown,
+}
+
+/// A sparse PTC response together with its exact requested-index coverage.
+#[derive(Debug)]
+pub(crate) struct PtcSchedule {
+    assignments: HashMap<u64, Option<Slot>>,
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum PtcScheduleError {
+    #[error("PTC duty slot {0} is outside epoch {1}")]
+    SlotOutOfEpoch(Slot, Epoch),
+    #[error("PTC response includes unrequested validator {0}")]
+    UnrequestedValidator(u64),
+    #[error("PTC response includes multiple duties for validator {0}")]
+    DuplicateValidator(u64),
+}
+
+impl PtcSchedule {
+    fn from_response(
+        epoch: Epoch,
+        slots_per_epoch: u64,
+        requested_indices: &[u64],
+        response: DutiesResponse<Vec<PtcDuty>>,
+    ) -> Result<Self, PtcScheduleError> {
+        let mut assignments: HashMap<_, _> = requested_indices
+            .iter()
+            .map(|&index| (index, None))
+            .collect();
+        for duty in response.data {
+            if duty.slot.epoch(slots_per_epoch) != epoch {
+                return Err(PtcScheduleError::SlotOutOfEpoch(duty.slot, epoch));
+            }
+            let assignment = assignments
+                .get_mut(&duty.validator_index)
+                .ok_or(PtcScheduleError::UnrequestedValidator(duty.validator_index))?;
+            if assignment.replace(duty.slot).is_some() {
+                return Err(PtcScheduleError::DuplicateValidator(duty.validator_index));
+            }
+        }
+        Ok(Self { assignments })
+    }
+
+    fn assignment_at_slot(&self, slot: Slot, validator_index: u64) -> DutyAssignment {
+        match self.assignments.get(&validator_index) {
+            Some(Some(assigned_slot)) if *assigned_slot == slot => DutyAssignment::Assigned,
+            Some(_) => DutyAssignment::NotAssigned,
+            None => DutyAssignment::Unknown,
+        }
+    }
 }
 
 pub trait DutiesProvider: Sync + Send + 'static {
@@ -226,9 +276,16 @@ pub trait DutiesProvider: Sync + Send + 'static {
 
     fn get_voluntary_exit_duty_count(&self, slot: Slot, pubkey: &PublicKeyBytes) -> u64;
 
+    /// A retained complete proposer view is not revoked by a failed or malformed refresh,
+    /// local registry changes, `execution_optimistic`, or a reorg. Only a complete replacement
+    /// changes its assignments.
     fn proposer_assignment_at_slot(
         &self,
         slot: Slot,
         validator_pubkey: &PublicKeyBytes,
     ) -> DutyAssignment;
+
+    /// Unknown unless a completed PTC fetch covered this validator in the slot's epoch.
+    fn ptc_assignment_at_slot(&self, slot: Slot, validator_index: ValidatorIndex)
+    -> DutyAssignment;
 }
