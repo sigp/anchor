@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use message_sender::MessageSender;
 use qbft::{Completed, DefaultLeaderFunction, UnsignedWrappedQbftMessage, WrappedQbftMessage};
-use ssv_types::{CommitteeId, consensus::QbftData};
+use ssv_types::{CommitteeId, consensus::QbftData, msgid::Role};
 use tokio::{
     select,
     sync::{
@@ -16,7 +16,9 @@ use tracing::{debug, error, trace, warn};
 use types::Hash256;
 
 use crate::{
-    QbftInitialization, QbftMessage, QbftMessageKind, TimeoutMode, timeout::calculate_round_timeout,
+    QbftInitialization, QbftMessage, QbftMessageKind, TimeoutMode,
+    instrumentation::{ProposerObserver, ProposerOutcome, RecvArmTag},
+    timeout::calculate_round_timeout,
 };
 type Qbft<D> = qbft::Qbft<DefaultLeaderFunction, D, MessageCallback>;
 
@@ -196,6 +198,11 @@ impl<D: QbftData> From<Option<QbftMessage<D>>> for RecvResult<D> {
 }
 
 impl<D: QbftData<Hash = Hash256>> Initialized<D> {
+    /// Whether this instance is running a proposer duty.
+    fn is_proposer(&self) -> bool {
+        self.qbft.get_identifier().role() == Some(Role::Proposer)
+    }
+
     async fn recv(&mut self, rx: &mut UnboundedReceiver<QbftMessage<D>>) -> RecvResult<D> {
         // We calculate the sleep dynamically, as both messages and the local timer might cause the
         // round to advance
@@ -284,6 +291,10 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
     // Signal a new instance that is uninitialized
     let mut instance = QbftInstance::Uninitialized(Uninitialized::default());
 
+    // Observability state only set to `Some` if the `Initialize` message arrives and role is
+    // `Proposer`.
+    let mut observer: Option<ProposerObserver> = None;
+
     loop {
         // Receive a new message for this instance
         let recv_result = match &mut instance {
@@ -291,13 +302,48 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
             QbftInstance::Initialized(initialized) => initialized.recv(&mut rx).await,
         };
 
+        // Snapshot state-machine before-state at the boundary.
+        // Only implemented for proposer duty instrumentation.
+        let before_snapshot = match &instance {
+            QbftInstance::Initialized(initialized) if observer.is_some() => {
+                Some((initialized.qbft.state_kind(), initialized.qbft.get_round()))
+            }
+            _ => None,
+        };
+
         // Handle message, round end, or closed queue. Keep the drop guard if we have one.
         let guard = match recv_result {
             RecvResult::Message(msg) => {
                 match msg.kind {
                     QbftMessageKind::Initialize(initialization) => {
+                        // Capture handoff budget (proposer observability).
+                        let handoff_budget_ms = initialization.handoff_budget_ms;
+
                         debug!(msg_id = ?initialization.message_id, "Received initialization message");
                         instance = instance.initialize(initialization, &message_sender).await;
+
+                        // If Qbft instance is running a proposer duty and initialized, start
+                        // proposer observability. NOTE: the observer is
+                        // created only after `initialize()` returns, so any round advances that
+                        // occur while replaying buffered messages during initialization are not
+                        // observed. The terminal outcome is still captured
+                        // by the post-loop `completed()` check below.
+                        if let QbftInstance::Initialized(initialized) = &instance
+                            && initialized.is_proposer()
+                            && observer.is_none()
+                        {
+                            let instance_height = *initialized.qbft.get_instance_height() as u64;
+                            // Post-replay position. Buffered messages may have advanced the
+                            // round/state before the observer opened. Include in instrumentation.
+                            let start_round = u64::from(initialized.qbft.get_round());
+                            let start_state = initialized.qbft.state_kind();
+                            observer = Some(ProposerObserver::start(
+                                instance_height,
+                                handoff_budget_ms,
+                                start_round,
+                                start_state,
+                            ));
+                        }
                     }
                     // We got a new network message, this should be passed onto the instance
                     QbftMessageKind::NetworkMessage(message) => {
@@ -317,20 +363,47 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
 
                         instance.receive(message);
 
-                        // Reset timer if round advanced (Relative mode only)
-                        if let QbftInstance::Initialized(initialized) = &mut instance
-                            && let Some(old) = old_round
-                            && initialized.qbft.get_round() > old
-                            && let TimeoutMode::Relative {
-                                current_round_start_time,
-                            } = &mut initialized.timeout_mode
-                        {
-                            debug!(
-                                old_round = ?old,
-                                new_round = ?initialized.qbft.get_round(),
-                                "Resetting round timer due to round advancement"
-                            );
-                            *current_round_start_time = Instant::now();
+                        if let QbftInstance::Initialized(initialized) = &mut instance {
+                            if let Some(old) = old_round
+                                && initialized.qbft.get_round() > old
+                            {
+                                // Reset timer if round advanced (Relative mode only)
+                                if let TimeoutMode::Relative {
+                                    current_round_start_time,
+                                } = &mut initialized.timeout_mode
+                                {
+                                    debug!(
+                                        old_round = ?old,
+                                        new_round = ?initialized.qbft.get_round(),
+                                        "Resetting round timer due to round advancement"
+                                    );
+                                    *current_round_start_time = Instant::now();
+                                }
+
+                                // If proposer duty: classify and emit the round advance.
+                                if let Some(observer) = &observer
+                                    && let Some((before_kind, before_round)) = before_snapshot
+                                {
+                                    observer.observe_round_advance(
+                                        before_kind,
+                                        initialized.qbft.state_kind(),
+                                        RecvArmTag::Message,
+                                        before_round,
+                                        initialized.qbft.get_round(),
+                                    );
+                                }
+                            }
+
+                            // If proposer duty: emit state transition (same round, variant
+                            // changed).
+                            if let Some(observer) = &observer
+                                && let Some((before_kind, _)) = before_snapshot
+                            {
+                                observer.observe_state_transition(
+                                    before_kind,
+                                    initialized.qbft.state_kind(),
+                                );
+                            }
                         }
                     }
                 }
@@ -340,13 +413,30 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 // There is nothing to do on round end if the instance is not ongoing.
                 if let QbftInstance::Initialized(initialized) = &mut instance {
                     warn!("Round timer elapsed");
+                    // Capture round change.
+                    let old_round = initialized.qbft.get_round();
                     initialized.qbft.end_round();
+                    let new_round = initialized.qbft.get_round();
+
                     // Reset timer for new round in Relative mode
                     if let TimeoutMode::Relative {
                         current_round_start_time,
                     } = &mut initialized.timeout_mode
                     {
                         *current_round_start_time = Instant::now();
+                    }
+
+                    // If proposer duty: classify and emit the timeout-driven round advance.
+                    if let Some(observer) = &observer
+                        && let Some((before_kind, _)) = before_snapshot
+                    {
+                        observer.observe_round_advance(
+                            before_kind,
+                            initialized.qbft.state_kind(),
+                            RecvArmTag::RoundEnd,
+                            old_round,
+                            new_round,
+                        );
                     }
                 };
                 None
@@ -355,6 +445,18 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                 // If the instance can receive no more messages, we no longer need it. Signal
                 // time out to listeners, as this instance was likely cleaned up.
                 if let QbftInstance::Initialized(initialized) = instance {
+                    // If proposer duty: record the `channel_closed` outcome.
+                    if let Some(observer) = &observer {
+                        // `decided_round()` is always `None` here (the fallback to the local round
+                        // is what applies). This branch only runs for
+                        // non-completed instances.
+                        let terminal_round = initialized
+                            .qbft
+                            .decided_round()
+                            .unwrap_or_else(|| initialized.qbft.get_round());
+                        observer.finish(ProposerOutcome::ChannelClosed, u64::from(terminal_round));
+                    }
+
                     initialized.complete(Completed::TimedOut);
                 }
                 break;
@@ -363,6 +465,24 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
 
         // If the instance is ongoing, check whether it is done.
         if let QbftInstance::Initialized(initialized) = instance {
+            // If proposer duty and there is finished data: record the outcome before instance is
+            // overwritten.
+            if let Some(observer) = &observer
+                && let Some(completed) = initialized.qbft.completed()
+            {
+                let outcome = match completed {
+                    Completed::Success(_) => ProposerOutcome::Decided,
+                    Completed::TimedOut => ProposerOutcome::MaxRoundTimeout,
+                };
+                // Prefer the round from the decided certificate; on timeout there is no
+                // certificate, so fall back to the local round reached at teardown.
+                let terminal_round = initialized
+                    .qbft
+                    .decided_round()
+                    .unwrap_or_else(|| initialized.qbft.get_round());
+                observer.finish(outcome, u64::from(terminal_round));
+            }
+
             instance = initialized.complete_if_done(&message_sender);
         }
 

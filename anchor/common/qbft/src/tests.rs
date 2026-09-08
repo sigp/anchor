@@ -150,20 +150,13 @@ fn construct_and_run_committee<D: QbftData<Hash = Hash256>>(
 }
 
 impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFTCommittee<D, S> {
-    fn wait_until_end(mut self) -> i32 {
+    /// Drives every active instance until the shared message queue is drained (consensus reached
+    /// or progress stalled). Shared driver behind the completion accessors below.
+    fn drive_to_completion(&mut self) {
         loop {
             let msg = self.msg_queue.borrow_mut().pop_front();
             let Some((sender, msg)) = msg else {
-                // we are done! check how many instances reached consensus
-                let mut num_consensus = 0;
-                for id in self.active_instances.iter() {
-                    let instance = self.instances.get_mut(id).expect("Instance exists");
-                    // Check if this instance just reached consensus
-                    if matches!(instance.completed, Some(Completed::Success(_))) {
-                        num_consensus += 1;
-                    }
-                }
-                return num_consensus;
+                return;
             };
 
             // Only receive messages for active instances
@@ -182,6 +175,37 @@ impl<D: QbftData<Hash = Hash256>, S: FnMut(UnsignedWrappedQbftMessage)> TestQBFT
                 });
             }
         }
+    }
+
+    fn wait_until_end(mut self) -> i32 {
+        self.drive_to_completion();
+
+        // check how many instances reached consensus
+        let mut num_consensus = 0;
+        for id in self.active_instances.iter() {
+            let instance = self.instances.get(id).expect("Instance exists");
+            // Check if this instance reached consensus
+            if matches!(instance.completed, Some(Completed::Success(_))) {
+                num_consensus += 1;
+            }
+        }
+        num_consensus
+    }
+
+    /// Drives the committee to completion and returns, for every active instance that reached
+    /// `Completed::Success`, the pair `(decided_round(), get_round())`. Lets tests assert how the
+    /// certificate round recorded by the local commit-quorum path relates to the local liveness
+    /// cursor.
+    fn decided_and_current_rounds(mut self) -> Vec<(Option<Round>, Round)> {
+        self.drive_to_completion();
+        self.active_instances
+            .iter()
+            .filter_map(|id| {
+                let instance = self.instances.get(id).expect("Instance exists");
+                matches!(instance.completed, Some(Completed::Success(_)))
+                    .then(|| (instance.decided_round(), instance.get_round()))
+            })
+            .collect()
     }
 
     // Pause an qbft instance from running. This will simulate the node going down
@@ -203,6 +227,39 @@ fn test_basic_committee() {
     // Wait until consensus is reached or all the instances have ended
     let num_consensus = test_instance.wait_until_end();
     assert_eq!(num_consensus, 4);
+}
+
+#[test]
+/// Drives a real local commit-quorum consensus through the e2e harness and asserts that every
+/// decided instance records the certificate round via `decided_round()`.
+///
+/// This exercises the LOCAL `received_commit` success path (the harness delivers single-signer
+/// commits, which route to `received_commit`, NOT `received_decided`). `test_basic_committee`
+/// decides in round 1 with no round change, so on this happy path the certificate round equals the
+/// local liveness cursor: `decided_round()` is `Some(round 1)` and matches `get_round()`.
+fn test_basic_committee_records_decided_round() {
+    let test_instance = TestQBFTCommitteeBuilder::default().run(TestData(21));
+
+    let rounds = test_instance.decided_and_current_rounds();
+
+    // All four instances reach consensus in round 1.
+    assert_eq!(
+        rounds.len(),
+        4,
+        "all four instances should reach local commit-quorum consensus"
+    );
+    for (decided_round, current_round) in rounds {
+        assert_eq!(
+            decided_round,
+            Some(Round::from(1u64)),
+            "decided_round should record the round consensus was reached (1)"
+        );
+        assert_eq!(
+            current_round,
+            Round::from(1u64),
+            "on this no-round-change happy path get_round() should equal decided_round"
+        );
+    }
 }
 
 #[test]
@@ -318,6 +375,20 @@ fn test_receive_accepts_past_round_decided_message_after_round_timeout() {
     assert!(qbft_instance.aggregated_commit.is_some());
     assert!(matches!(qbft_instance.state, InstanceState::Complete));
     assert!(qbft_instance.data.contains_key(&decided_root));
+
+    // `decided_round` records the certificate round (1), independent of the local liveness
+    // cursor `current_round` which the timeout advanced to round 2. This is the discriminating
+    // case: the two values differ, so it proves `decided_round` is not just echoing `get_round()`.
+    assert_eq!(
+        qbft_instance.decided_round(),
+        Some(Round::from(1u64)),
+        "decided_round should be the certificate round (1)"
+    );
+    assert_eq!(
+        qbft_instance.get_round(),
+        Round::from(2u64),
+        "get_round() should remain at the locally-advanced round (2), unchanged by decided_round"
+    );
 }
 
 #[test]

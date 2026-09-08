@@ -127,6 +127,8 @@ where
     state: InstanceState,
     /// If this QBFT instance has been completed, the completed value
     completed: Option<Completed<D::Hash>>,
+    /// The round recorded in the decided certificate. Set only on success paths.
+    decided_round: Option<Round>,
 
     // Message containers
     propose_container: MessageContainer,
@@ -189,6 +191,7 @@ where
             current_round,
             state: InstanceState::AwaitingProposal,
             completed: None,
+            decided_round: None,
 
             propose_container: MessageContainer::new(quorum_size),
             prepare_container: MessageContainer::new(quorum_size),
@@ -224,6 +227,12 @@ where
     /// Get the current round
     pub fn get_round(&self) -> Round {
         self.current_round
+    }
+
+    /// Returns the round from the decided certificate, if consensus was reached.
+    /// `None` for timeout/incomplete instances.
+    pub fn decided_round(&self) -> Option<Round> {
+        self.decided_round
     }
 
     /// Get the current instance identifier
@@ -1024,6 +1033,7 @@ where
             self.aggregated_commit = Some(aggregated_commit);
             self.state = InstanceState::Complete;
             self.completed = Some(Completed::Success(hash));
+            self.decided_round = Some(round);
         }
         Ok(())
     }
@@ -1216,6 +1226,7 @@ where
         self.data
             .insert(wrapped_msg.qbft_message.root, Arc::new(data));
         self.completed = Some(Completed::Success(wrapped_msg.qbft_message.root));
+        self.decided_round = Some(wrapped_msg.qbft_message.round.into());
         self.aggregated_commit = Some(wrapped_msg.signed_message);
 
         Ok(())
