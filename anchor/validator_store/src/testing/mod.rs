@@ -1,5 +1,6 @@
 mod common;
 
+mod aggregation_timing;
 mod aggregator_post_consensus;
 mod committee_aggregate;
 mod committee_attestation;

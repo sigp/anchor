@@ -110,6 +110,7 @@ pub(super) async fn run_sign_attestations(
 pub(super) struct MockConsensusDecider {
     forced_gloas_index: Option<u64>,
     fixed_decision: Option<(Vec<u8>, Arc<Barrier>)>,
+    captured_timeouts: Arc<Mutex<Vec<TimeoutMode>>>,
 }
 
 impl MockConsensusDecider {
@@ -142,9 +143,10 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
         _id: D::Id,
         initial: D,
         _validator: Box<dyn QbftDataValidator<D>>,
-        _timeout_mode: TimeoutMode,
+        timeout_mode: TimeoutMode,
         _committee_members: &IndexSet<OperatorId>,
     ) -> Result<Completed<D>, QbftError> {
+        self.captured_timeouts.lock().push(timeout_mode);
         // `D: QbftDecidable<E>` requires `'static`, so this downcast is sound. Only the Gloas
         // seed type carries `attestation_data_index`; every other `D` falls through to the echo.
         if let Some(index) = self.forced_gloas_index {
@@ -534,6 +536,8 @@ pub(super) struct ValidatorStoreTestHarness {
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
     pub(super) captured_disseminations: CapturedDisseminations,
+    /// Timeout origins supplied by the real signing and committee consensus callers.
+    pub(super) captured_consensus_timeouts: Arc<Mutex<Vec<TimeoutMode>>>,
     /// The dissemination handoff store the store awaits on; tests insert into it to stand in
     /// for the message receiver.
     pub(super) dissemination_store: Arc<DisseminationStore>,
@@ -716,6 +720,7 @@ impl ValidatorStoreTestHarness {
         let (is_synced_tx, is_synced_rx) = watch::channel(true);
 
         let decider = options.decider;
+        let captured_consensus_timeouts = Arc::clone(&decider.captured_timeouts);
 
         let spec = Arc::clone(&options.spec);
         let genesis_validators_root = Hash256::zero();
@@ -746,6 +751,7 @@ impl ValidatorStoreTestHarness {
             committee_setups,
             captured_calls,
             captured_disseminations,
+            captured_consensus_timeouts,
             dissemination_store,
             signature_collection_fails,
             signature_collection_hangs,

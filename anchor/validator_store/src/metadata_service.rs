@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     sync::Arc,
     time::Duration,
 };
@@ -324,6 +325,34 @@ async fn run_slot_start_publisher<T: SlotClock>(slot_clock: T, mut publish: impl
     }
 }
 
+/// Drive aggregation publication at the upcoming slot's fork-specific deadline.
+pub(super) async fn run_aggregation_publisher<E: EthSpec, T: SlotClock, F: Future<Output = ()>>(
+    slot_clock: T,
+    spec: Arc<ChainSpec>,
+    mut publish: impl FnMut() -> F,
+) {
+    loop {
+        // Sample once so the target slot and remaining delay agree across a slot boundary.
+        let delay = slot_clock.now_duration().and_then(|now| {
+            let next_slot = slot_clock
+                .slot_of(now)
+                .map_or_else(|| slot_clock.genesis_slot(), |slot| slot + 1);
+            slot_clock
+                .start_of(next_slot)?
+                .checked_add(spec.get_aggregate_attestation_due::<E>(next_slot))?
+                .checked_sub(now)
+        });
+
+        if let Some(delay) = delay {
+            sleep(delay).await;
+            publish().await;
+        } else {
+            error!("Failed to read slot clock");
+            sleep(slot_clock.slot_duration()).await;
+        }
+    }
+}
+
 impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
     pub fn new(
         duties_service: Arc<DutiesService<AnchorValidatorStore<T, E>, T>>,
@@ -453,7 +482,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         );
 
         // ═══════════════════════════════════════════════════════════════════════
-        // PHASE 3: AggregationAssignments (2/3 slot)
+        // PHASE 3: AggregationAssignments (fork-specific aggregation deadline)
         // Re-fetches `duties_service.attesters()` after selection proofs are computed.
         // At this point, `DutyAndProof.selection_proof.is_some()` accurately indicates
         // `is_aggregator` for attestation duties.
@@ -461,21 +490,16 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let self_clone_phase3 = self.clone();
         executor.spawn(
             async move {
-                loop {
-                    if let Some(duration_to_next_slot) =
-                        self_clone_phase3.slot_clock.duration_to_next_slot()
-                    {
-                        // Sleep until 2/3 into slot
-                        sleep(duration_to_next_slot + slot_duration * 2 / 3).await;
-
+                run_aggregation_publisher::<E, _, _>(
+                    self_clone_phase3.slot_clock.clone(),
+                    self_clone_phase3.spec.clone(),
+                    || async {
                         if let Err(err) = self_clone_phase3.update_aggregation_assignments().await {
                             error!(err, "Failed to update aggregator voting assignments");
                         }
-                    } else {
-                        error!("Failed to read slot clock");
-                        sleep(slot_duration).await;
-                    }
-                }
+                    },
+                )
+                .await;
             },
             "aggregation_assignments_service",
         );
@@ -636,7 +660,8 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         }
     }
 
-    /// Phase 3: Build and publish `AggregationAssignments` at 2/3 slot.
+    /// Phase 3: Build and publish `AggregationAssignments` at the fork-specific aggregation
+    /// deadline.
     ///
     /// Uses single-pass data transformation to minimize iterations:
     /// - ONE pass over attesters (those with `selection_proof`) to build all attester-related data
@@ -761,7 +786,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .update_aggregation_assignments(aggregator_info);
         self.spawn_aggregate_publisher(slot, new_executions);
 
-        trace!(%slot, "Published AggregationAssignments at 2/3 slot");
+        trace!(%slot, "Published AggregationAssignments");
         Ok(())
     }
 
