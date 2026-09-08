@@ -312,7 +312,7 @@ pub struct AnchorValidatorStore<
     voting_context_tx: watch::Sender<Option<Arc<VotingContext>>>,
     /// Watch channel for `VotingAssignments` (cached at slot start)
     voting_assignments_tx: watch::Sender<Option<Arc<VotingAssignments>>>,
-    /// Watch channel for `AggregationAssignments` (cached at 2/3 slot)
+    /// Watch channel for `AggregationAssignments` (cached at the aggregation deadline)
     aggregation_assignments_tx: watch::Sender<Option<Arc<AggregationAssignments<E>>>>,
     gas_limit: u64,
     // MEV configuration is applied at the operator level and applies to all validators this
@@ -678,7 +678,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         Ok(drain_signatures(pending).await)
     }
 
-    /// Run `AggregatorCommittee` QBFT consensus for a committee at 2/3 slot.
+    /// Run `AggregatorCommittee` QBFT consensus at the fork-specific aggregation deadline.
     ///
     /// Called once per `(committee, slot)` by the post-consensus execution in
     /// [`crate::aggregator_post_consensus`], which supplies the value this operator proposes.
@@ -693,7 +693,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::AGGREGATOR_COMMITTEE]);
         let timeout_mode = TimeoutMode::SlotTime {
             round_deadline_origin: self
-                .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
+                .get_instant_in_slot(slot, self.spec.get_aggregate_attestation_due::<E>(slot))?,
         };
 
         let completed = self
@@ -1331,8 +1331,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// Get aggregator voting assignments, waiting if not yet available for this slot.
     ///
     /// This method waits until `AggregationAssignments` for the requested slot becomes available.
-    /// Called by `run_aggregator_post_consensus` (via `run_aggregator_committee_consensus`)
-    /// at 2/3 slot.
+    /// Consumed by aggregation duties at the fork-specific aggregation deadline.
     ///
     /// Returns an error if the requested slot has already passed or if the watch channel is closed.
     pub async fn get_aggregation_assignments(
@@ -1361,10 +1360,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         }
     }
 
-    /// Update aggregator voting assignments (called by `MetadataService` Phase 3 at 2/3 slot).
+    /// Update aggregator voting assignments at the fork-specific aggregation deadline.
     ///
     /// This publishes the `AggregationAssignments` to all subscribers via the watch channel.
-    /// At 2/3 slot, selection proofs have been computed by Lighthouse, so
+    /// Once selection proofs have been computed by Lighthouse,
     /// `DutyAndProof.selection_proof.is_some()` accurately indicates `is_aggregator`.
     ///
     /// It also starts each Boole+ committee's post-consensus signing execution, before publishing,
@@ -1664,7 +1663,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             let timeout_mode = TimeoutMode::SlotTime {
                 round_deadline_origin: self.get_instant_in_slot(
                     message.aggregate().data().slot,
-                    self.spec.get_slot_duration() * 2 / 3,
+                    self.spec
+                        .get_aggregate_attestation_due::<E>(message.aggregate().data().slot),
                 )?,
             };
 
@@ -1769,7 +1769,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 selection_proof: contribution.selection_proof,
             };
 
-            // Get aggregator voting assignments from Phase 3 (published at 2/3 slot)
+            // Get aggregator voting assignments from Phase 3 at the aggregation deadline
             let aggregator_info = self.get_aggregation_assignments(slot).await?;
 
             let signing_data = match aggregator_info
@@ -1808,7 +1808,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             );
             let timeout_mode = TimeoutMode::SlotTime {
                 round_deadline_origin: self
-                    .get_instant_in_slot(slot, self.spec.get_slot_duration() * 2 / 3)?,
+                    .get_instant_in_slot(slot, self.spec.get_contribution_message_due::<E>(slot))?,
             };
 
             let completed = self
@@ -2762,13 +2762,13 @@ impl VotingAssignments {
     }
 }
 
-/// Aggregator-specific voting assignments, cached at 2/3 slot when selection proofs are known.
+/// Aggregator-specific voting assignments, cached at the aggregation deadline.
 ///
 /// This struct is separate from `VotingAssignments` because:
 /// - `VotingAssignments` is cached at slot start, before selection proofs are computed
-/// - `AggregationAssignments` is cached at 2/3 slot, after Lighthouse fills in selection proofs
+/// - `AggregationAssignments` is cached at the aggregation deadline, after selection proofs
 ///
-/// At 2/3 slot, `DutyAndProof.selection_proof.is_some()` indicates `is_aggregator = true`.
+/// `DutyAndProof.selection_proof.is_some()` indicates `is_aggregator = true`.
 ///
 /// Also tracks multi-subnet sync aggregators. When a validator aggregates for multiple
 /// sync subnets, `produce_signed_contribution_and_proof` is called multiple times (once
@@ -4939,18 +4939,29 @@ mod tests {
     fn attestation_due_switches_at_gloas_boundary() {
         use types::MainnetEthSpec;
 
+        // Arrange
         let mut spec = ChainSpec::mainnet();
         let gloas_activation_epoch = Epoch::new(100);
         spec.gloas_fork_epoch = Some(gloas_activation_epoch);
         let first_gloas_slot = gloas_activation_epoch.start_slot(MainnetEthSpec::slots_per_epoch());
         let last_pre_gloas_slot = first_gloas_slot - 1;
 
+        // Act
         let pre = spec.get_attestation_due::<MainnetEthSpec>(last_pre_gloas_slot);
         let post = spec.get_attestation_due::<MainnetEthSpec>(first_gloas_slot);
 
+        // Assert
         assert_ne!(pre, post);
-        assert_eq!(pre, spec.unaggregated_attestation_due);
-        assert_eq!(post, spec.unaggregated_attestation_due_gloas);
+        assert_eq!(
+            pre,
+            spec.compute_slot_component_duration(spec.attestation_due_bps)
+                .expect("mainnet attestation BPS should be valid"),
+        );
+        assert_eq!(
+            post,
+            spec.compute_slot_component_duration(spec.attestation_due_bps_gloas)
+                .expect("mainnet Gloas attestation BPS should be valid"),
+        );
     }
 
     // ==================== SlotVote accessor tests ====================
