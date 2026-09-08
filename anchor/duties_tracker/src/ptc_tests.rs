@@ -11,7 +11,7 @@ use axum::{
 use beacon_node_fallback::{ApiTopic, CandidateBeaconNode, Config};
 use database::{
     NetworkDatabase, PendingStateUpdates,
-    test_utils::{InMemoryTestFixture, generators},
+    test_utils::{InMemoryTestFixture, commit_and_publish, generators},
 };
 use eth2::{BeaconNodeHttpClient, Timeouts, types::PtcDuty};
 use sensitive_url::SensitiveUrl;
@@ -147,8 +147,7 @@ fn register_index(db: &NetworkDatabase, index: u64) -> PublicKeyBytes {
     let mut pending = PendingStateUpdates::default();
     db.insert_validator_tx(cluster, &validator, vec![], &tx, &mut pending)
         .unwrap();
-    tx.commit().unwrap();
-    db.publish_pending_state_updates(pending);
+    commit_and_publish(db, tx, pending);
     validator.public_key
 }
 
@@ -197,26 +196,19 @@ async fn test_ptc_poll_covers_relayed_validators_and_replaces_whole_snapshot() {
     tracker.poll_ptc_duties().await.unwrap();
 
     // Assert: wrong-slot and omitted queried indices are negatives, unqueried indices are unknown.
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(slot, validator_index(TEST_INDEX)),
-        DutyAssignment::Assigned
-    );
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(slot, validator_index(TEST_INDEX + 1)),
-        DutyAssignment::NotAssigned
-    );
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(slot, validator_index(TEST_INDEX + 2)),
-        DutyAssignment::NotAssigned
-    );
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(slot, validator_index(TEST_INDEX + 3)),
-        DutyAssignment::Unknown
-    );
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(slot + SLOTS_PER_EPOCH, validator_index(TEST_INDEX)),
-        DutyAssignment::Unknown
-    );
+    for (query_slot, index, expected) in [
+        (slot, TEST_INDEX, DutyAssignment::Assigned),
+        (slot, TEST_INDEX + 1, DutyAssignment::NotAssigned),
+        (slot, TEST_INDEX + 2, DutyAssignment::NotAssigned),
+        (slot, TEST_INDEX + 3, DutyAssignment::Unknown),
+        (slot + SLOTS_PER_EPOCH, TEST_INDEX, DutyAssignment::Unknown),
+    ] {
+        assert_eq!(
+            tracker.ptc_assignment_at_slot(query_slot, validator_index(index)),
+            expected,
+            "slot {query_slot}, validator {index}"
+        );
+    }
     let mut requests = server.take_requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].0, TEST_EPOCH);
@@ -356,8 +348,7 @@ async fn test_ptc_poll_empty_index_set_clears_current_snapshot_without_http() {
         .db
         .delete_validator_tx(&pubkey, &tx, &mut pending)
         .unwrap();
-    tx.commit().unwrap();
-    fixture.db.publish_pending_state_updates(pending);
+    commit_and_publish(&fixture.db, tx, pending);
     tracker.poll_ptc_duties().await.unwrap();
 
     // Assert: empty coverage is unknown and the API is never called with an empty index list.
@@ -406,21 +397,17 @@ async fn test_ptc_poll_gloas_gate_and_previous_epoch_retention_on_failure() {
     assert!(tracker.poll_ptc_duties().await.is_err());
 
     // Assert: pruning still runs on failure, keeps the previous epoch, and never queries lookahead.
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(test_slot(), validator_index(TEST_INDEX)),
-        DutyAssignment::Unknown
-    );
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(test_slot() + SLOTS_PER_EPOCH, validator_index(TEST_INDEX)),
-        DutyAssignment::Assigned
-    );
-    assert_eq!(
-        tracker.ptc_assignment_at_slot(
-            test_slot() + 2 * SLOTS_PER_EPOCH,
-            validator_index(TEST_INDEX)
-        ),
-        DutyAssignment::Unknown
-    );
+    for (slot, expected) in [
+        (test_slot(), DutyAssignment::Unknown),
+        (test_slot() + SLOTS_PER_EPOCH, DutyAssignment::Assigned),
+        (test_slot() + 2 * SLOTS_PER_EPOCH, DutyAssignment::Unknown),
+    ] {
+        assert_eq!(
+            tracker.ptc_assignment_at_slot(slot, validator_index(TEST_INDEX)),
+            expected,
+            "slot {slot}"
+        );
+    }
     let requests = server.take_requests();
     let mut queried_epochs = requests.iter().map(|(epoch, _)| *epoch).collect::<Vec<_>>();
     queried_epochs.dedup();

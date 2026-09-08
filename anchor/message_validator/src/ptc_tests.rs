@@ -9,7 +9,7 @@ use axum::{Json, Router, routing::post};
 use beacon_node_fallback::{ApiTopic, BeaconNodeFallback, CandidateBeaconNode, Config};
 use database::{
     PendingStateUpdates,
-    test_utils::{InMemoryTestFixture, generators},
+    test_utils::{InMemoryTestFixture, commit_and_publish, generators},
 };
 use duties_tracker::{
     DutiesProvider, DutyAssignment, duties_tracker::DutiesTracker,
@@ -203,8 +203,7 @@ async fn test_ptc_started_tracker_http_snapshot_controls_partial_signature_admis
             .db
             .insert_validator_tx(cluster, &validator, vec![], &tx, &mut pending)
             .unwrap();
-        tx.commit().unwrap();
-        fixture.db.publish_pending_state_updates(pending);
+        commit_and_publish(&fixture.db, tx, pending);
         if index < 2 {
             duties.push(eth2::types::PtcDuty {
                 pubkey: validator.public_key,
@@ -213,12 +212,11 @@ async fn test_ptc_started_tracker_http_snapshot_controls_partial_signature_admis
             });
         }
     }
-    let response = serde_json::to_value(DutiesResponse {
+    let response = DutiesResponse {
         dependent_root: Hash256::from([0; 32]),
         execution_optimistic: Some(false),
         data: duties,
-    })
-    .unwrap();
+    };
     let app = Router::new().route(
         "/eth/v1/validator/duties/ptc/0",
         post(move |Json(mut indices): Json<Vec<String>>| {
@@ -251,13 +249,13 @@ async fn test_ptc_started_tracker_http_snapshot_controls_partial_signature_admis
     ));
     let runtime = TestRuntime::default();
 
-    // Act: start production polling, waiting on its public assignment query rather than a delay.
+    // Act: start production polling and check public readiness with timer-paced retries.
     tracker.clone().start(runtime.task_executor.clone());
     tokio::time::timeout(TEST_TIMEOUT, async {
         while tracker.ptc_assignment_at_slot(Slot::new(0), ValidatorIndex(0))
             != DutyAssignment::Assigned
         {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
