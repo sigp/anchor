@@ -15,7 +15,7 @@ use types::{ChainSpec, Epoch, Slot};
 
 use crate::{
     Duties, DutiesProvider, DutyAssignment, MembershipKey, ProposerSchedule, ProposerScheduleError,
-    voluntary_exit_tracker::VoluntaryExitTracker,
+    PtcSchedule, PtcScheduleError, voluntary_exit_tracker::VoluntaryExitTracker,
 };
 
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
@@ -29,6 +29,10 @@ pub enum Error {
     Arith(ArithError),
     #[error("Failed to poll proposers: {0}")]
     FailedToPollProposers(String),
+    #[error("Failed to poll PTC duties: {0}")]
+    FailedToPollPtc(String),
+    #[error("Invalid PTC duties: {0}")]
+    InvalidPtcDuties(#[from] PtcScheduleError),
 }
 
 pub struct DutiesTracker<T: SlotClock + 'static> {
@@ -260,6 +264,56 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
         Ok(())
     }
 
+    /// Replace the current PTC view using exactly the indices captured for this request.
+    async fn poll_ptc_duties(&self) -> Result<(), Error> {
+        let current_slot = self.slot_clock.now().ok_or(Error::UnableToReadSlotClock)?;
+        let current_epoch = current_slot.epoch(self.slots_per_epoch);
+
+        // Retain one previous epoch for PTC messages arriving after an epoch boundary.
+        self.duties
+            .ptc
+            .write()
+            .retain(|&epoch, _| epoch >= current_epoch.saturating_sub(1u64));
+
+        if self
+            .spec
+            .gloas_fork_epoch
+            .is_none_or(|gloas_epoch| current_epoch < gloas_epoch)
+        {
+            return Ok(());
+        }
+
+        // Release the database watch borrow before HTTP. Later additions remain unknown
+        // until a subsequent request includes them.
+        let validator_indices = self.network_state_rx.borrow().validator_indices();
+        if validator_indices.is_empty() {
+            self.duties.ptc.write().remove(&current_epoch);
+            return Ok(());
+        }
+
+        let response = self
+            .beacon_nodes
+            .first_success(|beacon_node| {
+                let indices = &validator_indices;
+                async move {
+                    beacon_node
+                        .post_validator_duties_ptc(current_epoch, indices)
+                        .await
+                }
+            })
+            .await
+            .map_err(|error| Error::FailedToPollPtc(error.to_string()))?;
+
+        let schedule = PtcSchedule::from_response(
+            current_epoch,
+            self.slots_per_epoch,
+            &validator_indices,
+            response,
+        )?;
+        self.duties.ptc.write().insert(current_epoch, schedule);
+        Ok(())
+    }
+
     pub fn start(self: Arc<Self>, executor: TaskExecutor) {
         let self_clone = self.clone();
         self_clone.spawn_polling_task(
@@ -271,6 +325,15 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             "sync_committee_tracker",
             executor.clone(),
         );
+
+        if self.spec.gloas_fork_epoch.is_some() {
+            self.clone().spawn_polling_task(
+                |tracker| async move { tracker.poll_ptc_duties().await },
+                "Failed to poll PTC duties",
+                "ptc_tracker",
+                executor.clone(),
+            );
+        }
 
         self.spawn_polling_task(
             |tracker| {
@@ -380,6 +443,20 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
             }
             None => DutyAssignment::Unknown,
         }
+    }
+
+    fn ptc_assignment_at_slot(
+        &self,
+        slot: Slot,
+        validator_index: ValidatorIndex,
+    ) -> DutyAssignment {
+        self.duties
+            .ptc
+            .read()
+            .get(&slot.epoch(self.slots_per_epoch))
+            .map_or(DutyAssignment::Unknown, |schedule| {
+                schedule.assignment_at_slot(slot, validator_index.into())
+            })
     }
 }
 
@@ -1042,3 +1119,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "ptc_tests.rs"]
+mod ptc_tests;

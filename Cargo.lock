@@ -2614,6 +2614,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 name = "duties_tracker"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "beacon_node_fallback",
  "bls",
  "dashmap",
@@ -2623,6 +2624,7 @@ dependencies = [
  "parking_lot",
  "safe_arith",
  "sensitive_url",
+ "serde_json",
  "slot_clock",
  "ssv_types",
  "task_executor",
@@ -5200,10 +5202,13 @@ dependencies = [
 name = "message_validator"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "beacon_node_fallback",
  "bls",
  "dashmap",
  "database",
  "duties_tracker",
+ "eth2",
  "ethereum_ssz",
  "fork",
  "hex",
@@ -5211,6 +5216,7 @@ dependencies = [
  "openssl",
  "processor",
  "safe_arith",
+ "sensitive_url",
  "sha2",
  "slot_clock",
  "ssv_types",
