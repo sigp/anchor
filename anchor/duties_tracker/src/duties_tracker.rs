@@ -1,4 +1,7 @@
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::{Arc, OnceLock},
+};
 
 use beacon_node_fallback::BeaconNodeFallback;
 use bls::PublicKeyBytes;
@@ -21,6 +24,8 @@ use crate::{
 /// Only retain `HISTORICAL_DUTIES_EPOCHS` duties prior to the current epoch.
 const HISTORICAL_DUTIES_EPOCHS: u64 = 2;
 
+type LocalProposerLookup = dyn Fn(Slot, &PublicKeyBytes) -> bool + Send + Sync;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Unable to read the slot clock")]
@@ -33,6 +38,8 @@ pub enum Error {
     FailedToPollPtc(String),
     #[error("Invalid PTC duties: {0}")]
     InvalidPtcDuties(#[from] PtcScheduleError),
+    #[error("Local proposer lookup has already been configured")]
+    LocalProposerLookupAlreadySet,
 }
 
 pub struct DutiesTracker<T: SlotClock + 'static> {
@@ -50,6 +57,8 @@ pub struct DutiesTracker<T: SlotClock + 'static> {
     slot_clock: T,
     /// The network state receiver.
     network_state_rx: watch::Receiver<NetworkState>,
+    /// The local duty producer is initialized after this tracker and the network receiver.
+    local_proposer_lookup: OnceLock<Box<LocalProposerLookup>>,
 }
 
 impl<T: SlotClock + 'static> DutiesTracker<T> {
@@ -69,7 +78,19 @@ impl<T: SlotClock + 'static> DutiesTracker<T> {
             slots_per_epoch,
             slot_clock,
             network_state_rx,
+            local_proposer_lookup: OnceLock::new(),
         }
+    }
+
+    /// Installs the local producer's live assignment lookup once during client initialization.
+    /// The lookup runs synchronously during message validation and must only read cached duties.
+    pub fn set_local_proposer_lookup(
+        &self,
+        lookup: impl Fn(Slot, &PublicKeyBytes) -> bool + Send + Sync + 'static,
+    ) -> Result<(), Error> {
+        self.local_proposer_lookup
+            .set(Box::new(lookup))
+            .map_err(|_| Error::LocalProposerLookupAlreadySet)
     }
 
     async fn poll_sync_committee_duties(&self) -> Result<(), Error> {
@@ -445,6 +466,16 @@ impl<T: SlotClock + 'static> DutiesProvider for DutiesTracker<T> {
         }
     }
 
+    fn local_proposer_assignment_at_slot(
+        &self,
+        slot: Slot,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> bool {
+        self.local_proposer_lookup
+            .get()
+            .is_some_and(|lookup| lookup(slot, validator_pubkey))
+    }
+
     fn ptc_assignment_at_slot(
         &self,
         slot: Slot,
@@ -527,6 +558,31 @@ mod tests {
             slot_clock,
             network_state_rx,
         )
+    }
+
+    #[test]
+    fn test_local_proposer_lookup_is_optional_and_installed_only_once() {
+        // Arrange: the tracker starts without a local producer lookup.
+        let tracker = tracker_with_empty_network_state();
+        let pubkey = random_validator_pubkey();
+        let slot = Slot::new(SLOTS_PER_EPOCH);
+        assert!(!tracker.local_proposer_assignment_at_slot(slot, &pubkey));
+
+        // Act: install exact positive evidence, then attempt to replace the configured source.
+        tracker
+            .set_local_proposer_lookup(move |candidate_slot, candidate_pubkey| {
+                candidate_slot == slot && *candidate_pubkey == pubkey
+            })
+            .unwrap();
+        let replacement = tracker.set_local_proposer_lookup(|_, _| false);
+
+        // Assert: duplicate initialization is visible and preserves the original live lookup.
+        assert!(matches!(
+            replacement,
+            Err(Error::LocalProposerLookupAlreadySet)
+        ));
+        assert!(tracker.local_proposer_assignment_at_slot(slot, &pubkey));
+        assert!(!tracker.local_proposer_assignment_at_slot(slot + 1, &pubkey));
     }
 
     /// A `BeaconNodeFallback` with a single candidate that is never actually contacted by these

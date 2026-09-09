@@ -285,6 +285,16 @@ pub trait DutiesProvider: Sync + Send + 'static {
         validator_pubkey: &PublicKeyBytes,
     ) -> DutyAssignment;
 
+    /// Additional positive evidence from the local duty producer. This does not order the two
+    /// proposer views or change the retained complete schedule's assignments.
+    fn local_proposer_assignment_at_slot(
+        &self,
+        _slot: Slot,
+        _validator_pubkey: &PublicKeyBytes,
+    ) -> bool {
+        false
+    }
+
     /// Unknown unless a completed PTC fetch covered this validator in the slot's epoch.
     fn ptc_assignment_at_slot(&self, slot: Slot, validator_index: ValidatorIndex)
     -> DutyAssignment;

@@ -24,3 +24,6 @@ pub enum Error {
     #[error("Processor error: {0}")]
     Processor(#[from] processor::Error),
 }
+
+#[cfg(test)]
+mod proposer_view_tests;
