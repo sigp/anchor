@@ -947,10 +947,9 @@ pub(crate) fn validate_beacon_duty(
         }
     }
 
-    // Rule: For a proposer-preferences or envelope-proposer message, the validator must be the
-    // assigned proposer at the slot. Checked only once the slot-epoch's proposer duties are known
-    // locally, so a not-yet-fetched epoch is tolerated. No RANDAO tolerance: neither
-    // ProposerPreferences nor EnvelopeProposer carry a RANDAO signature.
+    // Unknown proposer schedules are tolerated. Preferences also tolerate a conflicting negative
+    // when the local duty producer currently assigns this validator and slot, so reception can
+    // support its signing work. Envelopes retain the complete tracker's assignment policy.
     if matches!(role, Role::ProposerPreferences | Role::EnvelopeProposer) {
         let validator_pubkey = match validation_context
             .signed_ssv_message
@@ -964,6 +963,8 @@ pub(crate) fn validate_beacon_duty(
 
         if duty_provider.proposer_assignment_at_slot(slot, &validator_pubkey)
             == DutyAssignment::NotAssigned
+            && !(role == Role::ProposerPreferences
+                && duty_provider.local_proposer_assignment_at_slot(slot, &validator_pubkey))
         {
             return Err(ValidationFailure::NoDuty);
         }
@@ -1764,6 +1765,8 @@ mod tests {
         /// so pre-existing tests keep the "assigned proposer" behavior; new tests
         /// set it explicitly to drive the three cases.
         pub(crate) proposer_assignment: DutyAssignment,
+        /// Exact positive assignment from the local producer's current cache.
+        pub(crate) local_proposer_assignment: bool,
         /// PTC membership known by the receive-side tracker.
         pub(crate) ptc_assignment: DutyAssignment,
     }
@@ -1779,12 +1782,21 @@ mod tests {
                 epoch_known_for_proposers: true,
                 validator_is_proposer: true,
                 proposer_assignment: DutyAssignment::Assigned,
+                local_proposer_assignment: false,
                 ptc_assignment: DutyAssignment::Assigned,
             }
         }
     }
 
     impl DutiesProvider for MockDutiesProvider {
+        fn local_proposer_assignment_at_slot(
+            &self,
+            _slot: Slot,
+            _validator_pubkey: &PublicKeyBytes,
+        ) -> bool {
+            self.local_proposer_assignment
+        }
+
         fn ptc_assignment_at_slot(
             &self,
             _slot: Slot,

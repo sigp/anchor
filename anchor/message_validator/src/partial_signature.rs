@@ -4038,6 +4038,90 @@ mod tests {
     }
 
     #[test]
+    fn test_local_proposer_positive_preferences_and_request_auth_keep_rsa_validation() {
+        // Arrange: the receive-side view is negative for both kinds sharing the preferences role.
+        let (committee, private_key, keys) = four_node_committee_and_keypair();
+        let (wrong_key, _) = generate_test_key_pair();
+        let signer = OperatorId(1);
+        let slot = Slot::new(0);
+        for kind in [
+            PartialSignatureKind::ProposerPreferences,
+            PartialSignatureKind::RequestAuth,
+        ] {
+            for (local_positive, valid_signature) in [(false, true), (true, true), (true, false)] {
+                let (_, message) = create_test_partial_signature(
+                    Role::ProposerPreferences,
+                    kind,
+                    signer,
+                    PartialSigTestOptions::default(),
+                    Some(if valid_signature {
+                        private_key.clone()
+                    } else {
+                        wrong_key.clone()
+                    }),
+                );
+                let context =
+                    create_proposer_preferences_context(&message, &committee, &keys, slot);
+
+                // Act: exercise the full partial-signature pipeline, including RSA after duties.
+                let result = validate_partial_signature_message(
+                    context,
+                    &mut DutyState::new(2 * SLOTS_PER_EPOCH_TEST as usize),
+                    Arc::new(MockDutiesProvider {
+                        proposer_assignment: DutyAssignment::NotAssigned,
+                        local_proposer_assignment: local_positive,
+                        ..Default::default()
+                    }),
+                );
+
+                // Assert: positive evidence bypasses only the negative assignment check.
+                match (local_positive, valid_signature) {
+                    (false, _) => assert!(matches!(result, Err(ValidationFailure::NoDuty))),
+                    (true, true) => assert!(result.is_ok(), "{kind:?}: {result:?}"),
+                    (true, false) => assert!(matches!(
+                        result,
+                        Err(ValidationFailure::SignatureVerificationFailed { .. })
+                    )),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_local_proposer_positive_does_not_override_envelope_assignment() {
+        // Arrange: an otherwise-valid envelope has positive producer evidence but a negative
+        // tracker.
+        let (committee, private_key, keys) = four_node_committee_and_keypair();
+        let slot = Slot::new(0);
+        let message = create_signed_envelope_proposer_message(
+            OperatorId(1),
+            &private_key,
+            slot,
+            Hash256::repeat_byte(0x33),
+        );
+        let context = create_envelope_proposer_context(&message, &committee, &keys, slot);
+
+        // Act: use the full envelope partial-signature pipeline with the new evidence active.
+        let result = validate_partial_signature_message(
+            context,
+            &mut DutyState::new(2 * SLOTS_PER_EPOCH_TEST as usize),
+            Arc::new(MockDutiesProvider {
+                proposer_assignment: DutyAssignment::NotAssigned,
+                local_proposer_assignment: true,
+                ..Default::default()
+            }),
+        );
+
+        // Assert: the preference exception must not admit envelopes or change peer scoring.
+        let failure = result.unwrap_err();
+        assert!(matches!(failure, ValidationFailure::NoDuty));
+        assert!(matches!(
+            MessageAcceptance::from(&failure),
+            MessageAcceptance::Ignore
+        ));
+    }
+
+    #[test]
     fn test_proposer_role_still_uses_index_path_not_pubkey_assignment() {
         // Regression pin for #1142: the INDEX-based `Role::Proposer` arm of `validate_beacon_duty`
         // is unchanged. It must decide purely on `is_validator_proposer_at_slot` (the index-keyed

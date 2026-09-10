@@ -4,6 +4,7 @@ mod metrics;
 mod notifier;
 
 use std::{
+    collections::HashMap,
     fs::File,
     io::Read,
     net::SocketAddr,
@@ -21,13 +22,14 @@ use beacon_node_fallback::{
     BeaconNodeFallback, CandidateBeaconNode, beacon_head_monitor::HeadEvent,
     start_fallback_updater_service,
 };
+use bls::PublicKeyBytes;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
 use eth::{
     index_sync::start_validator_index_syncer, voluntary_exit_processor::start_exit_processor,
 };
-use eth2::{BeaconNodeHttpClient, Timeouts};
+use eth2::{BeaconNodeHttpClient, Timeouts, types::ProposerData};
 use message_receiver::NetworkMessageReceiver;
 use message_sender::{MessageSender, NetworkMessageSender, impostor::ImpostorMessageSender};
 use message_validator::Validator;
@@ -53,7 +55,7 @@ use tokio::{
     time::{Instant, interval, sleep},
 };
 use tracing::{debug, error, info, warn};
-use types::{EthSpec, Hash256};
+use types::{Epoch, EthSpec, Hash256, Slot};
 use validator_metrics::set_gauge;
 use validator_services::{
     attestation_service::AttestationServiceBuilder,
@@ -90,6 +92,21 @@ const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 const MAX_HEAD_EVENT_QUEUE_LEN: usize = 1_024;
 
 pub struct Client {}
+
+fn local_proposer_assignment_at_slot(
+    proposers: &HashMap<Epoch, (Hash256, Vec<ProposerData>)>,
+    slots_per_epoch: u64,
+    slot: Slot,
+    validator_pubkey: &PublicKeyBytes,
+) -> bool {
+    proposers
+        .get(&slot.epoch(slots_per_epoch))
+        .is_some_and(|(_, duties)| {
+            duties
+                .iter()
+                .any(|duty| duty.slot == slot && duty.pubkey == *validator_pubkey)
+        })
+}
 
 impl Client {
     /// Runs the Anchor Client
@@ -693,6 +710,20 @@ impl Client {
                 .build()?,
         );
 
+        // Support preferences for duties the local producer sees even when the tracker disagrees.
+        // Neither cache is guaranteed to be newer, so this supplies positive evidence only.
+        let local_duties_service = duties_service.clone();
+        duties_tracker
+            .set_local_proposer_lookup(move |slot, pubkey| {
+                local_proposer_assignment_at_slot(
+                    &local_duties_service.proposers.read(),
+                    E::slots_per_epoch(),
+                    slot,
+                    pubkey,
+                )
+            })
+            .map_err(|e| e.to_string())?;
+
         // Update the metrics server.
         if let Some(ctx) = &http_metrics_shared_state {
             ctx.write().genesis_time = Some(genesis_time);
@@ -994,4 +1025,85 @@ pub fn load_pem_certificate<P: AsRef<Path>>(pem_path: P) -> Result<Certificate, 
         .read_to_end(&mut buf)
         .map_err(|e| format!("Unable to read certificate file: {e}"))?;
     Certificate::from_pem(&buf).map_err(|e| format!("Unable to parse certificate: {e}"))
+}
+
+#[cfg(test)]
+mod local_proposer_tests {
+    use super::*;
+
+    const SLOTS_PER_EPOCH: u64 = 32;
+    const DUTY_SLOT: Slot = Slot::new(SLOTS_PER_EPOCH);
+
+    #[test]
+    fn test_local_proposer_assignment_requires_exact_live_epoch_slot_and_pubkey() {
+        // Arrange: create the lookup before any local duty rows exist, as at client startup.
+        let proposers = Arc::new(RwLock::new(HashMap::new()));
+        let local_proposers = proposers.clone();
+        let lookup = move |slot, pubkey: &PublicKeyBytes| {
+            local_proposer_assignment_at_slot(
+                &local_proposers.read(),
+                SLOTS_PER_EPOCH,
+                slot,
+                pubkey,
+            )
+        };
+        let validator_x = bls::Keypair::random().pk.compress();
+        let validator_y = bls::Keypair::random().pk.compress();
+        let epoch = DUTY_SLOT.epoch(SLOTS_PER_EPOCH);
+        assert!(!lookup(DUTY_SLOT, &validator_x));
+
+        // Act: a matching row under the wrong epoch key must not count as local evidence.
+        proposers.write().insert(
+            epoch + 1,
+            (
+                Hash256::ZERO,
+                vec![ProposerData {
+                    pubkey: validator_x,
+                    validator_index: 0,
+                    slot: DUTY_SLOT,
+                }],
+            ),
+        );
+
+        // Assert: the query must select the duty slot's epoch before matching rows.
+        assert!(!lookup(DUTY_SLOT, &validator_x));
+
+        // Act: in the correct epoch, X has a different slot and Y has the requested slot.
+        proposers.write().insert(
+            epoch,
+            (
+                Hash256::ZERO,
+                vec![
+                    ProposerData {
+                        pubkey: validator_x,
+                        validator_index: 0,
+                        slot: DUTY_SLOT + 1,
+                    },
+                    ProposerData {
+                        pubkey: validator_y,
+                        validator_index: 1,
+                        slot: DUTY_SLOT,
+                    },
+                ],
+            ),
+        );
+
+        // Assert: neither row matches both the requested slot and validator pubkey.
+        assert!(!lookup(DUTY_SLOT, &validator_x));
+
+        // Act: a later local cache update supplies the exact row after lookup construction.
+        proposers
+            .write()
+            .get_mut(&epoch)
+            .unwrap()
+            .1
+            .push(ProposerData {
+                pubkey: validator_x,
+                validator_index: 0,
+                slot: DUTY_SLOT,
+            });
+
+        // Assert: the existing lookup reads the current cache, not a startup snapshot.
+        assert!(lookup(DUTY_SLOT, &validator_x));
+    }
 }
