@@ -850,6 +850,7 @@ impl ValidatorStoreTestHarness {
         self.validator_store.update_voting_context(VotingContext {
             voting_assignments: Arc::new(self.test_slot_voting_assignments()),
             vote: crate::SlotVote::Base(vote),
+            same_slot_head_root: None,
             decided_votes: Default::default(),
         });
     }
@@ -869,9 +870,20 @@ impl ValidatorStoreTestHarness {
     /// Seeds the Gloas voting context with an explicit vote, allowing tests to distinguish the
     /// shared metadata-service seed from the incoming attestation duty.
     pub(super) fn seed_gloas_voting_context_with_vote(&self, vote: GloasBeaconVote) {
+        self.seed_gloas_voting_context_with_head(vote, None);
+    }
+
+    /// Like `seed_gloas_voting_context_with_vote`, also recording the head root a same-slot head
+    /// event would have fixed for `TEST_SLOT`.
+    pub(super) fn seed_gloas_voting_context_with_head(
+        &self,
+        vote: GloasBeaconVote,
+        same_slot_head_root: Option<Hash256>,
+    ) {
         self.validator_store.update_voting_context(VotingContext {
             voting_assignments: Arc::new(self.test_slot_voting_assignments()),
             vote: crate::SlotVote::Gloas(vote),
+            same_slot_head_root,
             decided_votes: Default::default(),
         });
     }

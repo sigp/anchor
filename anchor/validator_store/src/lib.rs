@@ -1595,10 +1595,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         ))
     }
 
-    /// Constructs the QBFT data validator for Gloas-era committee attestation duties.
+    /// Constructs the QBFT data validator for Gloas-era committee attestation duties. The
+    /// context's same-slot head root is captured here, once per instance.
     fn create_gloas_beacon_vote_validator(
         &self,
         slot: Slot,
+        voting_context: &VotingContext,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
     ) -> Box<GloasBeaconVoteValidator<E>> {
         let slashing_protection =
@@ -1606,6 +1608,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
         Box::new(GloasBeaconVoteValidator::new(
             slot,
+            voting_context.same_slot_head_root,
             slashing_protection,
             self.spec.clone(),
             validator_attestation_committees,
@@ -1942,6 +1945,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                         seed,
                         self.create_gloas_beacon_vote_validator(
                             slot,
+                            voting_context,
                             validator_attestation_committees,
                         ),
                         timeout_mode,
@@ -2569,6 +2573,10 @@ struct VotingContext {
     /// The fork-tagged attestation vote for this slot (only available at 1/3 slot from the
     /// beacon node).
     vote: SlotVote,
+    /// Head block root a head event fixed as having this slot, when one triggered the context;
+    /// `None` on the timer path. Read once at committee-instance start for the SIP-94 same-slot
+    /// index check.
+    same_slot_head_root: Option<Hash256>,
     /// Committee decisions completed during this slot, used by the later aggregation phase.
     decided_votes: Mutex<HashMap<CommitteeId, SlotVote>>,
 }
@@ -5027,6 +5035,7 @@ mod tests {
         VotingContext {
             voting_assignments: Arc::new(create_test_voting_assignments(vec![], vec![])),
             vote: seed,
+            same_slot_head_root: None,
             decided_votes: Default::default(),
         }
     }

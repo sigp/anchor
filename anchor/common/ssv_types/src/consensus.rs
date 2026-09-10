@@ -1349,12 +1349,17 @@ impl<E: EthSpec> BeaconVoteValidator<E> {
 /// adds the two Gloas rules from [SIP-94][sip-94]: `attestation_data_index` is
 /// range-checked to `{0, 1}`, and the slashing-DB check reconstructs `AttestationData`
 /// with the decided index so cross-`index` double-votes trip protection. The index is
-/// trusted from the QBFT leader, never compared against the local BN view. Rationale
-/// for each rule is inline at its check.
+/// trusted from the QBFT leader except for the same-slot rule: an `index = 1` vote for a
+/// block the operator already knew, when the instance started, to be a same-slot head is
+/// rejected. Rationale for each rule is inline at its check.
 ///
-/// [sip-94]: https://github.com/ssvlabs/SIPs/blob/7e8b5bd6d4007682d8bd75b06a2f2ac7b617e9e5/sips/epbs_support.md#2-modified-attestation-duty
+/// [sip-94]: https://github.com/ssvlabs/SIPs/blob/5d6addeb229e12a4025090a988a54c7995c45bba/sips/epbs_support.md#2-modified-attestation-duty
 pub struct GloasBeaconVoteValidator<E: EthSpec> {
     slot: Slot,
+    /// Head block root known to have slot `slot` when this instance started, from the head
+    /// event that triggered the slot's voting context. `None` when the context came from the
+    /// timer. Captured once so every check in the instance evaluates the same knowledge.
+    same_slot_head_root: Option<Hash256>,
     // `None` if slashing protection is disabled via CLI.
     slashing_database: Option<Arc<SlashingDatabase>>,
     spec: Arc<ChainSpec>,
@@ -1379,6 +1384,7 @@ impl<E: EthSpec> QbftDataValidator<GloasBeaconVote> for GloasBeaconVoteValidator
 impl<E: EthSpec> GloasBeaconVoteValidator<E> {
     pub fn new(
         slot: Slot,
+        same_slot_head_root: Option<Hash256>,
         slashing_database: Option<Arc<SlashingDatabase>>,
         spec: Arc<ChainSpec>,
         validator_attestation_committees: HashMap<PublicKeyBytes, u64>,
@@ -1387,6 +1393,7 @@ impl<E: EthSpec> GloasBeaconVoteValidator<E> {
     ) -> Self {
         Self {
             slot,
+            same_slot_head_root,
             slashing_database,
             spec,
             validator_attestation_committees,
@@ -1425,11 +1432,21 @@ impl<E: EthSpec> GloasBeaconVoteValidator<E> {
         }
 
         // Gloas range-check (SIP-94): `index` encodes payload status, restricted to
-        // `0` (EMPTY) or `1` (FULL). The same-slot `index = 0` rule is BN/gossip-enforced,
-        // not checked here (it would need a BN lookup).
+        // `0` (EMPTY) or `1` (FULL).
         if value.attestation_data_index >= 2 {
             return Err(BeaconVoteValidationError::IndexOutOfRange(
                 value.attestation_data_index,
+            ));
+        }
+
+        // Same-slot rule (SIP-94 section 2): a block proposed in this slot has no payload yet,
+        // so a FULL vote for it is invalid and the beacon network rejects every attestation the
+        // committee signs over it. Checked only against the head event that fixed the block's
+        // slot before this instance started; a reorg never changes a block's slot, so an honest
+        // leader never trips it, and without that event the rule stays BN/gossip-enforced.
+        if value.attestation_data_index == 1 && self.same_slot_head_root == Some(value.block_root) {
+            return Err(BeaconVoteValidationError::SameSlotFullIndex(
+                value.block_root,
             ));
         }
 
@@ -1586,6 +1603,10 @@ pub enum BeaconVoteValidationError {
     /// Pre-Gloas votes carry no index field and never produce this error.
     #[error("Attestation data index out of range: {0}")]
     IndexOutOfRange(u64),
+    /// Gloas-only: `index = 1` was proposed for a block already known to be a same-slot head
+    /// (SIP-94 section 2).
+    #[error("Attestation data index 1 for same-slot block {0:?}")]
+    SameSlotFullIndex(Hash256),
 }
 
 #[cfg(test)]
@@ -2385,6 +2406,14 @@ mod tests {
 
     /// Mirrors `create_test_validator`, slashing disabled. Slot 100 → current epoch 3.
     fn create_gloas_test_validator(strict_mfp: bool) -> GloasBeaconVoteValidator<MainnetEthSpec> {
+        create_gloas_test_validator_with_head(strict_mfp, None)
+    }
+
+    /// Like `create_gloas_test_validator`, with a head root known to be same-slot.
+    fn create_gloas_test_validator_with_head(
+        strict_mfp: bool,
+        same_slot_head_root: Option<Hash256>,
+    ) -> GloasBeaconVoteValidator<MainnetEthSpec> {
         let spec = Arc::new(ChainSpec::mainnet());
         let validator_attestation_committees = HashMap::new();
         let genesis_validators_root = Hash256::zero();
@@ -2392,6 +2421,7 @@ mod tests {
 
         GloasBeaconVoteValidator::new(
             slot,
+            same_slot_head_root,
             None,
             spec,
             validator_attestation_committees,
@@ -2469,6 +2499,86 @@ mod tests {
             result.is_ok(),
             "index 1 must be accepted, got error: {:?}",
             result.unwrap_err()
+        );
+    }
+
+    // Same-slot rule (SIP-94 section 2): index 1 on a block the validator already knows to be
+    // a same-slot head is rejected; everything else is untouched.
+    fn same_slot_votes(block_root: Hash256, index: u64) -> (GloasBeaconVote, GloasBeaconVote) {
+        let source = Checkpoint {
+            epoch: Epoch::new(2),
+            root: Hash256::from_low_u64_be(1),
+        };
+        let target = Checkpoint {
+            epoch: Epoch::new(3),
+            root: Hash256::from_low_u64_be(2),
+        };
+        let our_vote = GloasBeaconVote {
+            block_root,
+            source,
+            target,
+            attestation_data_index: 0,
+        };
+        let proposed_vote = GloasBeaconVote {
+            block_root,
+            source,
+            target,
+            attestation_data_index: index,
+        };
+        (proposed_vote, our_vote)
+    }
+
+    #[test]
+    fn test_gloas_same_slot_full_index_rejected() {
+        let head_root = Hash256::repeat_byte(0x5a);
+        let validator = create_gloas_test_validator_with_head(false, Some(head_root));
+        let (proposed_vote, our_vote) = same_slot_votes(head_root, 1);
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            matches!(
+                result,
+                Err(BeaconVoteValidationError::SameSlotFullIndex(root)) if root == head_root
+            ),
+            "index 1 on the known same-slot head must be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_gloas_same_slot_empty_index_accepted() {
+        let head_root = Hash256::repeat_byte(0x5a);
+        let validator = create_gloas_test_validator_with_head(false, Some(head_root));
+        let (proposed_vote, our_vote) = same_slot_votes(head_root, 0);
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "index 0 on the same-slot head must pass, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_gloas_full_index_on_other_block_accepted() {
+        let head_root = Hash256::repeat_byte(0x5a);
+        let validator = create_gloas_test_validator_with_head(false, Some(head_root));
+        let (proposed_vote, our_vote) = same_slot_votes(Hash256::repeat_byte(0x5b), 1);
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "index 1 on a block not known to be same-slot must pass, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_gloas_full_index_without_head_knowledge_accepted() {
+        let validator = create_gloas_test_validator_with_head(false, None);
+        let (proposed_vote, our_vote) = same_slot_votes(Hash256::repeat_byte(0x5a), 1);
+
+        let result = validator.do_validation(&proposed_vote, &our_vote);
+        assert!(
+            result.is_ok(),
+            "without a same-slot head the rule stays BN-enforced, got {result:?}"
         );
     }
 
@@ -2894,6 +3004,7 @@ mod tests {
         committees_map.insert(pubkey, 7u64);
         let validator = GloasBeaconVoteValidator::<MainnetEthSpec>::new(
             slot,
+            None,
             Some(Arc::new(db)),
             spec,
             committees_map,
