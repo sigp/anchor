@@ -225,6 +225,16 @@ fn slot_vote_from_attestation_data<E: EthSpec>(
     }
 }
 
+/// The head root a same-slot head event fixed for `slot`, consumed by the SIP-94 same-slot
+/// index check. `wait_for_head_event` matched the event against an earlier clock read, so the
+/// slot is checked again here: an event for the previous slot must not be attached to this
+/// slot's context.
+fn same_slot_head_root(slot: Slot, head_event: Option<&HeadEvent>) -> Option<Hash256> {
+    head_event
+        .filter(|event| event.slot == slot)
+        .map(|event| event.beacon_block_root)
+}
+
 /// Reconstruct the attestation data whose tree root is used for aggregate fetching.
 fn aggregate_fetch_attestation_data<E: EthSpec>(
     spec: &ChainSpec,
@@ -583,6 +593,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
             .await
             .map_err(|e| format!("Failed to get cached voting assignments: {:?}", e))?;
 
+        let same_slot_head_root = same_slot_head_root(slot, head_event.as_ref());
         let attestation_data = match head_event {
             Some(event) => match self.fetch_attestation_data_from_event(slot, &event).await {
                 Some(data) => data,
@@ -596,6 +607,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
         let voting_context = VotingContext {
             voting_assignments,
             vote,
+            same_slot_head_root,
             decided_votes: Default::default(),
         };
 
@@ -1810,6 +1822,7 @@ mod tests {
                 attesting_committees: HashMap::new(),
                 sync_validators_by_subnet: HashMap::new(),
             }),
+            same_slot_head_root: None,
             vote: seed,
             decided_votes: Default::default(),
         }
@@ -2916,6 +2929,34 @@ mod tests {
             slot: Slot::new(slot),
             beacon_block_root: Hash256::zero(),
         }
+    }
+
+    /// A head event for the context's slot fixes its root as same-slot knowledge.
+    #[test]
+    fn same_slot_head_root_records_matching_event() {
+        let event = HeadEvent {
+            beacon_node_index: 0,
+            slot: Slot::new(TEST_SLOT),
+            beacon_block_root: Hash256::repeat_byte(0x5a),
+        };
+        assert_eq!(
+            same_slot_head_root(Slot::new(TEST_SLOT), Some(&event)),
+            Some(Hash256::repeat_byte(0x5a))
+        );
+    }
+
+    /// The timer path carries no head knowledge.
+    #[test]
+    fn same_slot_head_root_is_none_on_timer() {
+        assert_eq!(same_slot_head_root(Slot::new(TEST_SLOT), None), None);
+    }
+
+    /// An event matched against an earlier clock read must not bind the previous slot's head to
+    /// this slot's context after a boundary crossing.
+    #[test]
+    fn same_slot_head_root_is_none_when_event_slot_differs() {
+        let event = make_head_event(TEST_SLOT - 1);
+        assert_eq!(same_slot_head_root(Slot::new(TEST_SLOT), Some(&event)), None);
     }
 
     // A head event for the current slot should resolve the wait immediately.

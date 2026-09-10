@@ -555,3 +555,56 @@ fn committee_call_data(
     );
     committee_calls[0]
 }
+
+/// The production constructor path carries the voting context's same-slot head root into the
+/// committee validator (the mock decider never sees it, so this is the only plumbing check):
+/// index 1 on that root is rejected, and a context without the root accepts the same vote.
+#[tokio::test]
+async fn gloas_validator_carries_same_slot_head_root_from_voting_context() {
+    use ssv_types::consensus::QbftDataValidator;
+
+    let committee = create_committee_setup(&COMMITTEE_OPERATORS, COMMITTEE_VALIDATOR_COUNT, 0);
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![committee],
+        OUR_OPERATOR,
+        HarnessOptions {
+            spec: gloas_at_genesis_spec(),
+            ..Default::default()
+        },
+    );
+    let head_root = Hash256::repeat_byte(0x5a);
+    let seed = GloasBeaconVote {
+        block_root: head_root,
+        source: ValidatorStoreTestHarness::zero_checkpoint(),
+        target: Checkpoint {
+            epoch: Epoch::new(1),
+            root: Hash256::repeat_byte(0x71),
+        },
+        attestation_data_index: 0,
+    };
+    let full_vote = GloasBeaconVote {
+        attestation_data_index: 1,
+        ..seed.clone()
+    };
+    let slot = Slot::new(TEST_SLOT);
+
+    harness.seed_gloas_voting_context_with_head(seed.clone(), Some(head_root));
+    let context = harness.validator_store.get_voting_context(slot).await.unwrap();
+    let validator = harness
+        .validator_store
+        .create_gloas_beacon_vote_validator(slot, &context, Default::default());
+    assert!(
+        !validator.validate(&full_vote, &seed),
+        "index 1 on the context's same-slot head must be rejected"
+    );
+
+    harness.seed_gloas_voting_context_with_head(seed.clone(), None);
+    let context = harness.validator_store.get_voting_context(slot).await.unwrap();
+    let validator = harness
+        .validator_store
+        .create_gloas_beacon_vote_validator(slot, &context, Default::default());
+    assert!(
+        validator.validate(&full_vote, &seed),
+        "without a same-slot head the same vote must pass"
+    );
+}
