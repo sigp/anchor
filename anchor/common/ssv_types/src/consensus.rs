@@ -1445,7 +1445,9 @@ impl<E: EthSpec> GloasBeaconVoteValidator<E> {
         // slot before this instance started; a reorg never changes a block's slot, so an honest
         // leader never trips it, and without that event the rule stays BN/gossip-enforced.
         if value.attestation_data_index == 1 && self.same_slot_head_root == Some(value.block_root) {
-            return Err(BeaconVoteValidationError::SameSlotFullIndex(value.block_root));
+            return Err(BeaconVoteValidationError::SameSlotFullIndex(
+                value.block_root,
+            ));
         }
 
         if self.strict_mfp {
@@ -2549,7 +2551,10 @@ mod tests {
         let (proposed_vote, our_vote) = same_slot_votes(head_root, 0);
 
         let result = validator.do_validation(&proposed_vote, &our_vote);
-        assert!(result.is_ok(), "index 0 on the same-slot head must pass, got {result:?}");
+        assert!(
+            result.is_ok(),
+            "index 0 on the same-slot head must pass, got {result:?}"
+        );
     }
 
     #[test]

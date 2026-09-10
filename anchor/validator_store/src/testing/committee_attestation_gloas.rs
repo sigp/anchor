@@ -589,20 +589,32 @@ async fn gloas_validator_carries_same_slot_head_root_from_voting_context() {
     let slot = Slot::new(TEST_SLOT);
 
     harness.seed_gloas_voting_context_with_head(seed.clone(), Some(head_root));
-    let context = harness.validator_store.get_voting_context(slot).await.unwrap();
-    let validator = harness
+    let context = harness
         .validator_store
-        .create_gloas_beacon_vote_validator(slot, &context, Default::default());
+        .get_voting_context(slot)
+        .await
+        .unwrap();
+    let validator = harness.validator_store.create_gloas_beacon_vote_validator(
+        slot,
+        &context,
+        Default::default(),
+    );
     assert!(
         !validator.validate(&full_vote, &seed),
         "index 1 on the context's same-slot head must be rejected"
     );
 
     harness.seed_gloas_voting_context_with_head(seed.clone(), None);
-    let context = harness.validator_store.get_voting_context(slot).await.unwrap();
-    let validator = harness
+    let context = harness
         .validator_store
-        .create_gloas_beacon_vote_validator(slot, &context, Default::default());
+        .get_voting_context(slot)
+        .await
+        .unwrap();
+    let validator = harness.validator_store.create_gloas_beacon_vote_validator(
+        slot,
+        &context,
+        Default::default(),
+    );
     assert!(
         validator.validate(&full_vote, &seed),
         "without a same-slot head the same vote must pass"

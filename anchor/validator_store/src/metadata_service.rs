@@ -2956,7 +2956,10 @@ mod tests {
     #[test]
     fn same_slot_head_root_is_none_when_event_slot_differs() {
         let event = make_head_event(TEST_SLOT - 1);
-        assert_eq!(same_slot_head_root(Slot::new(TEST_SLOT), Some(&event)), None);
+        assert_eq!(
+            same_slot_head_root(Slot::new(TEST_SLOT), Some(&event)),
+            None
+        );
     }
 
     // A head event for the current slot should resolve the wait immediately.
