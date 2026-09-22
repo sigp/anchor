@@ -1,11 +1,11 @@
 //! Instrumentation taxonomy for QBFT Manager.
-#![expect(
-    dead_code,
-    reason = "Expected to be implemented by proposer QBFT instrumentation"
-)]
 
 use qbft::InstanceStateKind;
 use ssv_types::Round;
+use tokio::time::Instant;
+use tracing::{Span, field, info, info_span};
+
+use crate::metrics;
 
 pub mod checkpoints {
     pub const QBFT_INSTANCE_STARTED: &str = "qbft_instance_started";
@@ -35,7 +35,7 @@ pub enum RoundAdvanceReason {
 }
 
 impl RoundAdvanceReason {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Timeout => "timeout",
             Self::FPlusOneRoundChange => "f_plus_1_rc",
@@ -93,6 +93,173 @@ pub fn classify_round_advance(
     };
 
     Some(reason)
+}
+
+/// Terminal outcome of a proposer QBFT instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposerOutcome {
+    /// Consensus was reached.
+    Decided,
+    /// The instance exhausted its rounds without deciding.
+    MaxRoundTimeout,
+    /// The message channel closed before the instance decided (instance cleaned up).
+    ChannelClosed,
+}
+
+impl ProposerOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Decided => "decided",
+            Self::MaxRoundTimeout => "max_round_timeout",
+            Self::ChannelClosed => "channel_closed",
+        }
+    }
+
+    fn checkpoint(self) -> &'static str {
+        match self {
+            Self::Decided => checkpoints::QBFT_DECIDED,
+            Self::MaxRoundTimeout => checkpoints::QBFT_TIMED_OUT,
+            Self::ChannelClosed => checkpoints::QBFT_CHANNEL_CLOSED,
+        }
+    }
+}
+
+/// QBFT-manager boundary-layer observer for a single proposer duty QBFT instance.
+///
+/// Defined by a proposer duty instrumentation span and a QBFT instance start time. Serves as a
+/// single place where proposer lifecycle tracing events and metrics are emitted.
+pub struct ProposerObserver {
+    span: Span,
+    started: Instant,
+}
+
+impl ProposerObserver {
+    /// Open the instance span, record the handoff budget (if known), and emit the start checkpoint.
+    ///
+    /// `start_round` and `start_state` are provided to record the instance's post-replay position.
+    /// Any round advance or state change caused by replaying buffered messages during
+    /// `initialize()` has already happened by the time the observer opens. The starting state
+    /// is recorded, not the path taken to reach it.
+    pub fn start(
+        instance_height: u64,
+        handoff_budget_ms: Option<u64>,
+        start_round: u64,
+        start_state: InstanceStateKind,
+    ) -> Self {
+        let span = info_span!(
+            "proposer_qbft_instance",
+            role = "proposer",
+            instance_height,
+            start_round,
+            start_state = ?start_state,
+            handoff_budget_ms = field::Empty,
+            decided_round = field::Empty,
+            outcome = field::Empty,
+            duration_ms = field::Empty,
+        );
+
+        if let Some(budget_ms) = handoff_budget_ms {
+            span.record("handoff_budget_ms", budget_ms);
+            metrics::observe(
+                &metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS,
+                budget_ms as f64 / 1000.0,
+            );
+        }
+
+        span.in_scope(|| {
+            info!(
+                checkpoint = checkpoints::QBFT_INSTANCE_STARTED,
+                start_round,
+                start_state = ?start_state,
+                "Proposer QBFT instance started"
+            );
+        });
+
+        Self {
+            span,
+            started: Instant::now(),
+        }
+    }
+
+    /// Classify a round boundary and, if the round advanced, emit the round-advance event and bump
+    /// the per-reason counter.
+    pub fn observe_round_advance(
+        &self,
+        before_state: InstanceStateKind,
+        after_state: InstanceStateKind,
+        recv_arm: RecvArmTag,
+        from: Round,
+        to: Round,
+    ) {
+        if let Some(reason) = classify_round_advance(before_state, after_state, recv_arm, from, to)
+        {
+            self.span.in_scope(|| {
+                info!(
+                    checkpoint = checkpoints::QBFT_ROUND_ADVANCE,
+                    reason = reason.as_str(),
+                    from_round = u64::from(from),
+                    to_round = u64::from(to),
+                    "Proposer QBFT round advance"
+                );
+            });
+            metrics::inc_counter_vec(&metrics::PROPOSER_ROUND_ADVANCE_TOTAL, &[reason.as_str()]);
+        }
+    }
+
+    /// Emit a state-transition event when the instance enters `Prepare` or `Commit`.
+    ///
+    /// Fires independently of round advances as a future-round proposal that both advances the
+    /// round *and* enters `Prepare` legitimately triggers this event disjoint to round advance
+    /// metric recording.
+    pub fn observe_state_transition(&self, before: InstanceStateKind, after: InstanceStateKind) {
+        if before == after {
+            return;
+        }
+        self.span.in_scope(|| match after {
+            InstanceStateKind::Prepare => info!(
+                checkpoint = checkpoints::QBFT_PROPOSAL_ACCEPTED,
+                "Proposal accepted, entering Prepare"
+            ),
+            InstanceStateKind::Commit => info!(
+                checkpoint = checkpoints::QBFT_PREPARE_QUORUM,
+                "Prepare quorum reached, entering Commit"
+            ),
+            _ => {}
+        });
+    }
+
+    /// Record the terminal outcome on the span, emit the completion checkpoint, and observe the
+    /// decided-round, duration, and outcome metrics.
+    pub fn finish(&self, outcome: ProposerOutcome, decided_round: u64) {
+        let duration = self.started.elapsed();
+        let duration_ms = duration.as_millis() as u64;
+
+        self.span.record("decided_round", decided_round);
+        self.span.record("outcome", outcome.as_str());
+        self.span.record("duration_ms", duration_ms);
+        self.span.in_scope(|| {
+            info!(
+                checkpoint = outcome.checkpoint(),
+                decided_round,
+                duration_ms,
+                outcome = outcome.as_str(),
+                "Proposer QBFT instance finished"
+            );
+        });
+
+        metrics::inc_counter_vec(&metrics::PROPOSER_QBFT_OUTCOME_TOTAL, &[outcome.as_str()]);
+
+        // A `ChannelClosed` instance is torn down externally (cleanup/shutdown). Its round and
+        // wall-clock time are teardown artifacts and pollute meaningful consensus measurements.
+        // Decided round and QBFT duration gated for non-ChannelClosed outcomes.
+        if outcome != ProposerOutcome::ChannelClosed {
+            metrics::observe(&metrics::PROPOSER_QBFT_DECIDED_ROUND, decided_round as f64);
+            metrics::observe(
+                &metrics::PROPOSER_QBFT_DURATION_SECONDS,
+                duration.as_secs_f64(),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

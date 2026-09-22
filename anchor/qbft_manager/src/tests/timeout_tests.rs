@@ -1,4 +1,24 @@
+use bls::PublicKeyBytes;
+
 use super::*;
+use crate::{QbftMessage, metrics};
+
+/// Serializes the proposer-observer e2e tests. Each asserts before/after deltas on
+/// process-global Prometheus counters and histograms, so concurrent runs would race on shared
+/// state and produce flaky deltas. A `tokio::sync::Mutex` is used (not `std::sync::Mutex`) because
+/// the guard is held across `.await` points within the tests.
+static PROPOSER_METRIC_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Current bucketed observation count of `metric` (0 if the metric failed to register).
+fn histogram_sample_count(metric: &metrics::Result<metrics::Histogram>) -> u64 {
+    metric.as_ref().map(|h| h.get_sample_count()).unwrap_or(0)
+}
+
+/// Current summed observation value of `metric` (0.0 if the metric failed to register).
+fn histogram_sample_sum(metric: &metrics::Result<metrics::Histogram>) -> f64 {
+    metric.as_ref().map(|h| h.get_sample_sum()).unwrap_or(0.0)
+}
 
 // very important: set paused to true for deterministic timer
 #[tokio::test(start_paused = true)]
@@ -6,6 +26,313 @@ async fn test_timeouts() {
     for i in 1..=10 {
         test_timeout(i).await;
     }
+}
+
+/// Read `PROPOSER_QBFT_OUTCOME_TOTAL` for `outcome` (0 if unset).
+fn proposer_outcome_count(outcome: &str) -> u64 {
+    metrics::get_int_counter(&metrics::PROPOSER_QBFT_OUTCOME_TOTAL, &[outcome])
+        .map(|c| c.get())
+        .unwrap_or(0)
+}
+
+/// The proposer `MessageId` shared by the instance and its peers. `Role::Proposer` attaches the
+/// observer; peers must reuse it so commit aggregation (which compares the full `SSVMessage`)
+/// accepts the quorum.
+fn proposer_message_id() -> MessageId {
+    MessageId::new(
+        &DomainType::default(),
+        Role::Proposer,
+        &DutyExecutor::Validator(PublicKeyBytes::empty()),
+    )
+}
+
+/// Spawn `qbft_instance()` for operator 1 (the round-1 leader of committee `[1, 2, 3, 4]`, so it
+/// emits its own PROPOSAL on init) and initialize a `Role::Proposer` instance with `config`.
+fn spawn_proposer_instance(
+    config: qbft::Config<qbft::DefaultLeaderFunction>,
+    handoff_budget_ms: Option<u64>,
+) -> (
+    UnboundedSender<QbftMessage<BeaconVote>>,
+    oneshot::Receiver<Completed<BeaconVote>>,
+    BeaconVote,
+) {
+    let (sender_tx, _sender_rx) = unbounded_channel();
+    let (message_tx, message_rx) = unbounded_channel();
+    let (result_tx, result_rx) = oneshot::channel();
+    let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
+    tokio::spawn(qbft_instance::<BeaconVote>(
+        message_rx,
+        Arc::new(message_sender),
+    ));
+
+    let start_data = setup::generate_test_data(0).0;
+    message_tx
+        .send(QbftMessage {
+            kind: QbftMessageKind::Initialize(QbftInitialization {
+                initial: start_data.clone(),
+                validator: Box::new(NoDataValidation),
+                message_id: proposer_message_id(),
+                timeout_mode: TimeoutMode::Relative {
+                    current_round_start_time: Instant::now(),
+                },
+                config,
+                on_completed: result_tx,
+                handoff_budget_ms,
+            }),
+            drop_on_finish: None,
+        })
+        .unwrap();
+
+    (message_tx, result_rx, start_data)
+}
+
+/// Build a single-signer PREPARE or COMMIT network message for `root` at `round` from `signer`.
+/// The placeholder RSA signature is valid as content is not checked at this layer. `MessageId`
+/// matches the instance's so commit aggregation accepts the quorum.
+fn build_peer_consensus_msg(
+    msg_type: ssv_types::consensus::QbftMessageType,
+    round: u64,
+    root: Hash256,
+    signer: u64,
+) -> WrappedQbftMessage {
+    use ssv_types::{
+        RSA_SIGNATURE_SIZE, VariableList,
+        consensus::QbftMessage as SsvQbftMessage,
+        message::{MsgType, SSVMessage, SignedSSVMessage},
+    };
+    use ssz::Encode;
+
+    let msg_id = proposer_message_id();
+    let qbft_message = SsvQbftMessage {
+        qbft_message_type: msg_type,
+        height: 0,
+        round,
+        identifier: (&msg_id).into(),
+        root,
+        // PREPARE/COMMIT never claim a prepared value, so `data_round` is 0 and no justifications
+        // are required on the round-1 path.
+        data_round: 0,
+        round_change_justification: VariableList::empty(),
+        prepare_justification: VariableList::empty(),
+    };
+
+    let ssv_message = SSVMessage::new(
+        MsgType::SSVConsensusMsgType,
+        msg_id,
+        qbft_message.as_ssz_bytes(),
+    )
+    .expect("should create SSVMessage");
+
+    let signed_message = SignedSSVMessage::new(
+        vec![[0; RSA_SIGNATURE_SIZE]],
+        vec![OperatorId::from(signer)],
+        ssv_message,
+        // Only the PROPOSAL carries `full_data`.
+        vec![],
+    )
+    .expect("should create SignedSSVMessage");
+
+    WrappedQbftMessage {
+        signed_message,
+        qbft_message,
+    }
+}
+
+/// Objective: Drive proposer instance to max round timeout with a non-`None` `handoff_budget_ms`.
+/// Proposer instance exhausts its rounds and the observer records the `max_round_timeout` outcome.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_max_round_timeout_runs_observer() {
+    let _guard = PROPOSER_METRIC_LOCK.lock().await;
+
+    // Mirrors `ProposerOutcome::MaxRoundTimeout.as_str()`.
+    const MAX_ROUND_TIMEOUT_OUTCOME: &str = "max_round_timeout";
+    const MAX_ROUNDS: usize = 2;
+    const HANDOFF_BUDGET_MS: u64 = 4_000;
+
+    let outcome_before = proposer_outcome_count(MAX_ROUND_TIMEOUT_OUTCOME);
+    // Snapshot the handoff-budget histogram before the run so we can assert `start()` wired the
+    // budget through with a correct ms->s conversion (delta must be exactly one sample of 4.0s).
+    let budget_count_before =
+        histogram_sample_count(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    let budget_sum_before = histogram_sample_sum(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    let config = qbft::ConfigBuilder::new(
+        OperatorId(1),
+        InstanceHeight::from(0),
+        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+    )
+    .with_max_rounds(MAX_ROUNDS)
+    .build()
+    .unwrap();
+
+    // Initialize the instance and let it run out of rounds (no peer messages are fed).
+    let (_message_tx, result_rx, _start_data) =
+        spawn_proposer_instance(config, Some(HANDOFF_BUDGET_MS));
+
+    // Instance times out, observer recorded timeout outcome.
+    assert!(
+        matches!(result_rx.await, Ok(Completed::TimedOut)),
+        "proposer instance should reach Completed::TimedOut after exhausting its rounds"
+    );
+    let outcome_after = proposer_outcome_count(MAX_ROUND_TIMEOUT_OUTCOME);
+    assert!(
+        outcome_after > outcome_before,
+        "ProposerObserver::finish should increment \
+         PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{MAX_ROUND_TIMEOUT_OUTCOME}\"}} \
+         (before={outcome_before}, after={outcome_after})"
+    );
+
+    // `ProposerObserver::start` records the handoff budget once at instance start, converting
+    // ms->s. Asserting +1 sample and a sum delta of exactly `HANDOFF_BUDGET_MS / 1000` catches any
+    // regression in that conversion.
+    let budget_count_after = histogram_sample_count(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    let budget_sum_after = histogram_sample_sum(&metrics::PROPOSER_QBFT_HANDOFF_BUDGET_SECONDS);
+    assert_eq!(
+        budget_count_after,
+        budget_count_before + 1,
+        "handoff budget histogram should record exactly one sample"
+    );
+    // Exact for a single lossless observation; a small tolerance guards intent
+    // against future non-power-of-two budgets or accumulated samples.
+    const BUDGET_SUM_TOLERANCE: f64 = 1e-9;
+    let expected_budget_secs = HANDOFF_BUDGET_MS as f64 / 1000.0;
+    assert!(
+        (budget_sum_after - budget_sum_before - expected_budget_secs).abs() < BUDGET_SUM_TOLERANCE,
+        "handoff budget histogram sum should increase by {expected_budget_secs}s \
+         (before={budget_sum_before}, after={budget_sum_after})"
+    );
+}
+
+/// Objective: Drive proposer instance to decide in QBFT round 1. Observer records the `decided`
+/// outcome.
+/// Proposer instance is round-1 leader. It proposes and commits as quorums form.
+/// f = 1, so two peer PREPAREs and two peer COMMITs complete each quorum alongside its own.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_decided_runs_observer() {
+    let _guard = PROPOSER_METRIC_LOCK.lock().await;
+
+    use ssv_types::consensus::QbftData;
+
+    // Mirrors `ProposerOutcome::Decided.as_str()`.
+    const DECIDED_OUTCOME: &str = "decided";
+    // Operator 1 leads round 1, so the instance decides there with no round change.
+    const DECIDE_ROUND: u64 = 1;
+    // Peers that complete the prepare and commit quorums alongside the instance's own messages.
+    const PEER_SIGNERS: [u64; 2] = [2, 3];
+
+    let outcome_before = proposer_outcome_count(DECIDED_OUTCOME);
+    let config = qbft::ConfigBuilder::new(
+        OperatorId(1),
+        InstanceHeight::from(0),
+        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+    )
+    .build()
+    .unwrap();
+    let (message_tx, result_rx, start_data) = spawn_proposer_instance(config, None);
+    let proposal_root = start_data.hash();
+
+    let send_peer = |msg_type| {
+        for signer in PEER_SIGNERS {
+            message_tx
+                .send(QbftMessage {
+                    kind: QbftMessageKind::NetworkMessage(build_peer_consensus_msg(
+                        msg_type,
+                        DECIDE_ROUND,
+                        proposal_root,
+                        signer,
+                    )),
+                    drop_on_finish: None,
+                })
+                .unwrap();
+        }
+    };
+
+    // Peer PREPAREs form the prepare quorum (driving the instance to COMMIT); after it drains
+    // its own messages, peer COMMITs form the commit quorum and decide the instance.
+
+    // COMMITs that arrive before the proposal is accepted are dropped by the instance.
+    // PREPARE messages are buffered. `yield_now()` placed ahead of sending peer COMMITs.
+    // Lets the instance drain its PROPOSAL/PREPARE messages and the peer PREPAREs to reach COMMIT
+    // state.
+    send_peer(ssv_types::consensus::QbftMessageType::Prepare);
+    tokio::task::yield_now().await;
+    send_peer(ssv_types::consensus::QbftMessageType::Commit);
+
+    // Instance decides on the proposed root and the observer recorded the decided
+    // outcome.
+    assert!(
+        matches!(result_rx.await, Ok(Completed::Success(data)) if data == start_data),
+        "proposer instance should reach Completed::Success on the proposed data"
+    );
+    let outcome_after = proposer_outcome_count(DECIDED_OUTCOME);
+    assert!(
+        outcome_after > outcome_before,
+        "ProposerObserver::finish should increment \
+         PROPOSER_QBFT_OUTCOME_TOTAL{{outcome=\"{DECIDED_OUTCOME}\"}} \
+         (before={outcome_before}, after={outcome_after})"
+    );
+}
+
+/// Objective: Verify the ChannelClosed outcome path and its histogram gate.
+/// Dropping `message_tx` closes the channel; the observer should record
+/// `outcome="channel_closed"` but must NOT record decided-round or duration histograms.
+#[tokio::test(start_paused = true)]
+async fn test_proposer_instance_channel_closed_runs_observer() {
+    let _guard = PROPOSER_METRIC_LOCK.lock().await;
+
+    // Mirrors `ProposerOutcome::ChannelClosed.as_str()`.
+    const CHANNEL_CLOSED_OUTCOME: &str = "channel_closed";
+    const HANDOFF_BUDGET_MS: u64 = 2_000;
+
+    // Snapshot the outcome counter and both gated histograms before the run.
+    let outcome_before = proposer_outcome_count(CHANNEL_CLOSED_OUTCOME);
+    let decided_round_count_before = histogram_sample_count(&metrics::PROPOSER_QBFT_DECIDED_ROUND);
+    let duration_count_before = histogram_sample_count(&metrics::PROPOSER_QBFT_DURATION_SECONDS);
+
+    let config = qbft::ConfigBuilder::new(
+        OperatorId(1),
+        InstanceHeight::from(0),
+        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
+    )
+    .build()
+    .unwrap();
+
+    let (message_tx, result_rx, _start_data) =
+        spawn_proposer_instance(config, Some(HANDOFF_BUDGET_MS));
+
+    // Observer-before-close ordering is guaranteed by tokio mpsc FIFO drain-before-close: the
+    // `Initialize` message is enqueued (inside `spawn_proposer_instance`) before `message_tx` is
+    // dropped, so the instance always drains and processes `Initialize` (creating the observer)
+    // before it observes the channel `Closed`. `yield_now()` is not load-bearing for correctness;
+    // it merely lets the instance task make progress promptly.
+    tokio::task::yield_now().await;
+
+    // Drop the only external sender to close the message channel.
+    drop(message_tx);
+
+    // Closing the channel signals a timeout to listeners.
+    assert!(
+        matches!(result_rx.await, Ok(Completed::TimedOut)),
+        "ChannelClosed should signal TimedOut to listeners"
+    );
+
+    let outcome_after = proposer_outcome_count(CHANNEL_CLOSED_OUTCOME);
+    assert!(
+        outcome_after > outcome_before,
+        "ProposerObserver::finish should increment outcome counter for channel_closed \
+         (before={outcome_before}, after={outcome_after})"
+    );
+
+    // Histogram gate: decided-round and duration must NOT be recorded for ChannelClosed.
+    let decided_round_count_after = histogram_sample_count(&metrics::PROPOSER_QBFT_DECIDED_ROUND);
+    let duration_count_after = histogram_sample_count(&metrics::PROPOSER_QBFT_DURATION_SECONDS);
+    assert_eq!(
+        decided_round_count_before, decided_round_count_after,
+        "decided-round histogram must not record on ChannelClosed"
+    );
+    assert_eq!(
+        duration_count_before, duration_count_after,
+        "duration histogram must not record on ChannelClosed"
+    );
 }
 
 async fn test_timeout(round_timeout_to_test: usize) {
@@ -31,7 +358,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
     let qbft_start_time = slot_start_time + slot_clock.slot_duration() / 3;
 
     message_tx
-        .send(crate::QbftMessage {
+        .send(QbftMessage {
             kind: QbftMessageKind::Initialize(QbftInitialization {
                 initial: setup::generate_test_data(0).0,
                 validator: Box::new(NoDataValidation),
@@ -54,6 +381,7 @@ async fn test_timeout(round_timeout_to_test: usize) {
                 .build()
                 .unwrap(),
                 on_completed: result_tx,
+                handoff_budget_ms: None,
             }),
             drop_on_finish: None,
         })
@@ -121,6 +449,7 @@ async fn test_relative_mode_timeout() {
                 .build()
                 .unwrap(),
                 on_completed: result_tx,
+                handoff_budget_ms: None,
             }),
             drop_on_finish: None,
         })
@@ -198,6 +527,7 @@ async fn test_relative_vs_slottime_timing_difference() {
                     .build()
                     .unwrap(),
                     on_completed: result_tx,
+                    handoff_budget_ms: None,
                 }),
                 drop_on_finish: None,
             })
