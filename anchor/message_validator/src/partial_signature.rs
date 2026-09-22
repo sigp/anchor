@@ -11,7 +11,8 @@ use ssz::Decode;
 use types::consts::altair::SYNC_COMMITTEE_SUBNET_COUNT;
 
 use crate::{
-    ValidatedSSVMessage, ValidationContext, ValidationFailure, duty_state::DutyState,
+    ValidatedSSVMessage, ValidationContext, ValidationFailure,
+    duty_state::{DutyState, MAX_REQUEST_AUTH_DISTINCT_ROOTS},
     validate_beacon_duty, validate_duty_count, validate_role_for_fork, validate_slot_time,
     verify_single_signer,
 };
@@ -99,6 +100,19 @@ fn validate_partial_signature_message_semantics(
         return Err(ValidationFailure::InconsistentSigners);
     }
 
+    // Rule: a multi-entry RequestAuth packet names one validator (SIP-94 §5: every auth root of a
+    // packet belongs to the same duty and validator). This is a packet-internal structural check,
+    // so it runs before the membership loop below: that loop depends on the local validator view
+    // and maps to the Ignore-class `ValidatorIndexMismatch`, which must not mask a malformed
+    // packet as a local-metadata gap.
+    if is_request_auth_batch_role_kind(validation_context.role, partial_signature_messages.kind)
+        && partial_signature_messages.messages.iter().any(|message| {
+            message.validator_index != partial_signature_messages.messages[0].validator_index
+        })
+    {
+        return Err(ValidationFailure::InconsistentValidatorIndices);
+    }
+
     // Validate validator indices for non-committee duties
     for message in &partial_signature_messages.messages {
         // Rule: (only for Validator duties) Validator index must match with validatorPK
@@ -150,6 +164,14 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
                 || kind == PartialSignatureKind::AggregatorCommitteePartialSig
         }
     }
+}
+
+/// The one validator-scoped (role, kind) pair whose packets may carry several entries:
+/// `RequestAuth` on `Role::ProposerPreferences`, one entry per configured builder entry (the
+/// proposed SIP-94 §5/§7 amendment). Every other validator-scoped packet, including
+/// `ProposerPreferences` on the same role, keeps the one-entry rule.
+fn is_request_auth_batch_role_kind(role: Role, kind: PartialSignatureKind) -> bool {
+    role == Role::ProposerPreferences && kind == PartialSignatureKind::RequestAuth
 }
 
 /// Validates partial signature messages based on duty logic.
@@ -302,13 +324,30 @@ fn validate_partial_sig_messages_by_duty_logic(
                 }
             }
         }
+        // A RequestAuth packet carries one entry per configured builder entry, so its raw entry
+        // count is bounded by the same constant that caps its distinct-root budget (SIP-94 §5
+        // caps configured entries at 8). Repeated roots within the packet still count as raw
+        // entries here; the budget in `update_for_partial_signature` counts distinct roots.
+        // ProposerPreferences packets on this role keep the one-entry rule.
+        Role::ProposerPreferences => {
+            let limit = if is_request_auth_batch_role_kind(role, partial_signature_messages.kind) {
+                MAX_REQUEST_AUTH_DISTINCT_ROOTS
+            } else {
+                1
+            };
+            if message_count > limit {
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit,
+                });
+            }
+        }
         // Per-validator roles only allow one signature
         Role::Aggregator
         | Role::Proposer
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
         | Role::PTCAttester
-        | Role::ProposerPreferences
         | Role::EnvelopeProposer => {
             if message_count > 1 {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
@@ -2371,9 +2410,10 @@ mod tests {
         )
     }
 
-    /// Shared builder for the two kinds riding `Role::ProposerPreferences`
-    /// (`ProposerPreferences` and `RequestAuth`): same `MessageId`, envelope `proposal_slot`,
-    /// and single-message packet shape; only the declared `kind` differs.
+    /// Shared single-entry builder for the two kinds riding `Role::ProposerPreferences`
+    /// (`ProposerPreferences` and `RequestAuth`): same `MessageId` and envelope `proposal_slot`;
+    /// only the declared `kind` differs. Delegates to `create_signed_role8_packet` with one
+    /// entry for `ValidatorIndex(0)`, which is in the test committee's `validator_indices`.
     fn create_signed_proposer_preferences_message_with_kind(
         kind: PartialSignatureKind,
         signer_id: OperatorId,
@@ -2381,17 +2421,64 @@ mod tests {
         proposal_slot: Slot,
         signing_root: Hash256,
     ) -> SignedSSVMessage {
+        create_signed_role8_packet(
+            kind,
+            signer_id,
+            private_key,
+            proposal_slot,
+            &[(signing_root, ValidatorIndex(0))],
+        )
+    }
+
+    /// One `PartialSignatureMessage` entry of a role-8 packet. The BLS partial signature is
+    /// never checked by the validator, so it is left empty.
+    fn role8_entry(
+        signing_root: Hash256,
+        signer: OperatorId,
+        validator_index: ValidatorIndex,
+    ) -> PartialSignatureMessage {
+        PartialSignatureMessage {
+            partial_signature: Signature::empty(),
+            signing_root,
+            signer,
+            validator_index,
+        }
+    }
+
+    /// Builds a signed role-8 packet of `kind` carrying one entry per
+    /// `(signing_root, validator_index)` pair, in order. Every entry's inner `signer` is
+    /// `signer_id`, which also signs the envelope, so a packet built here is internally
+    /// consistent; `sign_role8_packet` takes hand-built entries for the inconsistent cases.
+    /// An empty `entries` slice yields an empty packet.
+    fn create_signed_role8_packet(
+        kind: PartialSignatureKind,
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+        proposal_slot: Slot,
+        entries: &[(Hash256, ValidatorIndex)],
+    ) -> SignedSSVMessage {
+        let messages = entries
+            .iter()
+            .map(|(root, index)| role8_entry(*root, signer_id, *index))
+            .collect();
+        sign_role8_packet(kind, signer_id, private_key, proposal_slot, messages)
+    }
+
+    /// Wraps caller-built `messages` in a `PartialSignatureMessages` of `kind` on the role-8
+    /// `MessageId` with envelope `proposal_slot`, and signs the envelope as `outer_signer` with
+    /// `private_key`. The inner signers are whatever the caller put in `messages`, so this is
+    /// the builder for packets whose inner signers drift or disagree with the envelope.
+    fn sign_role8_packet(
+        kind: PartialSignatureKind,
+        outer_signer: OperatorId,
+        private_key: &Rsa<Private>,
+        proposal_slot: Slot,
+        messages: Vec<PartialSignatureMessage>,
+    ) -> SignedSSVMessage {
         let partial_sig_messages = PartialSignatureMessages {
             kind,
             slot: proposal_slot,
-            messages: VariableList::new(vec![PartialSignatureMessage {
-                partial_signature: Signature::empty(),
-                signing_root,
-                signer: signer_id,
-                // ValidatorIndex(0) is in the test committee's validator_indices.
-                validator_index: ValidatorIndex(0),
-            }])
-            .unwrap(),
+            messages: VariableList::new(messages).unwrap(),
         };
 
         let msg_id = create_message_id_for_test(Role::ProposerPreferences);
@@ -2407,7 +2494,7 @@ mod tests {
         signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
         let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
 
-        SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
+        SignedSSVMessage::new(vec![signature], vec![outer_signer], ssv_msg, vec![]).unwrap()
     }
 
     /// Builds a ProposerPreferences packet whose RSA signature is produced with the WRONG key,
@@ -3098,9 +3185,58 @@ mod tests {
                 self.proposal_slot,
                 root,
             );
+            self.deliver_packet(duty_state, signed)
+        }
+
+        /// Signs one multi-entry role-8 packet of `kind` carrying `roots` in order, every entry
+        /// for `ValidatorIndex(0)`, with the fixture's key as `DEDUP_SIGNER`. Not delivered, so a
+        /// test can route it through a non-default context (e.g. a pre-Gloas spec).
+        fn batch_packet(&self, kind: PartialSignatureKind, roots: &[Hash256]) -> SignedSSVMessage {
+            let entries: Vec<_> = roots
+                .iter()
+                .map(|root| (*root, ValidatorIndex(0)))
+                .collect();
+            create_signed_role8_packet(
+                kind,
+                DEDUP_SIGNER,
+                &self.private_key,
+                self.proposal_slot,
+                &entries,
+            )
+        }
+
+        /// Signs and validates one multi-entry role-8 packet of `kind` carrying `roots`
+        /// (see `batch_packet`) against `duty_state`.
+        fn deliver_batch(
+            &self,
+            duty_state: &mut DutyState,
+            kind: PartialSignatureKind,
+            roots: &[Hash256],
+        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+            self.deliver_packet(duty_state, self.batch_packet(kind, roots))
+        }
+
+        /// Validates a hand-built `signed` role-8 packet against `duty_state` under the
+        /// fixture's committee, at the fixture's `proposal_slot`.
+        fn deliver_packet(
+            &self,
+            duty_state: &mut DutyState,
+            signed: SignedSSVMessage,
+        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+            self.deliver_packet_with_committee(duty_state, signed, &self.committee_info)
+        }
+
+        /// As `deliver_packet`, but under a caller-supplied `committee_info` (e.g. one whose
+        /// `validator_indices` is empty, the "no local metadata yet" view).
+        fn deliver_packet_with_committee(
+            &self,
+            duty_state: &mut DutyState,
+            signed: SignedSSVMessage,
+            committee_info: &crate::CommitteeInfo,
+        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
             let context = create_proposer_preferences_context(
                 &signed,
-                &self.committee_info,
+                committee_info,
                 &self.map,
                 self.proposal_slot,
             );
@@ -3131,6 +3267,11 @@ mod tests {
     /// Fills all 32 bytes with `tag`, so distinct tags give distinct signing roots.
     fn dedup_root(tag: u8) -> Hash256 {
         Hash256::from([tag; 32])
+    }
+
+    /// One distinct signing root per tag in `tags`, in order (see `dedup_root`).
+    fn dedup_roots(tags: std::ops::Range<u8>) -> Vec<Hash256> {
+        tags.map(dedup_root).collect()
     }
 
     // ---- Criterion 1: first delivery of a root is accepted. ----
@@ -3607,6 +3748,764 @@ mod tests {
         assert_too_many_roots(
             req_over,
             "TooManyDistinctSigningRoots (kind-9 cap hit on its own budget)",
+        );
+    }
+
+    // ==================== RequestAuth batched packets ====================
+    //
+    // A RequestAuth packet may carry several entries, one per configured builder entry (the
+    // proposed SIP-94 §5/§7 amendment), so it is the one validator-scoped (role, kind) pair
+    // exempt from the one-entry rule. These tests pin what that exemption adds:
+    //   - packet shape: raw entry count bounded by `MAX_REQUEST_AUTH_DISTINCT_ROOTS` (Reject),
+    //     empty packets still `NoPartialSignatureMessages`, kind 8 keeps its cap of 1;
+    //   - packet-internal consistency: one inner signer matching the envelope
+    //     (`InconsistentSigners`) and one validator index across entries
+    //     (`InconsistentValidatorIndices`, Reject), the latter checked before the
+    //     metadata-dependent membership loop and independent of the local validator view;
+    //   - set-based budget in `update_for_partial_signature`: P = the packet's distinct roots, N =
+    //     P minus the recorded set R. N empty is `RelayedDuplicateMessage`; |R| + |N| over the cap
+    //     is `TooManyDistinctSigningRoots` recording nothing; otherwise all of N is recorded. Roots
+    //     repeated within a packet count once, recorded roots cost nothing, and a packet rejected
+    //     before the budget (bad signature) records nothing.
+
+    // ---- Packet shape ----
+
+    #[test]
+    fn test_request_auth_two_entry_packet_accepted() {
+        // Arrange
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+
+        // Act: one RequestAuth packet carrying two distinct auth roots.
+        let result = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &[dedup_root(0xA1), dedup_root(0xA2)],
+        );
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "Expected a two-entry RequestAuth packet to be accepted, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_auth_eight_entry_packet_accepted() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+
+        // Act 1: a packet with exactly CAP distinct roots fills the budget in one delivery.
+        let full = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &dedup_roots(0..CAP as u8),
+        );
+
+        // Assert 1
+        assert!(
+            full.is_ok(),
+            "Expected a RequestAuth packet with exactly {CAP} distinct roots to be accepted, \
+             got: {full:?}"
+        );
+
+        // Act 2 + Assert 2: the budget is exactly full, so one further distinct root is over
+        // cap.
+        let over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root(CAP as u8),
+        );
+        assert_too_many_roots(
+            over,
+            "TooManyDistinctSigningRoots (budget exactly full after one CAP-entry packet)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_empty_packet_rejected() {
+        // Arrange
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+
+        // Act: a RequestAuth packet with no entries at all.
+        let result = fixture.deliver_batch(&mut duty_state, PartialSignatureKind::RequestAuth, &[]);
+
+        // Assert: the batch exemption does not admit an empty packet.
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::NoPartialSignatureMessages),
+            "NoPartialSignatureMessages (empty RequestAuth packet)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_nine_entry_packet_rejected() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let roots = dedup_roots(0..(CAP + 1) as u8);
+
+        // Act: CAP + 1 distinct roots in one packet exceed the raw entry bound.
+        let result =
+            fixture.deliver_batch(&mut duty_state, PartialSignatureKind::RequestAuth, &roots);
+
+        // Assert: Reject-class, reporting the raw count against the RequestAuth limit.
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { got, limit }
+                        if *got == CAP + 1 && *limit == CAP
+                )
+            },
+            "TooManyPartialSignatureMessages { got: CAP + 1, limit: CAP } (nine-entry packet)",
+        );
+
+        // The rejected packet recorded nothing: its first root delivered singly is a fresh
+        // accept, not RelayedDuplicateMessage.
+        let first_singly =
+            fixture.deliver(&mut duty_state, PartialSignatureKind::RequestAuth, roots[0]);
+        assert!(
+            first_singly.is_ok(),
+            "Expected the first root of the rejected packet to be accepted singly (nothing \
+             recorded), got: {first_singly:?}"
+        );
+    }
+
+    #[test]
+    fn test_request_auth_nine_raw_entries_with_repeated_roots_rejected() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange: CAP + 1 raw entries alternating between only two distinct roots.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let roots: Vec<Hash256> = (0..CAP + 1)
+            .map(|i| dedup_root(0xA0 + (i % 2) as u8))
+            .collect();
+
+        // Act
+        let result =
+            fixture.deliver_batch(&mut duty_state, PartialSignatureKind::RequestAuth, &roots);
+
+        // Assert: the raw entry bound counts entries, not distinct roots.
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { got, limit }
+                        if *got == CAP + 1 && *limit == CAP
+                )
+            },
+            "TooManyPartialSignatureMessages { got: CAP + 1, limit: CAP } (raw count, two \
+             distinct roots)",
+        );
+    }
+
+    #[test]
+    fn test_proposer_preferences_two_entries_same_root_still_rejected() {
+        // Arrange: kind 8 on the same role, two entries carrying the SAME root.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let root = dedup_root(0xB1);
+
+        // Act
+        let result = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::ProposerPreferences,
+            &[root, root],
+        );
+
+        // Assert: the RequestAuth exemption did not leak to kind 8, even when the roots repeat.
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::TooManyPartialSignatureMessages { got: 2, limit: 1 }
+                )
+            },
+            "TooManyPartialSignatureMessages { limit: 1 } (kind 8 keeps the one-entry rule)",
+        );
+    }
+
+    // ---- Packet-internal consistency ----
+
+    #[test]
+    fn test_request_auth_batch_inner_signer_drift_rejected() {
+        // Arrange: two entries whose inner signers differ (the first matches the envelope).
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let signed = sign_role8_packet(
+            PartialSignatureKind::RequestAuth,
+            DEDUP_SIGNER,
+            &fixture.private_key,
+            fixture.proposal_slot,
+            vec![
+                role8_entry(dedup_root(0xC1), DEDUP_SIGNER, ValidatorIndex(0)),
+                role8_entry(dedup_root(0xC2), OperatorId(2), ValidatorIndex(0)),
+            ],
+        );
+
+        // Act
+        let result = fixture.deliver_packet(&mut duty_state, signed);
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::InconsistentSigners),
+            "InconsistentSigners (second entry's inner signer differs from the first)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_batch_inner_signer_disagrees_with_outer_rejected() {
+        // Arrange: both entries agree on inner signer OperatorId(2), but the envelope is signed
+        // by DEDUP_SIGNER (OperatorId(1)).
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let signed = sign_role8_packet(
+            PartialSignatureKind::RequestAuth,
+            DEDUP_SIGNER,
+            &fixture.private_key,
+            fixture.proposal_slot,
+            vec![
+                role8_entry(dedup_root(0xC3), OperatorId(2), ValidatorIndex(0)),
+                role8_entry(dedup_root(0xC4), OperatorId(2), ValidatorIndex(0)),
+            ],
+        );
+
+        // Act
+        let result = fixture.deliver_packet(&mut duty_state, signed);
+
+        // Assert
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::InconsistentSigners),
+            "InconsistentSigners (uniform inner signer disagrees with the envelope signer)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_batch_mixed_validator_indices_rejected_with_metadata() {
+        // Arrange: two entries naming two validator indices, BOTH present in the committee's
+        // validator_indices, so membership alone would have passed.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let signed = create_signed_role8_packet(
+            PartialSignatureKind::RequestAuth,
+            DEDUP_SIGNER,
+            &fixture.private_key,
+            fixture.proposal_slot,
+            &[
+                (dedup_root(0xD1), ValidatorIndex(0)),
+                (dedup_root(0xD2), ValidatorIndex(123)),
+            ],
+        );
+
+        // Act
+        let result = fixture.deliver_packet(&mut duty_state, signed);
+
+        // Assert: a packet names one validator; two indices is a Reject.
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::InconsistentValidatorIndices),
+            "InconsistentValidatorIndices (two known indices in one RequestAuth packet)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_batch_mixed_indices_reject_precedes_membership_ignore() {
+        // Arrange: the second entry's ValidatorIndex(999) is NOT in the committee's
+        // validator_indices, so the membership loop would yield the Ignore-class
+        // ValidatorIndexMismatch if it ran first.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let signed = create_signed_role8_packet(
+            PartialSignatureKind::RequestAuth,
+            DEDUP_SIGNER,
+            &fixture.private_key,
+            fixture.proposal_slot,
+            &[
+                (dedup_root(0xD3), ValidatorIndex(0)),
+                (dedup_root(0xD4), ValidatorIndex(999)),
+            ],
+        );
+
+        // Act
+        let result = fixture.deliver_packet(&mut duty_state, signed);
+
+        // Assert: the packet-internal Reject wins over the local-metadata Ignore.
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::InconsistentValidatorIndices),
+            "InconsistentValidatorIndices, not ValidatorIndexMismatch (structural check runs \
+             before membership)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_batch_mixed_indices_rejected_without_local_metadata() {
+        // Arrange: a committee view with EMPTY validator_indices (no local metadata yet), so
+        // the membership loop is skipped entirely.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let mut no_metadata = fixture.committee_info.clone();
+        no_metadata.validator_indices = vec![];
+
+        let mixed = create_signed_role8_packet(
+            PartialSignatureKind::RequestAuth,
+            DEDUP_SIGNER,
+            &fixture.private_key,
+            fixture.proposal_slot,
+            &[
+                (dedup_root(0xD5), ValidatorIndex(0)),
+                (dedup_root(0xD6), ValidatorIndex(999)),
+            ],
+        );
+
+        // Act 1
+        let mixed_result =
+            fixture.deliver_packet_with_committee(&mut duty_state, mixed, &no_metadata);
+
+        // Assert 1: the structural check does not depend on the local validator view.
+        assert_validation_error(
+            mixed_result,
+            |failure| matches!(failure, ValidationFailure::InconsistentValidatorIndices),
+            "InconsistentValidatorIndices (mixed indices with empty local validator_indices)",
+        );
+
+        // Act 2 + Assert 2: a uniform-index two-entry packet under the same empty view is
+        // accepted; only the internal inconsistency is rejected, membership stays skipped.
+        let uniform = fixture.batch_packet(
+            PartialSignatureKind::RequestAuth,
+            &[dedup_root(0xD7), dedup_root(0xD8)],
+        );
+        let uniform_result =
+            fixture.deliver_packet_with_committee(&mut duty_state, uniform, &no_metadata);
+        assert!(
+            uniform_result.is_ok(),
+            "Expected a uniform-index two-entry packet to be accepted with empty \
+             validator_indices, got: {uniform_result:?}"
+        );
+    }
+
+    // ---- Set-based budget ----
+
+    #[test]
+    fn test_request_auth_all_known_roots_packet_ignored() {
+        // Arrange: roots A and B recorded by one accepted batch.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let (root_a, root_b) = (dedup_root(0xE1), dedup_root(0xE2));
+        let first = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &[root_a, root_b],
+        );
+        assert!(
+            first.is_ok(),
+            "Expected batch [A, B] to be accepted, got: {first:?}"
+        );
+
+        // Act + Assert: the same set again, in either order, adds no new root.
+        for (label, roots) in [("[A, B]", [root_a, root_b]), ("[B, A]", [root_b, root_a])] {
+            let repeat =
+                fixture.deliver_batch(&mut duty_state, PartialSignatureKind::RequestAuth, &roots);
+            assert_validation_error(
+                repeat,
+                |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+                &format!("RelayedDuplicateMessage (batch {label} of already recorded roots)"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_request_auth_mixed_known_and_new_roots_accepted_and_records_only_new() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange: root A recorded singly.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let (root_a, root_b) = (dedup_root(0xE3), dedup_root(0xE4));
+        let single_a = fixture.deliver(&mut duty_state, PartialSignatureKind::RequestAuth, root_a);
+        assert!(
+            single_a.is_ok(),
+            "Expected root A to be accepted, got: {single_a:?}"
+        );
+
+        // Act: a batch mixing the known root A with the new root B.
+        let mixed = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &[root_a, root_b],
+        );
+
+        // Assert: accepted (one new root), and B is now recorded.
+        assert!(
+            mixed.is_ok(),
+            "Expected batch [A, B] with B new to be accepted, got: {mixed:?}"
+        );
+        let single_b = fixture.deliver(&mut duty_state, PartialSignatureKind::RequestAuth, root_b);
+        assert_validation_error(
+            single_b,
+            |failure| matches!(failure, ValidationFailure::RelayedDuplicateMessage { .. }),
+            "RelayedDuplicateMessage (B recorded by the mixed batch)",
+        );
+
+        // The two deliveries consumed exactly two budget slots: CAP - 2 further distinct roots
+        // accept, the next one is over cap.
+        for tag in 0..(CAP - 2) as u8 {
+            let fresh = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                dedup_root(tag),
+            );
+            assert!(
+                fresh.is_ok(),
+                "Expected fresh root #{tag} (budget consumed exactly 2 so far) to be accepted, \
+                 got: {fresh:?}"
+            );
+        }
+        let over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root((CAP - 2) as u8),
+        );
+        assert_too_many_roots(
+            over,
+            "TooManyDistinctSigningRoots (A and B consumed exactly two slots)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_repeated_roots_inside_packet_count_once() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let root_a = dedup_root(0xE5);
+
+        // Act: one packet repeating root A three times.
+        let repeated = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &[root_a, root_a, root_a],
+        );
+
+        // Assert: accepted, and it consumed ONE budget slot: CAP - 1 further distinct roots
+        // accept, the next one is over cap.
+        assert!(
+            repeated.is_ok(),
+            "Expected packet [A, A, A] to be accepted, got: {repeated:?}"
+        );
+        for tag in 0..(CAP - 1) as u8 {
+            let fresh = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                dedup_root(tag),
+            );
+            assert!(
+                fresh.is_ok(),
+                "Expected fresh root #{tag} ([A, A, A] consumed one slot) to be accepted, \
+                 got: {fresh:?}"
+            );
+        }
+        let over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root((CAP - 1) as u8),
+        );
+        assert_too_many_roots(
+            over,
+            "TooManyDistinctSigningRoots (repeated in-packet root counted once)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_budget_boundary_exact_fit_accepted() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange: CAP - 2 roots recorded singly, leaving exactly two slots.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        for tag in 0..(CAP - 2) as u8 {
+            let single = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                dedup_root(tag),
+            );
+            assert!(
+                single.is_ok(),
+                "Expected root #{tag} to be accepted, got: {single:?}"
+            );
+        }
+
+        // Act: a batch of exactly two new roots.
+        let exact_fit = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &[dedup_root(0xE6), dedup_root(0xE7)],
+        );
+
+        // Assert: |R| + |N| == cap is admitted; the budget is then full.
+        assert!(
+            exact_fit.is_ok(),
+            "Expected a two-root batch filling the budget exactly to be accepted, \
+             got: {exact_fit:?}"
+        );
+        let over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            dedup_root(0xE8),
+        );
+        assert_too_many_roots(
+            over,
+            "TooManyDistinctSigningRoots (budget full after the exact-fit batch)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_over_budget_batch_records_nothing() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange: CAP - 2 roots recorded singly, leaving two slots; a batch of three new roots
+        // X, Y, Z therefore overflows by one.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        for tag in 0..(CAP - 2) as u8 {
+            let single = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::RequestAuth,
+                dedup_root(tag),
+            );
+            assert!(
+                single.is_ok(),
+                "Expected root #{tag} to be accepted, got: {single:?}"
+            );
+        }
+        let (root_x, root_y, root_z) = (dedup_root(0xF1), dedup_root(0xF2), dedup_root(0xF3));
+        let over_batch = [root_x, root_y, root_z];
+
+        // Act: the over-budget batch, twice.
+        let first = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &over_batch,
+        );
+        let again = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &over_batch,
+        );
+
+        // Assert: both are over cap, and the second is NOT RelayedDuplicateMessage, which would
+        // prove the first had recorded something.
+        assert_too_many_roots(
+            first,
+            "TooManyDistinctSigningRoots (three new roots into two free slots)",
+        );
+        assert_too_many_roots(
+            again,
+            "TooManyDistinctSigningRoots, not RelayedDuplicateMessage (over-budget batch \
+             recorded nothing)",
+        );
+
+        // X and Y singly are fresh accepts into the two free slots; Z then finds the budget
+        // full.
+        let single_x = fixture.deliver(&mut duty_state, PartialSignatureKind::RequestAuth, root_x);
+        assert!(
+            single_x.is_ok(),
+            "Expected X singly to be accepted (never recorded), got: {single_x:?}"
+        );
+        let single_y = fixture.deliver(&mut duty_state, PartialSignatureKind::RequestAuth, root_y);
+        assert!(
+            single_y.is_ok(),
+            "Expected Y singly to be accepted (never recorded), got: {single_y:?}"
+        );
+        let single_z = fixture.deliver(&mut duty_state, PartialSignatureKind::RequestAuth, root_z);
+        assert_too_many_roots(
+            single_z,
+            "TooManyDistinctSigningRoots (Z finds the budget full after X and Y)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_forged_signature_batch_records_nothing() {
+        // Arrange: a three-root batch signed with an unrelated key, so RSA verification fails
+        // AFTER semantics and duty logic but BEFORE the budget update.
+        let fixture = Role8Fixture::new();
+        let (wrong_key, _wrong_public) = generate_test_key_pair();
+        let mut duty_state = DutyState::new(64);
+        let roots = dedup_roots(0xF4..0xF7);
+        let entries: Vec<_> = roots
+            .iter()
+            .map(|root| (*root, ValidatorIndex(0)))
+            .collect();
+        let forged = create_signed_role8_packet(
+            PartialSignatureKind::RequestAuth,
+            DEDUP_SIGNER,
+            &wrong_key,
+            fixture.proposal_slot,
+            &entries,
+        );
+
+        // Act
+        let forged_result = fixture.deliver_packet(&mut duty_state, forged);
+
+        // Assert: rejected at the signature check, and the honest batch of the same roots is a
+        // fresh accept, not RelayedDuplicateMessage.
+        assert_validation_error(
+            forged_result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::SignatureVerificationFailed { .. }
+                )
+            },
+            "SignatureVerificationFailed (forged three-root batch)",
+        );
+        let honest =
+            fixture.deliver_batch(&mut duty_state, PartialSignatureKind::RequestAuth, &roots);
+        assert!(
+            honest.is_ok(),
+            "Expected the honest batch after the forged one to be accepted (nothing recorded), \
+             got: {honest:?}"
+        );
+    }
+
+    // ---- Interaction with the kind-8 budget and the duty slot ----
+
+    #[test]
+    fn test_request_auth_full_batch_leaves_preferences_budget_untouched() {
+        use crate::duty_state::{
+            MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS as PREF_CAP,
+            MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP,
+        };
+
+        // Arrange: one batch spends the whole RequestAuth budget.
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+        let full = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &dedup_roots(0..CAP as u8),
+        );
+        assert!(
+            full.is_ok(),
+            "Expected the CAP-root batch to be accepted, got: {full:?}"
+        );
+
+        // Act + Assert: kind 8 still accepts distinct roots up to ITS OWN cap, then is over
+        // cap on its own budget.
+        for i in 0..PREF_CAP {
+            let pref = fixture.deliver(
+                &mut duty_state,
+                PartialSignatureKind::ProposerPreferences,
+                dedup_root(0x80 + i as u8),
+            );
+            assert!(
+                pref.is_ok(),
+                "Expected kind-8 root #{i} to be accepted after a full RequestAuth batch, \
+                 got: {pref:?}"
+            );
+        }
+        let pref_over = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::ProposerPreferences,
+            dedup_root(0x80 + PREF_CAP as u8),
+        );
+        assert_too_many_roots(
+            pref_over,
+            "TooManyDistinctSigningRoots (kind-8 cap hit on its own budget)",
+        );
+    }
+
+    #[test]
+    fn test_request_auth_batch_and_preferences_share_one_duty_slot() {
+        use crate::duty_state::MAX_REQUEST_AUTH_DISTINCT_ROOTS as CAP;
+
+        // Arrange
+        let fixture = Role8Fixture::new();
+        let mut duty_state = DutyState::new(64);
+
+        // Act: a full RequestAuth batch and a kind-8 singleton at the same proposal_slot.
+        let batch = fixture.deliver_batch(
+            &mut duty_state,
+            PartialSignatureKind::RequestAuth,
+            &dedup_roots(0..CAP as u8),
+        );
+        let pref = fixture.deliver(
+            &mut duty_state,
+            PartialSignatureKind::ProposerPreferences,
+            dedup_root(0x80),
+        );
+
+        // Assert: both accepted, and together they occupy ONE duty slot for the signer's epoch.
+        assert!(
+            batch.is_ok(),
+            "Expected the CAP-root batch to be accepted, got: {batch:?}"
+        );
+        assert!(
+            pref.is_ok(),
+            "Expected the kind-8 singleton to be accepted, got: {pref:?}"
+        );
+        let epoch = fixture.proposal_slot.epoch(SLOTS_PER_EPOCH_TEST);
+        assert_eq!(
+            duty_state
+                .get_or_create_operator(&DEDUP_SIGNER)
+                .get_duty_count(epoch, SLOTS_PER_EPOCH_TEST),
+            1,
+            "Expected a CAP-entry RequestAuth batch plus a kind-8 packet to count as one duty \
+             slot"
+        );
+    }
+
+    #[test]
+    fn test_request_auth_batch_rejected_before_gloas() {
+        // Arrange: a two-entry RequestAuth batch under a spec whose Gloas fork activates at
+        // GLOAS_ACTIVATION_EPOCH; the fixture's proposal_slot (epoch 0) is pre-Gloas.
+        let fixture = Role8Fixture::new();
+        let signed = fixture.batch_packet(
+            PartialSignatureKind::RequestAuth,
+            &[dedup_root(0xF8), dedup_root(0xF9)],
+        );
+        let mut context = create_proposer_preferences_context(
+            &signed,
+            &fixture.committee_info,
+            &fixture.map,
+            fixture.proposal_slot,
+        );
+        context.spec = spec_with_gloas(Some(GLOAS_ACTIVATION_EPOCH));
+
+        // Act
+        let result = validate_partial_signature_message(
+            context,
+            &mut DutyState::new(64),
+            Arc::new(MockDutiesProvider::default()),
+        );
+
+        // Assert: the fork gate runs before any batch handling.
+        assert_validation_error(
+            result,
+            |failure| {
+                matches!(
+                    failure,
+                    ValidationFailure::RoleNotActiveBeforeEthFork {
+                        minimum_fork: types::ForkName::Gloas,
+                        ..
+                    }
+                )
+            },
+            "RoleNotActiveBeforeEthFork (two-entry RequestAuth batch pre-Gloas)",
         );
     }
 
