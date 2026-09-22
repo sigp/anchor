@@ -1798,6 +1798,120 @@ async fn stale_post_consensus_sign_and_collect_does_not_recreate_cleaned_collect
     run_stale_sign_and_collect(PartialSignatureKind::PostConsensus).await;
 }
 
+/// Signs `signing_root` for the scenario validator as a standalone single-validator request and
+/// waits for the reconstructed signature.
+async fn sign_and_collect_single_validator(
+    scenario: &BatchScenario,
+    signing_root: Hash256,
+    validator_index: ValidatorIndex,
+) -> Result<Arc<Signature>, CollectionError> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        scenario.manager.sign_and_collect(
+            scenario.metadata.clone(),
+            SignatureRequester::SingleValidator {
+                pubkey: scenario.validator_pubkey,
+            },
+            ValidatorSigningData {
+                root: signing_root,
+                index: validator_index,
+                validator_pubkey: scenario.validator_pubkey,
+                share: Some(scenario.validator_key.clone()),
+            },
+        ),
+    )
+    .await
+    .expect("single-validator request should resolve promptly")
+}
+
+/// SIP-94 section 5: a peer authenticates against builders A, B, and C and gossips all three
+/// RequestAuth shares in one packet. Our node is configured for A and B only, so C never gets a
+/// `sign_and_collect` registration. The unrequested C entries must not stop A and B from
+/// reconstructing.
+#[tokio::test(flavor = "multi_thread")]
+async fn request_auth_batch_unrequested_root_does_not_block_requested_roots() {
+    // Arrange: one multi-entry RequestAuth packet per remote operator covering A, B, and C.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let mut scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    scenario.metadata.kind = PartialSignatureKind::RequestAuth;
+    scenario.metadata.role = Role::ProposerPreferences;
+    let validator_index = ValidatorIndex(7);
+    let root_a = Hash256::repeat_byte(0xA1);
+    let root_b = Hash256::repeat_byte(0xB2);
+    let root_c = Hash256::repeat_byte(0xC3);
+    let packet_roots = [root_a, root_b, root_c];
+
+    for (operator_id, share) in &scenario.remote_shares {
+        let entries = packet_roots
+            .iter()
+            .map(|signing_root| PartialSignatureMessage {
+                partial_signature: share.sign(*signing_root),
+                signing_root: *signing_root,
+                signer: *operator_id,
+                validator_index,
+            })
+            .collect::<Vec<_>>();
+        scenario
+            .manager
+            .receive_partial_signatures(PartialSignatureMessages {
+                kind: PartialSignatureKind::RequestAuth,
+                slot: scenario.metadata.slot,
+                messages: VariableList::new(entries)
+                    .expect("three entries fit in a partial signature packet"),
+            })
+            .expect("remote RequestAuth packet should enter the processor");
+    }
+
+    // Act: register and sign only the roots this node requested.
+    let (signature_a, signature_b) = tokio::join!(
+        sign_and_collect_single_validator(&scenario, root_a, validator_index),
+        sign_and_collect_single_validator(&scenario, root_b, validator_index),
+    );
+
+    // Assert: both requested roots reconstruct to the master signature.
+    let signature_a = signature_a.expect("root A should reconstruct");
+    let signature_b = signature_b.expect("root B should reconstruct");
+    assert_eq!(
+        signature_a.as_ref(),
+        &scenario.validator_master.sign(root_a)
+    );
+    assert_eq!(
+        signature_b.as_ref(),
+        &scenario.validator_master.sign(root_b)
+    );
+
+    // Assert: C only ever received remote shares. Registration state lives inside the collector
+    // task, so the observable evidence is the share-only collector entry plus our two outgoing
+    // partials (A and B, never C).
+    assert!(
+        scenario
+            .manager
+            .signature_collectors
+            .contains_key(&(root_c, validator_index)),
+        "unrequested root C should keep a share-only collector"
+    );
+    let sent = sender.messages();
+    assert_eq!(
+        sent.len(),
+        2,
+        "only the requested roots A and B should be published"
+    );
+    let mut sent_roots = sent
+        .iter()
+        .map(|unsigned| {
+            let messages = PartialSignatureMessages::from_ssz_bytes(unsigned.ssv_message.data())
+                .expect("single-validator RequestAuth message should decode");
+            assert_eq!(messages.kind, PartialSignatureKind::RequestAuth);
+            assert_eq!(messages.messages.len(), 1);
+            messages.messages[0].signing_root
+        })
+        .collect::<Vec<_>>();
+    sent_roots.sort();
+    let mut expected_roots = vec![root_a, root_b];
+    expected_roots.sort();
+    assert_eq!(sent_roots, expected_roots);
+}
+
 #[tokio::test]
 async fn clean_quorum_is_verified_cached_and_does_not_enter_fallback() {
     let _metric_guard = METRIC_TEST_LOCK.lock().await;
