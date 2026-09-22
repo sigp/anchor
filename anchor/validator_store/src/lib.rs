@@ -191,12 +191,10 @@ const PROPOSER_PREFERENCES_COLLECTION_TIMEOUT_SLOTS: u32 = 2;
 /// so an unbounded no-quorum wait would head-of-line-block every later proposer.
 const REQUEST_AUTH_COLLECTION_TIMEOUT_SLOTS: u32 = 2;
 
-/// Upper bound on how long `sign_request_auth_v1` waits when the proposal slot is the current
-/// slot. This is the block-production path: Lighthouse resolves the whole builder config before
-/// requesting a block, so waiting longer costs the proposal itself, while failing fast merely
-/// omits the unsignable builder and lets the proposal proceed with a local payload. Quorum here
-/// is also unlikely on a cold cache: peers broadcast their partial signatures once, at
-/// duty-discovery time, and their request-auth cache suppresses re-signing.
+/// Anchor's direct-call upper bound for `sign_request_auth_v1` when the proposal slot is current.
+/// Lighthouse's block service applies a tighter 200 ms outer deadline on cold cache misses, omits
+/// an unsignable builder, and continues block production. This one-second backstop still governs
+/// direct callers outside that private block-service wrapper.
 const REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Whether and how to bound a request-auth signature collection; see
@@ -1596,11 +1594,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     /// - Current slot: bound direct calls within [`REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT`]. The
     ///   Lighthouse block service applies a tighter 200 ms outer deadline on a cold cache miss so
     ///   block production can continue without that builder.
-    /// - Past slot: decline, so the collection future is never constructed and no partial
-    ///   signature is broadcast. The selected Lighthouse builder-preferences service skips
-    ///   elapsed duties, but this remains a defensive contract for other callers. Declines are
-    ///   expected behavior and are kept out of the failure reporter so they cannot pollute the
-    ///   divergence metric.
+    /// - Past slot: decline, so the collection future is never constructed and no partial signature
+    ///   is broadcast. The selected Lighthouse builder-preferences service skips elapsed duties,
+    ///   but this remains a defensive contract for other callers. Declines are expected behavior
+    ///   and are kept out of the failure reporter so they cannot pollute the divergence metric.
     fn request_auth_collection_bound(
         &self,
         proposal_slot: Slot,

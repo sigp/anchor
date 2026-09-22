@@ -43,20 +43,19 @@ const STARTING_VALIDATOR_INDEX: usize = 5;
 /// Gloas fork boundary strictly between the send epoch and the proposal epoch in the success
 /// test, which is what makes its epoch-keyed-domain guard falsifiable.
 const LOOKAHEAD_EPOCHS: u64 = 2;
-/// Builder auth data used by every fixture. The bytes follow the `RequestAuth::data` convention
-/// (the builder's advertised URL) but the store treats them as opaque, so any non-empty value
-/// exercises the same path. The known-answer vector below uses the same bytes, so its constants
-/// double as an independent check of this fixture's merkleization.
+/// Explicit opaque builder auth data used by every fixture. Default derivation from a builder URL
+/// is owned by `builder_store` and tested at Anchor's client integration boundary. The known-answer
+/// vector below uses these same bytes, independently checking the fixture's merkleization.
 const TEST_AUTH_DATA: &[u8] = b"https://builder.example/";
 /// One paused-clock tick used to bracket a timeout deadline: a poll at `bound - epsilon` must be
 /// pending and a poll at `bound + epsilon` must be resolved.
 const TIMER_EPSILON: Duration = Duration::from_millis(1);
 
-/// Serializes the metric-reading tests against each other. Both the classification test and the
+/// Serializes the metric-reading tests against each other. Both the infra-failure test and the
 /// slot-aware timeout test increment labels of the global prometheus
 /// `REQUEST_AUTH_RECONSTRUCTION_FAILURES` counter (every timeout failure lands in the
 /// `insufficient_partial_signatures` bucket), so concurrent execution would make the
-/// classification test's delta assertions racy. A tokio mutex rather than std because the guard
+/// tests' delta assertions racy. A tokio mutex rather than std because the guard
 /// is held across awaits.
 static METRIC_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
@@ -221,13 +220,14 @@ async fn request_auth_success_pins_root_kind_role_mode_and_envelope_slot() {
 ///  - future slot (cache-warming): the bound is `REQUEST_AUTH_COLLECTION_TIMEOUT_SLOTS` slots; a
 ///    no-quorum collection is still pending just before that bound and resolves to
 ///    `CollectionTimeout` just after,
-///  - current slot (block-production): the bound is the fail-fast
-///    `REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT` (1s), bracketed the same way,
-///  - past slot (steady state: LH's preferences loop revisits elapsed proposer slots every tick):
-///    the bound resolves to a decline, which fails on the first poll before the collection future
-///    is ever constructed. The mock records ZERO collection calls (so no partial signature would
-///    have been broadcast) and neither reconstruction-failure label moves: declines bypass the
-///    failure reporter so structural noise cannot pollute the divergence metric.
+///  - current slot (direct-call backstop): the bound is `REQUEST_AUTH_PROPOSAL_SLOT_TIMEOUT` (1s),
+///    bracketed the same way. Lighthouse's block service applies a tighter 200 ms outer deadline on
+///    a cold cache miss,
+///  - past slot: the bound resolves to a defensive decline, which fails on the first poll before
+///    the collection future is ever constructed. The mock records ZERO collection calls (so no
+///    partial signature would have been broadcast) and neither reconstruction-failure label moves:
+///    declines bypass the failure reporter so structural noise cannot pollute the divergence
+///    metric.
 ///
 /// All three failures surface as `SignatureCollectionFailed(CollectionTimeout)`. The mock
 /// collector hangs forever, so only the production bound can resolve the bounded cases; the
@@ -235,12 +235,17 @@ async fn request_auth_success_pins_root_kind_role_mode_and_envelope_slot() {
 /// directions (a longer bound fails the "resolved just after" poll, a shorter one fails the
 /// "still pending just before" poll).
 ///
-/// Joins `METRIC_TEST_LOCK` because the bounded cases increment the
-/// `insufficient_partial_signatures` label the classification test asserts deltas on, and the
-/// decline case reads both labels for its own zero-delta assertions.
+/// Each bounded case increments only `insufficient_partial_signatures`; the decline increments
+/// neither label. `METRIC_TEST_LOCK` keeps these deltas isolated from the infra-failure test.
 #[tokio::test(start_paused = true)]
 async fn request_auth_timeout_is_slot_aware() {
     let _guard = METRIC_TEST_LOCK.lock().await;
+    let metric = crate::metrics::REQUEST_AUTH_RECONSTRUCTION_FAILURES
+        .as_ref()
+        .expect("metric should be created");
+    let insufficient_counter = metric
+        .with_label_values(&[crate::metrics::REQUEST_AUTH_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES]);
+    let infra_counter = metric.with_label_values(&[crate::metrics::REQUEST_AUTH_FAILURE_INFRA]);
 
     struct TimeoutCase {
         name: &'static str,
@@ -289,6 +294,8 @@ async fn request_auth_timeout_is_slot_aware() {
             },
         );
         let request_auth = create_request_auth(case.proposal_slot);
+        let insufficient_before = insufficient_counter.get();
+        let infra_before = infra_counter.get();
 
         // Act + Assert: drive the future by hand under the paused clock so the deadline can be
         // bracketed on both sides.
@@ -298,23 +305,6 @@ async fn request_auth_timeout_is_slot_aware() {
         tokio::pin!(fut);
 
         let result = if case.expected_bound.is_zero() {
-            // A decline must stay out of the failure reporter: elapsed proposal slots recur
-            // every tick in steady state, so routing them through the reporter would pollute
-            // the divergence metric with structural noise. The label deltas are read around
-            // this case only; the reads are race-free because this test holds
-            // `METRIC_TEST_LOCK` (the earlier bounded cases DO increment the insufficient
-            // label, but those increments land before these before-values are captured).
-            let metric = crate::metrics::REQUEST_AUTH_RECONSTRUCTION_FAILURES
-                .as_ref()
-                .expect("metric should be created");
-            let insufficient_counter = metric.with_label_values(&[
-                crate::metrics::REQUEST_AUTH_FAILURE_INSUFFICIENT_PARTIAL_SIGNATURES,
-            ]);
-            let infra_counter =
-                metric.with_label_values(&[crate::metrics::REQUEST_AUTH_FAILURE_INFRA]);
-            let insufficient_before = insufficient_counter.get();
-            let infra_before = infra_counter.get();
-
             // The decline must fail on the very first poll: it happens before the collection
             // future is ever constructed.
             let Poll::Ready(result) = futures::poll!(fut.as_mut()) else {
@@ -327,19 +317,6 @@ async fn request_auth_timeout_is_slot_aware() {
                 harness.captured_calls.lock().is_empty(),
                 "{}: a past-slot request must never reach the collector (no partial signature \
                  broadcast)",
-                case.name
-            );
-            assert_eq!(
-                insufficient_counter.get() - insufficient_before,
-                0,
-                "{}: a decline must not increment the insufficient_partial_signatures \
-                 reconstruction-failure label",
-                case.name
-            );
-            assert_eq!(
-                infra_counter.get() - infra_before,
-                0,
-                "{}: a decline must not increment the infra reconstruction-failure label",
                 case.name
             );
             result
@@ -382,25 +359,28 @@ async fn request_auth_timeout_is_slot_aware() {
             "{}: expected CollectionTimeout from the slot-aware bound, got: {result:?}",
             case.name
         );
+        assert_eq!(
+            insufficient_counter.get() - insufficient_before,
+            u64::from(!case.expected_bound.is_zero()),
+            "{}: only a started collection timing out should increment insufficient_partial_signatures",
+            case.name
+        );
+        assert_eq!(
+            infra_counter.get() - infra_before,
+            0,
+            "{}: neither a timeout nor a past-slot decline is an infrastructure failure",
+            case.name
+        );
     }
 }
 
 // ==================== Failure classification / metrics tests ====================
 
-/// Collection failures are classified into the two labels of
-/// `REQUEST_AUTH_RECONSTRUCTION_FAILURES` by `report_request_auth_collection_failure`:
-///  - a no-quorum timeout (the hanging collector plus the current-slot bound, resolved by the
-///    production `collect_within` deadline) lands in `insufficient_partial_signatures`,
-///  - an `EmptySignature` collection error (the same infra injection the sibling module uses) lands
-///    in `infra`.
-///
-/// Each phase asserts the cross-label zero delta too, pinning the classification boundary: a
-/// timeout drifting into `infra` would hide divergence signals, and an infra failure drifting
-/// into `insufficient_partial_signatures` would silently inflate the divergence estimate. The
-/// metric lives in the process-global prometheus registry, so deltas are only reliable under
-/// `METRIC_TEST_LOCK`.
+/// An `EmptySignature` collection error increments only the `infra` failure label. The
+/// cross-label zero delta ensures infrastructure failures cannot inflate divergence estimates.
+/// `METRIC_TEST_LOCK` isolates the process-global metric from the timeout test.
 #[tokio::test(start_paused = true)]
-async fn request_auth_failure_classification_increments_metrics() {
+async fn request_auth_infra_failure_increments_only_infra_metric() {
     let _guard = METRIC_TEST_LOCK.lock().await;
 
     // Arrange
@@ -415,48 +395,6 @@ async fn request_auth_failure_classification_increments_metrics() {
 
     let our_operator_id = OperatorId(1);
 
-    // Act (phase 1): a no-quorum timeout. The collector hangs and the current-slot proposal
-    // selects the 1s fail-fast bound, which the paused clock auto-advances past, so the failure
-    // is the genuine `CollectionTimeout` from `collect_within`.
-    let committee =
-        create_committee_setup(&PRIMARY_COMMITTEE_OPERATOR_IDS, 1, STARTING_VALIDATOR_INDEX);
-    let pubkey = committee.validators[0].public_key;
-    let harness = ValidatorStoreTestHarness::new_with_options(
-        vec![committee],
-        our_operator_id,
-        HarnessOptions {
-            collector_hangs: true,
-            ..Default::default()
-        },
-    );
-    let result = harness
-        .validator_store
-        .sign_request_auth_v1(pubkey, create_request_auth(Slot::new(TEST_SLOT)))
-        .await;
-
-    // Assert (phase 1)
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout)
-            ))
-        ),
-        "expected the no-quorum timeout surfaced as SignatureCollectionFailed, got: {result:?}"
-    );
-    assert_eq!(
-        insufficient_counter.get() - insufficient_before,
-        1,
-        "CollectionTimeout should increment the insufficient_partial_signatures \
-         reconstruction-failure metric once"
-    );
-    assert_eq!(
-        infra_counter.get() - infra_before,
-        0,
-        "CollectionTimeout must not leak into the infra reconstruction-failure metric"
-    );
-
-    // Act (phase 2): an infra failure. EmptySignature classifies as the infra failure class.
     let committee =
         create_committee_setup(&PRIMARY_COMMITTEE_OPERATOR_IDS, 1, STARTING_VALIDATOR_INDEX);
     let pubkey = committee.validators[0].public_key;
@@ -468,12 +406,14 @@ async fn request_auth_failure_classification_increments_metrics() {
             ..Default::default()
         },
     );
+
+    // Act
     let result = harness
         .validator_store
         .sign_request_auth_v1(pubkey, create_request_auth(Slot::new(TEST_SLOT)))
         .await;
 
-    // Assert (phase 2)
+    // Assert
     assert!(
         matches!(
             result,
@@ -490,9 +430,8 @@ async fn request_auth_failure_classification_increments_metrics() {
     );
     assert_eq!(
         insufficient_counter.get() - insufficient_before,
-        1,
-        "the infra failure must not leak into the insufficient_partial_signatures metric (its \
-         delta stays at phase 1's single increment)"
+        0,
+        "the infra failure must not increment the insufficient_partial_signatures metric"
     );
 }
 
