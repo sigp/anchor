@@ -1,31 +1,29 @@
 //! SSV-specific validation of `builder_definitions.yml`, run once at startup after
 //! Lighthouse's `BuilderStore` has loaded and validated the same file.
 //!
-//! Lighthouse validates against most beacon-API wire bounds (64 enabled entries, URL
-//! shape and length, duplicate `(url, auth_data)` pairs), but it is SSV-unaware and its
-//! load validation skips one wire bound. Three constraints are enforced here instead:
+//! Lighthouse validates against the beacon-API wire bounds, including per-validator
+//! overrides, but it is SSV-unaware. Anchor adds the lower SSV entry cap and validates
+//! disabled global entries that Lighthouse deliberately ignores:
 //!
 //! - SIP-94 §5 caps configured builder entries at 8 per validator. Excess entries load fine but
 //!   their request-auth signing roots exceed the gossip root budget peers enforce, so which
 //!   builders survive depends on per-peer message arrival order: nondeterministic, silent
 //!   sub-quorum drops. Failing startup is the only loud signal.
 //! - A zero-length auth `data` is invalid per SIP-94 §5 and rejected by go-ssv at config load.
-//!   Lighthouse instead drops such a builder with an error log at every produce. Rejecting it at
-//!   startup keeps a config that go-ssv operators cannot even load from silently half-working on an
-//!   Anchor operator.
+//!   Lighthouse instead drops such a global builder during resolution. Rejecting it at startup
+//!   keeps a config that go-ssv operators cannot even load from silently half-working on an Anchor
+//!   operator.
 //! - An entry's `builder_pubkeys` list is bounded at 64 (`MAX_BUILDER_PUBKEYS`) on the wire, but
-//!   Lighthouse's load validation never inspects it: an oversized list loads fine and
-//!   `builder_config` then omits the builder with an error log at every produce, exactly the
-//!   silent-drop failure mode above. Not an SSV constraint (go-ssv does not check it at load
-//!   either), just fail-fast for a bound Lighthouse misses; redundant the moment Lighthouse bounds
-//!   it at load, so revisit at the next pin bump.
+//!   Lighthouse's global load validation never inspects it: an oversized list loads fine and
+//!   `builder_config` then omits the builder during resolution, exactly the silent-drop failure
+//!   mode above. Not an SSV constraint (go-ssv does not check it at load either), just fail-fast
+//!   for a bound Lighthouse misses; redundant the moment Lighthouse bounds it at load, so revisit
+//!   at the next pin bump.
 //!
 //! `BuilderStore`'s container type is crate-private, so the file is re-read here with a
-//! minimal wrapper over the exported [`BuilderDefinition`] and the same `yaml_serde`
-//! parser Lighthouse uses, keeping per-entry semantics and YAML dialect identical. The
-//! filename coupling and the wrapper's field layout are pinned by the round-trip test
-//! below, which writes through the real `BuilderStore` and asserts the wrapper sees the
-//! entry.
+//! minimal wrapper over the exported definition types and the same `yaml_serde` parser
+//! Lighthouse uses. The round-trip tests write global and per-validator configuration
+//! through the real store before exercising this wrapper.
 //!
 //! Enforcement boundary: this pass validates the file bytes once at startup, while the
 //! store serves its own earlier read for the rest of the process lifetime. The two reads
@@ -39,9 +37,9 @@
 //! before signing. Checks run per entry first (most actionable), then the cap; the first
 //! violation wins.
 
-use std::{fs::File, path::Path};
+use std::{collections::BTreeMap, fs::File, path::Path};
 
-use builder_store::{BuilderDefinition, BuilderStore};
+use builder_store::{BuilderDefinition, BuilderStore, ValidatorBuilderConfig};
 use builder_types::MaxBuilderPubkeys;
 use serde::Deserialize;
 use typenum::Unsigned;
@@ -68,6 +66,8 @@ const BUILDER_DEFINITIONS_FILENAME: &str = "builder_definitions.yml";
 struct BuilderDefinitionsFile {
     #[serde(default)]
     builders: Vec<BuilderDefinition>,
+    #[serde(default)]
+    validator_configs: BTreeMap<String, ValidatorBuilderConfig>,
 }
 
 /// A failure opening the builder definitions store or a violation of the SSV
@@ -75,12 +75,12 @@ struct BuilderDefinitionsFile {
 ///
 /// The SSV-specific variants carry only entry indices and counts, never URLs or auth
 /// bytes: builder URLs may embed credentials, and auth `data` must stay out of logs
-/// entirely. `Store` re-surfaces Lighthouse's own error, which names URLs exactly as
-/// Lighthouse's validator client does at load; auth bytes never appear in either.
+/// entirely. The `Store` display retains only a static error category because
+/// Lighthouse store errors may contain a builder URL with embedded credentials.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Lighthouse's `BuilderStore` could not open, create, or validate the file.
-    #[error("unable to open or create the builder definitions store: {0:?}")]
+    #[error("builder definitions store: {}", store_error_reason(.0))]
     Store(builder_store::Error),
     /// The definitions file could not be opened. `BuilderStore` creates it before this
     /// check runs, so this indicates a filesystem-level problem, not a missing file.
@@ -89,22 +89,22 @@ pub enum Error {
     /// The definitions file could not be parsed. `BuilderStore` parsed the same bytes
     /// moments earlier, so this indicates either an external write racing startup or
     /// wrapper drift against a new Lighthouse pin.
-    #[error("unable to parse the definitions file: {0}")]
+    #[error("unable to parse the definitions file")]
     UnableToParse(yaml_serde::Error),
     /// More than [`MAX_SSV_BUILDER_ENTRIES`] enabled entries.
     #[error("{enabled} enabled builder entries exceed the SSV cap of {max} (SIP-94)")]
     TooManyEnabledEntries { enabled: usize, max: usize },
     /// The entry at `index` (file order, zero-based) resolves to zero-length auth
-    /// `data`: either an explicit empty value (`auth_data: "0x"`) or an empty URL on a
-    /// disabled entry. Omit `auth_data` to default to the URL bytes.
+    /// `data` because it contains an explicit empty value (`auth_data: "0x"`). Omit
+    /// `auth_data` to default to the lowercase ASCII hostname.
     #[error(
         "builder entry {index} resolves to zero-length auth data; omit `auth_data` to \
-         default to the URL bytes"
+         default to the lowercase ASCII hostname"
     )]
     ZeroLengthAuthData { index: usize },
     /// The entry at `index` (file order, zero-based) configures more `builder_pubkeys`
-    /// than the wire's `MAX_BUILDER_PUBKEYS`. Lighthouse accepts the file and would then
-    /// omit the builder, with an error log, from every block-production request.
+    /// than the wire's `MAX_BUILDER_PUBKEYS`. Lighthouse accepts the global entry and
+    /// would then omit the builder from block-production requests.
     #[error(
         "builder entry {index} configures {count} builder pubkeys, exceeding the wire cap \
          of {max}"
@@ -114,6 +114,36 @@ pub enum Error {
         count: usize,
         max: usize,
     },
+    /// A validator-specific override exceeds the SSV entry cap. An absent list inherits
+    /// globals and an empty list explicitly disables direct builders, so only present
+    /// non-empty lists are counted here.
+    #[error(
+        "validator {validator_pubkey} configures {count} builder entries, exceeding the SSV cap \
+         of {max} (SIP-94)"
+    )]
+    TooManyValidatorEntries {
+        validator_pubkey: String,
+        count: usize,
+        max: usize,
+    },
+}
+
+/// Never format upstream payloads: even filesystem and parser errors may contain secrets.
+fn store_error_reason(error: &builder_store::Error) -> &'static str {
+    use builder_store::Error::*;
+    match error {
+        UnableToOpenFile(_) => "unable to open file",
+        UnableToParseFile(_) => "unable to parse YAML",
+        UnableToEncodeFile(_) => "unable to encode YAML",
+        UnableToWriteFile(_) => "unable to write file",
+        UnableToCreateValidatorDir(_) => "unable to create directory",
+        DuplicateBuilderAuth(_) => "duplicate builder authentication",
+        InvalidBuilderUrl(_) => "invalid builder URL",
+        UnsupportedUrlScheme(_) => "unsupported builder URL scheme",
+        TooManyEnabledBuilders { .. } => "too many enabled builders",
+        TooManyBuilderPubkeys(_) => "too many builder public keys",
+        EmptyAuthData(_) => "empty authentication data",
+    }
 }
 
 /// Open (or create) `<dir>/builder_definitions.yml` through Lighthouse's `BuilderStore`,
@@ -133,11 +163,10 @@ pub fn open_and_validate(builder_definitions_dir: &Path) -> Result<BuilderStore,
 /// `<dir>/builder_definitions.yml`.
 ///
 /// The per-entry checks cover ALL entries, disabled ones included: for auth `data` this
-/// matches go-ssv, which has no disabled concept and validates everything, and the
-/// `builder_pubkeys` bound follows the same shape so a disabled entry cannot become a
-/// deferred failure when later enabled. The zero-length check resolves auth `data`
-/// exactly the way `builder_config` and go-ssv do (explicit bytes, else
-/// `BuilderUrl::to_default_auth_data`). The entry cap counts ENABLED entries only:
+/// preserves Anchor's explicit-empty-auth policy, and the `builder_pubkeys` bound
+/// follows the same shape so a disabled entry cannot become a deferred failure when
+/// later enabled. Lighthouse validates default auth derivation for active URLs;
+/// inactive URLs need no signing data. The entry cap counts ENABLED entries only:
 /// disabled entries never reach the wire, and Lighthouse's own 64-entry wire cap also
 /// counts enabled only.
 fn validate_builder_constraints(builder_definitions_dir: &Path) -> Result<(), Error> {
@@ -147,11 +176,11 @@ fn validate_builder_constraints(builder_definitions_dir: &Path) -> Result<(), Er
         yaml_serde::from_reader(file).map_err(Error::UnableToParse)?;
 
     for (index, definition) in config.builders.iter().enumerate() {
-        let resolved_auth_data_len = match &definition.auth_data {
-            Some(auth_data) => auth_data.len(),
-            None => definition.url.to_default_auth_data().len(),
-        };
-        if resolved_auth_data_len == 0 {
+        if definition
+            .auth_data
+            .as_ref()
+            .is_some_and(|data| data.is_empty())
+        {
             return Err(Error::ZeroLengthAuthData { index });
         }
 
@@ -177,6 +206,20 @@ fn validate_builder_constraints(builder_definitions_dir: &Path) -> Result<(), Er
         });
     }
 
+    for (validator_pubkey, validator_config) in &config.validator_configs {
+        let Some(builders) = &validator_config.builders else {
+            continue;
+        };
+        let count = builders.len();
+        if count > MAX_SSV_BUILDER_ENTRIES {
+            return Err(Error::TooManyValidatorEntries {
+                validator_pubkey: validator_pubkey.clone(),
+                count,
+                max: MAX_SSV_BUILDER_ENTRIES,
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -184,17 +227,17 @@ fn validate_builder_constraints(builder_definitions_dir: &Path) -> Result<(), Er
 mod tests {
     use std::sync::Arc;
 
-    use bls::{PublicKeyBytes, Signature};
+    use bls::{Keypair, PublicKeyBytes, Signature};
+    use builder_store::ValidatorBuilderDefinition;
     use builder_types::{RequestAuth, RequestAuthData, SignedRequestAuth};
     use parking_lot::Mutex;
+    use serde::Serialize;
     use tempfile::TempDir;
     use types::Slot;
 
     use super::*;
 
-    /// The canonical fixture URL. Also the exact byte string the omitted-auth derivation
-    /// vector asserts on, so keep it free of trailing slashes; the trailing-slash test adds
-    /// its own variant.
+    /// The canonical fixture URL.
     const TEST_URL: &str = "https://builder.example.com";
 
     /// Builds a definition with the given enabled flag, URL, and optional explicit auth
@@ -208,6 +251,18 @@ mod tests {
                 .map(|bytes| RequestAuthData::new(bytes).expect("auth data fits the limit")),
             builder_pubkeys: vec![],
             max_execution_payment: 1,
+            min_bid: None,
+            builder_boost_factor: None,
+        }
+    }
+
+    fn validator_definition(url: &str, auth_data: Option<Vec<u8>>) -> ValidatorBuilderDefinition {
+        ValidatorBuilderDefinition {
+            url: url.parse().expect("fixture URL fits the ByteList limit"),
+            auth_data: auth_data
+                .map(|bytes| RequestAuthData::new(bytes).expect("auth data fits the limit")),
+            builder_pubkeys: vec![],
+            max_execution_payment: None,
             min_bid: None,
             builder_boost_factor: None,
         }
@@ -256,11 +311,14 @@ mod tests {
     /// auth `data` it is asked to sign, returning the recorded byte strings SORTED. The
     /// store may invoke the closure concurrently and in unspecified order, so callers must
     /// never assert on callback order; sorting makes that structural.
-    async fn captured_auth_data(store: &BuilderStore) -> Vec<Vec<u8>> {
+    async fn captured_auth_data(
+        store: &BuilderStore,
+        validator_pubkey: &PublicKeyBytes,
+    ) -> Vec<Vec<u8>> {
         let captured: Arc<Mutex<Vec<Vec<u8>>>> = Arc::new(Mutex::new(Vec::new()));
         let capture = captured.clone();
         store
-            .builder_config(move |data: RequestAuthData| {
+            .builder_config(validator_pubkey, move |data: RequestAuthData| {
                 let capture = capture.clone();
                 async move {
                     capture.lock().push(data.to_vec());
@@ -280,25 +338,6 @@ mod tests {
     }
 
     // ==================== Entry-cap tests ====================
-
-    /// One enabled entry over the SSV cap fails with the exact count and cap, even though
-    /// Lighthouse's own store (64-entry cap) accepts the file.
-    #[test]
-    fn nine_enabled_entries_fail() {
-        // Arrange
-        let over_cap = MAX_SSV_BUILDER_ENTRIES + 1;
-        let (dir, _) = store_with(
-            (0..over_cap)
-                .map(|i| definition(true, &indexed_url(i), None))
-                .collect(),
-        );
-
-        // Act
-        let result = validate_builder_constraints(dir.path());
-
-        // Assert
-        expect_too_many_enabled(result, over_cap);
-    }
 
     /// Exactly the cap of enabled entries passes, and disabled entries do not count toward
     /// it: they never reach the wire, matching Lighthouse's own enabled-only cap semantics.
@@ -323,6 +362,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn per_validator_cap_handles_inherit_disable_and_override() {
+        let (dir, store) = store_with(
+            (0..MAX_SSV_BUILDER_ENTRIES)
+                .map(|index| definition(true, &indexed_url(index), None))
+                .collect(),
+        );
+        let validator = Keypair::random().pk.compress();
+
+        store
+            .set_validator_config(
+                &validator,
+                ValidatorBuilderConfig {
+                    builders: None,
+                    ..Default::default()
+                },
+            )
+            .expect("an omitted override list should inherit globals");
+        assert_eq!(store.get_validator_config(&validator).builders.len(), 8);
+        assert!(validate_builder_constraints(dir.path()).is_ok());
+
+        store
+            .set_validator_config(
+                &validator,
+                ValidatorBuilderConfig {
+                    builders: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .expect("an empty override list should disable direct builders");
+        assert!(store.get_validator_config(&validator).builders.is_empty());
+        assert!(validate_builder_constraints(dir.path()).is_ok());
+
+        let overrides = (0..MAX_SSV_BUILDER_ENTRIES)
+            .map(|index| validator_definition(&format!("https://override{index}.example"), None))
+            .collect();
+        store
+            .set_validator_config(
+                &validator,
+                ValidatorBuilderConfig {
+                    builders: Some(overrides),
+                    ..Default::default()
+                },
+            )
+            .expect("eight override entries fit Lighthouse and SSV bounds");
+        assert_eq!(store.get_validator_config(&validator).builders.len(), 8);
+        assert!(validate_builder_constraints(dir.path()).is_ok());
+
+        let secret_url = "https://user:password@secret-builder.example/path";
+        let secret_auth = b"do-not-log-auth-data".to_vec();
+        let mut overrides: Vec<_> = (0..MAX_SSV_BUILDER_ENTRIES)
+            .map(|index| validator_definition(&format!("https://override{index}.example"), None))
+            .collect();
+        overrides.push(validator_definition(secret_url, Some(secret_auth.clone())));
+        store
+            .set_validator_config(
+                &validator,
+                ValidatorBuilderConfig {
+                    builders: Some(overrides),
+                    ..Default::default()
+                },
+            )
+            .expect("nine entries remain below Lighthouse's wire cap");
+
+        let error = validate_builder_constraints(dir.path())
+            .expect_err("nine validator-specific entries should exceed the SSV cap");
+        match &error {
+            Error::TooManyValidatorEntries {
+                validator_pubkey,
+                count,
+                max,
+            } => {
+                assert_eq!(validator_pubkey, &validator.to_string());
+                assert_eq!(*count, MAX_SSV_BUILDER_ENTRIES + 1);
+                assert_eq!(*max, MAX_SSV_BUILDER_ENTRIES);
+            }
+            other => panic!("expected TooManyValidatorEntries, got: {other:?}"),
+        }
+        let rendered = error.to_string();
+        assert!(!rendered.contains(secret_url));
+        assert!(!rendered.contains("password"));
+        assert!(!rendered.contains("do-not-log-auth-data"));
+    }
+
     // ==================== Zero-length auth tests ====================
 
     /// A DISABLED entry with explicit empty auth data (`auth_data: "0x"`) fails with the
@@ -341,32 +464,174 @@ mod tests {
 
         // Act + Assert
         match validate_builder_constraints(dir.path()) {
-            Err(Error::ZeroLengthAuthData { index }) => {
+            Err(error @ Error::ZeroLengthAuthData { index }) => {
                 assert_eq!(
                     index, 1,
                     "the error should carry the file-order entry index"
                 );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("default to the lowercase ASCII hostname")
+                );
             }
             other => panic!("expected ZeroLengthAuthData, got: {other:?}"),
         }
+    }
 
-        // Arrange: an EMPTY URL on a disabled entry resolves to zero-length DEFAULT auth
-        // data (the `None` branch of the resolution; an enabled empty URL dies in
-        // Lighthouse's own URL validation first, so only disabled entries reach it).
-        let (dir, _) = store_with(vec![
-            definition(true, TEST_URL, None),
-            definition(false, "", None),
-        ]);
+    /// Disabled entries never need hostname-derived signing data. This also explicitly
+    /// permits an empty inactive URL, while explicit empty auth remains invalid above.
+    #[test]
+    fn disabled_urls_do_not_require_hostname_default_auth() {
+        for url in ["https://user:password@", ""] {
+            // Arrange: Lighthouse accepts inactive URLs without deriving auth data.
+            let (dir, _) = store_with(vec![definition(false, url, None)]);
 
-        // Act + Assert
-        match validate_builder_constraints(dir.path()) {
-            Err(Error::ZeroLengthAuthData { index }) => {
-                assert_eq!(index, 1, "the empty-URL default must also be caught");
-            }
-            other => {
-                panic!("expected ZeroLengthAuthData for the empty-URL default, got: {other:?}")
+            // Act
+            let result = open_and_validate(dir.path());
+
+            // Assert
+            assert!(
+                result.is_ok(),
+                "inactive URLs must not require default auth: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    /// Startup diagnostics must retain an actionable category without displaying the
+    /// URL or opaque auth bytes carried by upstream errors.
+    #[test]
+    fn store_validation_errors_preserve_safe_categories() {
+        // Arrange: bypass store insertion so startup itself validates each bad file.
+        #[derive(Serialize)]
+        struct FixtureFile {
+            builders: Vec<BuilderDefinition>,
+            validator_configs: BTreeMap<String, ValidatorBuilderConfig>,
+        }
+        let secret_url = "https://user:password@builder.example.com/path";
+        let duplicate = definition(true, secret_url, Some(b"do-not-log-auth-data".to_vec()));
+        let mut oversized =
+            validator_definition(secret_url, Some(b"do-not-log-auth-data".to_vec()));
+        oversized.builder_pubkeys = test_pubkeys(MaxBuilderPubkeys::USIZE + 1);
+        let validator = Keypair::random().pk.compress().to_string();
+        let cases = [
+            (
+                "duplicate builder",
+                vec![duplicate.clone(), duplicate],
+                None,
+            ),
+            (
+                "invalid builder URL",
+                vec![definition(true, "https://user:password@", None)],
+                None,
+            ),
+            (
+                "unsupported builder URL scheme",
+                vec![definition(
+                    true,
+                    "ftp://user:password@builder.example.com",
+                    None,
+                )],
+                None,
+            ),
+            (
+                "empty authentication data",
+                vec![],
+                Some(validator_definition(secret_url, Some(vec![]))),
+            ),
+            ("too many builder public keys", vec![], Some(oversized)),
+        ];
+        for (category, builders, validator_definition) in cases {
+            let dir = TempDir::new().expect("tempdir");
+            let validator_configs = validator_definition
+                .map(|definition| {
+                    BTreeMap::from([(
+                        validator.clone(),
+                        ValidatorBuilderConfig {
+                            builders: Some(vec![definition]),
+                            ..Default::default()
+                        },
+                    )])
+                })
+                .unwrap_or_default();
+            let fixture = FixtureFile {
+                builders,
+                validator_configs,
+            };
+            let file =
+                File::create(dir.path().join(BUILDER_DEFINITIONS_FILENAME)).expect("fixture file");
+            yaml_serde::to_writer(file, &fixture).expect("fixture should serialize");
+
+            // Act
+            let error = match open_and_validate(dir.path()) {
+                Err(error) => error,
+                Ok(_) => panic!("{category} should fail store validation"),
+            };
+            let rendered = error.to_string();
+
+            // Assert
+            assert!(matches!(error, Error::Store(_)));
+            assert!(
+                rendered.contains(category),
+                "expected {category:?} in {rendered:?}"
+            );
+            for secret in [
+                secret_url,
+                "user",
+                "password",
+                "do-not-log-auth-data",
+                "646f2d6e6f742d6c6f672d617574682d64617461",
+            ] {
+                assert!(
+                    !rendered.contains(secret),
+                    "startup error must omit sensitive values"
+                );
             }
         }
+    }
+
+    #[test]
+    fn store_file_open_error_preserves_safe_category() {
+        // Arrange: inject the portable filesystem failure without OS permission assumptions.
+        let error = Error::Store(builder_store::Error::UnableToOpenFile(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "do-not-log-auth-data",
+        )));
+
+        // Act
+        let rendered = error.to_string();
+
+        // Assert
+        assert!(rendered.contains("unable to open"));
+        assert!(!rendered.contains("do-not-log-auth-data"));
+    }
+
+    /// A concurrent file edit can make the second read fail parsing after the store has
+    /// loaded. Parser diagnostics include invalid scalar values, which may be secrets.
+    #[test]
+    fn second_read_parse_error_does_not_render_sensitive_scalar() {
+        // Arrange: obtain a real parser error carrying the invalid input value.
+        let sensitive_marker = "sensitive_auth_material_do_not_log";
+        let input = format!("builders: {sensitive_marker}\n");
+        let parse_error = match yaml_serde::from_str::<BuilderDefinitionsFile>(&input) {
+            Err(error) => error,
+            Ok(_) => panic!("a scalar builders field must fail deserialization"),
+        };
+        assert!(
+            parse_error.to_string().contains(sensitive_marker),
+            "fixture must expose the sensitive scalar in the underlying parser error"
+        );
+
+        // Act: this is the same wrapper used by the startup second-read path.
+        let rendered = Error::UnableToParse(parse_error).to_string();
+
+        // Assert
+        assert!(rendered.contains("unable to parse"));
+        assert!(
+            !rendered.contains(sensitive_marker),
+            "startup Display must redact parser input values: {rendered}"
+        );
     }
 
     // ==================== Builder-pubkeys bound tests ====================
@@ -451,82 +716,62 @@ mod tests {
 
         // Act + Assert: the check now counts exactly the inserted entries, proving it read
         // what the store wrote.
-        expect_too_many_enabled(validate_builder_constraints(dir.path()), over_cap);
+        expect_too_many_enabled(open_and_validate(dir.path()).map(|_| ()), over_cap);
     }
 
     // ==================== Auth-data derivation vectors ====================
     //
-    // These pin the Lighthouse-side derivation this module's zero-length check mirrors
-    // (`builder_config` resolves omitted `auth_data` to the URL's UTF-8 bytes). If the
-    // derivation ever changed, the check's notion of "resolves to zero length" could
-    // silently diverge from what actually goes on the wire.
+    // These pin the Lighthouse-side derivation used for enabled builders on the wire.
 
-    /// Omitted `auth_data` resolves to exactly the URL's UTF-8 bytes (builder-specs #165
-    /// default).
+    /// Equivalent URL spellings resolve to the same lowercase ASCII hostname.
     #[tokio::test]
     async fn derivation_vector_omitted_auth_data() {
-        // Arrange
-        let (_dir, store) = store_with(vec![definition(true, TEST_URL, None)]);
+        let complex_url =
+            "HTTPS://User:Password@Builder.Example.Com:443/bids?network=hoodi#fragment";
+        let (_dir, store) = store_with(vec![
+            definition(true, TEST_URL, None),
+            definition(true, complex_url, None),
+        ]);
+        let validator = Keypair::random().pk.compress();
 
-        // Act
-        let captured = captured_auth_data(&store).await;
+        let captured = captured_auth_data(&store, &validator).await;
 
-        // Assert
         assert_eq!(
             captured,
-            vec![TEST_URL.as_bytes().to_vec()],
-            "omitted auth_data should resolve to the URL's exact UTF-8 bytes"
+            vec![
+                b"builder.example.com".to_vec(),
+                b"builder.example.com".to_vec(),
+            ],
+            "omitted auth_data should resolve to lowercase hostname bytes"
         );
     }
 
-    /// URLs differing only by a trailing slash derive DISTINCT auth data: the default is
-    /// the URL bytes exactly as configured, with no canonicalization. A signature over the
-    /// wrong variant would fail the builder's byte-exact verification.
-    #[tokio::test]
-    async fn derivation_vector_trailing_slash_distinct() {
-        // Arrange
-        let url_without_slash = TEST_URL;
-        let url_with_slash = format!("{TEST_URL}/");
-        let (_dir, store) = store_with(vec![
-            definition(true, url_without_slash, None),
-            definition(true, &url_with_slash, None),
-        ]);
-
-        // Act
-        let captured = captured_auth_data(&store).await;
-
-        // Assert
-        let mut expected = vec![
-            url_without_slash.as_bytes().to_vec(),
-            url_with_slash.as_bytes().to_vec(),
-        ];
-        expected.sort();
-        assert_eq!(
-            captured, expected,
-            "both trailing-slash variants should be signed, each over its own exact bytes"
-        );
-    }
-
-    /// Explicit `auth_data` is signed verbatim; the URL-bytes default only applies when the
-    /// field is omitted.
+    /// Explicit `auth_data` is signed verbatim; hostname defaulting applies only when omitted.
     #[tokio::test]
     async fn derivation_vector_explicit_hex() {
-        // Arrange
         let explicit_auth = vec![0x12, 0x34, 0xab, 0xcd];
-        let (_dir, store) = store_with(vec![definition(
-            true,
-            TEST_URL,
-            Some(explicit_auth.clone()),
-        )]);
+        let (dir, store) = store_with(vec![]);
+        let validator = Keypair::random().pk.compress();
+        store
+            .set_validator_config(
+                &validator,
+                ValidatorBuilderConfig {
+                    builders: Some(vec![validator_definition(
+                        TEST_URL,
+                        Some(explicit_auth.clone()),
+                    )]),
+                    ..Default::default()
+                },
+            )
+            .expect("explicit per-validator auth should be accepted");
+        assert!(validate_builder_constraints(dir.path()).is_ok());
 
-        // Act
-        let captured = captured_auth_data(&store).await;
+        let captured = captured_auth_data(&store, &validator).await;
 
-        // Assert
         assert_eq!(
             captured,
             vec![explicit_auth],
-            "explicit auth_data should be signed verbatim, not replaced by the URL default"
+            "explicit auth_data should be signed verbatim"
         );
     }
 }
