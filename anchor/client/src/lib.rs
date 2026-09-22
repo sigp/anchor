@@ -23,6 +23,7 @@ use beacon_node_fallback::{
     start_fallback_updater_service,
 };
 use bls::PublicKeyBytes;
+use builder_store::BuilderStore;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
@@ -66,6 +67,7 @@ use validator_services::{
     payload_attestation_service::PayloadAttestationService,
     preparation_service::PreparationServiceBuilder,
     proposer_preferences_service::ProposerPreferencesService,
+    request_auth_cache::RequestAuthCache,
     sync_committee_service::SyncCommitteeService,
 };
 
@@ -758,12 +760,23 @@ impl Client {
                 .await?;
         }
 
+        // `BlockServiceBuilder::build()` requires both a `BuilderStore` and a `RequestAuthCache`.
+        // The builder definitions file starts empty, so both are inert until the rest of the
+        // builder stack validates the configuration and starts the preferences service with
+        // clone-shared instances. That service is the cache's only `prune()` caller, so direct
+        // builders must not be deployed before the complete stack is integrated.
+        let configured_builders =
+            BuilderStore::open_or_create(config.global_config.data_dir.builder_definitions_dir())
+                .map_err(|e| format!("Unable to open or create builder definitions: {e:?}"))?;
+
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())
             .executor(executor.clone())
-            .chain_spec(spec.clone());
+            .chain_spec(spec.clone())
+            .configured_builders(configured_builders)
+            .request_auth_cache(RequestAuthCache::default());
 
         // If we have proposer nodes, add them to the block service builder.
         if proposer_nodes.num_total().await > 0 {
@@ -881,6 +894,7 @@ impl Client {
                 beacon_nodes.clone(),
                 executor.clone(),
                 spec.clone(),
+                None,
             )
             .start_update_service()
             .map_err(|e| format!("Unable to start payload attestation service: {e}"))?;

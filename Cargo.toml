@@ -75,23 +75,25 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse latest from unstable (1256bd99e1b6c5d1290241849354b7e27dbc0ed9)
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "1256bd99e1b6c5d1290241849354b7e27dbc0ed9" }
+# Lighthouse unstable (fdcc8658b3b917181855fce7a10a6147061419e4)
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+builder_store = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+builder_types = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "fdcc8658b3b917181855fce7a10a6147061419e4" }
 
 alloy = { version = "1.2.1", features = [
     "sol-types",
