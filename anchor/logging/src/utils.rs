@@ -9,6 +9,7 @@ pub(crate) const LIGHTHOUSE_CRATES: &[&str] = &[
     "slashing_protection",
     "task_executor",
     "validator_services",
+    "builder_store",
     "fork",
 ];
 

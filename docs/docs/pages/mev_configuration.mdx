@@ -1,8 +1,10 @@
 # MEV Configuration
 
-MEV needs no flag. Anchor always creates validator registrations, so relays know about your
-validators by default. To use external builders, configure the builder or MEV-Boost connection on
-your beacon node.
+MEV needs no flag. Before the Gloas (ePBS) fork, Anchor creates validator registrations for
+relays, and external builders are configured on your
+beacon node (builder or MEV-Boost connection). From Gloas onward, direct builder connections are
+configured on Anchor itself and use proposer preferences instead of validator registrations; see
+[Direct builder connections](#direct-builder-connections-from-gloas) below.
 
 `--proposer-delay-ms` tunes *when* Anchor asks for a block. Asking later gives builders more time to
 bid, at the cost of leaving less of the slot for everything that follows.
@@ -78,3 +80,119 @@ command line flag in milliseconds, so `ProposerDelay: 300ms` becomes `--proposer
 The ePBS value maps the same way from the SSV node's `ProposerDelayEPBS` key or the
 `PROPOSER_DELAY_EPBS` environment variable: `ProposerDelayEPBS: 300ms` becomes
 `--proposer-delay-epbs-ms 300`. Both clients hard-cap it at one second.
+
+## Direct builder connections (from Gloas)
+
+From the Gloas fork onward, Anchor can request bids from specific builders directly, alongside the
+in-protocol p2p bids and the local build. This is configured per node in
+`<data_dir>/builder_definitions.yml`. Anchor creates the file on first start with an empty
+`builders` list; with no entries the feature is off and block production uses p2p bids and the local build only.
+
+To get started, either start Anchor once and edit the template it creates, then restart; or place
+a populated file in the data directory before first start, which Anchor picks up as-is. The latter
+fits clusters best: every operator must deploy byte-identical entries (see below), so distribute
+one canonical file. There is no Anchor keymanager route for builder entries; the file is the whole
+reachable surface.
+
+Edits apply on restart. There is no runtime reload, and the file is validated at every startup:
+an invalid file stops the node with an error category. Anchor-specific constraint errors also
+identify the offending entry, validator, or count. URLs and authentication data are omitted from
+store validation errors.
+
+```yaml
+min_bid: 0
+builder_boost_factor: 100
+builders:
+  - enabled: true
+    url: "https://builder.example.com"
+    max_execution_payment: 1000000000
+```
+
+The same file can override builders for one validator. Each `validator_configs` key is that
+validator's compressed public key. If `builders` is omitted, the validator inherits the global
+list. An empty list disables direct builders for that validator. A non-empty list replaces the
+global list rather than adding to it:
+
+```yaml
+validator_configs:
+  "0x<validator-public-key>":
+    min_bid: 10
+    builders:
+      - url: "https://validator-builder.example.com"
+        max_execution_payment: 1000000000
+
+  "0x<disabled-validator-public-key>":
+    builders: []
+```
+
+Per-validator builder entries do not have an `enabled` field. Remove an entry from the list to
+disable it, or use `builders: []` to disable all direct builders for that validator.
+
+Each entry supports:
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | Disabled entries never reach the wire, but the file must still validate; see Limits. |
+| `url` | The builder's URL, contacted by your beacon node. At most 2048 bytes. |
+| `auth_data` | Optional `0x`-hex authentication bytes agreed with the builder out of band, at most 4096 bytes. When omitted, it defaults to the URL's lowercase ASCII hostname. Scheme, credentials, port, path, query, fragment, and trailing slash are not included. |
+| `builder_pubkeys` | Optional list of builder BLS public keys allowed to sign this builder's bids. Empty accepts any. At most 64 keys; see Limits. |
+| `max_execution_payment` | The maximum trusted (off-protocol) payment, in gwei, accepted from this builder. |
+| `min_bid`, `builder_boost_factor` | Optional per-builder overrides of the top-level values. |
+
+The top-level `min_bid` and `builder_boost_factor` govern p2p bids and fill in any entry that
+omits its own.
+
+### The configuration must be byte-identical across the cluster
+
+Builder entries are cluster configuration. Every operator of a cluster MUST use byte-identical
+entries, `auth_data` included. Each builder's authentication is threshold-signed by the cluster,
+and the signed bytes include `auth_data`: a one-byte divergence fragments the signing roots, and a
+builder is **silently dropped** wherever fewer than a quorum of operators share its exact bytes,
+starting with the divergent operator's own proposals. The drop surfaces only in signing-failure
+logs and reconstruction telemetry. The full entries must still match even when two URL spellings
+derive the same hostname auth data, because the URL remains routing metadata sent to the beacon
+node.
+
+Treat the file as sensitive and restrict its permissions accordingly. A custom `auth_data` value
+may be a shared secret agreed with the builder, so handle it as a credential. Request-auth signing
+logs record the auth-data length, not its contents. Downstream systems may log builder URLs, so
+do not embed credentials in the URL itself; authentication material belongs in `auth_data`.
+
+### Migrating default authentication and mixed-client clusters
+
+This Lighthouse update changes omitted `auth_data` from the complete URL to its lowercase ASCII
+hostname. For `https://builder.example.com/`, the default is now `builder.example.com`.
+Older Anchor versions and the current go-ssv Gloas implementation still default to URL bytes.
+Identical URLs with omitted auth therefore do **not** guarantee identical signing roots during
+an upgrade or in a mixed-client cluster.
+
+Before upgrading, configure explicit, identical authentication bytes on every operator. To pin
+the standard hostname default in this example, use
+`auth_data: "0x6275696c6465722e6578616d706c652e636f6d"` in Anchor and the same value for go-ssv's
+`AuthData`. Confirm that the receiving builder supports the hostname default. An existing custom
+value agreed with the builder can also be retained unchanged. Do not rely on omitted defaults
+until every operator and the builder use the same rule.
+
+### Use the standard default or an agreed custom value
+
+The builder checks the value it receives against the one it agreed with you, and rejects a
+mismatch, dropping itself from that proposal. Without a custom agreement, use the lowercase ASCII
+hostname default, either explicitly as above or by omitting the field once the whole cluster has
+compatible defaults. Explicitly pinning the standard default does not create a new custom token.
+A custom value the builder does not recognise fails every proposal. It fails per builder rather
+than failing the file, so nothing is refused at startup.
+
+### Limits
+
+At most **8** global entries may be enabled, and each explicit per-validator builder list may
+contain at most **8** entries (an SSV protocol cap; the beacon API itself allows 64). Inherited
+global lists are checked once as globals, while `builders: []` remains valid. Anchor refuses to
+start above either cap: excess entries can exceed the per-slot signing budget other operators
+enforce on gossip, silently dropping builders in a per-peer, nondeterministic way.
+A zero-length `auth_data` (`"0x"` or an empty string) is also refused at startup, for disabled
+entries too; omit the field instead to use the URL default. An entry listing more than **64**
+`builder_pubkeys` (a beacon-API bound) is likewise refused, disabled entries included: the file
+would otherwise load, and the builder would then be omitted during block production.
+
+Disabled global entries do not need a valid hostname when `auth_data` is omitted, because no
+authentication is signed for them. Enabling such an entry still requires a valid HTTP(S) URL.

@@ -104,11 +104,15 @@ you may consider increasing the peer count using `--target-peers`.
 
 ## How to enable MEV on Anchor?
 
-Anchor needs no flag: it always creates validator registrations. To actually use external builders,
-configure the builder or MEV-Boost connection on your beacon node. The `--builder-proposals` flag
-that used to gate this is deprecated and ignored, and will be removed.
+Anchor needs no flag. Before Gloas, it creates validator registrations; configure the builder or
+MEV-Boost connection on your beacon node to use external builders. From Gloas onward,
+configure direct builders in Anchor's `builder_definitions.yml`; Anchor can use them alongside
+in-protocol bids and local block production, using proposer preferences instead of registrations.
+The `--builder-proposals` flag that used to gate this
+is deprecated and ignored, and will be removed.
 
-See [MEV Configuration](/mev_configuration) for tuning, including `--proposer-delay-ms`.
+See [MEV Configuration](/mev_configuration) for the builder file, per-validator overrides, and
+proposer-delay tuning.
 
 <div id="sync" />
 

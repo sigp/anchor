@@ -1,3 +1,4 @@
+mod builder_definitions;
 pub mod config;
 mod key;
 mod metrics;
@@ -23,7 +24,6 @@ use beacon_node_fallback::{
     start_fallback_updater_service,
 };
 use bls::PublicKeyBytes;
-use builder_store::BuilderStore;
 use config::Config;
 use database::{NetworkDatabase, OwnOperatorId};
 use duties_tracker::{duties_tracker::DutiesTracker, voluntary_exit_tracker::VoluntaryExitTracker};
@@ -162,6 +162,18 @@ impl Client {
             key.e().to_owned().map_err(err)?,
         )
         .map_err(err)?;
+
+        // Load the builder definitions before spawning any service so an invalid file fails
+        // startup immediately rather than after the sync and doppelganger waits below. The
+        // store and the `RequestAuthCache` are required by `BlockServiceBuilder::build()` and
+        // are shared with the builder-preferences service, the cache's only `prune()` caller.
+        // Lighthouse validates most beacon-API bounds. The SSV constraints from SIP-94
+        // section 5 and the `builder_pubkeys` bound its load validation misses are enforced in
+        // `builder_definitions`.
+        let configured_builders = builder_definitions::open_and_validate(
+            &config.global_config.data_dir.builder_definitions_dir(),
+        )
+        .map_err(|e| format!("Failed to load builder definitions: {e}"))?;
 
         // Start the processor
         let processor_senders = processor::spawn(config.processor, executor.clone());
@@ -762,15 +774,10 @@ impl Client {
         }
 
         // `BlockServiceBuilder::build()` requires both a `BuilderStore` and a `RequestAuthCache`.
-        // Both types are Arc-backed, so the clones below share one store and one cache between
-        // block production and the builder-preferences service. The service's per-slot tick is
-        // the cache's only `prune()` caller; a second
-        // `RequestAuthCache::default()` here would leave the block service's cache insert-only.
-        let configured_builders =
-            BuilderStore::open_or_create(config.global_config.data_dir.builder_definitions_dir())
-                .map_err(|e| format!("Unable to open or create builder definitions: {e:?}"))?;
+        // The store was validated before service startup. This single cache is clone-shared
+        // between block production and the builder-preferences service, whose per-slot tick is
+        // the cache's only `prune()` caller.
         let request_auth_cache = RequestAuthCache::default();
-
         let mut block_service_builder = BlockServiceBuilder::new()
             .slot_clock(slot_clock.clone())
             .validator_store(validator_store.clone())
