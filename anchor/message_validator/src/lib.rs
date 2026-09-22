@@ -207,6 +207,11 @@ pub enum ValidationFailure {
         got: usize,
         limit: usize,
     },
+    /// A multi-entry validator-scoped packet whose entries name more than one validator index.
+    /// Every entry of such a packet belongs to the one validator the `MessageId` names, so the
+    /// inconsistency is internal to the packet and independent of the local validator view,
+    /// unlike [`ValidationFailure::ValidatorIndexMismatch`]. Reject-class.
+    InconsistentValidatorIndices,
     EncodeOperators,
     SlotStartTimeNotFound {
         slot: Slot,
