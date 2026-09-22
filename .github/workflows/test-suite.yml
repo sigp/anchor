@@ -60,7 +60,7 @@ jobs:
     # Use self-hosted runners only on the sigp repo.
     runs-on: ubuntu-22.04 #${{ github.repository == 'sigp/anchor' && fromJson('["self-hosted", "linux", "CI", "large"]') || 'ubuntu-22.04'  }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: 'recursive'
     - name: Get latest version of stable Rust
@@ -86,7 +86,7 @@ jobs:
     env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: 'recursive'
     - name: Get latest version of stable Rust
@@ -105,7 +105,7 @@ jobs:
     name: check-fmt
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Get latest version of nightly Rust
       uses: moonrepo/setup-rust@v1
       with:
@@ -119,7 +119,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: 1
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Get latest version of stable Rust
       uses: moonrepo/setup-rust@v1
       with:
@@ -142,7 +142,7 @@ jobs:
     name: check-msrv
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Install Rust at Minimum Supported Rust Version (MSRV)
       run: |
         metadata=$(cargo metadata --no-deps --format-version 1)
@@ -156,7 +156,7 @@ jobs:
     if: needs.check-labels.outputs.skip_ci != 'true'
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Get latest version of nightly Rust
       uses: moonrepo/setup-rust@v1
       with:
@@ -178,7 +178,7 @@ jobs:
     name: spellcheck
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       # Uses the canonical version so that the version is up to date:
       # https://github.com/rojopolis/spellcheck-github-actions?tab=readme-ov-file#using-a-canonical-version
     - uses: rojopolis/spellcheck-github-actions@0.46.0
@@ -191,7 +191,7 @@ jobs:
     if: needs.check-labels.outputs.skip_ci != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Get latest version of stable Rust
         uses: moonrepo/setup-rust@v1
         with:
@@ -208,7 +208,7 @@ jobs:
       image: sigmaprime/lockbud:latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Install dependencies
         run: apt update && apt install -y cmake libclang-dev
       - name: Check for deadlocks
@@ -233,6 +233,6 @@ jobs:
       'lockbud',
     ]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Check that success job is dependent on all others
         run: ./.github/scripts/check_success_job.sh ./.github/workflows/test-suite.yml test-suite-success
