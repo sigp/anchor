@@ -62,5 +62,4 @@ yaml_serde = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-bls = { workspace = true }
 tempfile = { workspace = true }

@@ -33,7 +33,8 @@ use crate::{FIRST_ROUND, ValidationFailure, message_counts::MessageCounts};
 pub(crate) const MAX_PROPOSER_PREFERENCES_DISTINCT_ROOTS: usize = 4;
 
 /// Maximum distinct `BuilderRequestAuth` signing roots accepted per
-/// (`MessageId`, operator, `proposal_slot`).
+/// (`MessageId`, operator, `proposal_slot`), and the raw entry bound of one `RequestAuth`
+/// packet (a packet carries at most one entry per configured builder entry).
 ///
 /// One root per configured builder entry: SIP-94 §5 caps configured entries at 8 per
 /// validator (an SSV policy bound; the beacon-APIs wire container allows
@@ -144,30 +145,45 @@ impl DutyState {
         // change between emissions, chiefly a dependent_root shift under reorg; one auth root
         // per configured builder entry). Distinct roots are tracked per
         // (MessageId, operator, proposal_slot, kind), each kind under its own cap (SIP-94 §7:
-        // budgets are tracked per partial-signature kind; neither consumes the other).
+        // budgets are tracked per partial-signature kind; neither consumes the other). A
+        // ProposerPreferences packet always reaches here with one entry; a RequestAuth packet
+        // may carry several, and all of its new roots are recorded together or not at all.
         let kind = partial_signature_messages.kind;
         if let Some((seen_roots, cap)) = signer_state.root_budget(kind) {
-            let root = partial_signature_messages
+            if partial_signature_messages.messages.is_empty() {
+                return Err(ValidationFailure::NoPartialSignatureMessages);
+            }
+            // The packet's distinct roots not yet recorded for this key. A RequestAuth packet
+            // may carry several entries (one per configured builder entry); a repeated root
+            // within the packet counts once, and a root already recorded costs nothing.
+            let new_roots: HashSet<Hash256> = partial_signature_messages
                 .messages
-                .first()
-                .ok_or(ValidationFailure::NoPartialSignatureMessages)?
-                .signing_root;
-            // Any repeat of a recorded root is IGNORE regardless of the propagation peer
-            // (SIP-94 §7): an honest retry or restart can repeat an accepted root after the
+                .iter()
+                .map(|message| message.signing_root)
+                .filter(|root| !seen_roots.contains(root))
+                .collect();
+            // A packet adding no new root is IGNORE regardless of the propagation peer
+            // (SIP-94 §7): an honest retry or restart can repeat accepted roots after the
             // recipient's gossip duplicate cache expires, so repetition does not prove peer
             // fault. Membership is checked before capacity so a recorded root stays IGNORE
             // even when the set is full.
-            if seen_roots.contains(&root) {
+            if new_roots.is_empty() {
                 return Err(ValidationFailure::RelayedDuplicateMessage {
-                    got: format!("{kind:?} root {root:?}"),
+                    got: format!("{kind:?} roots all recorded"),
                 });
             }
-            if seen_roots.len() >= cap {
+            // The whole packet is admitted or ignored: an over-budget packet records nothing,
+            // so it never consumes part of the budget.
+            let recorded = seen_roots.len();
+            let added = new_roots.len();
+            if recorded + added > cap {
                 return Err(ValidationFailure::TooManyDistinctSigningRoots {
-                    got: format!("{kind:?} distinct roots exceed cap {cap}"),
+                    got: format!(
+                        "{kind:?} {recorded} recorded plus {added} new distinct roots exceed cap {cap}"
+                    ),
                 });
             }
-            seen_roots.insert(root);
+            seen_roots.extend(new_roots);
         }
 
         // Record the partial signature (only once)

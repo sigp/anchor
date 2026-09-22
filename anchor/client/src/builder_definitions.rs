@@ -75,8 +75,9 @@ struct BuilderDefinitionsFile {
 ///
 /// The SSV-specific variants carry only entry indices and counts, never URLs or auth
 /// bytes: builder URLs may embed credentials, and auth `data` must stay out of logs
-/// entirely. The `Store` display retains only a static error category because
-/// Lighthouse store errors may contain a builder URL with embedded credentials.
+/// entirely. The `Store` display retains only an error category, because Lighthouse store
+/// errors may contain a builder URL with embedded credentials, plus structural metadata
+/// that cannot echo input (a parser line and column, an `io::ErrorKind`).
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Lighthouse's `BuilderStore` could not open, create, or validate the file.
@@ -89,7 +90,7 @@ pub enum Error {
     /// The definitions file could not be parsed. `BuilderStore` parsed the same bytes
     /// moments earlier, so this indicates either an external write racing startup or
     /// wrapper drift against a new Lighthouse pin.
-    #[error("unable to parse the definitions file")]
+    #[error("unable to parse the definitions file{}", parse_error_location(.0))]
     UnableToParse(yaml_serde::Error),
     /// More than [`MAX_SSV_BUILDER_ENTRIES`] enabled entries.
     #[error("{enabled} enabled builder entries exceed the SSV cap of {max} (SIP-94)")]
@@ -128,21 +129,31 @@ pub enum Error {
     },
 }
 
+/// The parser's position, if known. Line and column are structural metadata that never
+/// echo input values, unlike the parser message itself.
+fn parse_error_location(error: &yaml_serde::Error) -> String {
+    error
+        .location()
+        .map(|location| format!(" at line {} column {}", location.line(), location.column()))
+        .unwrap_or_default()
+}
+
 /// Never format upstream payloads: even filesystem and parser errors may contain secrets.
-fn store_error_reason(error: &builder_store::Error) -> &'static str {
+/// Only structural metadata (error kind, parser position) is added to the category.
+fn store_error_reason(error: &builder_store::Error) -> String {
     use builder_store::Error::*;
     match error {
-        UnableToOpenFile(_) => "unable to open file",
-        UnableToParseFile(_) => "unable to parse YAML",
-        UnableToEncodeFile(_) => "unable to encode YAML",
-        UnableToWriteFile(_) => "unable to write file",
-        UnableToCreateValidatorDir(_) => "unable to create directory",
-        DuplicateBuilderAuth(_) => "duplicate builder authentication",
-        InvalidBuilderUrl(_) => "invalid builder URL",
-        UnsupportedUrlScheme(_) => "unsupported builder URL scheme",
-        TooManyEnabledBuilders { .. } => "too many enabled builders",
-        TooManyBuilderPubkeys(_) => "too many builder public keys",
-        EmptyAuthData(_) => "empty authentication data",
+        UnableToOpenFile(error) => format!("unable to open file ({:?})", error.kind()),
+        UnableToParseFile(error) => format!("unable to parse YAML{}", parse_error_location(error)),
+        UnableToEncodeFile(_) => "unable to encode YAML".into(),
+        UnableToWriteFile(_) => "unable to write file".into(),
+        UnableToCreateValidatorDir(_) => "unable to create directory".into(),
+        DuplicateBuilderAuth(_) => "duplicate builder authentication".into(),
+        InvalidBuilderUrl(_) => "invalid builder URL".into(),
+        UnsupportedUrlScheme(_) => "unsupported builder URL scheme".into(),
+        TooManyEnabledBuilders { .. } => "too many enabled builders".into(),
+        TooManyBuilderPubkeys(_) => "too many builder public keys".into(),
+        EmptyAuthData(_) => "empty authentication data".into(),
     }
 }
 
@@ -602,8 +613,8 @@ mod tests {
         // Act
         let rendered = error.to_string();
 
-        // Assert
-        assert!(rendered.contains("unable to open"));
+        // Assert: the kind is structural and safe; the OS message is not rendered.
+        assert!(rendered.contains("unable to open file (PermissionDenied)"));
         assert!(!rendered.contains("do-not-log-auth-data"));
     }
 
@@ -626,8 +637,11 @@ mod tests {
         // Act: this is the same wrapper used by the startup second-read path.
         let rendered = Error::UnableToParse(parse_error).to_string();
 
-        // Assert
-        assert!(rendered.contains("unable to parse"));
+        // Assert: the position survives, the scalar does not.
+        assert!(
+            rendered.contains("unable to parse the definitions file at line 1 column"),
+            "startup Display should carry the parser position: {rendered}"
+        );
         assert!(
             !rendered.contains(sensitive_marker),
             "startup Display must redact parser input values: {rendered}"

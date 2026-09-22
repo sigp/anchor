@@ -192,8 +192,7 @@ enforce on gossip, silently dropping builders in a per-peer, nondeterministic wa
 A zero-length `auth_data` (`"0x"` or an empty string) is also refused at startup, for disabled
 entries too; omit the field instead to use the URL default. An entry listing more than **64**
 `builder_pubkeys` (a beacon-API bound) is likewise refused, disabled entries included: the file
-would otherwise load, and the builder would then be omitted during block production. Do not rely
-on Lighthouse's builder-store omission logs being visible through Anchor's logging filter.
+would otherwise load, and the builder would then be omitted during block production.
 
 Disabled global entries do not need a valid hostname when `auth_data` is omitted, because no
 authentication is signed for them. Enabling such an entry still requires a valid HTTP(S) URL.
