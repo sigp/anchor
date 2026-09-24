@@ -760,14 +760,15 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 /// - `OperatorState::get_duty_count`, which derives per-epoch duty counts from ring occupancy
 ///   (SIP-94 §7 retention). Exactness needs MORE than the acceptance window: a count query for the
 ///   epoch of the oldest acceptable slot probes back to that epoch's FIRST slot, so the ring must
-///   cover `earliness + lateness + slots_per_epoch`, plus one slot padding the sub-slot lateness
-///   margins (`LATE_MESSAGE_MARGIN` + `CLOCK_ERROR_TOLERANCE`).
+///   cover `earliness + lateness + slots_per_epoch`, plus one slot padding the sub-slot timing
+///   margins (early-arrival margin, `LATE_MESSAGE_MARGIN`, and clock tolerance at both ends).
 ///
 /// The default arm covers the widest default-role window (lateness `slots_per_epoch +
 /// LATE_SLOT_ALLOWANCE`, no earliness). `ProposerPreferences` spans the proposer lookahead into
 /// the future (its envelope slot is a future `proposal_slot`) with a 2-slot lateness; its
 /// epoch-aligned lead is at most 63 slots with mainnet parameters (SIP-94 §7). Its
 /// lookahead-sized ring exceeds its bound (`63 + 2 + 32 + 1 = 98 <= 128`) with headroom.
+/// The combined timing margins fit within the one-slot padding at mainnet's 12-second slots.
 ///
 /// The match is exhaustive so adding a role forces an explicit sizing decision here; a silent
 /// default would under-size a wide-window role and quietly disable its duty limit.
@@ -1075,6 +1076,9 @@ pub(crate) fn validate_role_for_fork(
 
 /// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
 const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
+/// Extra early-arrival margin at the SIP-94 §7 proposer-preferences epoch boundary,
+/// allowing partials sent near that boundary to arrive despite clock skew.
+const PROPOSER_PREFERENCES_EARLY_MESSAGE_MARGIN: Duration = Duration::from_secs(1);
 /// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
 ///
 /// This margin is added to the deadline calculation after converting slot-based TTL to time.
@@ -1093,7 +1097,12 @@ pub(crate) fn validate_slot_time(
 ) -> Result<(), ValidationFailure> {
     // Check if the message is too early
     let earliness = message_earliness(msg_slot, validation_context)?;
-    if earliness > CLOCK_ERROR_TOLERANCE {
+    let early_message_margin = if validation_context.role == Role::ProposerPreferences {
+        PROPOSER_PREFERENCES_EARLY_MESSAGE_MARGIN
+    } else {
+        Duration::ZERO
+    };
+    if earliness > CLOCK_ERROR_TOLERANCE + early_message_margin {
         return Err(ValidationFailure::EarlySlotMessage {
             got: format!("early by {earliness:?}"),
         });

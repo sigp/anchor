@@ -41,6 +41,7 @@ pub(crate) fn validate_partial_signature_message(
 
     // SIP-94 §7: allow in-flight pre-fork registrations through the Gloas epoch, then
     // ignore them. The slot-based fork gate and structural rejections take precedence.
+    // Retirement deliberately uses the current slot clock rather than `received_at`.
     if validation_context.role == Role::ValidatorRegistration
         && let Some(gloas_epoch) = validation_context.spec.gloas_fork_epoch
         && let Some(current_slot) = validation_context.slot_clock.now()
@@ -3139,8 +3140,9 @@ mod tests {
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
         let earliest_slot = proposal_epoch.saturating_sub(1) * SLOTS_PER_EPOCH_TEST;
-        let boundary =
-            proposer_preferences_slot_start(genesis, earliest_slot) - crate::CLOCK_ERROR_TOLERANCE;
+        let boundary = proposer_preferences_slot_start(genesis, earliest_slot)
+            - Duration::from_secs(1)
+            - crate::CLOCK_ERROR_TOLERANCE;
         let received_at = if before_boundary {
             boundary - Duration::from_nanos(1)
         } else {
@@ -3209,6 +3211,120 @@ mod tests {
     fn test_proposer_preferences_earliest_arrival_saturates_at_epoch_zero() {
         check_proposer_preferences_earliest_arrival(0, false);
         check_proposer_preferences_earliest_arrival(0, true);
+    }
+
+    #[test]
+    fn test_other_roles_keep_clock_error_tolerance() {
+        // Arrange: timing validation reads the explicit role, slot, clock, and receipt time.
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let slot = Slot::new(64);
+        let signed = create_signed_proposer_preferences_message(
+            OperatorId(1),
+            &private_key,
+            slot,
+            Hash256::repeat_byte(1),
+        );
+        let slot_start = proposer_preferences_slot_start(genesis, slot.as_u64());
+        for role in [
+            Role::Committee,
+            Role::Aggregator,
+            Role::Proposer,
+            Role::SyncCommittee,
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+            Role::AggregatorCommittee,
+            Role::PTCAttester,
+            Role::EnvelopeProposer,
+        ] {
+            for (earliness, accepted) in [
+                (Duration::from_millis(50), true),
+                (Duration::from_millis(50) + Duration::from_nanos(1), false),
+                (Duration::from_millis(1_050), false),
+            ] {
+                let mut context = create_proposer_preferences_context_at(
+                    &signed,
+                    &committee_info,
+                    &map,
+                    genesis,
+                    slot_start - earliness,
+                );
+                context.role = role;
+
+                // Act: exercise the shared timing check for every other role.
+                let result = validate_slot_time(slot, &context);
+
+                // Assert: the extra second is restricted to ProposerPreferences.
+                if accepted {
+                    assert!(result.is_ok(), "{role:?} at {earliness:?}: {result:?}");
+                } else {
+                    let failure = result.expect_err("other roles retain the 50ms boundary");
+                    assert!(
+                        matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
+                        "{role:?} at {earliness:?}: {failure:?}"
+                    );
+                    assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_proposer_preferences_early_margin_does_not_extend_lateness() {
+        // Arrange: both role-8 kinds retain the same proposal-slot deadline and clock tolerance.
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let proposal_slot = Slot::new(64);
+        let deadline = proposer_preferences_slot_start(
+            genesis,
+            proposal_slot.as_u64() + crate::LATE_SLOT_ALLOWANCE,
+        ) + crate::LATE_MESSAGE_MARGIN
+            + crate::CLOCK_ERROR_TOLERANCE;
+        for kind in [
+            PartialSignatureKind::ProposerPreferences,
+            PartialSignatureKind::RequestAuth,
+        ] {
+            let signed = create_signed_proposer_preferences_message_with_kind(
+                kind,
+                OperatorId(1),
+                &private_key,
+                proposal_slot,
+                Hash256::repeat_byte(1),
+            );
+            for (extra, accepted) in [(Duration::ZERO, true), (Duration::from_nanos(1), false)] {
+                let context = create_proposer_preferences_context_at(
+                    &signed,
+                    &committee_info,
+                    &map,
+                    genesis,
+                    deadline + extra,
+                );
+                let ring = crate::stored_slot_count(
+                    Role::ProposerPreferences,
+                    SLOTS_PER_EPOCH_TEST,
+                    &context.spec,
+                );
+
+                // Act: validate the complete partial-signature path at the lateness boundary.
+                let result = validate_partial_signature_message(
+                    context,
+                    &mut DutyState::new(ring),
+                    Arc::new(MockDutiesProvider::default()),
+                );
+
+                // Assert: one nanosecond beyond the existing deadline still produces Ignore.
+                if accepted {
+                    assert!(result.is_ok(), "{kind:?} at deadline: {result:?}");
+                } else {
+                    let failure = result.expect_err("earliness margin must not extend lateness");
+                    assert!(
+                        matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+                        "{kind:?} beyond deadline: {failure:?}"
+                    );
+                    assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+                }
+            }
+        }
     }
 
     #[test]
