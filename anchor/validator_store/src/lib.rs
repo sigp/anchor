@@ -206,6 +206,31 @@ enum RequestAuthCollectionBound {
     DeclinePastSlot,
 }
 
+/// Return an expected-wait error before and during the slot from which peers are expected to have
+/// emitted (SIP-94 §5): slot `slots_per_epoch / 2 - 1` of the epoch preceding the proposal.
+/// Allow that slot for peers to prepare and deliver their shares; normal failure reporting resumes
+/// in the following slot.
+/// Genesis-epoch proposals have no preceding epoch, and an unavailable clock fails open to
+/// normal failure reporting. Return the emission slot with the decision so the error names the
+/// same emission window used for suppression.
+fn pending_peer_emission(
+    now: Option<Slot>,
+    proposal_slot: Slot,
+    slots_per_epoch: u64,
+) -> Option<SpecificError> {
+    let proposal_epoch = proposal_slot.epoch(slots_per_epoch);
+    if proposal_epoch == Epoch::new(0) {
+        return None;
+    }
+    let peers_expected_from_slot =
+        (proposal_epoch - 1).start_slot(slots_per_epoch) + (slots_per_epoch / 2 - 1);
+    now.is_some_and(|now| now <= peers_expected_from_slot)
+        .then_some(SpecificError::CollectionPendingPeerEmission {
+            proposal_slot,
+            peers_expected_from_slot,
+        })
+}
+
 /// A request to collect a committee signature for a single validator.
 ///
 /// The shared fields (`validator`, `signing_root`) drive `collect_prepared_signatures`,
@@ -1537,14 +1562,26 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         }
     }
 
-    /// Classify and report a ProposerPreferences signature-collection failure.
+    /// Report a ProposerPreferences collection failure, or return its expected-wait status.
     fn report_proposer_preferences_collection_failure(
         &self,
-        error: &Error,
+        error: Error,
         preferences: &ProposerPreferences,
         signing_root: Hash256,
-    ) {
-        match instrumentation::classify_collection_failure(error) {
+    ) -> Error {
+        if matches!(
+            error,
+            Error::SpecificError(SpecificError::SignatureCollectionFailed(
+                CollectionError::CollectionTimeout
+            ))
+        ) && let Some(pending) = pending_peer_emission(
+            self.slot_clock.now(),
+            preferences.proposal_slot,
+            E::slots_per_epoch(),
+        ) {
+            return pending.into();
+        }
+        match instrumentation::classify_collection_failure(&error) {
             CollectionFailureClass::NoSignature => {
                 warn!(
                     validator_index = preferences.validator_index,
@@ -1584,6 +1621,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 );
             }
         }
+        error
     }
 
     /// Slot-aware bound for a request-auth signature collection.
@@ -1614,18 +1652,30 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         })
     }
 
-    /// Classify and report a RequestAuth signature-collection failure.
+    /// Report a RequestAuth collection failure, or return its expected-wait status.
     ///
     /// `request_auth.data` is opaque builder authentication material agreed out of band; it is
     /// logged only by length, never raw.
     fn report_request_auth_collection_failure(
         &self,
-        error: &Error,
+        error: Error,
         validator_pubkey: &PublicKeyBytes,
         request_auth: &RequestAuth,
         signing_root: Hash256,
-    ) {
-        match instrumentation::classify_collection_failure(error) {
+    ) -> Error {
+        if matches!(
+            error,
+            Error::SpecificError(SpecificError::SignatureCollectionFailed(
+                CollectionError::CollectionTimeout
+            ))
+        ) && let Some(pending) = pending_peer_emission(
+            self.slot_clock.now(),
+            request_auth.slot,
+            E::slots_per_epoch(),
+        ) {
+            return pending.into();
+        }
+        match instrumentation::classify_collection_failure(&error) {
             CollectionFailureClass::NoSignature => {
                 warn!(
                     ?validator_pubkey,
@@ -1663,6 +1713,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 );
             }
         }
+        error
     }
 
     fn create_proposer_consensus_data_validator(
@@ -3071,6 +3122,13 @@ pub enum SyncSelectionProofAssignmentError {
 pub enum SpecificError {
     Unsupported,
     SignatureCollectionFailed(CollectionError),
+    /// Collection timed out before or during the slot from which peers are expected to have
+    /// emitted (SIP-94 §5), allowing shares time to arrive. The caller can retry without treating
+    /// this wait as a reconstruction failure.
+    CollectionPendingPeerEmission {
+        proposal_slot: Slot,
+        peers_expected_from_slot: Slot,
+    },
     ArithError(ArithError),
     QbftError(QbftError),
     Timeout,
@@ -4460,12 +4518,11 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let signature = match collected {
             Ok(signature) => signature,
             Err(err) => {
-                self.report_proposer_preferences_collection_failure(
-                    &err,
+                return Err(self.report_proposer_preferences_collection_failure(
+                    err,
                     &preferences,
                     signing_root,
-                );
-                return Err(err);
+                ));
             }
         };
 
@@ -4531,13 +4588,12 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         let signature = match collected {
             Ok(signature) => signature,
             Err(err) => {
-                self.report_request_auth_collection_failure(
-                    &err,
+                return Err(self.report_request_auth_collection_failure(
+                    err,
                     &validator_pubkey,
                     &request_auth_v1,
                     signing_root,
-                );
-                return Err(err);
+                ));
             }
         };
 
