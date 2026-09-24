@@ -1,4 +1,4 @@
-//! Regression coverage for issue #1292 at the first Gloas slot.
+//! Regression coverage for issues #1292 and #1114 at the first Gloas slot.
 //!
 //! These tests exercise Anchor's actual consensus callers and Phase 3 scheduler. The scheduler
 //! test supplies assignments directly, so it does not cover beacon API fetching or duty discovery.
@@ -16,11 +16,14 @@ use ssv_types::{
 };
 use ssz_types::VariableList;
 use tokio::time::Instant;
-use types::{Attestation, Checkpoint, Epoch, EthSpec, Hash256, MainnetEthSpec, Slot};
+use types::{Attestation, Checkpoint, Epoch, EthSpec, Hash256, MainnetEthSpec, Slot, SyncSubnetId};
 use validator_store::ValidatorStore;
 
 use super::common::*;
-use crate::{AggregationAssignments, metadata_service::run_aggregation_publisher};
+use crate::{
+    AggregationAssignments, Error, SpecificError, VotingAssignments,
+    metadata_service::run_aggregation_publisher,
+};
 
 const OUR_OPERATOR_ID: OperatorId = OperatorId(1);
 const COMMITTEE_INDEX: usize = 0;
@@ -50,6 +53,119 @@ fn timing_harness(active_fork: Fork) -> ValidatorStoreTestHarness {
             ..Default::default()
         },
     )
+}
+
+fn selection_proof_harness(active_fork: Fork, slot: Slot) -> ValidatorStoreTestHarness {
+    let harness = timing_harness(active_fork);
+    harness.slot_clock.set_slot(slot.as_u64());
+    let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+    let validator_index = validator
+        .index
+        .expect("test validator should have an index");
+    harness
+        .validator_store
+        .update_voting_assignments(VotingAssignments {
+            slot,
+            attesting_validators: vec![validator_index],
+            attesting_committees: HashMap::from([(validator.public_key, COMMITTEE_INDEX as u64)]),
+            sync_validators_by_subnet: HashMap::from([(
+                validator_index,
+                HashMap::from([(SyncSubnetId::new(SYNC_SUBCOMMITTEE), 1)]),
+            )]),
+        });
+    harness
+}
+
+/// Both collection paths expire at the duty slot's deadline, even when called after slot start.
+#[tokio::test(start_paused = true)]
+async fn selection_proofs_expire_at_the_gloas_boundary_deadlines() {
+    for active_fork in [Fork::Alan, Fork::Boole] {
+        for (slot, expected_offset) in boundary_slots() {
+            // Arrange: assignments are ready, but neither proof can reach quorum.
+            let harness = selection_proof_harness(active_fork, slot);
+            harness.hang_signature_collection();
+            let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+            let call_offset = Duration::from_secs(1);
+            advance_in_lockstep(&harness.slot_clock, call_offset).await;
+            let attestation = harness
+                .validator_store
+                .produce_selection_proof(validator.public_key, slot);
+            let sync = harness.validator_store.produce_sync_selection_proof(
+                &validator.public_key,
+                slot,
+                SyncSubnetId::new(SYNC_SUBCOMMITTEE),
+            );
+            tokio::pin!(attestation, sync);
+            assert!(attestation.as_mut().now_or_never().is_none());
+            assert!(sync.as_mut().now_or_never().is_none());
+            assert_eq!(harness.captured_calls.lock().len(), 2);
+
+            // Act: move to just before the due point, then cross it.
+            advance_in_lockstep(
+                &harness.slot_clock,
+                expected_offset - call_offset - BEFORE_DEADLINE,
+            )
+            .await;
+            assert!(
+                attestation.as_mut().now_or_never().is_none(),
+                "attestation proof expired early"
+            );
+            assert!(
+                sync.as_mut().now_or_never().is_none(),
+                "sync proof expired early"
+            );
+            advance_in_lockstep(&harness.slot_clock, BEFORE_DEADLINE).await;
+
+            // Assert: the real signing callbacks return timeout at 8s before Gloas and 6s after.
+            let attestation = attestation.now_or_never().unwrap_or_else(|| {
+                panic!("attestation proof did not expire for {active_fork:?} at slot {slot}")
+            });
+            let sync = sync.now_or_never().unwrap_or_else(|| {
+                panic!("sync proof did not expire for {active_fork:?} at slot {slot}")
+            });
+            assert!(matches!(
+                attestation,
+                Err(Error::SpecificError(SpecificError::Timeout))
+            ));
+            assert!(matches!(
+                sync,
+                Err(Error::SpecificError(SpecificError::Timeout))
+            ));
+        }
+    }
+}
+
+/// Proofs that reach quorum before the deadline remain usable by the caller.
+#[tokio::test(start_paused = true)]
+async fn selection_proofs_complete_before_the_gloas_boundary_deadlines() {
+    for active_fork in [Fork::Alan, Fork::Boole] {
+        for (slot, expected_offset) in boundary_slots() {
+            // Arrange: both proofs can reach quorum just before the duty deadline.
+            let harness = selection_proof_harness(active_fork, slot);
+            let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
+            advance_in_lockstep(&harness.slot_clock, expected_offset - BEFORE_DEADLINE).await;
+
+            // Act: invoke both actual signing callbacks.
+            let (attestation, sync) = tokio::join!(
+                harness
+                    .validator_store
+                    .produce_selection_proof(validator.public_key, slot),
+                harness.validator_store.produce_sync_selection_proof(
+                    &validator.public_key,
+                    slot,
+                    SyncSubnetId::new(SYNC_SUBCOMMITTEE),
+                ),
+            );
+
+            // Assert: neither callback discards a proof that completes on time.
+            assert!(
+                attestation.is_ok(),
+                "attestation proof should complete: {attestation:?}"
+            );
+            assert!(sync.is_ok(), "sync proof should complete: {sync:?}");
+            assert_eq!(harness.captured_calls.lock().len(), 2);
+        }
+    }
 }
 
 /// Legacy aggregate callbacks must use the duty slot's fork for their cumulative round origin.

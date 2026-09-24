@@ -1136,10 +1136,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             ))
     }
 
-    /// The payload-due deadline for `slot` (50% of the slot, SIP-94 §6). Past it the envelope
+    /// The configured payload-due deadline for `slot` (SIP-94 §6). At or after it the envelope
     /// cannot satisfy the slot, so neither dissemination nor collection may start or continue.
     fn envelope_deadline(&self, slot: Slot) -> Result<Instant, Error> {
-        let deadline = self.get_instant_in_slot(slot, self.spec.get_slot_duration() / 2)?;
+        let deadline = self.get_instant_in_slot(slot, self.spec.get_payload_due())?;
         if Instant::now() >= deadline {
             return Err(Error::SpecificError(
                 SpecificError::EnvelopeDeadlinePassed { slot },
@@ -3783,9 +3783,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             let signing_root = slot.signing_root(domain_hash);
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            // Stop at two thirds of the slot. If the selection proof is not ready by then, we
-            // will not produce an aggregation anyway.
-            let delay = self.spec.get_slot_duration() * 2 / 3;
+            // Stop collecting partial signatures at this slot's aggregate-attestation deadline.
+            let delay = self.spec.get_aggregate_attestation_due::<E>(slot);
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
                 let committee_id = cluster.committee_id();
@@ -3893,9 +3892,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             .signing_root(domain_hash);
             let (validator, cluster) = self.get_validator_and_cluster(*validator_pubkey)?;
 
-            // Stop at two thirds of the slot. If the selection proof is not ready by then, we
-            // will not produce an aggregation anyway.
-            let delay = self.spec.get_slot_duration() * 2 / 3;
+            // Stop collecting partial signatures at this slot's sync-contribution deadline.
+            let delay = self.spec.get_contribution_message_due::<E>(slot);
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
                 // Under Boole, sync selection proofs use the same committee path as attestation
