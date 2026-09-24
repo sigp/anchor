@@ -39,6 +39,17 @@ pub(crate) fn validate_partial_signature_message(
     // Validate basic semantics
     let signer = validate_partial_signature_message_semantics(&validation_context, &messages)?;
 
+    // SIP-94 §7: allow in-flight pre-fork registrations through the Gloas epoch, then
+    // ignore them. The slot-based fork gate and structural rejections take precedence.
+    // Retirement deliberately uses the current slot clock rather than `received_at`.
+    if validation_context.role == Role::ValidatorRegistration
+        && let Some(gloas_epoch) = validation_context.spec.gloas_fork_epoch
+        && let Some(current_slot) = validation_context.slot_clock.now()
+        && current_slot.epoch(validation_context.slots_per_epoch) > gloas_epoch
+    {
+        return Err(ValidationFailure::ValidatorRegistrationRetired);
+    }
+
     // Validate duty-specific logic
     validate_partial_sig_messages_by_duty_logic(
         &validation_context,
@@ -1384,6 +1395,16 @@ mod tests {
         signer_id: OperatorId,
         private_key: &Rsa<Private>,
     ) -> SignedSSVMessage {
+        create_signed_partial_sig_message_at(role, kind, signer_id, private_key, Slot::new(1))
+    }
+
+    fn create_signed_partial_sig_message_at(
+        role: Role,
+        kind: PartialSignatureKind,
+        signer_id: OperatorId,
+        private_key: &Rsa<Private>,
+        slot: Slot,
+    ) -> SignedSSVMessage {
         let (mut partial_sig_messages, _) = create_test_partial_signature(
             role,
             kind,
@@ -1391,7 +1412,7 @@ mod tests {
             PartialSigTestOptions::default(),
             Some(private_key.clone()),
         );
-        partial_sig_messages.slot = Slot::new(1);
+        partial_sig_messages.slot = slot;
 
         let msg_id = create_message_id_for_test(role);
         let ssv_msg = SSVMessage::new(
@@ -2020,6 +2041,174 @@ mod tests {
         assert!(result.is_ok(), "Expected ok but got: {result:?}");
     }
 
+    /// SIP-94 §7: registration retirement uses the local epoch, while slot validity and
+    /// partial-signature semantics retain their existing rejection precedence.
+    fn validate_registration_at_epoch(
+        message_slot: u64,
+        received_slot: u64,
+        current_slot: Option<u64>,
+        gloas_epoch: Option<u64>,
+        kind: PartialSignatureKind,
+    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let signed = create_signed_partial_sig_message_at(
+            Role::ValidatorRegistration,
+            kind,
+            OperatorId(1),
+            &private_key,
+            Slot::new(message_slot),
+        );
+        let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let received_at = proposer_preferences_slot_start(genesis, received_slot);
+        let mut context = create_proposer_preferences_context_at(
+            &signed,
+            &committee_info,
+            &map,
+            genesis,
+            received_at,
+        );
+        context.role = Role::ValidatorRegistration;
+        context.spec = spec_with_gloas(gloas_epoch);
+        context.fork_schedule = generate_fork_schedule(Fork::Alan);
+        if let Some(slot) = current_slot {
+            context.slot_clock.set_slot(slot);
+        } else {
+            context.slot_clock.set_current_time(Duration::ZERO);
+            assert!(context.slot_clock.now().is_none());
+        }
+        validate_partial_signature_message(
+            context,
+            &mut DutyState::new(128),
+            Arc::new(MockDutiesProvider::default()),
+        )
+    }
+
+    #[test]
+    fn test_validator_registration_pre_fork_slot_accepted_during_gloas_epoch() {
+        // Arrange: the last pre-fork slot is still within the registration TTL.
+        for received_slot in [64, 95] {
+            // Act: receive at the first and last slots of the Gloas epoch.
+            let result = validate_registration_at_epoch(
+                63,
+                received_slot,
+                Some(received_slot),
+                Some(2),
+                PartialSignatureKind::ValidatorRegistration,
+            );
+            // Assert: the slot-based gate permits these pre-fork registrations.
+            assert!(result.is_ok(), "receipt slot {received_slot}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_validator_registration_pre_fork_slot_ignored_after_gloas_epoch() {
+        // Arrange: slot 63 remains within its TTL at receipt slot 96.
+        // Act: local time has reached the first epoch after Gloas.
+        let result = validate_registration_at_epoch(
+            63,
+            96,
+            Some(96),
+            Some(2),
+            PartialSignatureKind::ValidatorRegistration,
+        );
+        // Assert: retirement is an Ignore verdict even for an otherwise valid packet.
+        let failure = result.expect_err("registration is retired after the Gloas epoch");
+        assert!(matches!(
+            failure,
+            ValidationFailure::ValidatorRegistrationRetired
+        ));
+        assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+    }
+
+    #[test]
+    fn test_validator_registration_retirement_uses_slot_clock_epoch() {
+        // Arrange: receipt timestamp is still in epoch 2, but local time is epoch 3.
+        // Act: the local slot clock alone determines retirement.
+        let result = validate_registration_at_epoch(
+            63,
+            95,
+            Some(96),
+            Some(2),
+            PartialSignatureKind::ValidatorRegistration,
+        );
+        // Assert: an older receipt timestamp cannot keep registration active.
+        let failure = result.expect_err("local epoch should retire registration");
+        assert!(matches!(
+            failure,
+            ValidationFailure::ValidatorRegistrationRetired
+        ));
+        assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+    }
+
+    #[test]
+    fn test_validator_registration_retirement_unscheduled_fork_noop() {
+        // Arrange and act: no Gloas epoch is scheduled, with the same receipt as retirement.
+        let result = validate_registration_at_epoch(
+            63,
+            96,
+            Some(96),
+            None,
+            PartialSignatureKind::ValidatorRegistration,
+        );
+        // Assert: registration retains its existing TTL behavior.
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn test_validator_registration_retirement_unavailable_clock_noop() {
+        // Arrange and act: the clock cannot determine the current slot.
+        let result = validate_registration_at_epoch(
+            63,
+            96,
+            None,
+            Some(2),
+            PartialSignatureKind::ValidatorRegistration,
+        );
+        // Assert: an unavailable local clock does not retire registration.
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn test_validator_registration_gloas_slot_reject_precedes_retirement() {
+        // Arrange and act: both the message slot and local epoch are after Gloas.
+        let result = validate_registration_at_epoch(
+            64,
+            96,
+            Some(96),
+            Some(2),
+            PartialSignatureKind::ValidatorRegistration,
+        );
+        // Assert: the existing slot-based rejection wins over the new Ignore gate.
+        let failure = result.expect_err("Gloas-slot registration must be rejected");
+        assert!(matches!(
+            failure,
+            ValidationFailure::RoleNotActiveAfterEthFork {
+                role: Role::ValidatorRegistration,
+                ..
+            }
+        ));
+        assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Reject);
+    }
+
+    #[test]
+    fn test_validator_registration_kind_mismatch_reject_precedes_retirement() {
+        // Arrange and act: registration role carries an unrelated kind after retirement.
+        let result = validate_registration_at_epoch(
+            63,
+            96,
+            Some(96),
+            Some(2),
+            PartialSignatureKind::VoluntaryExit,
+        );
+        // Assert: retirement must not change the classification of this malformed packet.
+        let failure = result.expect_err("kind mismatch must be rejected");
+        assert!(matches!(
+            failure,
+            ValidationFailure::PartialSignatureTypeRoleMismatch
+        ));
+        assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Reject);
+    }
+
     #[test]
     fn test_ptc_attester_within_ttl_accepted() {
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
@@ -2371,9 +2560,8 @@ mod tests {
     // It mirrors PTCAttester's fork gate (post-Gloas only) and per-packet cap (1),
     // but its envelope slot is the duty's (possibly future) `proposal_slot`, not the
     // current send slot. That single semantic change drives six role-scoped rules:
-    //   1. earliness: a future `proposal_slot` up to `(1 + spec.min_seed_lookahead) *
-    //      slots_per_epoch` ahead is accepted (`early_slot_allowance`), while every other role
-    //      keeps the strict no-future rule;
+    //   1. earliness: SIP-94 §7 permits arrival from the start of the proposal epoch minus
+    //      `min_seed_lookahead`, with clock tolerance; every other role keeps its slot boundary;
     //   2. lateness: a TIGHT TTL of `LATE_SLOT_ALLOWANCE` slots past `proposal_slot`;
     //   3. no monotonic slot-advance (a lower `proposal_slot` is a concurrent duty, not a stale
     //      one);
@@ -2562,9 +2750,9 @@ mod tests {
     /// Builds a ProposerPreferences validation context whose wall clock currently reads
     /// `current_slot`, with `received_at` pinned to the start of that slot. When the packet's
     /// envelope `proposal_slot` equals `current_slot` the message is exactly on time; when
-    /// `proposal_slot > current_slot` it is early by `(proposal_slot - current_slot)` slots,
-    /// which the earliness tests use to probe `early_slot_allowance`. The Ethereum Gloas fork
-    /// is active from epoch 0.
+    /// `proposal_slot > current_slot` it is early by `(proposal_slot - current_slot)` slots.
+    /// Genesis remains slot 0 so the SIP-94 §7 epoch boundary can be resolved. The Ethereum Gloas
+    /// fork is active from epoch 0.
     fn create_proposer_preferences_context<'a>(
         signed_msg: &'a SignedSSVMessage,
         committee_info: &'a crate::CommitteeInfo,
@@ -2572,26 +2760,16 @@ mod tests {
         current_slot: Slot,
     ) -> ValidationContext<'a, ManualSlotClock> {
         let now = SystemTime::now();
-        let slot_clock = ManualSlotClock::new(
-            current_slot,
-            now.duration_since(UNIX_EPOCH).unwrap(),
-            Duration::from_secs(12),
-        );
-
-        ValidationContext {
-            signed_ssv_message: signed_msg,
+        let genesis = now - Duration::from_secs(current_slot.as_u64() * 12);
+        let context = create_proposer_preferences_context_at(
+            signed_msg,
             committee_info,
-            role: Role::ProposerPreferences,
-            received_at: now,
-            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
-            epochs_per_sync_committee_period: 256,
-            sync_committee_size: 512,
-            slot_clock,
             operator_pub_keys,
-            fork_schedule: generate_fork_schedule(Fork::Boole),
-            // ProposerPreferences only exists post-Gloas; activate from epoch 0.
-            spec: spec_with_gloas(Some(0)),
-        }
+            genesis,
+            now,
+        );
+        context.slot_clock.set_slot(current_slot.as_u64());
+        context
     }
 
     /// Slot duration used by the ProposerPreferences timing helpers/tests.
@@ -2956,98 +3134,204 @@ mod tests {
         );
     }
 
-    // Earliness allowance is `(1 + spec.min_seed_lookahead) * slots_per_epoch` slots. The test
-    // spec is mainnet, where `min_seed_lookahead = 1`, so the allowance is `2 * slots_per_epoch`
-    // (= 64 with SLOTS_PER_EPOCH_TEST = 32). A ProposerPreferences `proposal_slot` this far in
-    // the future is accepted; one slot further out is `EarlySlotMessage`.
-    const PROPOSER_PREFERENCES_EARLINESS_ALLOWANCE_SLOTS: u64 = 2 * SLOTS_PER_EPOCH_TEST;
+    /// SIP-94 §7: both role-8 kinds share the proposal epoch's earliest arrival boundary.
+    fn check_proposer_preferences_earliest_arrival(proposal_epoch: u64, before_boundary: bool) {
+        // Arrange: test the first and last proposal slots in the same epoch.
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let earliest_slot = proposal_epoch.saturating_sub(1) * SLOTS_PER_EPOCH_TEST;
+        let boundary = proposer_preferences_slot_start(genesis, earliest_slot)
+            - Duration::from_secs(1)
+            - crate::CLOCK_ERROR_TOLERANCE;
+        let received_at = if before_boundary {
+            boundary - Duration::from_nanos(1)
+        } else {
+            boundary
+        };
+        for offset in [0, SLOTS_PER_EPOCH_TEST - 1] {
+            for kind in [
+                PartialSignatureKind::ProposerPreferences,
+                PartialSignatureKind::RequestAuth,
+            ] {
+                let proposal_slot = Slot::new(proposal_epoch * SLOTS_PER_EPOCH_TEST + offset);
+                let signed = create_signed_proposer_preferences_message_with_kind(
+                    kind,
+                    OperatorId(1),
+                    &private_key,
+                    proposal_slot,
+                    Hash256::repeat_byte(1),
+                );
+                let context = create_proposer_preferences_context_at(
+                    &signed,
+                    &committee_info,
+                    &map,
+                    genesis,
+                    received_at,
+                );
+                assert_eq!(context.spec.min_seed_lookahead.as_u64(), 1);
+                let ring = crate::stored_slot_count(
+                    Role::ProposerPreferences,
+                    SLOTS_PER_EPOCH_TEST,
+                    &context.spec,
+                );
+
+                // Act: validate through the complete partial-signature path.
+                let result = validate_partial_signature_message(
+                    context,
+                    &mut DutyState::new(ring),
+                    Arc::new(MockDutiesProvider::default()),
+                );
+
+                // Assert: the tolerance boundary is inclusive and one nanosecond earlier is Ignore.
+                if before_boundary {
+                    let failure = result.expect_err("before the epoch-aligned boundary is early");
+                    assert!(
+                        matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
+                        "{kind:?} at {proposal_slot}: {failure:?}"
+                    );
+                    assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+                } else {
+                    assert!(result.is_ok(), "{kind:?} at {proposal_slot}: {result:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_proposer_preferences_future_proposal_slot_within_allowance_accepted() {
-        // The envelope slot IS the duty's `proposal_slot`. A future `proposal_slot` up to the
-        // proposer lookahead (`(1 + min_seed_lookahead) * slots_per_epoch` slots) ahead of the
-        // current slot must be accepted, because a proposer commits preferences for its whole
-        // lookahead of future proposal slots at once.
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
-
-        let current_slot = Slot::new(1);
-        // Envelope `proposal_slot` exactly at the far edge of the allowance.
-        let proposal_slot =
-            current_slot + Slot::new(PROPOSER_PREFERENCES_EARLINESS_ALLOWANCE_SLOTS);
-        let signed_msg = create_signed_proposer_preferences_message(
-            OperatorId(1),
-            &private_key,
-            proposal_slot,
-            Hash256::from([1u8; 32]),
-        );
-
-        // Ring must span the lookahead so the future-slot write does not collide; size it
-        // like production's ProposerPreferences ring.
-        let ring = ((1 + 1) * SLOTS_PER_EPOCH_TEST + 2 * SLOTS_PER_EPOCH_TEST) as usize;
-        let validation_context =
-            create_proposer_preferences_context(&signed_msg, &committee_info, &map, current_slot);
-
-        // Act
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut DutyState::new(ring),
-            Arc::new(MockDutiesProvider::default()),
-        );
-
-        // Assert: accepted; specifically NOT rejected as early.
-        assert!(
-            result.is_ok(),
-            "Expected future proposal_slot within the earliness allowance to be accepted, got: {result:?}"
-        );
+        check_proposer_preferences_earliest_arrival(2, false);
     }
 
     #[test]
     fn test_proposer_preferences_future_proposal_slot_beyond_allowance_early() {
-        // One slot past the earliness allowance must be rejected as `EarlySlotMessage`.
-        // This is the boundary partner of the accepted case above.
-        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
-        let (private_key, public_key) = generate_test_key_pair();
-        let map =
-            create_operator_pub_keys(committee_info.committee_members.clone(), vec![public_key]);
+        check_proposer_preferences_earliest_arrival(2, true);
+    }
 
-        let current_slot = Slot::new(1);
-        let proposal_slot =
-            current_slot + Slot::new(PROPOSER_PREFERENCES_EARLINESS_ALLOWANCE_SLOTS + 1);
-        let signed_msg = create_signed_proposer_preferences_message(
+    #[test]
+    fn test_proposer_preferences_earliest_arrival_saturates_at_epoch_zero() {
+        check_proposer_preferences_earliest_arrival(0, false);
+        check_proposer_preferences_earliest_arrival(0, true);
+    }
+
+    #[test]
+    fn test_other_roles_keep_clock_error_tolerance() {
+        // Arrange: timing validation reads the explicit role, slot, clock, and receipt time.
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let slot = Slot::new(64);
+        let signed = create_signed_proposer_preferences_message(
             OperatorId(1),
             &private_key,
-            proposal_slot,
-            Hash256::from([1u8; 32]),
+            slot,
+            Hash256::repeat_byte(1),
         );
+        let slot_start = proposer_preferences_slot_start(genesis, slot.as_u64());
+        for role in [
+            Role::Committee,
+            Role::Aggregator,
+            Role::Proposer,
+            Role::SyncCommittee,
+            Role::ValidatorRegistration,
+            Role::VoluntaryExit,
+            Role::AggregatorCommittee,
+            Role::PTCAttester,
+            Role::EnvelopeProposer,
+        ] {
+            for (earliness, accepted) in [
+                (Duration::from_millis(50), true),
+                (Duration::from_millis(50) + Duration::from_nanos(1), false),
+                (Duration::from_millis(1_050), false),
+            ] {
+                let mut context = create_proposer_preferences_context_at(
+                    &signed,
+                    &committee_info,
+                    &map,
+                    genesis,
+                    slot_start - earliness,
+                );
+                context.role = role;
 
-        let ring = ((1 + 1) * SLOTS_PER_EPOCH_TEST + 2 * SLOTS_PER_EPOCH_TEST) as usize;
-        let validation_context =
-            create_proposer_preferences_context(&signed_msg, &committee_info, &map, current_slot);
+                // Act: exercise the shared timing check for every other role.
+                let result = validate_slot_time(slot, &context);
 
-        // Act
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut DutyState::new(ring),
-            Arc::new(MockDutiesProvider::default()),
-        );
+                // Assert: the extra second is restricted to ProposerPreferences.
+                if accepted {
+                    assert!(result.is_ok(), "{role:?} at {earliness:?}: {result:?}");
+                } else {
+                    let failure = result.expect_err("other roles retain the 50ms boundary");
+                    assert!(
+                        matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
+                        "{role:?} at {earliness:?}: {failure:?}"
+                    );
+                    assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+                }
+            }
+        }
+    }
 
-        // Assert
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
-            "EarlySlotMessage (ProposerPreferences one slot past the earliness allowance)",
-        );
+    #[test]
+    fn test_proposer_preferences_early_margin_does_not_extend_lateness() {
+        // Arrange: both role-8 kinds retain the same proposal-slot deadline and clock tolerance.
+        let (committee_info, private_key, map) = four_node_committee_and_keypair();
+        let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let proposal_slot = Slot::new(64);
+        let deadline = proposer_preferences_slot_start(
+            genesis,
+            proposal_slot.as_u64() + crate::LATE_SLOT_ALLOWANCE,
+        ) + crate::LATE_MESSAGE_MARGIN
+            + crate::CLOCK_ERROR_TOLERANCE;
+        for kind in [
+            PartialSignatureKind::ProposerPreferences,
+            PartialSignatureKind::RequestAuth,
+        ] {
+            let signed = create_signed_proposer_preferences_message_with_kind(
+                kind,
+                OperatorId(1),
+                &private_key,
+                proposal_slot,
+                Hash256::repeat_byte(1),
+            );
+            for (extra, accepted) in [(Duration::ZERO, true), (Duration::from_nanos(1), false)] {
+                let context = create_proposer_preferences_context_at(
+                    &signed,
+                    &committee_info,
+                    &map,
+                    genesis,
+                    deadline + extra,
+                );
+                let ring = crate::stored_slot_count(
+                    Role::ProposerPreferences,
+                    SLOTS_PER_EPOCH_TEST,
+                    &context.spec,
+                );
+
+                // Act: validate the complete partial-signature path at the lateness boundary.
+                let result = validate_partial_signature_message(
+                    context,
+                    &mut DutyState::new(ring),
+                    Arc::new(MockDutiesProvider::default()),
+                );
+
+                // Assert: one nanosecond beyond the existing deadline still produces Ignore.
+                if accepted {
+                    assert!(result.is_ok(), "{kind:?} at deadline: {result:?}");
+                } else {
+                    let failure = result.expect_err("earliness margin must not extend lateness");
+                    assert!(
+                        matches!(failure, ValidationFailure::LateSlotMessage { .. }),
+                        "{kind:?} beyond deadline: {failure:?}"
+                    );
+                    assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+                }
+            }
+        }
     }
 
     #[test]
     fn test_non_proposer_preferences_future_slot_still_early() {
         // Regression pin: the earliness allowance is STRICTLY role-scoped to
-        // ProposerPreferences (`early_slot_allowance` returns `Duration::ZERO` for every
-        // other role). A non-role-8 message (ValidatorRegistration) with a future envelope
-        // slot must still be rejected as early — even one slot ahead, which is well inside
+        // ProposerPreferences. A non-role-8 message (ValidatorRegistration) with a future envelope
+        // slot must still be rejected as early, even one slot ahead, which is well inside
         // the ProposerPreferences allowance but not available to any other role.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
@@ -5069,13 +5353,9 @@ mod tests {
 
     #[test]
     fn test_proposer_preferences_ring_avoids_lookahead_collision() {
-        // Mirrors go's TestProposerPreferencesRingAvoidsLookaheadCollision. The
-        // ProposerPreferences `DutyState` ring is sized to cover the proposer lookahead so a
-        // validly accepted future-slot write cannot evict a live slot's dedup state. Two
-        // accepted role-8 messages — one for the current slot S and one for S + 2*spe (the
-        // earliness bound) — must retain DISTINCT per-slot signer states. Concretely, after the
-        // S + 2*spe message, a NEW distinct-root at S is still accepted (its role-8 root set
-        // survived), rather than being reset by a ring-index collision.
+        // SIP-94 §7: an accepted future proposal must not evict a still-live earlier
+        // proposal's dedup state. At receipt slot 32, proposal slots 30 and 94 are valid
+        // and remain 64 slots apart, exercising the original short-ring collision.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
         let map =
@@ -5097,8 +5377,9 @@ mod tests {
             (2 * SLOTS_PER_EPOCH_TEST + crate::LATE_SLOT_ALLOWANCE + 1) as usize,
         );
 
-        let slot_s = Slot::new(1);
-        let far_slot = slot_s + Slot::new(2 * SLOTS_PER_EPOCH_TEST); // earliness bound
+        let wall_slot = Slot::new(SLOTS_PER_EPOCH_TEST);
+        let slot_s = wall_slot - Slot::new(crate::LATE_SLOT_ALLOWANCE);
+        let far_slot = slot_s + Slot::new(2 * SLOTS_PER_EPOCH_TEST);
         // Note: slot_s and far_slot differ by exactly 2*spe = 64. The ring length is 128, so
         // they map to DISTINCT indices only because the ring covers the whole lookahead; a
         // 2*spe-sized ring (64) would alias them and this test would fail.
@@ -5110,7 +5391,8 @@ mod tests {
             slot_s,
             Hash256::from([0xA1; 32]),
         );
-        let ctx_s1 = create_proposer_preferences_context(&signed_s1, &committee_info, &map, slot_s);
+        let ctx_s1 =
+            create_proposer_preferences_context(&signed_s1, &committee_info, &map, wall_slot);
         // Deliver the first `0xA1` root; its exact-duplicate resend below must classify as an
         // Ignore-class `RelayedDuplicateMessage` (recorded-root repeat, peer-agnostic).
         assert!(
@@ -5130,9 +5412,9 @@ mod tests {
             far_slot,
             Hash256::from([0xB1; 32]),
         );
-        // Current slot stays S; the far slot is a future proposal_slot inside the allowance.
+        // Receipt stays at epoch 1 start, the earliest arrival for the epoch-2 proposal.
         let ctx_far =
-            create_proposer_preferences_context(&signed_far, &committee_info, &map, slot_s);
+            create_proposer_preferences_context(&signed_far, &committee_info, &map, wall_slot);
         assert!(
             validate_partial_signature_message(
                 ctx_far,
@@ -5151,7 +5433,8 @@ mod tests {
             slot_s,
             Hash256::from([0xA2; 32]),
         );
-        let ctx_s2 = create_proposer_preferences_context(&signed_s2, &committee_info, &map, slot_s);
+        let ctx_s2 =
+            create_proposer_preferences_context(&signed_s2, &committee_info, &map, wall_slot);
         let result_s2 = validate_partial_signature_message(
             ctx_s2,
             &mut duty_state,
@@ -5175,7 +5458,7 @@ mod tests {
             Hash256::from([0xA1; 32]), // same as signed_s1
         );
         let ctx_dup =
-            create_proposer_preferences_context(&signed_dup, &committee_info, &map, slot_s);
+            create_proposer_preferences_context(&signed_dup, &committee_info, &map, wall_slot);
         let result_dup = validate_partial_signature_message(
             ctx_dup,
             &mut duty_state,
@@ -5190,18 +5473,9 @@ mod tests {
 
     #[test]
     fn test_proposer_preferences_saturated_epochs_not_conflated() {
-        // The devnet-visible regression this fix removes: role-8 duties legitimately spread
-        // across concurrent epochs (earliness allows a proposal_slot up to
-        // (1 + min_seed_lookahead) * spe ahead), and the deleted two-bucket counters conflated
-        // every epoch below the newest-seen one into a single bucket. With 32 duties spread
-        // over epochs 0 and 1 while an epoch-2 duty was recorded, that shared bucket hit the
-        // slots-per-epoch duty limit and a legitimate first message for a free epoch-1 slot
-        // was IGNORE'd as ExcessiveDutyCount. Ring-derived counts are per-epoch, so every
-        // message here must be accepted end to end through validate_partial_signature_message
-        // (epoch derived from the MESSAGE slot, first-message gate, ring occupancy).
-        // (Asserting ExcessiveDutyCount for role 8 is impossible under exact counting: the
-        // count only reaches the limit when every slot of the epoch is occupied, leaving no
-        // first message to reject.)
+        // SIP-94 §7: duty counts remain separate across proposal epochs. At receipt
+        // slot 32, slots 30 and 31 remain live while epoch-2 proposals are eligible.
+        // The epoch-0 duties must not inflate epoch 1's count after epoch 2 is seen.
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let signer_id = OperatorId(1);
 
@@ -5210,9 +5484,7 @@ mod tests {
         let ring = crate::stored_slot_count(Role::ProposerPreferences, SLOTS_PER_EPOCH_TEST, &spec);
         let mut duty_state = DutyState::new(ring);
 
-        // Wall clock stays at slot 1 (epoch 0) throughout; every message slot below is inside
-        // the role-8 window [wall - 2, wall + 2 * spe].
-        let wall_slot = Slot::new(1);
+        let wall_slot = Slot::new(32);
         let accept = |duty_state: &mut DutyState, slot: Slot| {
             // One distinct root per slot; the dedup set is per (signer, slot).
             let signed = create_signed_proposer_preferences_message(
@@ -5234,30 +5506,19 @@ mod tests {
             );
         };
 
-        // 16 duties in epoch 0, 16 in epoch 1, then 1 in epoch 2, so the two nearer epochs
-        // keep receiving duties while a later epoch already holds recorded state. (The test
-        // clock has no start times for slots before the wall slot, so epoch 0 starts at 2.)
-        for slot in 2..18u64 {
-            accept(&mut duty_state, Slot::new(slot));
-        }
-        for slot in 32..48u64 {
+        // Arrange: fill 30 epoch-1 duties, then record a future epoch-2 duty.
+        for slot in 32..62u64 {
             accept(&mut duty_state, Slot::new(slot));
         }
         accept(&mut duty_state, Slot::new(64));
 
-        // 16 more duties across epochs 0 and 1. Under the old counters each of these landed
-        // in the shared older-epoch bucket, pushing it to 32 (= the role-8 duty limit).
-        for slot in 18..32u64 {
-            accept(&mut duty_state, Slot::new(slot));
-        }
-        for slot in 48..50u64 {
-            accept(&mut duty_state, Slot::new(slot));
-        }
+        // Act: both still-live epoch-0 duties arrive after epoch 2 was recorded.
+        // Historical two-bucket counters added these to epoch 1's previous bucket.
+        accept(&mut duty_state, Slot::new(30));
+        accept(&mut duty_state, Slot::new(31));
 
-        // The load-bearing acceptance: a first message for a FREE epoch-1 slot. Epoch 1 holds
-        // only 18 duties, so exact per-epoch counting admits it; the old conflated bucket read
-        // 32 >= 32 here and dropped an honest preference share.
-        accept(&mut duty_state, Slot::new(50));
+        // Assert: epoch 1 has only 30 occupied duties, so its next free slot is accepted.
+        accept(&mut duty_state, Slot::new(62));
     }
 
     #[test]
