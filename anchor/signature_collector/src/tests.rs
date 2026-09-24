@@ -1824,6 +1824,78 @@ async fn sign_and_collect_single_validator(
     .expect("single-validator request should resolve promptly")
 }
 
+/// SIP-94 §7: an early network partial creates a collector before any local request,
+/// and cleanup retains that collector through the slot following its proposal.
+#[tokio::test(flavor = "multi_thread")]
+async fn early_network_partial_retained_through_slot_after_proposal() {
+    // Arrange: receipt is at epoch 2 start and the proposal is epoch 3's last slot.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let receipt_slot = BATCH_TEST_SLOT;
+    let proposal_slot = receipt_slot + 2 * SLOTS_PER_EPOCH - 1;
+    let signing_root = Hash256::repeat_byte(0xE1);
+    let validator_index = ValidatorIndex(7);
+    let collector_key = (signing_root, validator_index);
+    let (operator_id, share) = &scenario.remote_shares[0];
+    assert!(scenario.manager.signature_collectors.is_empty());
+
+    // Act: ingest only a network partial, without calling sign_and_collect locally.
+    scenario
+        .manager
+        .receive_partial_signatures(PartialSignatureMessages {
+            kind: PartialSignatureKind::ProposerPreferences,
+            slot: proposal_slot,
+            messages: VariableList::new(vec![PartialSignatureMessage {
+                partial_signature: share.sign(signing_root),
+                signing_root,
+                signer: *operator_id,
+                validator_index,
+            }])
+            .expect("one partial fits in a packet"),
+        })
+        .expect("network partial should enter the processor");
+    drain_batch_processor_work(&scenario.manager).await;
+
+    // Assert: the network path creates a future-slot collector and publishes nothing.
+    assert_eq!(scenario.manager.signature_collectors.len(), 1);
+    assert_eq!(
+        scenario
+            .manager
+            .signature_collectors
+            .get(&collector_key)
+            .expect("network partial must create an unrequested collector")
+            .for_slot,
+        proposal_slot,
+    );
+    assert_eq!(sender.attempts(), 0);
+
+    // Act and assert: run production cleanup at the relevant slot boundaries.
+    for (current_slot, retained) in [
+        (receipt_slot, true),
+        (proposal_slot - 1, true),
+        (proposal_slot, true),
+        (proposal_slot + 1, true),
+        (proposal_slot + 2, false),
+    ] {
+        scenario.manager.slot_clock.set_slot(current_slot.as_u64());
+        let cutoff = scenario
+            .manager
+            .slot_clock
+            .now()
+            .expect("clock is available")
+            .saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS);
+        scenario.manager.remove_stale_entries(cutoff);
+        assert_eq!(
+            scenario
+                .manager
+                .signature_collectors
+                .contains_key(&collector_key),
+            retained,
+            "unexpected collector retention after cleanup at slot {current_slot}"
+        );
+    }
+}
+
 /// SIP-94 section 5: a peer authenticates against builders A, B, and C and gossips all three
 /// RequestAuth shares in one packet. Our node is configured for A and B only, so C never gets a
 /// `sign_and_collect` registration. The unrequested C entries must not stop A and B from

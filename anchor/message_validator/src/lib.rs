@@ -92,6 +92,8 @@ pub enum ValidationFailure {
     UnknownValidator,
     ValidatorLiquidated,
     ValidatorNotAttesting,
+    /// SIP-94 §7: registration partials received after the Gloas epoch are ignored.
+    ValidatorRegistrationRetired,
     EarlySlotMessage {
         got: String,
     },
@@ -271,6 +273,7 @@ impl From<&ValidationFailure> for MessageAcceptance {
             | ValidationFailure::UnknownValidator
             | ValidationFailure::ValidatorLiquidated
             | ValidationFailure::ValidatorNotAttesting
+            | ValidationFailure::ValidatorRegistrationRetired
             | ValidationFailure::EarlySlotMessage { .. }
             | ValidationFailure::LateSlotMessage { .. }
             | ValidationFailure::SlotAlreadyAdvanced { .. }
@@ -753,7 +756,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 /// Two consumers rely on the sizing (the ring is indexed by `slot % len`):
 /// - Per-slot signer state (dedup, message counts): an entry must not be evicted while its slot is
 ///   still inside the role's message acceptance window (earliness + lateness, see
-///   `early_slot_allowance` / `message_lateness`).
+///   `message_earliness` / `message_lateness`).
 /// - `OperatorState::get_duty_count`, which derives per-epoch duty counts from ring occupancy
 ///   (SIP-94 §7 retention). Exactness needs MORE than the acceptance window: a count query for the
 ///   epoch of the oldest acceptable slot probes back to that epoch's FIRST slot, so the ring must
@@ -763,7 +766,8 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 /// The default arm covers the widest default-role window (lateness `slots_per_epoch +
 /// LATE_SLOT_ALLOWANCE`, no earliness). `ProposerPreferences` spans the proposer lookahead into
 /// the future (its envelope slot is a future `proposal_slot`) with a 2-slot lateness; its
-/// lookahead-sized ring exceeds its bound (`64 + 2 + 32 + 1 = 99 <= 128`) with headroom.
+/// epoch-aligned lead is at most 63 slots with mainnet parameters (SIP-94 §7). Its
+/// lookahead-sized ring exceeds its bound (`63 + 2 + 32 + 1 = 98 <= 128`) with headroom.
 ///
 /// The match is exhaustive so adding a role forces an explicit sizing decision here; a silent
 /// default would under-size a wide-window role and quietly disable its duty limit.
@@ -1037,8 +1041,8 @@ pub(crate) fn validate_role_for_fork(
     // Reject ValidatorRegistration at/after the Ethereum Gloas (ePBS) fork; SIP-94
     // deprecates the duty (proposer preferences replace relay registrations). Gated
     // on the message's duty slot, not wall clock, so registrations for pre-fork
-    // slots remain valid through their TTL window. Wire values are retained for
-    // pre-Gloas decode per SIP-94.
+    // slots pass this gate. The partial-signature path separately checks wall-clock
+    // retirement per SIP-94 §7. Wire values are retained for pre-Gloas decode.
     if role == Role::ValidatorRegistration {
         let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
         if current_fork.gloas_enabled() {
@@ -1089,7 +1093,7 @@ pub(crate) fn validate_slot_time(
 ) -> Result<(), ValidationFailure> {
     // Check if the message is too early
     let earliness = message_earliness(msg_slot, validation_context)?;
-    if earliness > CLOCK_ERROR_TOLERANCE + early_slot_allowance(validation_context) {
+    if earliness > CLOCK_ERROR_TOLERANCE {
         return Err(ValidationFailure::EarlySlotMessage {
             got: format!("early by {earliness:?}"),
         });
@@ -1106,38 +1110,26 @@ pub(crate) fn validate_slot_time(
     Ok(())
 }
 
-/// Returns how early a message is compared to its slot start time.
+/// Returns how early a message is compared to its earliest arrival time.
+/// SIP-94 §7 permits proposer preferences from the start of the proposal epoch minus
+/// `min_seed_lookahead`, saturating at epoch zero. Other roles use their message slot.
 /// Returns a zero duration if the message is on time or late.
 fn message_earliness(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
+    let slot = if validation_context.role == Role::ProposerPreferences {
+        slot.epoch(validation_context.slots_per_epoch)
+            .saturating_sub(validation_context.spec.min_seed_lookahead)
+            .start_slot(validation_context.slots_per_epoch)
+    } else {
+        slot
+    };
     let slot_start = slot_start_time(slot, validation_context.slot_clock.clone())
         .map_err(|_| ValidationFailure::SlotStartTimeNotFound { slot })?;
     Ok(slot_start
         .duration_since(validation_context.received_at)
         .unwrap_or_default())
-}
-
-/// Extra future-slot tolerance (on top of `CLOCK_ERROR_TOLERANCE`) allowed for a role's message
-/// slot. Only `ProposerPreferences` is non-zero: its envelope slot is the duty's future
-/// `proposal_slot`, so the whole proposer lookahead (current epoch + `min_seed_lookahead`) ahead of
-/// that slot must be accepted. Every other role keeps the strict no-future rule.
-fn early_slot_allowance(validation_context: &ValidationContext<impl SlotClock>) -> Duration {
-    match validation_context.role {
-        Role::ProposerPreferences => {
-            let allowance_slots = u32::try_from(
-                (1 + validation_context.spec.min_seed_lookahead.as_u64())
-                    * validation_context.slots_per_epoch,
-            )
-            .unwrap_or(u32::MAX);
-            validation_context
-                .slot_clock
-                .slot_duration()
-                .saturating_mul(allowance_slots)
-        }
-        _ => Duration::ZERO,
-    }
 }
 
 /// Returns how late a message is compared to its deadline based on role.
