@@ -105,7 +105,7 @@ const BLOCK_SLOT_LOOKUP_TIMEOUT: Duration = Duration::from_millis(500);
 /// that drift. 50 ms mirrors the message validator's `CLOCK_ERROR_TOLERANCE`,
 /// the clock error the SSV network already budgets for between nodes. Nothing
 /// consumes the assignments this early: the soonest consumers are the
-/// selection-proof flows (deadline 2/3 slot) and the voting-context build
+/// selection-proof flows (fork-specific aggregation deadlines) and the voting-context build
 /// (triggered no earlier than a head event).
 const VOTING_ASSIGNMENTS_PUBLISH_DELAY: Duration = Duration::from_millis(50);
 

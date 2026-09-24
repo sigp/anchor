@@ -1,9 +1,13 @@
 //! Envelope-signing duty tests (SIP-94 §6, disseminate-and-sign).
 
-use std::{sync::LazyLock, time::Duration};
+use std::{
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use bls::{FixedBytesExtended, PublicKeyBytes};
 use eth2::types::FullBlockContents;
+use futures::FutureExt;
 use signature_collector::CollectionError;
 use slashing_protection::Safe;
 use ssv_types::{
@@ -35,6 +39,13 @@ use crate::{DecidedBlockContext, Error, SpecificError};
 /// because the guard is held across awaits.
 static METRIC_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+const BEFORE_PAYLOAD_DEADLINE: Duration = Duration::from_millis(1);
+const COLLECTION_START_OFFSET: Duration = Duration::from_secs(1);
+const PAYLOAD_DUE_CASES: [(u64, Duration); 2] = [
+    (2500, Duration::from_secs(3)),
+    (7500, Duration::from_secs(9)),
+];
 
 // ==================== Fixtures and helpers ====================
 
@@ -120,6 +131,15 @@ fn gloas_options() -> HarnessOptions {
         spec: gloas_at_genesis_spec(),
         disable_slashing_protection: true,
         ..Default::default()
+    }
+}
+
+fn gloas_options_with_payload_due(payload_due_bps: u64) -> HarnessOptions {
+    let mut spec = (*gloas_at_genesis_spec()).clone();
+    spec.payload_due_bps = payload_due_bps;
+    HarnessOptions {
+        spec: Arc::new(spec.compute_derived_values::<MainnetEthSpec>()),
+        ..gloas_options()
     }
 }
 
@@ -609,6 +629,135 @@ async fn non_builder_without_dissemination_times_out() {
     );
     counters.assert_deltas(0, 0, 1);
     assert_no_outward_action(&harness, "when no dissemination arrives");
+}
+
+/// Missing dissemination follows the configured due point, including one later than half-slot.
+#[tokio::test(start_paused = true)]
+async fn dissemination_wait_uses_configured_payload_due() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+    for (bps, expected_offset) in PAYLOAD_DUE_CASES {
+        // Arrange: no peer supplies the envelope before the configured deadline.
+        let (harness, pubkey) = harness_with_options(gloas_options_with_payload_due(bps));
+        harness.slot_clock.set_slot(TEST_SLOT);
+        let envelope = self_build_envelope(test_decided_root());
+        let context = context_for(&envelope, false);
+        let signing = run_non_builder_task(&harness, pubkey, context);
+        tokio::pin!(signing);
+        assert!(signing.as_mut().now_or_never().is_none());
+
+        // Act: drive both clocks to just before the deadline, then across it.
+        let before_deadline = expected_offset - BEFORE_PAYLOAD_DEADLINE;
+        harness.slot_clock.advance_time(before_deadline);
+        tokio::time::advance(before_deadline).await;
+        assert!(
+            signing.as_mut().now_or_never().is_none(),
+            "dissemination wait ended early"
+        );
+        harness.slot_clock.advance_time(BEFORE_PAYLOAD_DEADLINE);
+        tokio::time::advance(BEFORE_PAYLOAD_DEADLINE).await;
+
+        // Assert: the wait ends at payload due without signing or publication.
+        let result = signing
+            .now_or_never()
+            .expect("dissemination wait should end at payload due");
+        assert!(matches!(
+            result,
+            Err(Error::SpecificError(
+                SpecificError::DisseminationTimeout { .. }
+            ))
+        ));
+        assert_no_outward_action(&harness, "when no dissemination arrives");
+    }
+}
+
+/// Builder and non-builder collection share an absolute deadline, even after a late start.
+#[tokio::test(start_paused = true)]
+async fn envelope_collection_uses_configured_payload_due() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+    for (bps, expected_offset) in PAYLOAD_DUE_CASES {
+        for built_locally in [true, false] {
+            // Arrange: start collection late and withhold quorum on either signing path.
+            let mut options = gloas_options_with_payload_due(bps);
+            options.collector_hangs = true;
+            let (harness, pubkey) = harness_with_options(options);
+            harness.slot_clock.set_slot(TEST_SLOT);
+            let envelope = self_build_envelope(test_decided_root());
+            let context = context_for(&envelope, built_locally);
+            seed_context(&harness, pubkey, context);
+            if !built_locally {
+                insert_dissemination(&harness, pubkey, &envelope);
+            }
+            let call_offset = COLLECTION_START_OFFSET;
+            harness.slot_clock.advance_time(call_offset);
+            tokio::time::advance(call_offset).await;
+            let signing = async {
+                if built_locally {
+                    sign_envelope(&harness, pubkey, envelope).await.map(|_| ())
+                } else {
+                    run_non_builder_task(&harness, pubkey, context).await
+                }
+            };
+            tokio::pin!(signing);
+            assert!(signing.as_mut().now_or_never().is_none());
+            assert_eq!(envelope_collection_count(&harness), 1);
+
+            // Act: the late start must not move the absolute slot deadline.
+            let before_deadline = expected_offset - call_offset - BEFORE_PAYLOAD_DEADLINE;
+            harness.slot_clock.advance_time(before_deadline);
+            tokio::time::advance(before_deadline).await;
+            assert!(
+                signing.as_mut().now_or_never().is_none(),
+                "collection ended early"
+            );
+            harness.slot_clock.advance_time(BEFORE_PAYLOAD_DEADLINE);
+            tokio::time::advance(BEFORE_PAYLOAD_DEADLINE).await;
+
+            // Assert: the collector receives the configured payload deadline.
+            let result = signing
+                .now_or_never()
+                .expect("collection should expire at payload due");
+            assert!(matches!(
+                result,
+                Err(Error::SpecificError(
+                    SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout)
+                ))
+            ));
+        }
+    }
+}
+
+/// Starting at payload due is rejected before either envelope path can sign or disseminate.
+#[tokio::test(start_paused = true)]
+async fn envelope_paths_reject_at_configured_payload_due() {
+    let _guard = METRIC_TEST_LOCK.lock().await;
+    for (bps, expected_offset) in PAYLOAD_DUE_CASES {
+        for built_locally in [true, false] {
+            // Arrange: start either signing path exactly at the configured deadline.
+            let (harness, pubkey) = harness_with_options(gloas_options_with_payload_due(bps));
+            harness.slot_clock.set_slot(TEST_SLOT);
+            let envelope = self_build_envelope(test_decided_root());
+            let context = context_for(&envelope, built_locally);
+            seed_context(&harness, pubkey, context);
+            harness.slot_clock.advance_time(expected_offset);
+            tokio::time::advance(expected_offset).await;
+
+            // Act: try to sign an envelope bound to the accepted block context.
+            let result = if built_locally {
+                sign_envelope(&harness, pubkey, envelope).await.map(|_| ())
+            } else {
+                run_non_builder_task(&harness, pubkey, context).await
+            };
+
+            // Assert: reject before collecting signatures, disseminating, or publishing.
+            assert!(matches!(
+                result,
+                Err(Error::SpecificError(
+                    SpecificError::EnvelopeDeadlinePassed { .. }
+                ))
+            ));
+            assert_no_outward_action(&harness, "at the configured payload-due deadline");
+        }
+    }
 }
 
 /// A disseminated envelope that fails a decision binding is never signed.
