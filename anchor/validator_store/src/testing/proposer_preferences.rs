@@ -537,11 +537,11 @@ async fn proposer_preferences_no_quorum_hits_bounded_timeout() {
     );
 }
 
-/// Timeouts stop being expected waits at the slot from which peers are expected to have emitted
-/// (SIP-94 §5). Exercise two proposal epochs and an offset within the second epoch so the cutoff
-/// must follow the proposal epoch, independently of the proposal's position within it.
+/// Allow one slot of grace from the slot from which peers are expected to have emitted
+/// (SIP-94 §5), then report timeouts again. Mainnet cases cover two proposal epochs, an offset
+/// within the second epoch, and a future proposal in the current epoch, whose grace has elapsed.
 #[tokio::test(start_paused = true)]
-async fn proposer_preferences_timeout_reporting_starts_at_peer_emission_cutoff() {
+async fn proposer_preferences_timeout_reporting_starts_after_peer_emission_grace() {
     let _guard = METRIC_TEST_LOCK.lock().await;
     let metric = crate::metrics::PROPOSER_PREFERENCES_RECONSTRUCTION_FAILURES
         .as_ref()
@@ -551,83 +551,82 @@ async fn proposer_preferences_timeout_reporting_starts_at_peer_emission_cutoff()
     ]);
     let infra_counter =
         metric.with_label_values(&[crate::metrics::PROPOSER_PREFERENCES_FAILURE_INFRA]);
-    let slots_per_epoch = MainnetEthSpec::slots_per_epoch();
-    let first_cutoff = slots_per_epoch / 2 - 1;
+    // (proposal slot, clock slot, expected peer-emission slot, pending)
     let cases = [
-        (Slot::new(slots_per_epoch), Slot::new(first_cutoff)),
-        (
-            Slot::new(slots_per_epoch * LOOKAHEAD_EPOCHS + 1),
-            Slot::new(slots_per_epoch + first_cutoff),
-        ),
+        (32, 14, 15, true),
+        (32, 15, 15, true),
+        (32, 16, 15, false),
+        (65, 46, 47, true),
+        (65, 47, 47, true),
+        (65, 48, 47, false),
+        (33, 32, 15, false),
     ];
 
-    for (proposal_slot, peers_expected_from_slot) in cases {
-        for before_cutoff in [true, false] {
-            // Arrange: inject the timeout directly so the manual clock alone selects the
-            // reporting boundary, without coupling it to Tokio's collection timer.
-            let committee =
-                create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
-            let pubkey = committee.validators[0].public_key;
-            let harness = ValidatorStoreTestHarness::new_with_options(
-                vec![committee],
-                OperatorId(1),
-                HarnessOptions {
-                    collector_failure: Some(CollectionError::CollectionTimeout),
-                    ..Default::default()
-                },
-            );
-            let now = peers_expected_from_slot.as_u64() - u64::from(before_cutoff);
-            harness
-                .slot_clock
-                .set_current_time(Duration::from_secs(now * SLOT_DURATION_SECS));
-            let insufficient_before = insufficient_counter.get();
-            let infra_before = infra_counter.get();
+    for (proposal_slot, now, peers_expected_from_slot, pending) in cases {
+        let proposal_slot = Slot::new(proposal_slot);
+        let peers_expected_from_slot = Slot::new(peers_expected_from_slot);
+        // Arrange: inject the timeout directly so the manual clock alone selects the
+        // reporting boundary, without coupling it to Tokio's collection timer.
+        let committee = create_committee_setup(&test_operator_ids(), 1, STARTING_VALIDATOR_INDEX);
+        let pubkey = committee.validators[0].public_key;
+        let harness = ValidatorStoreTestHarness::new_with_options(
+            vec![committee],
+            OperatorId(1),
+            HarnessOptions {
+                collector_failure: Some(CollectionError::CollectionTimeout),
+                ..Default::default()
+            },
+        );
+        harness
+            .slot_clock
+            .set_current_time(Duration::from_secs(now * SLOT_DURATION_SECS));
+        let insufficient_before = insufficient_counter.get();
+        let infra_before = infra_counter.get();
 
-            // Act
-            let result = harness
-                .validator_store
-                .sign_proposer_preferences(
-                    pubkey,
-                    create_proposer_preferences(STARTING_VALIDATOR_INDEX as u64, proposal_slot),
-                )
-                .await;
+        // Act
+        let result = harness
+            .validator_store
+            .sign_proposer_preferences(
+                pubkey,
+                create_proposer_preferences(STARTING_VALIDATOR_INDEX as u64, proposal_slot),
+            )
+            .await;
 
-            // Assert
-            assert_eq!(
-                insufficient_counter.get() - insufficient_before,
-                u64::from(!before_cutoff),
-                "proposal {proposal_slot}, clock {now}: only timeouts at or after the cutoff are failures"
+        // Assert
+        assert_eq!(
+            insufficient_counter.get() - insufficient_before,
+            u64::from(!pending),
+            "proposal {proposal_slot}, clock {now}: only timeouts after peer-emission grace are failures"
+        );
+        assert_eq!(
+            infra_counter.get() - infra_before,
+            0,
+            "proposal {proposal_slot}, clock {now}: a timeout is never an infrastructure failure"
+        );
+        if pending {
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::SpecificError(SpecificError::CollectionPendingPeerEmission {
+                        proposal_slot: pending_proposal_slot,
+                        peers_expected_from_slot: pending_cutoff,
+                    })) if pending_proposal_slot == proposal_slot
+                        && pending_cutoff == peers_expected_from_slot
+                ),
+                "proposal {proposal_slot}, clock {now}: expected pending peer emission, got: {result:?}"
             );
-            assert_eq!(
-                infra_counter.get() - infra_before,
-                0,
-                "proposal {proposal_slot}, clock {now}: a timeout is never an infrastructure failure"
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::SpecificError(
+                        SpecificError::SignatureCollectionFailed(
+                            CollectionError::CollectionTimeout
+                        )
+                    ))
+                ),
+                "proposal {proposal_slot}, clock {now}: expected CollectionTimeout, got: {result:?}"
             );
-            if before_cutoff {
-                assert!(
-                    matches!(
-                        result,
-                        Err(Error::SpecificError(SpecificError::CollectionPendingPeerEmission {
-                            proposal_slot: pending_proposal_slot,
-                            peers_expected_from_slot: pending_cutoff,
-                        })) if pending_proposal_slot == proposal_slot
-                            && pending_cutoff == peers_expected_from_slot
-                    ),
-                    "proposal {proposal_slot}, clock {now}: expected pending peer emission, got: {result:?}"
-                );
-            } else {
-                assert!(
-                    matches!(
-                        result,
-                        Err(Error::SpecificError(
-                            SpecificError::SignatureCollectionFailed(
-                                CollectionError::CollectionTimeout
-                            )
-                        ))
-                    ),
-                    "proposal {proposal_slot}, clock {now}: expected CollectionTimeout, got: {result:?}"
-                );
-            }
         }
     }
 }

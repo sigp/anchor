@@ -206,11 +206,13 @@ enum RequestAuthCollectionBound {
     DeclinePastSlot,
 }
 
-/// Return an expected-wait error before the slot from which peers are expected to have emitted
-/// (SIP-94 §5): slot `slots_per_epoch / 2 - 1` of the epoch preceding the proposal.
+/// Return an expected-wait error before and during the slot from which peers are expected to have
+/// emitted (SIP-94 §5): slot `slots_per_epoch / 2 - 1` of the epoch preceding the proposal.
+/// Allow that slot for peers to prepare and deliver their shares; normal failure reporting resumes
+/// in the following slot.
 /// Genesis-epoch proposals have no preceding epoch, and an unavailable clock fails open to
-/// normal failure reporting. Return the cutoff with the decision so callers cannot disagree
-/// about the reporting boundary and the slot in the error.
+/// normal failure reporting. Return the emission slot with the decision so the error names the
+/// same emission window used for suppression.
 fn pending_peer_emission(
     now: Option<Slot>,
     proposal_slot: Slot,
@@ -222,7 +224,7 @@ fn pending_peer_emission(
     }
     let peers_expected_from_slot =
         (proposal_epoch - 1).start_slot(slots_per_epoch) + (slots_per_epoch / 2 - 1);
-    now.is_some_and(|now| now < peers_expected_from_slot)
+    now.is_some_and(|now| now <= peers_expected_from_slot)
         .then_some(SpecificError::CollectionPendingPeerEmission {
             proposal_slot,
             peers_expected_from_slot,
@@ -3120,8 +3122,9 @@ pub enum SyncSelectionProofAssignmentError {
 pub enum SpecificError {
     Unsupported,
     SignatureCollectionFailed(CollectionError),
-    /// Collection timed out before the slot from which peers are expected to have emitted
-    /// (SIP-94 §5). The caller can retry without treating this wait as a reconstruction failure.
+    /// Collection timed out before or during the slot from which peers are expected to have
+    /// emitted (SIP-94 §5), allowing shares time to arrive. The caller can retry without treating
+    /// this wait as a reconstruction failure.
     CollectionPendingPeerEmission {
         proposal_slot: Slot,
         peers_expected_from_slot: Slot,
