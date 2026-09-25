@@ -1082,6 +1082,7 @@ async fn sign_block_then_matching_envelope_succeeds() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(block)),
             Slot::new(TEST_SLOT),
+            None,
         )
         .await
         .expect("the Gloas block duty must sign successfully");
@@ -1134,6 +1135,7 @@ async fn sign_block_with_another_operators_self_build_block_signs_its_envelope()
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(local_block)),
             Slot::new(TEST_SLOT),
+            None,
         )
         .await
         .expect("the Gloas block duty must sign successfully");
@@ -1186,6 +1188,7 @@ async fn sign_block_as_builder_spawns_no_non_builder_task() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(block)),
             Slot::new(TEST_SLOT),
+            None,
         )
         .await
         .expect("the Gloas block duty must sign successfully");
@@ -1224,6 +1227,7 @@ async fn sign_block_with_external_build_decision_spawns_no_non_builder_task() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(local_block)),
             Slot::new(TEST_SLOT),
+            None,
         )
         .await
         .expect("the Gloas block duty must sign successfully");
@@ -1274,6 +1278,7 @@ async fn repeated_sign_block_for_the_same_slot_spawns_one_non_builder_task() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(local_block.clone())),
             Slot::new(TEST_SLOT),
+            None,
         )
         .await
         .expect("the first Gloas block duty must sign successfully");
@@ -1285,6 +1290,7 @@ async fn repeated_sign_block_for_the_same_slot_spawns_one_non_builder_task() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(local_block)),
             Slot::new(TEST_SLOT),
+            None,
         )
         .await;
     assert!(

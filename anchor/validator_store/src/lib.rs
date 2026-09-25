@@ -3532,6 +3532,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         validator_pubkey: PublicKeyBytes,
         block: UnsignedBlock<E>,
         current_slot: Slot,
+        _local_payload_root: Option<Hash256>,
     ) -> Result<SignedBlock<E>, Error> {
         let (block_type, block_slot) = match block {
             UnsignedBlock::Full(FullBlockContents::BlockContents(ref contents)) => {

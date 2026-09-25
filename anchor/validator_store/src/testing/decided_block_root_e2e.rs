@@ -129,6 +129,7 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(block)),
             Slot::new(DUTY_SLOT),
+            None,
         )
         .await;
 
@@ -190,6 +191,7 @@ async fn conflicting_root_aborts_before_threshold_signing() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(block)),
             Slot::new(DUTY_SLOT),
+            None,
         )
         .await;
 
@@ -231,6 +233,7 @@ async fn pre_gloas_duty_creates_no_entry() {
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(block)),
             Slot::new(DUTY_SLOT),
+            None,
         )
         .await;
 
