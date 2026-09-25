@@ -1,5 +1,4 @@
 mod consensus_message;
-mod dissemination;
 mod duty_state;
 mod message_counts;
 mod partial_signature;
@@ -28,7 +27,6 @@ use slot_clock::SlotClock;
 use ssv_types::{
     CommitteeInfo, IndexSet, OperatorId, ValidatorIndex,
     consensus::QbftMessage,
-    dissemination::EnvelopeDissemination,
     message::{MsgType, SSVMessageError, SignedSSVMessage, SignedSSVMessageError},
     msgid::{DutyExecutor, MessageId, Role},
     partial_sig::PartialSignatureMessages,
@@ -42,7 +40,6 @@ use types::{ChainSpec, Epoch, ForkName, Slot};
 
 use crate::{
     consensus_message::validate_consensus_message,
-    dissemination::validate_envelope_dissemination,
     duty_state::{DutyState, OperatorState},
     partial_signature::validate_partial_signature_message,
 };
@@ -253,16 +250,6 @@ pub enum ValidationFailure {
         current_fork: ForkName,
         deprecated_since_fork: ForkName,
     },
-    /// An envelope dissemination message for a role other than `EnvelopeProposer`, the only
-    /// role that admits the class (SIP-94 §7). Reject-class.
-    UnexpectedDisseminationMessage {
-        role: Role,
-    },
-    /// A dissemination message with a signer count other than exactly one. Reject-class.
-    DisseminationOneSigner,
-    /// A dissemination message whose inner envelope bytes do not SSZ-decode as a blinded
-    /// execution payload envelope (SIP-94 §7). Reject-class.
-    UndecodableDisseminationEnvelope(DecodeError),
 }
 
 impl From<&ValidationFailure> for MessageAcceptance {
@@ -337,7 +324,6 @@ impl From<SignedSSVMessageError> for ValidationFailure {
 pub enum ValidatedSSVMessage {
     QbftMessage(QbftMessage),
     PartialSignatureMessages(PartialSignatureMessages),
-    EnvelopeDissemination(EnvelopeDissemination),
 }
 
 #[derive(Debug)]
@@ -535,8 +521,7 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences
-            | Role::EnvelopeProposer => {
+            | Role::ProposerPreferences => {
                 let validator_pk = match ssv_message.msg_id().duty_executor() {
                     Some(DutyExecutor::Validator(pk)) => pk,
                     _ => return Err(ValidationFailure::UnknownValidator),
@@ -787,7 +772,6 @@ pub(crate) fn stored_slot_count(role: Role, slots_per_epoch: u64, spec: &ChainSp
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
         | Role::PTCAttester
-        | Role::EnvelopeProposer
         | Role::AggregatorCommittee => 2 * slots_per_epoch + LATE_SLOT_ALLOWANCE + 1,
     };
     count as usize
@@ -806,9 +790,6 @@ fn validate_ssv_message(
         }
         MsgType::SSVPartialSignatureMsgType => {
             validate_partial_signature_message(validation_context, duty_state, duty_provider)
-        }
-        MsgType::SSVEnvelopeDisseminationMsgType => {
-            validate_envelope_dissemination(validation_context, duty_state, duty_provider)
         }
     }
 }
@@ -847,9 +828,7 @@ fn verify_message_signature(
     }
 }
 
-/// Looks up `signer`'s RSA key and verifies the message's first signature against it, the
-/// shared tail of the single-signer validation paths (partial signatures and envelope
-/// disseminations).
+/// Looks up `signer`'s RSA key and verifies the partial signature packet's RSA signature.
 pub(crate) fn verify_single_signer(
     validation_context: &ValidationContext<impl SlotClock>,
     signer: OperatorId,
@@ -959,8 +938,8 @@ pub(crate) fn validate_beacon_duty(
 
     // Unknown proposer schedules are tolerated. Preferences also tolerate a conflicting negative
     // when the local duty producer currently assigns this validator and slot, so reception can
-    // support its signing work. Envelopes retain the complete tracker's assignment policy.
-    if matches!(role, Role::ProposerPreferences | Role::EnvelopeProposer) {
+    // support its signing work.
+    if role == Role::ProposerPreferences {
         let validator_pubkey = match validation_context
             .signed_ssv_message
             .ssv_message()
@@ -973,8 +952,7 @@ pub(crate) fn validate_beacon_duty(
 
         if duty_provider.proposer_assignment_at_slot(slot, &validator_pubkey)
             == DutyAssignment::NotAssigned
-            && !(role == Role::ProposerPreferences
-                && duty_provider.local_proposer_assignment_at_slot(slot, &validator_pubkey))
+            && !duty_provider.local_proposer_assignment_at_slot(slot, &validator_pubkey)
         {
             return Err(ValidationFailure::NoDuty);
         }
@@ -1012,7 +990,6 @@ pub(crate) fn validate_beacon_duty(
 /// - PTCAttester before the Ethereum Gloas (ePBS) fork (not yet active)
 /// - ValidatorRegistration at/after the Ethereum Gloas (ePBS) fork (deprecated by SIP-94)
 /// - ProposerPreferences before the Ethereum Gloas (ePBS) fork (not yet active)
-/// - EnvelopeProposer before the Ethereum Gloas (ePBS) fork (not yet active)
 pub(crate) fn validate_role_for_fork(
     slot: Slot,
     validation_context: &ValidationContext<impl SlotClock>,
@@ -1055,12 +1032,9 @@ pub(crate) fn validate_role_for_fork(
         }
     }
 
-    // Reject post-Gloas roles (PTCAttester, ProposerPreferences, EnvelopeProposer) before the
+    // Reject post-Gloas roles (PTCAttester, ProposerPreferences) before the
     // Ethereum Gloas (ePBS) fork, read from the consensus spec.
-    if matches!(
-        role,
-        Role::PTCAttester | Role::ProposerPreferences | Role::EnvelopeProposer
-    ) {
+    if matches!(role, Role::PTCAttester | Role::ProposerPreferences) {
         let current_fork = validation_context.spec.fork_name_at_epoch(epoch);
         if !current_fork.gloas_enabled() {
             return Err(ValidationFailure::RoleNotActiveBeforeEthFork {
@@ -1149,9 +1123,7 @@ fn message_lateness(
     validation_context: &ValidationContext<impl SlotClock>,
 ) -> Result<Duration, ValidationFailure> {
     let ttl = match validation_context.role {
-        Role::Proposer | Role::SyncCommittee | Role::PTCAttester | Role::EnvelopeProposer => {
-            1 + LATE_SLOT_ALLOWANCE
-        }
+        Role::Proposer | Role::SyncCommittee | Role::PTCAttester => 1 + LATE_SLOT_ALLOWANCE,
         Role::Committee
         | Role::Aggregator
         | Role::ValidatorRegistration
@@ -1272,14 +1244,11 @@ fn duty_limit(
         }
         // Proposer and SyncCommittee have no duty limit
         Role::Proposer | Role::SyncCommittee => Ok(None),
-        // Per-proposal-slot roles: max duties capped at SLOTS_PER_EPOCH (one preferences packet /
-        // one self-build envelope per proposal slot). Overflow is IGNORE-classified. Both
+        // Preferences duties are capped at SLOTS_PER_EPOCH. Overflow is IGNORE-classified. Both
         // ProposerPreferences kinds (preferences and request-auth) share each proposal slot's
         // single ring entry, so kind-9 packets add no distinct slots beyond kind-8's; this is
         // the stricter reading of SIP-94 §7's "type-9 messages ride existing duty slots".
-        Role::ProposerPreferences | Role::EnvelopeProposer => {
-            Ok(Some(validation_context.slots_per_epoch))
-        }
+        Role::ProposerPreferences => Ok(Some(validation_context.slots_per_epoch)),
     }
 }
 
@@ -1423,10 +1392,6 @@ mod tests {
         for (msg_type, role) in [
             (MsgType::SSVConsensusMsgType, Role::Committee),
             (MsgType::SSVPartialSignatureMsgType, Role::Proposer),
-            (
-                MsgType::SSVEnvelopeDisseminationMsgType,
-                Role::EnvelopeProposer,
-            ),
         ] {
             let signed_message =
                 signed_test_message(msg_type, create_message_id_for_test(role), vec![0x01]);
@@ -1710,8 +1675,7 @@ mod tests {
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences
-            | Role::EnvelopeProposer => DutyExecutor::Validator(PublicKeyBytes::empty()),
+            | Role::ProposerPreferences => DutyExecutor::Validator(PublicKeyBytes::empty()),
         };
         MessageId::new(&domain, role, &duty_executor)
     }
@@ -1763,7 +1727,7 @@ mod tests {
         /// behavior.
         pub(crate) validator_is_proposer: bool,
         /// Value returned by `proposer_assignment_at_slot`, the pubkey-keyed
-        /// lookup used by the `ProposerPreferences` / `EnvelopeProposer` arm.
+        /// lookup used by the `ProposerPreferences` arm.
         /// `DutyAssignment::Assigned` = assigned proposer at the slot,
         /// `DutyAssignment::NotAssigned` = a fetched epoch proves the pubkey is
         /// not the proposer at the slot, `DutyAssignment::Unknown` = the slot's

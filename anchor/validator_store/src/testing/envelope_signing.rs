@@ -1,22 +1,15 @@
-//! Envelope-signing duty tests (SIP-94 §6, disseminate-and-sign).
+//! SIP-94 proposer folding and local envelope publication regressions.
 
-use std::{
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::time::Duration;
 
 use bls::{FixedBytesExtended, PublicKeyBytes};
 use eth2::types::FullBlockContents;
-use futures::FutureExt;
-use signature_collector::CollectionError;
-use slashing_protection::Safe;
+use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
     consensus::{
-        BEACON_ROLE_PROPOSER, BlindedExecutionPayloadEnvelope, DataVersion, ProposerConsensusData,
-        ValidatorDuty,
+        BEACON_ROLE_PROPOSER, DataVersion, GloasProposalData, ProposerConsensusData, ValidatorDuty,
     },
-    dissemination::EnvelopeDissemination,
     msgid::Role,
     partial_sig::PartialSignatureKind,
 };
@@ -26,54 +19,67 @@ use tree_hash::TreeHash;
 use types::{
     BeaconBlock, BeaconBlockGloas, ChainSpec, Domain, EmptyBlock, EthSpec,
     ExecutionPayloadEnvelope, ExecutionPayloadGloas, ExecutionRequestsGloas, ForkName, Hash256,
-    MainnetEthSpec, SignedExecutionPayloadEnvelope, SignedRoot, Slot,
-    consts::gloas::BUILDER_INDEX_SELF_BUILD,
+    MainnetEthSpec, SignedRoot, SigningData, Slot, consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
 use validator_store::{UnsignedBlock, ValidatorStore};
 
 use super::common::*;
-use crate::{DecidedBlockContext, Error, SpecificError};
+use crate::{BlindedExecutionPayloadEnvelope, DecidedBlockContext, Error, SpecificError};
 
-/// Serializes every test that records an envelope outcome: the labels live in the global
-/// prometheus registry, so concurrent recordings would race the delta assertions. Tokio mutex
-/// because the guard is held across awaits.
-static METRIC_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
+const EXTERNAL_BUILDER: u64 = 7;
 
-const BEFORE_PAYLOAD_DEADLINE: Duration = Duration::from_millis(1);
-const COLLECTION_START_OFFSET: Duration = Duration::from_secs(1);
-const PAYLOAD_DUE_CASES: [(u64, Duration); 2] = [
-    (2500, Duration::from_secs(3)),
-    (7500, Duration::from_secs(9)),
-];
-
-// ==================== Fixtures and helpers ====================
-
-fn test_operator_ids() -> [OperatorId; 4] {
-    [OperatorId(1), OperatorId(2), OperatorId(3), OperatorId(4)]
+fn committee() -> (CommitteeSetup, PublicKeyBytes) {
+    let setup = create_primary_committee_setup(1);
+    let pubkey = setup.validators[0].public_key;
+    (setup, pubkey)
 }
 
-/// The block root envelope tests bind envelopes to.
-fn test_decided_root() -> Hash256 {
-    Hash256::from_low_u64_be(0xdec1)
-}
-
-/// Builds a Gloas self-build envelope at `TEST_SLOT` bound to `beacon_block_root`.
-fn self_build_envelope(beacon_block_root: Hash256) -> ExecutionPayloadEnvelope<MainnetEthSpec> {
-    ExecutionPayloadEnvelope {
-        payload: ExecutionPayloadGloas::<MainnetEthSpec> {
-            slot_number: Slot::new(TEST_SLOT),
-            ..Default::default()
-        },
-        execution_requests: ExecutionRequestsGloas::<MainnetEthSpec>::default(),
-        builder_index: BUILDER_INDEX_SELF_BUILD,
-        beacon_block_root,
-        parent_beacon_block_root: Hash256::from_low_u64_be(0x1111),
+fn options() -> HarnessOptions {
+    HarnessOptions {
+        spec: gloas_at_genesis_spec(),
+        ..Default::default()
     }
 }
 
-/// Derives the decided-block context whose bindings all match `envelope`.
-fn context_for(
+fn harness() -> (ValidatorStoreTestHarness, PublicKeyBytes) {
+    let (setup, pubkey) = committee();
+    (
+        ValidatorStoreTestHarness::new_with_options(vec![setup], OperatorId(1), options()),
+        pubkey,
+    )
+}
+
+fn block(spec: &ChainSpec, builder_index: u64) -> BeaconBlock<MainnetEthSpec> {
+    let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(spec);
+    block.slot = Slot::new(TEST_SLOT);
+    block
+        .body
+        .signed_execution_payload_bid
+        .message
+        .builder_index = builder_index;
+    block
+        .body
+        .signed_execution_payload_bid
+        .message
+        .execution_requests_root =
+        ExecutionRequestsGloas::<MainnetEthSpec>::default().tree_hash_root();
+    BeaconBlock::Gloas(block)
+}
+
+fn envelope(block: &BeaconBlock<MainnetEthSpec>) -> ExecutionPayloadEnvelope<MainnetEthSpec> {
+    ExecutionPayloadEnvelope {
+        payload: ExecutionPayloadGloas {
+            slot_number: Slot::new(TEST_SLOT),
+            ..Default::default()
+        },
+        execution_requests: ExecutionRequestsGloas::default(),
+        builder_index: BUILDER_INDEX_SELF_BUILD,
+        beacon_block_root: block.canonical_root(),
+        parent_beacon_block_root: block.parent_root(),
+    }
+}
+
+fn context(
     envelope: &ExecutionPayloadEnvelope<MainnetEthSpec>,
     built_locally: bool,
 ) -> DecidedBlockContext {
@@ -81,200 +87,45 @@ fn context_for(
         beacon_block_root: envelope.beacon_block_root,
         parent_block_root: envelope.parent_beacon_block_root,
         execution_requests_root: envelope.execution_requests.tree_hash_root(),
+        payload_root: envelope.payload.tree_hash_root(),
         builder_index: envelope.builder_index,
         block_hash: envelope.payload.block_hash,
         built_locally,
     }
 }
 
-/// Records `context` for the validator at `TEST_SLOT`.
-fn seed_context(
-    harness: &ValidatorStoreTestHarness,
-    pubkey: PublicKeyBytes,
-    context: DecidedBlockContext,
-) {
-    harness
-        .validator_store
-        .record_decided_block_context(pubkey, Slot::new(TEST_SLOT), context)
-        .expect("seeding the decided context must succeed");
-}
-
-/// Inserts the blinded form of `envelope` into the harness dissemination store, standing in
-/// for the message receiver, and returns the inserted blinded envelope.
-fn insert_dissemination(
-    harness: &ValidatorStoreTestHarness,
-    pubkey: PublicKeyBytes,
-    envelope: &ExecutionPayloadEnvelope<MainnetEthSpec>,
-) -> BlindedExecutionPayloadEnvelope<MainnetEthSpec> {
-    let blinded = BlindedExecutionPayloadEnvelope::from_full(envelope);
-    harness.dissemination_store.insert(
-        pubkey,
-        EnvelopeDissemination {
-            slot: Slot::new(TEST_SLOT),
-            envelope: VariableList::new(blinded.as_ssz_bytes())
-                .expect("blinded envelope bytes should fit"),
-        },
-    );
-    blinded
-}
-
-/// A single-validator committee over `test_operator_ids()` and its validator's public key.
-fn single_validator_committee() -> (CommitteeSetup, PublicKeyBytes) {
-    let committee = create_committee_setup(&test_operator_ids(), 1, 5);
-    let pubkey = committee.validators[0].public_key;
-    (committee, pubkey)
-}
-
-/// Default envelope-test options: Gloas at genesis, slashing protection disabled.
-fn gloas_options() -> HarnessOptions {
-    HarnessOptions {
-        spec: gloas_at_genesis_spec(),
-        disable_slashing_protection: true,
-        ..Default::default()
-    }
-}
-
-fn gloas_options_with_payload_due(payload_due_bps: u64) -> HarnessOptions {
-    let mut spec = (*gloas_at_genesis_spec()).clone();
-    spec.payload_due_bps = payload_due_bps;
-    HarnessOptions {
-        spec: Arc::new(spec.compute_derived_values::<MainnetEthSpec>()),
-        ..gloas_options()
-    }
-}
-
-/// Builds a single-validator harness owned by `OperatorId(1)` with the given options.
-fn harness_with_options(options: HarnessOptions) -> (ValidatorStoreTestHarness, PublicKeyBytes) {
-    let (committee, pubkey) = single_validator_committee();
-    let harness =
-        ValidatorStoreTestHarness::new_with_options(vec![committee], OperatorId(1), options);
-    (harness, pubkey)
-}
-
-/// Builds the default Gloas harness most envelope tests use.
-fn gloas_harness() -> (ValidatorStoreTestHarness, PublicKeyBytes) {
-    harness_with_options(gloas_options())
-}
-
-/// The `Domain::BeaconBuilder` domain hash at `TEST_SLOT`'s epoch, recomputed from the spec
-/// so tests do not depend on the store's own fork-selection logic.
-fn envelope_domain_hash(harness: &ValidatorStoreTestHarness) -> Hash256 {
-    let spec = &harness.spec;
+fn domain(harness: &ValidatorStoreTestHarness, domain: Domain) -> Hash256 {
     let epoch = Slot::new(TEST_SLOT).epoch(MainnetEthSpec::slots_per_epoch());
-    spec.get_domain(
+    harness.spec.get_domain(
         epoch,
-        Domain::BeaconBuilder,
-        &spec.fork_at_epoch(epoch),
+        domain,
+        &harness.spec.fork_at_epoch(epoch),
         harness.genesis_validators_root,
     )
 }
 
-/// Drives the envelope duty under test against the store.
-async fn sign_envelope(
-    harness: &ValidatorStoreTestHarness,
-    pubkey: PublicKeyBytes,
-    envelope: ExecutionPayloadEnvelope<MainnetEthSpec>,
-) -> Result<SignedExecutionPayloadEnvelope<MainnetEthSpec>, Error> {
+fn seed(harness: &ValidatorStoreTestHarness, pubkey: PublicKeyBytes, context: DecidedBlockContext) {
     harness
         .validator_store
-        .sign_execution_payload_envelope(pubkey, envelope)
-        .await
+        .record_decided_block_context(pubkey, Slot::new(TEST_SLOT), context)
+        .unwrap();
 }
 
-/// Runs the body of the detached non-builder task for the harness validator at `TEST_SLOT`,
-/// awaiting it directly: the same code `sign_block` spawns, minus the executor.
-async fn run_non_builder_task(
-    harness: &ValidatorStoreTestHarness,
-    pubkey: PublicKeyBytes,
-    context: DecidedBlockContext,
-) -> Result<(), Error> {
-    let (validator, cluster) = harness.validator_store.get_validator_and_cluster(pubkey)?;
-    harness
-        .validator_store
-        .clone()
-        .sign_disseminated_envelope(validator, cluster, context, Slot::new(TEST_SLOT))
-        .await
-}
-
-/// Number of captured signature collections of the envelope kind.
-fn envelope_collection_count(harness: &ValidatorStoreTestHarness) -> usize {
-    harness
-        .captured_calls
-        .lock()
-        .iter()
-        .filter(|call| call.metadata.kind == PartialSignatureKind::Envelope)
-        .count()
-}
-
-/// Waits for the detached non-builder task to reach signature collection and returns the root
-/// it signed. Bounded so a task that never signs fails the test instead of hanging it.
-async fn wait_for_envelope_signing_root(harness: &ValidatorStoreTestHarness) -> Hash256 {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let signed_root = harness
-                .captured_calls
-                .lock()
-                .iter()
-                .find(|call| call.metadata.kind == PartialSignatureKind::Envelope)
-                .map(|call| call.signing_root);
-            if let Some(root) = signed_root {
-                return root;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the non-builder task must reach signature collection")
-}
-
-/// Gives spawned tasks a chance to run before a negative assertion: a wrongly spawned
-/// non-builder task with a valid dissemination already stored would sign immediately.
-async fn let_spawned_tasks_run() {
-    for _ in 0..8 {
-        tokio::task::yield_now().await;
-    }
-    tokio::time::sleep(Duration::from_millis(50)).await;
-}
-
-/// A Gloas block at `TEST_SLOT` whose bid names `builder_index` and commits to the default
-/// execution requests, so `self_build_envelope(block.canonical_root())` binds to it.
-fn gloas_block_with_bid(spec: &ChainSpec, builder_index: u64) -> BeaconBlock<MainnetEthSpec> {
-    // `EmptyBlock::empty` fixes the slot to `spec.genesis_slot`, so the slot is set on the
-    // inner struct before wrapping.
-    let mut gloas_block = BeaconBlockGloas::<MainnetEthSpec>::empty(spec);
-    gloas_block.slot = Slot::new(TEST_SLOT);
-    let bid = &mut gloas_block.body.signed_execution_payload_bid.message;
-    bid.builder_index = builder_index;
-    bid.execution_requests_root =
-        ExecutionRequestsGloas::<MainnetEthSpec>::default().tree_hash_root();
-    BeaconBlock::Gloas(gloas_block)
-}
-
-/// The envelope for `block` that every decision binding accepts.
-fn envelope_for_block(
-    block: &BeaconBlock<MainnetEthSpec>,
-) -> ExecutionPayloadEnvelope<MainnetEthSpec> {
-    let mut envelope = self_build_envelope(block.canonical_root());
-    envelope.parent_beacon_block_root = block.parent_root();
-    envelope
-}
-
-/// The consensus value a fixed-decision mock returns so `sign_block` decides `block` for the
-/// harness validator regardless of the local proposal.
-fn decided_consensus_data(
-    committee: &CommitteeSetup,
+fn decision(
+    setup: &CommitteeSetup,
     pubkey: PublicKeyBytes,
     block: &BeaconBlock<MainnetEthSpec>,
+    payload_root: Hash256,
 ) -> ProposerConsensusData {
-    let validator_index = committee.validators[0]
-        .index
-        .expect("the harness validator has a beacon index");
+    let BeaconBlock::Gloas(block) = block.clone() else {
+        panic!("Gloas fixture")
+    };
     ProposerConsensusData {
         duty: ValidatorDuty {
             r#type: BEACON_ROLE_PROPOSER,
             pub_key: pubkey,
             slot: Slot::new(TEST_SLOT),
-            validator_index,
+            validator_index: setup.validators[0].index.unwrap(),
             committee_index: 0,
             committee_length: 0,
             committees_at_slot: 0,
@@ -282,1030 +133,489 @@ fn decided_consensus_data(
             validator_sync_committee_indices: Default::default(),
         },
         version: DataVersion::from(ForkName::Gloas),
-        data_ssz: VariableList::new(block.as_ssz_bytes()).expect("block bytes should fit"),
-    }
-}
-
-/// Before-values of the three envelope outcome labels, taken under `METRIC_TEST_LOCK`.
-struct OutcomeCounters {
-    published: crate::metrics::IntCounter,
-    not_built_locally: crate::metrics::IntCounter,
-    failed: crate::metrics::IntCounter,
-    external_build: crate::metrics::IntCounter,
-    published_before: u64,
-    not_built_locally_before: u64,
-    failed_before: u64,
-    external_build_before: u64,
-}
-
-impl OutcomeCounters {
-    fn snapshot() -> Self {
-        let metric = crate::metrics::ENVELOPE_SIGNING_OUTCOMES
-            .as_ref()
-            .expect("metric should be created");
-        let published = metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_PUBLISHED]);
-        let not_built_locally =
-            metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY]);
-        let failed = metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_FAILED]);
-        let external_build =
-            metric.with_label_values(&[crate::metrics::ENVELOPE_OUTCOME_EXTERNAL_BUILD]);
-        Self {
-            published_before: published.get(),
-            not_built_locally_before: not_built_locally.get(),
-            failed_before: failed.get(),
-            external_build_before: external_build.get(),
-            published,
-            not_built_locally,
-            failed,
-            external_build,
-        }
-    }
-
-    /// Asserts the delta of every outcome label since the snapshot. `assert_deltas` pins
-    /// the external_build label to zero; external-build tests use `assert_external_build`.
-    fn assert_external_build(&self, external_build: u64) {
-        assert_eq!(
-            self.external_build.get() - self.external_build_before,
-            external_build,
-            "unexpected delta on the external_build outcome label"
-        );
-    }
-
-    fn assert_deltas(&self, published: u64, not_built_locally: u64, failed: u64) {
-        self.assert_external_build(0);
-        assert_eq!(
-            self.published.get() - self.published_before,
-            published,
-            "unexpected delta on the published outcome label"
-        );
-        assert_eq!(
-            self.not_built_locally.get() - self.not_built_locally_before,
-            not_built_locally,
-            "unexpected delta on the not_built_locally outcome label"
-        );
-        assert_eq!(
-            self.failed.get() - self.failed_before,
-            failed,
-            "unexpected delta on the failed outcome label"
-        );
-    }
-}
-
-/// Asserts that the duty stopped before any outward action: no dissemination broadcast and no
-/// signature collection.
-fn assert_no_outward_action(harness: &ValidatorStoreTestHarness, context: &str) {
-    assert!(
-        harness.captured_disseminations.lock().is_empty(),
-        "no dissemination may be broadcast {context}"
-    );
-    assert!(
-        harness.captured_calls.lock().is_empty(),
-        "no signature collection may happen {context}"
-    );
-}
-
-// ==================== Builder path ====================
-
-/// The builder operator disseminates its blinded envelope, signs, and returns the envelope.
-#[tokio::test(flavor = "multi_thread")]
-async fn builder_disseminates_signs_and_publishes() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-
-    let signed = sign_envelope(&harness, pubkey, envelope.clone())
-        .await
-        .expect("the builder path must sign successfully");
-
-    assert_eq!(
-        signed.message, envelope,
-        "the returned message must be the input envelope unchanged"
-    );
-    let disseminations = harness.captured_disseminations.lock();
-    assert_eq!(
-        disseminations.len(),
-        1,
-        "the builder must broadcast exactly one dissemination"
-    );
-    assert_eq!(
-        disseminations[0].validator_pubkey, pubkey,
-        "the dissemination must carry the duty validator"
-    );
-    assert_eq!(
-        disseminations[0].committee_id,
-        ssv_types::CommitteeId::from(test_operator_ids().to_vec()),
-        "the dissemination must route to the cluster's committee"
-    );
-    let sent = &disseminations[0].dissemination;
-    assert_eq!(sent.slot, Slot::new(TEST_SLOT));
-    assert_eq!(
-        sent.blinded_envelope::<MainnetEthSpec>()
-            .expect("the broadcast bytes must decode"),
-        BlindedExecutionPayloadEnvelope::from_full(&envelope),
-        "the broadcast must carry the blinded form of the local envelope"
-    );
-}
-
-/// Exactly one collection happens, over the blinded envelope root under
-/// `Domain::BeaconBuilder`, with the `Envelope` partial-signature kind.
-#[tokio::test(flavor = "multi_thread")]
-async fn signing_root_is_the_blinded_envelope_root_under_beacon_builder_domain() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-
-    let domain_hash = envelope_domain_hash(&harness);
-    let expected_root =
-        BlindedExecutionPayloadEnvelope::from_full(&envelope).signing_root(domain_hash);
-
-    sign_envelope(&harness, pubkey, envelope)
-        .await
-        .expect("the envelope duty must sign successfully");
-
-    let captured = harness.captured_calls.lock();
-    assert_eq!(
-        captured.len(),
-        1,
-        "exactly one signature collection must happen"
-    );
-    assert_eq!(
-        captured[0].signing_root, expected_root,
-        "the signing root must be the blinded envelope root under Domain::BeaconBuilder"
-    );
-    assert_eq!(
-        captured[0].metadata.kind,
-        PartialSignatureKind::Envelope,
-        "the partial signature kind must be Envelope"
-    );
-    assert_eq!(
-        captured[0].metadata.role,
-        Role::EnvelopeProposer,
-        "the collection role must be EnvelopeProposer"
-    );
-}
-
-/// The envelope path succeeds with slashing protection enabled and writes no block-proposal
-/// record at the duty slot: a first-time probe insertion afterwards is still accepted as safe.
-#[tokio::test(flavor = "multi_thread")]
-async fn envelope_signing_does_not_touch_the_slashing_db() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = harness_with_options(HarnessOptions {
-        disable_slashing_protection: false,
-        ..gloas_options()
-    });
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-
-    let signed = sign_envelope(&harness, pubkey, envelope.clone())
-        .await
-        .expect("the envelope duty must succeed despite slashing protection being enabled");
-
-    assert_eq!(
-        signed.message, envelope,
-        "the returned message must be the input envelope unchanged"
-    );
-    // Any record left by the envelope path would surface here as `SameData` or a
-    // double-proposal error instead of `Valid`.
-    let first_time_probe = harness
-        .slashing_protection
-        .check_and_insert_block_signing_root(
-            &pubkey,
-            Slot::new(TEST_SLOT),
-            Hash256::repeat_byte(0xEE).into(),
-        );
-    assert!(
-        matches!(first_time_probe, Ok(Safe::Valid)),
-        "no block-proposal record may exist at the duty slot after envelope signing, got {first_time_probe:?}"
-    );
-}
-
-/// A builder whose local BN envelope carries a different execution block hash than the decided
-/// bid must not disseminate or sign it.
-#[tokio::test(flavor = "multi_thread")]
-async fn builder_with_inconsistent_block_hash_broadcasts_nothing() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    let mut context = context_for(&envelope, true);
-    context.block_hash = types::ExecutionBlockHash::from_root(Hash256::repeat_byte(0xBB));
-    seed_context(&harness, pubkey, context);
-    let counters = OutcomeCounters::snapshot();
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeBuilderInconsistent { .. }
-            ))
-        ),
-        "an inconsistent local envelope must be rejected with the dedicated error, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "for an inconsistent local envelope");
-}
-
-/// A builder whose local envelope fails a decision binding must not disseminate or sign it.
-#[tokio::test(flavor = "multi_thread")]
-async fn builder_with_binding_mismatch_broadcasts_nothing() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    let mut context = context_for(&envelope, true);
-    context.parent_block_root = Hash256::repeat_byte(0xCC);
-    seed_context(&harness, pubkey, context);
-    let counters = OutcomeCounters::snapshot();
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeBindingMismatch {
-                    field: "parent_beacon_block_root"
-                }
-            ))
-        ),
-        "a binding mismatch must be rejected with the mismatching field, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "for a binding-mismatched local envelope");
-}
-
-// ==================== Non-builder path ====================
-
-/// Lighthouse's envelope callback on a non-builder returns the delegated sentinel at once: the
-/// share is signed by the task `sign_block` spawned, and the callback must neither wait for the
-/// dissemination nor collect a second signature.
-#[tokio::test(start_paused = true)]
-async fn non_builder_callback_returns_delegated_sentinel_without_signing() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let local_envelope = self_build_envelope(test_decided_root());
-    let mut builder_envelope = local_envelope.clone();
-    builder_envelope.payload.block_number = 42;
-    seed_context(&harness, pubkey, context_for(&builder_envelope, false));
-    insert_dissemination(&harness, pubkey, &builder_envelope);
-    let counters = OutcomeCounters::snapshot();
-
-    let result = sign_envelope(&harness, pubkey, local_envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeNonBuilderDelegated { .. }
-            ))
-        ),
-        "a non-builder callback must return the delegated sentinel, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 0);
-    assert_no_outward_action(&harness, "from a non-builder callback");
-}
-
-/// The non-builder task signs the disseminated envelope's root, never its own, and broadcasts
-/// no dissemination.
-#[tokio::test(flavor = "multi_thread")]
-async fn non_builder_task_signs_disseminated_root() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    // The builder's envelope differs from what this operator's own node built.
-    let mut builder_envelope = self_build_envelope(test_decided_root());
-    builder_envelope.payload.block_number = 42;
-    let context = context_for(&builder_envelope, false);
-    seed_context(&harness, pubkey, context);
-    let disseminated = insert_dissemination(&harness, pubkey, &builder_envelope);
-    let counters = OutcomeCounters::snapshot();
-
-    let domain_hash = envelope_domain_hash(&harness);
-
-    run_non_builder_task(&harness, pubkey, context)
-        .await
-        .expect("the non-builder task must contribute its share");
-
-    counters.assert_deltas(0, 1, 0);
-    let captured = harness.captured_calls.lock();
-    assert_eq!(
-        captured.len(),
-        1,
-        "exactly one signature share is contributed"
-    );
-    assert_eq!(
-        captured[0].signing_root,
-        disseminated.signing_root(domain_hash),
-        "the non-builder must sign the disseminated envelope's root"
-    );
-    assert!(
-        harness.captured_disseminations.lock().is_empty(),
-        "a non-builder must never broadcast a dissemination"
-    );
-}
-
-/// Without a dissemination, the non-builder task times out at the deadline having signed
-/// nothing.
-#[tokio::test(start_paused = true)]
-async fn non_builder_without_dissemination_times_out() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    let context = context_for(&envelope, false);
-    seed_context(&harness, pubkey, context);
-    let counters = OutcomeCounters::snapshot();
-
-    let result = run_non_builder_task(&harness, pubkey, context).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::DisseminationTimeout { .. }
-            ))
-        ),
-        "a missing dissemination must time out with the dedicated error, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "when no dissemination arrives");
-}
-
-/// Missing dissemination follows the configured due point, including one later than half-slot.
-#[tokio::test(start_paused = true)]
-async fn dissemination_wait_uses_configured_payload_due() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    for (bps, expected_offset) in PAYLOAD_DUE_CASES {
-        // Arrange: no peer supplies the envelope before the configured deadline.
-        let (harness, pubkey) = harness_with_options(gloas_options_with_payload_due(bps));
-        harness.slot_clock.set_slot(TEST_SLOT);
-        let envelope = self_build_envelope(test_decided_root());
-        let context = context_for(&envelope, false);
-        let signing = run_non_builder_task(&harness, pubkey, context);
-        tokio::pin!(signing);
-        assert!(signing.as_mut().now_or_never().is_none());
-
-        // Act: drive both clocks to just before the deadline, then across it.
-        let before_deadline = expected_offset - BEFORE_PAYLOAD_DEADLINE;
-        harness.slot_clock.advance_time(before_deadline);
-        tokio::time::advance(before_deadline).await;
-        assert!(
-            signing.as_mut().now_or_never().is_none(),
-            "dissemination wait ended early"
-        );
-        harness.slot_clock.advance_time(BEFORE_PAYLOAD_DEADLINE);
-        tokio::time::advance(BEFORE_PAYLOAD_DEADLINE).await;
-
-        // Assert: the wait ends at payload due without signing or publication.
-        let result = signing
-            .now_or_never()
-            .expect("dissemination wait should end at payload due");
-        assert!(matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::DisseminationTimeout { .. }
-            ))
-        ));
-        assert_no_outward_action(&harness, "when no dissemination arrives");
-    }
-}
-
-/// Builder and non-builder collection share an absolute deadline, even after a late start.
-#[tokio::test(start_paused = true)]
-async fn envelope_collection_uses_configured_payload_due() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    for (bps, expected_offset) in PAYLOAD_DUE_CASES {
-        for built_locally in [true, false] {
-            // Arrange: start collection late and withhold quorum on either signing path.
-            let mut options = gloas_options_with_payload_due(bps);
-            options.collector_hangs = true;
-            let (harness, pubkey) = harness_with_options(options);
-            harness.slot_clock.set_slot(TEST_SLOT);
-            let envelope = self_build_envelope(test_decided_root());
-            let context = context_for(&envelope, built_locally);
-            seed_context(&harness, pubkey, context);
-            if !built_locally {
-                insert_dissemination(&harness, pubkey, &envelope);
+        data_ssz: VariableList::new(
+            GloasProposalData {
+                block,
+                payload_root,
             }
-            let call_offset = COLLECTION_START_OFFSET;
-            harness.slot_clock.advance_time(call_offset);
-            tokio::time::advance(call_offset).await;
-            let signing = async {
-                if built_locally {
-                    sign_envelope(&harness, pubkey, envelope).await.map(|_| ())
-                } else {
-                    run_non_builder_task(&harness, pubkey, context).await
-                }
-            };
-            tokio::pin!(signing);
-            assert!(signing.as_mut().now_or_never().is_none());
-            assert_eq!(envelope_collection_count(&harness), 1);
-
-            // Act: the late start must not move the absolute slot deadline.
-            let before_deadline = expected_offset - call_offset - BEFORE_PAYLOAD_DEADLINE;
-            harness.slot_clock.advance_time(before_deadline);
-            tokio::time::advance(before_deadline).await;
-            assert!(
-                signing.as_mut().now_or_never().is_none(),
-                "collection ended early"
-            );
-            harness.slot_clock.advance_time(BEFORE_PAYLOAD_DEADLINE);
-            tokio::time::advance(BEFORE_PAYLOAD_DEADLINE).await;
-
-            // Assert: the collector receives the configured payload deadline.
-            let result = signing
-                .now_or_never()
-                .expect("collection should expire at payload due");
-            assert!(matches!(
-                result,
-                Err(Error::SpecificError(
-                    SpecificError::SignatureCollectionFailed(CollectionError::CollectionTimeout)
-                ))
-            ));
-        }
+            .as_ssz_bytes(),
+        )
+        .unwrap(),
     }
 }
 
-/// Starting at payload due is rejected before either envelope path can sign or disseminate.
-#[tokio::test(start_paused = true)]
-async fn envelope_paths_reject_at_configured_payload_due() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    for (bps, expected_offset) in PAYLOAD_DUE_CASES {
-        for built_locally in [true, false] {
-            // Arrange: start either signing path exactly at the configured deadline.
-            let (harness, pubkey) = harness_with_options(gloas_options_with_payload_due(bps));
-            harness.slot_clock.set_slot(TEST_SLOT);
-            let envelope = self_build_envelope(test_decided_root());
-            let context = context_for(&envelope, built_locally);
-            seed_context(&harness, pubkey, context);
-            harness.slot_clock.advance_time(expected_offset);
-            tokio::time::advance(expected_offset).await;
+#[test]
+fn doubly_blinded_envelope_matches_independent_progressive_root_vector() {
+    // Arrange: retain the fixture checked against consensus-specs pyspec at a5a1bc630.
+    let full = ExecutionPayloadEnvelope::<MainnetEthSpec> {
+        payload: ExecutionPayloadGloas::default(),
+        execution_requests: ExecutionRequestsGloas::default(),
+        builder_index: 42,
+        beacon_block_root: Hash256::from_low_u64_be(0x1111),
+        parent_beacon_block_root: Hash256::from_low_u64_be(0x2222),
+    };
 
-            // Act: try to sign an envelope bound to the accepted block context.
-            let result = if built_locally {
-                sign_envelope(&harness, pubkey, envelope).await.map(|_| ())
-            } else {
-                run_non_builder_task(&harness, pubkey, context).await
-            };
+    // Act: replace both variable fields with their roots using the production view.
+    let blinded = BlindedExecutionPayloadEnvelope::from_full(&full);
 
-            // Assert: reject before collecting signatures, disseminating, or publishing.
-            assert!(matches!(
-                result,
-                Err(Error::SpecificError(
-                    SpecificError::EnvelopeDeadlinePassed { .. }
-                ))
-            ));
-            assert_no_outward_action(&harness, "at the configured payload-due deadline");
-        }
+    // Assert: both full parity and an independent fixed root survive the second blinding.
+    let expected = Hash256::from_slice(
+        &hex::decode("9af9a50572381e869605147c3d6220c969d6f12087d94393ec0440660f752c5e").unwrap(),
+    );
+    assert_eq!(blinded.tree_hash_root(), full.tree_hash_root());
+    assert_eq!(blinded.tree_hash_root(), expected);
+    assert_eq!(blinded.payload_root, full.payload.tree_hash_root());
+    assert_eq!(
+        blinded.execution_requests_root,
+        full.execution_requests.tree_hash_root()
+    );
+}
+
+#[tokio::test]
+async fn self_build_signs_one_pair_then_callback_only_waits() {
+    // Arrange: local contents match the consensus value.
+    let (harness, pubkey) = harness();
+    let block = block(&harness.spec, BUILDER_INDEX_SELF_BUILD);
+    let envelope = envelope(&block);
+    let expected_block = SigningData {
+        object_root: block.canonical_root(),
+        domain: domain(&harness, Domain::BeaconProposer),
     }
-}
+    .tree_hash_root();
+    let expected_envelope = BlindedExecutionPayloadEnvelope::from_full(&envelope)
+        .signing_root(domain(&harness, Domain::BeaconBuilder));
 
-/// A disseminated envelope that fails a decision binding is never signed.
-#[tokio::test(flavor = "multi_thread")]
-async fn non_builder_rejects_binding_mismatched_dissemination() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let local_envelope = self_build_envelope(test_decided_root());
-    let context = context_for(&local_envelope, false);
-    seed_context(&harness, pubkey, context);
-    // Disseminated envelope binds to a different beacon block root.
-    let mut forged = local_envelope.clone();
-    forged.beacon_block_root = Hash256::repeat_byte(0xDD);
-    insert_dissemination(&harness, pubkey, &forged);
-    let counters = OutcomeCounters::snapshot();
-
-    let result = run_non_builder_task(&harness, pubkey, context).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeBindingMismatch {
-                    field: "beacon_block_root"
-                }
-            ))
-        ),
-        "a binding-mismatched dissemination must be rejected, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "for a binding-mismatched dissemination");
-}
-
-/// Disseminated bytes that do not decode as a blinded envelope are never signed.
-#[tokio::test(flavor = "multi_thread")]
-async fn non_builder_rejects_undecodable_dissemination() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    let context = context_for(&envelope, false);
-    seed_context(&harness, pubkey, context);
-    harness.dissemination_store.insert(
-        pubkey,
-        EnvelopeDissemination {
-            slot: Slot::new(TEST_SLOT),
-            envelope: VariableList::new(vec![0xFF; 3]).expect("garbage bytes should fit"),
-        },
-    );
-    let counters = OutcomeCounters::snapshot();
-
-    let result = run_non_builder_task(&harness, pubkey, context).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::DisseminationUndecodable { .. }
-            ))
-        ),
-        "undecodable disseminated bytes must be rejected, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "for an undecodable dissemination");
-}
-
-// ==================== Gate tests ====================
-
-/// A pre-Gloas slot is rejected before any outward action.
-#[tokio::test(flavor = "multi_thread")]
-async fn pre_gloas_slot_is_rejected_before_signing() {
-    let (harness, pubkey) = harness_with_options(HarnessOptions {
-        spec: electra_at_genesis_spec(),
-        ..Default::default()
-    });
-    let envelope = self_build_envelope(test_decided_root());
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeBeforeGloas { .. }
-            ))
-        ),
-        "a pre-Gloas envelope must be rejected with the dedicated error, got {result:?}"
-    );
-    assert_no_outward_action(&harness, "for a pre-Gloas envelope");
-}
-
-/// A non-self-build envelope is rejected before any outward action.
-#[tokio::test(flavor = "multi_thread")]
-async fn non_self_build_envelope_is_rejected_before_signing() {
-    let (harness, pubkey) = gloas_harness();
-    let mut envelope = self_build_envelope(test_decided_root());
-    envelope.builder_index = 7;
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(SpecificError::EnvelopeNotSelfBuild {
-                builder_index: 7
-            }))
-        ),
-        "a non-self-build envelope must be rejected with the dedicated error, got {result:?}"
-    );
-    assert_no_outward_action(&harness, "for a non-self-build envelope");
-}
-
-/// A decided context that committed to an external builder's bid short-circuits the duty
-/// before the non-builder path can wait for a dissemination that will never arrive: the
-/// runner returns the dedicated no-op sentinel immediately, with no outward action. The
-/// local BN's envelope is self-build here (the mixed case: this operator produced a
-/// self-build candidate, but consensus decided another operator's external-bid block).
-#[tokio::test(start_paused = true)]
-async fn external_build_decision_short_circuits_before_waiting() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let counters = OutcomeCounters::snapshot();
-    let envelope = self_build_envelope(test_decided_root());
-    let mut context = context_for(&envelope, false);
-    context.builder_index = 7;
-    seed_context(&harness, pubkey, context);
-
-    // With a paused clock, a regression back into the dissemination wait would hang the
-    // test rather than pass it: nothing advances time and no dissemination is inserted.
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(SpecificError::EnvelopeExternalBuild {
-                builder_index: 7
-            }))
-        ),
-        "an external-build decision must return the no-op sentinel, got {result:?}"
-    );
-    assert_no_outward_action(&harness, "for an external-build decision");
-    counters.assert_external_build(1);
-}
-
-/// A future-slot envelope is rejected before any outward action.
-#[tokio::test(flavor = "multi_thread")]
-async fn future_slot_envelope_is_rejected_before_signing() {
-    let (harness, pubkey) = gloas_harness();
-    let mut envelope = self_build_envelope(test_decided_root());
-    envelope.payload.slot_number = Slot::new(TEST_SLOT + 1);
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(result, Err(Error::GreaterThanCurrentSlot { .. })),
-        "a future-slot envelope must be rejected with the dedicated error, got {result:?}"
-    );
-    assert_no_outward_action(&harness, "for a future-slot envelope");
-}
-
-/// An envelope without a recorded decided context is rejected before any outward action.
-#[tokio::test(flavor = "multi_thread")]
-async fn missing_decided_context_is_rejected_before_signing() {
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::DecidedRootUnavailable { .. }
-            ))
-        ),
-        "an envelope without a decided context must be rejected with the dedicated error, got {result:?}"
-    );
-    assert_no_outward_action(&harness, "without a decided context");
-}
-
-/// A duty starting past the payload-due mark (50% of the slot) is rejected before any outward
-/// action, builder or not.
-#[tokio::test(flavor = "multi_thread")]
-async fn duty_past_the_payload_due_deadline_is_rejected() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-    // Position the clock 7s into the 12s slot, past the 6s payload-due mark. `start_of` is a
-    // `SlotClock` trait method, so bring the trait into scope locally.
-    use slot_clock::SlotClock as _;
-    let slot_start = harness
-        .slot_clock
-        .start_of(Slot::new(TEST_SLOT))
-        .expect("slot start must exist");
+    // Act: the block callback completes before Lighthouse asks for the envelope.
     harness
-        .slot_clock
-        .set_current_time(slot_start + std::time::Duration::from_secs(7));
-    let counters = OutcomeCounters::snapshot();
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeDeadlinePassed { .. }
-            ))
-        ),
-        "a duty past the payload-due mark must be rejected, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert_no_outward_action(&harness, "past the payload-due deadline");
-}
-
-// ==================== Metrics and failure tests ====================
-
-/// The happy path increments only the `published` label.
-#[tokio::test(flavor = "multi_thread")]
-async fn published_outcome_increments_only_the_published_label() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-    let counters = OutcomeCounters::snapshot();
-
-    sign_envelope(&harness, pubkey, envelope)
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(block)),
+            Slot::new(TEST_SLOT),
+            Some(envelope.payload.tree_hash_root()),
+        )
         .await
-        .expect("the happy-path envelope duty must sign successfully");
-
-    counters.assert_deltas(1, 0, 0);
-}
-
-/// A signature-collection failure increments the `failed` label.
-#[tokio::test(flavor = "multi_thread")]
-async fn collection_failure_increments_the_failed_label() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = harness_with_options(HarnessOptions {
-        collector_failure: Some(CollectionError::EmptySignature),
-        ..gloas_options()
-    });
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-    let counters = OutcomeCounters::snapshot();
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::SignatureCollectionFailed(CollectionError::EmptySignature)
-            ))
-        ),
-        "a collection failure must surface as SignatureCollectionFailed, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-}
-
-/// A failed dissemination broadcast surfaces the dedicated error, increments `failed`, and
-/// never starts signature collection.
-#[tokio::test(flavor = "multi_thread")]
-async fn broadcast_failure_increments_failed_and_signs_nothing() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = harness_with_options(HarnessOptions {
-        dissemination_failure: Some(CollectionError::DisseminationSendFailed(
-            "sender closed".to_string(),
-        )),
-        ..gloas_options()
-    });
-    let envelope = self_build_envelope(test_decided_root());
-    seed_context(&harness, pubkey, context_for(&envelope, true));
-    let counters = OutcomeCounters::snapshot();
-
-    let result = sign_envelope(&harness, pubkey, envelope).await;
-
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::DisseminationBroadcastFailed(_)
-            ))
-        ),
-        "a broadcast failure must surface as DisseminationBroadcastFailed, got {result:?}"
-    );
-    counters.assert_deltas(0, 0, 1);
-    assert!(
-        harness.captured_calls.lock().is_empty(),
-        "no signature collection may happen after a failed broadcast"
-    );
-}
-
-// ==================== End-to-end tests ====================
-
-/// End to end: `sign_block` records the decided context (with builder provenance), then a
-/// matching envelope disseminates and signs through the builder path.
-#[tokio::test(flavor = "multi_thread")]
-async fn sign_block_then_matching_envelope_succeeds() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    // `EmptyBlock::empty` fixes the slot to `spec.genesis_slot`, so the slot is set on the
-    // inner struct before wrapping. The bid commitments are aligned with the envelope the
-    // test presents afterwards, since the write site now records them for validation.
-    let mut gloas_block = BeaconBlockGloas::<MainnetEthSpec>::empty(&harness.spec);
-    gloas_block.slot = Slot::new(TEST_SLOT);
+        .unwrap();
     {
-        let bid = &mut gloas_block.body.signed_execution_payload_bid.message;
-        // A self-build block: the empty fixture's zeroed bid must carry the sentinel and the
-        // commitments the presented envelope will bind to.
-        bid.builder_index = BUILDER_INDEX_SELF_BUILD;
-        bid.execution_requests_root =
-            ExecutionRequestsGloas::<MainnetEthSpec>::default().tree_hash_root();
+        let calls = harness.captured_calls.lock();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].signing_root, expected_block);
+        assert_eq!(calls[0].envelope_signing_root, Some(expected_envelope));
+        assert_eq!(calls[0].metadata.role, Role::Proposer);
+        assert_eq!(calls[0].metadata.kind, PartialSignatureKind::PostConsensus);
+        assert!(!calls[0].wait_only);
     }
-    let bid = &gloas_block.body.signed_execution_payload_bid.message;
-    let parent_block_root = bid.parent_block_root;
-    let block = BeaconBlock::Gloas(gloas_block);
-    let mut envelope = self_build_envelope(block.canonical_root());
-    envelope.parent_beacon_block_root = parent_block_root;
+    let signed = harness
+        .validator_store
+        .sign_execution_payload_envelope(pubkey, envelope.clone())
+        .await
+        .unwrap();
 
+    // Assert: publication uses the original contents and does not sign or send a second packet.
+    assert_eq!(signed.message, envelope);
+    let calls = harness.captured_calls.lock();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].wait_only);
+    assert_eq!(calls[1].signing_root, expected_envelope);
+    assert_eq!(calls[1].envelope_signing_root, Some(expected_block));
+}
+
+#[tokio::test]
+async fn external_local_candidate_signs_decided_self_build_without_local_payload() {
+    // Arrange: the local builder is external, but QBFT decides another operator's self-build.
+    let (setup, pubkey) = committee();
+    let spec = gloas_at_genesis_spec();
+    let decided_block = block(&spec, BUILDER_INDEX_SELF_BUILD);
+    let decided_envelope = envelope(&decided_block);
+    let decided = decision(
+        &setup,
+        pubkey,
+        &decided_block,
+        decided_envelope.payload.tree_hash_root(),
+    );
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![setup],
+        OperatorId(1),
+        HarnessOptions {
+            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
+            ..options()
+        },
+    );
+    let expected = BlindedExecutionPayloadEnvelope::from_full(&decided_envelope)
+        .signing_root(domain(&harness, Domain::BeaconBuilder));
+
+    // Act: no local payload or later dissemination is supplied.
     harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(block(&spec, EXTERNAL_BUILDER))),
+            Slot::new(TEST_SLOT),
+            None,
+        )
+        .await
+        .unwrap();
+    let result = harness
+        .validator_store
+        .sign_execution_payload_envelope(pubkey, decided_envelope)
+        .await;
+
+    // Assert: both shares were signed from the decision, while local publication is suppressed.
+    assert!(matches!(
+        result,
+        Err(Error::SpecificError(SpecificError::EnvelopeNotLocal { .. }))
+    ));
+    let calls = harness.captured_calls.lock();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].envelope_signing_root, Some(expected));
+}
+
+#[tokio::test]
+async fn decided_external_builder_sends_only_block_share() {
+    // Arrange: the local self-build loses to an external builder decision.
+    let (setup, pubkey) = committee();
+    let spec = gloas_at_genesis_spec();
+    let decided = decision(
+        &setup,
+        pubkey,
+        &block(&spec, EXTERNAL_BUILDER),
+        Hash256::ZERO,
+    );
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![setup],
+        OperatorId(1),
+        HarnessOptions {
+            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
+            ..options()
+        },
+    );
+    let local = block(&spec, BUILDER_INDEX_SELF_BUILD);
+    let local_envelope = envelope(&local);
+
+    // Act: sign the committee decision, then exercise Lighthouse's local callback.
+    harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(local)),
+            Slot::new(TEST_SLOT),
+            Some(local_envelope.payload.tree_hash_root()),
+        )
+        .await
+        .unwrap();
+    let result = harness
+        .validator_store
+        .sign_execution_payload_envelope(pubkey, local_envelope)
+        .await;
+
+    // Assert: the external decision requires no envelope share or wait.
+    assert!(matches!(
+        result,
+        Err(Error::SpecificError(
+            SpecificError::EnvelopeExternalBuild { .. }
+        ))
+    ));
+    let calls = harness.captured_calls.lock();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].envelope_signing_root, None);
+}
+
+#[tokio::test]
+async fn missing_local_self_build_payload_root_aborts_before_signing() {
+    // Arrange: a malformed stateless production response omitted the self-build payload root.
+    let (harness, pubkey) = harness();
+    let block = block(&harness.spec, BUILDER_INDEX_SELF_BUILD);
+
+    // Act: enter the actual block callback without a root.
+    let result = harness
         .validator_store
         .sign_block(
             pubkey,
             UnsignedBlock::Full(FullBlockContents::Block(block)),
-            Slot::new(TEST_SLOT),
-            None,
-        )
-        .await
-        .expect("the Gloas block duty must sign successfully");
-    let signed = sign_envelope(&harness, pubkey, envelope.clone())
-        .await
-        .expect("an envelope matching the recorded context must sign through the builder path");
-
-    assert_eq!(
-        signed.message, envelope,
-        "the returned message must be the input envelope unchanged"
-    );
-    assert_eq!(
-        harness.captured_disseminations.lock().len(),
-        1,
-        "the builder provenance recorded by sign_block must drive a dissemination"
-    );
-}
-
-/// Mixed bid, the case Lighthouse's callback cannot serve: this operator's own node took an
-/// external builder's bid, the cluster decided another operator's self-build block. `sign_block`
-/// must spawn the non-builder task, which signs the disseminated envelope's root once it arrives.
-/// A later callback for the slot returns the delegated sentinel and adds no second share.
-#[tokio::test(flavor = "multi_thread")]
-async fn sign_block_with_another_operators_self_build_block_signs_its_envelope() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (committee, pubkey) = single_validator_committee();
-    let spec = gloas_at_genesis_spec();
-    let decided_block = gloas_block_with_bid(&spec, BUILDER_INDEX_SELF_BUILD);
-    let decided = decided_consensus_data(&committee, pubkey, &decided_block);
-    let harness = ValidatorStoreTestHarness::new_with_options(
-        vec![committee],
-        OperatorId(1),
-        HarnessOptions {
-            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
-            ..gloas_options()
-        },
-    );
-    let local_block = gloas_block_with_bid(&spec, 7);
-    assert_ne!(
-        local_block.canonical_root(),
-        decided_block.canonical_root(),
-        "the fixture must model a decided block this operator did not build"
-    );
-    let builder_envelope = envelope_for_block(&decided_block);
-    let domain_hash = envelope_domain_hash(&harness);
-
-    harness
-        .validator_store
-        .sign_block(
-            pubkey,
-            UnsignedBlock::Full(FullBlockContents::Block(local_block)),
-            Slot::new(TEST_SLOT),
-            None,
-        )
-        .await
-        .expect("the Gloas block duty must sign successfully");
-    // The builder operator's dissemination arrives after the block decided.
-    let disseminated = insert_dissemination(&harness, pubkey, &builder_envelope);
-
-    let signed_root = wait_for_envelope_signing_root(&harness).await;
-
-    assert_eq!(
-        signed_root,
-        disseminated.signing_root(domain_hash),
-        "the spawned task must sign the disseminated envelope's root"
-    );
-    assert!(
-        harness.captured_disseminations.lock().is_empty(),
-        "a non-builder must never broadcast a dissemination"
-    );
-
-    // Lighthouse's callback for the same slot: nothing to publish, no second share.
-    let result = sign_envelope(&harness, pubkey, envelope_for_block(&decided_block)).await;
-    assert!(
-        matches!(
-            result,
-            Err(Error::SpecificError(
-                SpecificError::EnvelopeNonBuilderDelegated { .. }
-            ))
-        ),
-        "the callback on a non-builder must return the delegated sentinel, got {result:?}"
-    );
-    assert_eq!(
-        envelope_collection_count(&harness),
-        1,
-        "the callback must not collect a second envelope share"
-    );
-}
-
-/// The builder operator signs from Lighthouse's callback only: `sign_block` on a block this
-/// operator built spawns no non-builder task. A valid dissemination is stored up front so a
-/// wrongly spawned task would sign immediately and be caught.
-#[tokio::test(flavor = "multi_thread")]
-async fn sign_block_as_builder_spawns_no_non_builder_task() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (harness, pubkey) = gloas_harness();
-    let block = gloas_block_with_bid(&harness.spec, BUILDER_INDEX_SELF_BUILD);
-    insert_dissemination(&harness, pubkey, &envelope_for_block(&block));
-
-    harness
-        .validator_store
-        .sign_block(
-            pubkey,
-            UnsignedBlock::Full(FullBlockContents::Block(block)),
-            Slot::new(TEST_SLOT),
-            None,
-        )
-        .await
-        .expect("the Gloas block duty must sign successfully");
-    let_spawned_tasks_run().await;
-
-    assert_eq!(
-        envelope_collection_count(&harness),
-        0,
-        "the builder must not sign its envelope before Lighthouse's callback"
-    );
-}
-
-/// A decided block that committed to an external builder's bid has no self-build envelope duty,
-/// so `sign_block` spawns nothing even though this operator did not build the block.
-#[tokio::test(flavor = "multi_thread")]
-async fn sign_block_with_external_build_decision_spawns_no_non_builder_task() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (committee, pubkey) = single_validator_committee();
-    let spec = gloas_at_genesis_spec();
-    let decided_block = gloas_block_with_bid(&spec, 7);
-    let decided = decided_consensus_data(&committee, pubkey, &decided_block);
-    let harness = ValidatorStoreTestHarness::new_with_options(
-        vec![committee],
-        OperatorId(1),
-        HarnessOptions {
-            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
-            ..gloas_options()
-        },
-    );
-    let local_block = gloas_block_with_bid(&spec, BUILDER_INDEX_SELF_BUILD);
-    insert_dissemination(&harness, pubkey, &envelope_for_block(&decided_block));
-
-    harness
-        .validator_store
-        .sign_block(
-            pubkey,
-            UnsignedBlock::Full(FullBlockContents::Block(local_block)),
-            Slot::new(TEST_SLOT),
-            None,
-        )
-        .await
-        .expect("the Gloas block duty must sign successfully");
-    let_spawned_tasks_run().await;
-
-    assert_eq!(
-        envelope_collection_count(&harness),
-        0,
-        "an external-build decision carries no self-build envelope duty"
-    );
-}
-
-/// Lighthouse can invoke `sign_block` twice for one slot: a second block-service notification
-/// for the same slot was observed on a devnet. The repeat must fail slashing protection inside
-/// `sign_abstract_block` as `SameData` before `sign_block` reaches the non-builder spawn, so only
-/// the first call's task signs. This pins the spawn's placement after `sign_abstract_block`: the
-/// other spawn-path tests disable slashing protection and call `sign_block` once, so a spawn
-/// moved above the slashing check would pass them and double-sign on the devnet.
-#[tokio::test(flavor = "multi_thread")]
-async fn repeated_sign_block_for_the_same_slot_spawns_one_non_builder_task() {
-    let _guard = METRIC_TEST_LOCK.lock().await;
-    let (committee, pubkey) = single_validator_committee();
-    let spec = gloas_at_genesis_spec();
-    let decided_block = gloas_block_with_bid(&spec, BUILDER_INDEX_SELF_BUILD);
-    let decided = decided_consensus_data(&committee, pubkey, &decided_block);
-    let harness = ValidatorStoreTestHarness::new_with_options(
-        vec![committee],
-        OperatorId(1),
-        HarnessOptions {
-            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
-            disable_slashing_protection: false,
-            ..gloas_options()
-        },
-    );
-    let local_block = gloas_block_with_bid(&spec, 7);
-    assert_ne!(
-        local_block.canonical_root(),
-        decided_block.canonical_root(),
-        "the fixture must model a decided block this operator did not build"
-    );
-    // Stored up front so the legitimately spawned task signs immediately, and a wrongly spawned
-    // second task would too.
-    insert_dissemination(&harness, pubkey, &envelope_for_block(&decided_block));
-
-    harness
-        .validator_store
-        .sign_block(
-            pubkey,
-            UnsignedBlock::Full(FullBlockContents::Block(local_block.clone())),
-            Slot::new(TEST_SLOT),
-            None,
-        )
-        .await
-        .expect("the first Gloas block duty must sign successfully");
-    wait_for_envelope_signing_root(&harness).await;
-
-    let repeat = harness
-        .validator_store
-        .sign_block(
-            pubkey,
-            UnsignedBlock::Full(FullBlockContents::Block(local_block)),
             Slot::new(TEST_SLOT),
             None,
         )
         .await;
-    assert!(
-        matches!(repeat, Err(Error::SameData)),
-        "a repeated sign_block for the same slot must be rejected by slashing protection as SameData, got {repeat:?}"
-    );
-    let_spawned_tasks_run().await;
 
-    assert_eq!(
-        envelope_collection_count(&harness),
-        1,
-        "a repeated sign_block must not spawn a second non-builder task"
+    // Assert: no invented root or outward signature can follow the malformed response.
+    assert!(matches!(
+        result,
+        Err(Error::SpecificError(SpecificError::MissingLocalPayloadRoot))
+    ));
+    assert!(harness.captured_calls.lock().is_empty());
+}
+
+#[tokio::test]
+async fn each_decided_envelope_field_is_required_before_publication_wait() {
+    for field in [
+        "payload_root",
+        "execution_requests_root",
+        "builder_index",
+        "beacon_block_root",
+        "parent_beacon_block_root",
+        "block_hash",
+    ] {
+        // Arrange: start with matching contents and change exactly one decided field.
+        let (harness, pubkey) = harness();
+        let envelope = envelope(&block(&harness.spec, BUILDER_INDEX_SELF_BUILD));
+        let mut context = context(&envelope, true);
+        match field {
+            "payload_root" => context.payload_root = Hash256::repeat_byte(1),
+            "execution_requests_root" => context.execution_requests_root = Hash256::repeat_byte(2),
+            "builder_index" => context.builder_index = EXTERNAL_BUILDER,
+            "block_hash" => {
+                context.block_hash = types::ExecutionBlockHash::from_root(Hash256::repeat_byte(5))
+            }
+            "beacon_block_root" => context.beacon_block_root = Hash256::repeat_byte(3),
+            "parent_beacon_block_root" => context.parent_block_root = Hash256::repeat_byte(4),
+            _ => unreachable!(),
+        }
+        seed(&harness, pubkey, context);
+
+        // Act: try to publish local contents against the mismatching decision.
+        let result = harness
+            .validator_store
+            .sign_execution_payload_envelope(pubkey, envelope)
+            .await;
+
+        // Assert: rejection happens before even waiting on a collector.
+        assert!(result.is_err(), "must bind {field}");
+        assert!(
+            harness.captured_calls.lock().is_empty(),
+            "must reject {field} before collection"
+        );
+    }
+}
+
+#[tokio::test]
+async fn slashable_block_signs_neither_block_nor_envelope_share() {
+    // Arrange: protection already records a different block at this slot.
+    let (setup, pubkey) = committee();
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![setup],
+        OperatorId(1),
+        HarnessOptions {
+            disable_slashing_protection: false,
+            ..options()
+        },
     );
-    assert!(
-        harness.captured_disseminations.lock().is_empty(),
-        "a non-builder must never broadcast a dissemination"
+    harness
+        .slashing_protection
+        .check_and_insert_block_signing_root(
+            &pubkey,
+            Slot::new(TEST_SLOT),
+            Hash256::repeat_byte(9).into(),
+        )
+        .unwrap();
+    let block = block(&harness.spec, BUILDER_INDEX_SELF_BUILD);
+    let payload_root = envelope(&block).payload.tree_hash_root();
+
+    // Act: the paired signing path must pass the existing block slashing gate.
+    let result = harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(block)),
+            Slot::new(TEST_SLOT),
+            Some(payload_root),
+        )
+        .await;
+
+    // Assert: both shares remain unsent, not merely the conflicting block share.
+    assert!(matches!(result, Err(Error::Slashable(_))));
+    assert!(harness.captured_calls.lock().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn envelope_wait_times_out_without_affecting_completed_block() {
+    // Arrange: the block quorum succeeds, then the envelope quorum remains unavailable.
+    let (harness, pubkey) = harness();
+    let block = block(&harness.spec, BUILDER_INDEX_SELF_BUILD);
+    let envelope = envelope(&block);
+    let signed_block = harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(block)),
+            Slot::new(TEST_SLOT),
+            Some(envelope.payload.tree_hash_root()),
+        )
+        .await;
+    assert!(signed_block.is_ok());
+    harness.hang_signature_collection();
+
+    // Act: only the envelope callback waits for its independent threshold.
+    let result = harness
+        .validator_store
+        .sign_execution_payload_envelope(pubkey, envelope)
+        .await;
+
+    // Assert: the deadline ends that wait, with one paired send and one wait-only call.
+    assert!(result.is_err());
+    let calls = harness.captured_calls.lock();
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].wait_only);
+    assert!(calls[1].wait_only);
+}
+
+#[tokio::test]
+async fn envelope_past_payload_deadline_never_waits() {
+    // Arrange: valid local contents, but the configured payload deadline has elapsed.
+    let (harness, pubkey) = harness();
+    let envelope = envelope(&block(&harness.spec, BUILDER_INDEX_SELF_BUILD));
+    seed(&harness, pubkey, context(&envelope, true));
+    let slot_start = harness.slot_clock.start_of(Slot::new(TEST_SLOT)).unwrap();
+    harness
+        .slot_clock
+        .set_current_time(slot_start + Duration::from_secs(7));
+
+    // Act: exercise the real deadline guard.
+    let result = harness
+        .validator_store
+        .sign_execution_payload_envelope(pubkey, envelope)
+        .await;
+
+    // Assert: expiry is checked before registering any collection wait.
+    assert!(matches!(
+        result,
+        Err(Error::SpecificError(
+            SpecificError::EnvelopeDeadlinePassed { .. }
+        ))
+    ));
+    assert!(harness.captured_calls.lock().is_empty());
+}
+
+#[tokio::test]
+async fn same_block_with_different_decided_payload_signs_decision_but_cannot_publish_local_contents()
+ {
+    // Arrange: block bytes match locally, but the decided payload root belongs to different
+    // contents.
+    let (setup, pubkey) = committee();
+    let spec = gloas_at_genesis_spec();
+    let block = block(&spec, BUILDER_INDEX_SELF_BUILD);
+    let local_envelope = envelope(&block);
+    let mut decided_envelope = local_envelope.clone();
+    decided_envelope.payload.block_number = 42;
+    let decided = decision(
+        &setup,
+        pubkey,
+        &block,
+        decided_envelope.payload.tree_hash_root(),
     );
+    let harness = ValidatorStoreTestHarness::new_with_options(
+        vec![setup],
+        OperatorId(1),
+        HarnessOptions {
+            decider: MockConsensusDecider::fixed_after_barrier(&decided, 1),
+            ..options()
+        },
+    );
+    let expected = BlindedExecutionPayloadEnvelope::from_full(&decided_envelope)
+        .signing_root(domain(&harness, Domain::BeaconBuilder));
+
+    // Act: sign the decided roots, then offer the local payload to the publication callback.
+    harness
+        .validator_store
+        .sign_block(
+            pubkey,
+            UnsignedBlock::Full(FullBlockContents::Block(block)),
+            Slot::new(TEST_SLOT),
+            Some(local_envelope.payload.tree_hash_root()),
+        )
+        .await
+        .unwrap();
+    let result = harness
+        .validator_store
+        .sign_execution_payload_envelope(pubkey, local_envelope)
+        .await;
+
+    // Assert: same block ownership is insufficient when the payload itself differs.
+    assert!(matches!(
+        result,
+        Err(Error::SpecificError(
+            SpecificError::EnvelopeBindingMismatch {
+                field: "payload_root"
+            }
+        ))
+    ));
+    let calls = harness.captured_calls.lock();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].envelope_signing_root, Some(expected));
+}
+
+#[tokio::test]
+async fn invalid_envelope_callback_inputs_never_wait() {
+    for case in ["future_slot", "external_envelope", "missing_decision"] {
+        // Arrange: no decided context, with one callback precondition violated per case.
+        let (harness, pubkey) = harness();
+        let mut envelope = envelope(&block(&harness.spec, BUILDER_INDEX_SELF_BUILD));
+        match case {
+            "future_slot" => envelope.payload.slot_number = Slot::new(TEST_SLOT + 1),
+            "external_envelope" => envelope.builder_index = EXTERNAL_BUILDER,
+            _ => {}
+        }
+
+        // Act: the callback validates inputs before interacting with collectors.
+        let result = harness
+            .validator_store
+            .sign_execution_payload_envelope(pubkey, envelope)
+            .await;
+
+        // Assert: retain the precise error ordering and no outward action.
+        match case {
+            "future_slot" => assert!(matches!(result, Err(Error::GreaterThanCurrentSlot { .. }))),
+            "external_envelope" => assert!(matches!(
+                result,
+                Err(Error::SpecificError(
+                    SpecificError::EnvelopeNotSelfBuild { .. }
+                ))
+            )),
+            _ => assert!(matches!(
+                result,
+                Err(Error::SpecificError(
+                    SpecificError::DecidedRootUnavailable { .. }
+                ))
+            )),
+        }
+        assert!(harness.captured_calls.lock().is_empty());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn envelope_wait_uses_configured_payload_deadline() {
+    for (payload_due_bps, due_seconds) in [(2500, 3), (7500, 9)] {
+        // Arrange: keep collection pending from one second into the slot.
+        let (setup, pubkey) = committee();
+        let mut spec = (*gloas_at_genesis_spec()).clone();
+        spec.payload_due_bps = payload_due_bps;
+        let harness = ValidatorStoreTestHarness::new_with_options(
+            vec![setup],
+            OperatorId(1),
+            HarnessOptions {
+                spec: std::sync::Arc::new(spec.compute_derived_values::<MainnetEthSpec>()),
+                collector_hangs: true,
+                ..options()
+            },
+        );
+        let envelope = envelope(&block(&harness.spec, BUILDER_INDEX_SELF_BUILD));
+        seed(&harness, pubkey, context(&envelope, true));
+        let slot_start = harness.slot_clock.start_of(Slot::new(TEST_SLOT)).unwrap();
+        harness
+            .slot_clock
+            .set_current_time(slot_start + Duration::from_secs(1));
+        let start = tokio::time::Instant::now();
+
+        // Act: Tokio advances only to the production callback's actual timeout.
+        let result = harness
+            .validator_store
+            .sign_execution_payload_envelope(pubkey, envelope)
+            .await;
+
+        // Assert: #1310's configured deadline survives the fold, including non-default values.
+        assert!(result.is_err());
+        assert_eq!(start.elapsed(), Duration::from_secs(due_seconds - 1));
+        let calls = harness.captured_calls.lock();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].wait_only);
+    }
 }

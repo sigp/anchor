@@ -806,7 +806,6 @@ dependencies = [
  "bls",
  "builder_types",
  "database",
- "dissemination_store",
  "eth2",
  "ethereum_ssz",
  "fork",
@@ -830,6 +829,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tree_hash",
+ "tree_hash_derive",
  "types",
  "validator_metrics",
  "validator_services",
@@ -1945,7 +1945,6 @@ dependencies = [
  "clap",
  "cli",
  "database",
- "dissemination_store",
  "duties_tracker",
  "eth",
  "eth2",
@@ -2641,17 +2640,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "dissemination_store"
-version = "0.1.0"
-dependencies = [
- "bls",
- "parking_lot",
- "ssv_types",
- "tokio",
- "types",
 ]
 
 [[package]]
@@ -5268,7 +5256,6 @@ dependencies = [
  "bls",
  "bls_lagrange",
  "database",
- "dissemination_store",
  "duties_tracker",
  "eth2",
  "ethereum_ssz",

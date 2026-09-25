@@ -1,4 +1,5 @@
 mod aggregator_post_consensus;
+mod envelope;
 mod instrumentation;
 pub mod metadata_service;
 mod metrics;
@@ -9,14 +10,13 @@ use std::{
     future::Future,
     num::NonZeroUsize,
     str::from_utf8,
-    sync::{Arc, LazyLock, Weak},
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
 use bls::{AggregateSignature, PublicKeyBytes, SecretKey, Signature};
 use builder_types::{RequestAuth, SignedRequestAuth};
 use database::{NetworkDatabase, NonUniqueIndex, UniqueIndex};
-use dissemination_store::DisseminationStore;
 use eth2::types::{BlockContents, BlockContentsTuple, FullBlockContents, PublishBlockRequest};
 use fork::{Fork, ForkSchedule};
 use futures::{
@@ -49,12 +49,11 @@ use ssv_types::{
     consensus::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
-        BeaconVoteValidator, BlindedExecutionPayloadEnvelope, Contribution, ContributionWrapper,
-        Contributions, DataVersion, ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator,
+        BeaconVoteValidator, Contribution, ContributionWrapper, Contributions, DataVersion,
+        ForkDecodeError, GloasBeaconVote, GloasBeaconVoteValidator, GloasProposalData,
         ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
         ValidatorDuty,
     },
-    dissemination::EnvelopeDissemination,
     msgid::Role,
     partial_sig::PartialSignatureKind,
     try_to_variable_list,
@@ -76,8 +75,8 @@ use types::{
     PayloadAttestationMessage, ProposerPreferences, SelectionProof, SignedAggregateAndProof,
     SignedBeaconBlock, SignedBlindedBeaconBlock, SignedContributionAndProof,
     SignedExecutionPayloadEnvelope, SignedProposerPreferences, SignedRoot,
-    SignedValidatorRegistrationData, SignedVoluntaryExit, SingleAttestation, Slot, SlotData,
-    SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
+    SignedValidatorRegistrationData, SignedVoluntaryExit, SigningData, SingleAttestation, Slot,
+    SlotData, SyncAggregatorSelectionData, SyncCommitteeContribution, SyncCommitteeMessage,
     SyncSelectionProof, SyncSubnetId, ValidatorRegistrationData, VoluntaryExit,
     consts::gloas::BUILDER_INDEX_SELF_BUILD,
 };
@@ -90,7 +89,7 @@ use validator_store::{
 
 use crate::{
     aggregator_post_consensus::AggregatorPostConsensusShared,
-    instrumentation::CollectionFailureClass,
+    envelope::BlindedExecutionPayloadEnvelope, instrumentation::CollectionFailureClass,
 };
 
 /// Number of epochs of slashing protection history to keep.
@@ -110,12 +109,10 @@ struct DecidedBlockKey {
     slot: Slot,
 }
 
-/// The block-QBFT decision fields the envelope duty validates a dissemination against
-/// (SIP-94 §6): the decided block root plus the bid commitments recoverable only from
-/// the decided block itself, and whether this operator's own proposal was the decided
-/// block (builder provenance for the envelope duty).
+/// Immutable proposer decision commitments and local ownership for envelope publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecidedBlockContext {
+    pub payload_root: Hash256,
     pub beacon_block_root: Hash256,
     pub parent_block_root: Hash256,
     pub execution_requests_root: Hash256,
@@ -133,12 +130,14 @@ pub struct DecidedBlockContext {
 
 impl DecidedBlockContext {
     /// Validates a blinded envelope's decision bindings against this context (SIP-94 §6).
-    /// `payload_root` has no binding here by design: it is trusted from the builder operator.
-    fn validate_blinded<E: EthSpec>(
+    fn validate_blinded(
         &self,
-        blinded: &BlindedExecutionPayloadEnvelope<E>,
+        blinded: &BlindedExecutionPayloadEnvelope,
     ) -> Result<(), SpecificError> {
         let mismatch = |field| SpecificError::EnvelopeBindingMismatch { field };
+        if blinded.payload_root != self.payload_root {
+            return Err(mismatch("payload_root"));
+        }
         if blinded.beacon_block_root != self.beacon_block_root {
             return Err(mismatch("beacon_block_root"));
         }
@@ -153,16 +152,27 @@ impl DecidedBlockContext {
         if blinded.builder_index != self.builder_index {
             return Err(mismatch("builder_index"));
         }
-        if blinded.execution_requests.tree_hash_root() != self.execution_requests_root {
+        if blinded.execution_requests_root != self.execution_requests_root {
             return Err(mismatch("execution_requests_root"));
         }
         Ok(())
     }
 
+    fn blinded_envelope(&self) -> BlindedExecutionPayloadEnvelope {
+        BlindedExecutionPayloadEnvelope {
+            payload_root: self.payload_root,
+            execution_requests_root: self.execution_requests_root,
+            builder_index: self.builder_index,
+            beacon_block_root: self.beacon_block_root,
+            parent_beacon_block_root: self.parent_block_root,
+        }
+    }
+
     /// True if `other` carries the same decision bindings, ignoring the operator-local
     /// `built_locally` bit.
     fn same_decision(&self, other: &DecidedBlockContext) -> bool {
-        self.beacon_block_root == other.beacon_block_root
+        self.payload_root == other.payload_root
+            && self.beacon_block_root == other.beacon_block_root
             && self.parent_block_root == other.parent_block_root
             && self.execution_requests_root == other.execution_requests_root
             && self.builder_index == other.builder_index
@@ -344,8 +354,6 @@ pub struct AnchorValidatorStore<
     decrypted_keys: Mutex<LruCache<[u8; ENCRYPTED_KEY_LENGTH], SecretKey>>,
     /// Block-QBFT decision contexts, keyed `(validator, slot)`.
     decided_block_contexts: Mutex<HashMap<DecidedBlockKey, DecidedBlockContext>>,
-    /// Handoff store for SIP-94 §6 envelope disseminations (written by the message receiver).
-    dissemination_store: Arc<DisseminationStore>,
     signature_collector: Box<dyn SignatureCollecting>,
     consensus: Arc<C>,
     slashing_protection: Arc<SlashingDatabase>,
@@ -371,9 +379,6 @@ pub struct AnchorValidatorStore<
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
-    /// Self-reference for work that outlives a `&self` trait call: the detached non-builder
-    /// envelope signing task spawned from [`Self::sign_block`].
-    weak_self: Weak<Self>,
     /// `(committee, slot)` keys whose Boole+ `AggregatorCommittee` post-consensus execution has
     /// already been started.
     ///
@@ -541,7 +546,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     pub fn new(
         database: Arc<NetworkDatabase>,
         signature_collector: Box<dyn SignatureCollecting>,
-        dissemination_store: Arc<DisseminationStore>,
         consensus: Arc<C>,
         slashing_protection: Arc<SlashingDatabase>,
         disable_slashing_protection: bool,
@@ -558,11 +562,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         is_synced: watch::Receiver<bool>,
         task_executor: TaskExecutor,
     ) -> Arc<AnchorValidatorStore<T, E, C>> {
-        Arc::new_cyclic(|weak_self| Self {
+        Arc::new(Self {
             database,
             decrypted_keys: Mutex::new(LruCache::new(MAX_VALIDATORS_PER_OPERATOR)),
             decided_block_contexts: Mutex::new(HashMap::new()),
-            dissemination_store,
             signature_collector,
             consensus,
             slashing_protection,
@@ -583,7 +586,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             strict_mfp,
             is_synced,
             task_executor,
-            weak_self: weak_self.clone(),
             aggregator_post_consensus: Mutex::new(HashSet::new()),
         })
     }
@@ -848,70 +850,28 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         signing_root: Hash256,
         slot: Slot,
     ) -> Result<Signature, Error> {
-        let committee_id = cluster.committee_id();
-        let metadata = SignatureMetadata {
-            kind: signature_kind,
-            role,
-            threshold: cluster
-                .get_f()
-                .safe_mul(2)
-                .and_then(|x| x.safe_add(1))
-                .map_err(SpecificError::from)?,
-            slot,
-            committee_id,
+        let metadata = self.signature_metadata(signature_kind, role, cluster, slot)?;
+        let requester = match collection_mode {
+            CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
+                pubkey: validator.public_key,
+            },
+            CollectionMode::SingleValidatorBatch {
+                subnet_id,
+                descriptor,
+            } => SignatureRequester::SingleValidatorBatch {
+                pubkey: validator.public_key,
+                subnet_id,
+                descriptor,
+            },
+            CollectionMode::Committee {
+                validator_partial_signature_batch_size,
+                base_hash,
+            } => SignatureRequester::Committee {
+                validator_partial_signature_batch_size,
+                base_hash,
+            },
         };
-
-        let (requester, encrypted_private_key) = {
-            let state = self.database.state();
-            let requester = match collection_mode {
-                CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
-                    pubkey: validator.public_key,
-                },
-                CollectionMode::SingleValidatorBatch {
-                    subnet_id,
-                    descriptor,
-                } => SignatureRequester::SingleValidatorBatch {
-                    pubkey: validator.public_key,
-                    subnet_id,
-                    descriptor,
-                },
-                CollectionMode::Committee {
-                    validator_partial_signature_batch_size,
-                    base_hash,
-                } => SignatureRequester::Committee {
-                    validator_partial_signature_batch_size,
-                    base_hash,
-                },
-            };
-            let encrypted_private_key = state
-                .shares()
-                .get_by(&validator.public_key)
-                .ok_or(Error::UnknownPubkey(validator.public_key))?
-                .encrypted_private_key;
-            (requester, encrypted_private_key)
-        };
-
-        let decrypted_key_share = if let Some(operator_key) = &self.private_key {
-            let key = self
-                .decrypted_keys
-                .lock()
-                .try_get_or_insert(encrypted_private_key, || {
-                    decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
-                        .map_err(|_| SpecificError::KeyShareDecryptionFailed)
-                })
-                .cloned()?;
-            Some(key)
-        } else {
-            // We are in imposter mode and cannot decrypt the share.
-            None
-        };
-
-        let signing_data = ValidatorSigningData {
-            root: signing_root,
-            index: validator.index.ok_or(SpecificError::MissingIndex)?,
-            validator_pubkey: validator.public_key,
-            share: decrypted_key_share,
-        };
+        let signing_data = self.validator_signing_data(validator, signing_root)?;
 
         let _timer =
             validator_metrics::start_timer_vec(&validator_metrics::SIGNING_TIMES, &["ssv"]);
@@ -920,6 +880,59 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             self.signature_collector
                 .sign_and_collect(metadata, requester, signing_data);
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
+    }
+
+    fn signature_metadata(
+        &self,
+        kind: PartialSignatureKind,
+        role: Role,
+        cluster: &Cluster,
+        slot: Slot,
+    ) -> Result<SignatureMetadata, Error> {
+        Ok(SignatureMetadata {
+            kind,
+            role,
+            threshold: cluster
+                .get_f()
+                .safe_mul(2)
+                .and_then(|x| x.safe_add(1))
+                .map_err(SpecificError::from)?,
+            slot,
+            committee_id: cluster.committee_id(),
+        })
+    }
+
+    fn validator_signing_data(
+        &self,
+        validator: &ValidatorMetadata,
+        root: Hash256,
+    ) -> Result<ValidatorSigningData, Error> {
+        let encrypted_private_key = self
+            .database
+            .state()
+            .shares()
+            .get_by(&validator.public_key)
+            .ok_or(Error::UnknownPubkey(validator.public_key))?
+            .encrypted_private_key;
+        let share = if let Some(operator_key) = &self.private_key {
+            Some(
+                self.decrypted_keys
+                    .lock()
+                    .try_get_or_insert(encrypted_private_key, || {
+                        decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
+                            .map_err(|_| SpecificError::KeyShareDecryptionFailed)
+                    })
+                    .cloned()?,
+            )
+        } else {
+            None
+        };
+        Ok(ValidatorSigningData {
+            root,
+            index: validator.index.ok_or(SpecificError::MissingIndex)?,
+            validator_pubkey: validator.public_key,
+            share,
+        })
     }
 
     /// Bound a [`Self::collect_signature`] future, mapping elapse to `CollectionTimeout` (the
@@ -947,7 +960,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         &self,
         validator: &ValidatorMetadata,
         cluster: &Cluster,
-        signable_block: &impl SignableBlock<E>,
+        signable_block: &BeaconBlock<E, BlindedPayload<E>>,
+        local_payload_root: Option<Hash256>,
     ) -> Result<UnsignedBlock<E>, Error> {
         let block = signable_block.as_block();
         let slot = block.slot();
@@ -984,11 +998,36 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             validator_sync_committee_indices: Default::default(),
         };
 
-        // Package the consensus data
+        let proposal_bytes = if let BeaconBlockRef::Gloas(gloas) = block {
+            let payload_root = match local_payload_root {
+                Some(root) => root,
+                None if gloas
+                    .body
+                    .signed_execution_payload_bid
+                    .message
+                    .builder_index
+                    == BUILDER_INDEX_SELF_BUILD =>
+                {
+                    return Err(Error::SpecificError(SpecificError::MissingLocalPayloadRoot));
+                }
+                None => Hash256::ZERO,
+            };
+            let proposal = GloasProposalData {
+                block: gloas.clone().into(),
+                payload_root,
+            };
+            proposal
+                .validate_payload_root()
+                .map_err(SpecificError::InvalidQbftData)?;
+            proposal.as_ssz_bytes()
+        } else {
+            signable_block.as_ssz_bytes()
+        };
+
         let consensus_data = ProposerConsensusData {
             duty: validator_duty,
             version: block_version,
-            data_ssz: try_to_variable_list(signable_block.as_ssz_bytes(), |provided, max| {
+            data_ssz: try_to_variable_list(proposal_bytes, |provided, max| {
                 Error::SpecificError(SpecificError::DataTooLarge(format!(
                     "Block data too large for consensus: {} > {}",
                     provided, max
@@ -1018,18 +1057,19 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         };
 
         // Decode the decided data into a block we can sign
-        let unsigned_block = decode_decided_block(&completed_data)
+        let (unsigned_block, payload_root) = decode_decided_block(&completed_data)
             .map_err(|err| Error::SpecificError(SpecificError::InvalidQbftData(err)))?;
 
         // Record the decided context for later reads. This point is reached holding the consensus
         // decided value and each operator's own local proposal. Every participating
         // operator records the same context. Post-Gloas only.
-        if ForkName::from(completed_data.version) >= ForkName::Gloas
+        if let Some(payload_root) = payload_root
             && let UnsignedBlock::Full(FullBlockContents::Block(decided_block)) = &unsigned_block
             && let Ok(bid) = decided_block.body().signed_execution_payload_bid()
         {
             let decided_root = decided_block.canonical_root();
             let context = DecidedBlockContext {
+                payload_root,
                 beacon_block_root: decided_root,
                 // The block's own parent_root, per SIP-94 §6 (the bid carries an equal copy,
                 // enforced by process_execution_payload_bid, but the block is the source).
@@ -1137,7 +1177,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
     }
 
     /// The configured payload-due deadline for `slot` (SIP-94 §6). At or after it the envelope
-    /// cannot satisfy the slot, so neither dissemination nor collection may start or continue.
+    /// cannot satisfy the slot, so signature collection may not start or continue.
     fn envelope_deadline(&self, slot: Slot) -> Result<Instant, Error> {
         let deadline = self.get_instant_in_slot(slot, self.spec.get_payload_due())?;
         if Instant::now() >= deadline {
@@ -1146,114 +1186,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             ));
         }
         Ok(deadline)
-    }
-
-    /// Sign another operator's envelope for `(validator, slot)`: the SIP-94 §6 non-builder path.
-    ///
-    /// Spawned by [`Self::sign_block`] once the decided block is threshold-signed, when the
-    /// decided bid is self-build and the decided block is not this operator's own proposal. It
-    /// runs detached from Lighthouse's envelope callback on purpose: that callback first fetches
-    /// this operator's own envelope from its beacon node and never reaches the store when the
-    /// node holds none (its local bid was external), so a non-builder share must not depend on
-    /// it. Awaits the builder operator's dissemination until the payload-due deadline, validates
-    /// it against the decided context, and contributes this operator's partial signature.
-    /// Publishes nothing: only the builder operator holds the payload bytes.
-    pub(crate) async fn sign_disseminated_envelope(
-        self: Arc<Self>,
-        validator: ValidatorMetadata,
-        cluster: Cluster,
-        context: DecidedBlockContext,
-        slot: Slot,
-    ) -> Result<(), Error> {
-        let record_outcome = |outcome: &str| {
-            metrics::inc_counter_vec(&metrics::ENVELOPE_SIGNING_OUTCOMES, &[outcome]);
-        };
-        let deadline = self
-            .envelope_deadline(slot)
-            .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
-
-        let Some(dissemination) = self
-            .dissemination_store
-            .wait(validator.public_key, slot, deadline)
-            .await
-        else {
-            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-            return Err(Error::SpecificError(SpecificError::DisseminationTimeout {
-                slot,
-            }));
-        };
-        let disseminated = dissemination.blinded_envelope::<E>().map_err(|err| {
-            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-            Error::SpecificError(SpecificError::DisseminationUndecodable(err))
-        })?;
-        context.validate_blinded(&disseminated).map_err(|err| {
-            record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-            Error::SpecificError(err)
-        })?;
-
-        // `payload_root` is trusted from the builder operator by design (SIP-94 §6).
-        let domain_hash = self.get_domain(slot.epoch(E::slots_per_epoch()), Domain::BeaconBuilder);
-        let signing_root = disseminated.signing_root(domain_hash);
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        Self::collect_within(
-            remaining,
-            self.collect_signature(
-                PartialSignatureKind::Envelope,
-                Role::EnvelopeProposer,
-                CollectionMode::SingleValidator,
-                &validator,
-                &cluster,
-                signing_root,
-                slot,
-            ),
-        )
-        .await
-        .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
-
-        info!(
-            %slot,
-            validator_pubkey = %validator.public_key,
-            disseminated_root = ?disseminated.tree_hash_root(),
-            "Signed another operator's envelope"
-        );
-        record_outcome(metrics::ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY);
-        Ok(())
-    }
-
-    /// Start [`Self::sign_disseminated_envelope`] for `(validator, slot)` when the recorded
-    /// decision calls for it: a self-build bid on a block another operator built. No-op
-    /// otherwise (no Gloas context recorded, external build, or this operator is the builder and
-    /// signs from Lighthouse's envelope callback). Detached; a terminal failure is logged here
-    /// because nothing awaits the task.
-    fn spawn_non_builder_envelope_signing(
-        &self,
-        validator: &ValidatorMetadata,
-        cluster: &Cluster,
-        slot: Slot,
-    ) {
-        let Ok(context) = self.get_decided_block_context(validator.public_key, slot) else {
-            return;
-        };
-        if context.builder_index != BUILDER_INDEX_SELF_BUILD || context.built_locally {
-            return;
-        }
-        let Some(store) = self.weak_self.upgrade() else {
-            return;
-        };
-        let validator = validator.clone();
-        let cluster = cluster.clone();
-        let validator_pubkey = validator.public_key;
-        self.task_executor.spawn(
-            async move {
-                if let Err(error) = store
-                    .sign_disseminated_envelope(validator, cluster, context, slot)
-                    .await
-                {
-                    warn!(?error, %slot, %validator_pubkey, "Non-builder envelope signing failed");
-                }
-            },
-            "envelope_non_builder_signing",
-        );
     }
 
     async fn sign_abstract_block(
@@ -1293,8 +1225,32 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         }
 
         let signing_root = block.signing_root(domain_hash);
-        let signature = self
-            .collect_signature(
+        let signature = if block.fork_name_unchecked() >= ForkName::Gloas {
+            let context = self.get_decided_block_context(validator.public_key, header.slot)?;
+            let metadata = self.signature_metadata(
+                PartialSignatureKind::PostConsensus,
+                Role::Proposer,
+                cluster,
+                header.slot,
+            )?;
+            let block_data = self.validator_signing_data(validator, signing_root)?;
+            let envelope_data = if context.builder_index == BUILDER_INDEX_SELF_BUILD {
+                let domain = self.get_domain(block.epoch(), Domain::BeaconBuilder);
+                Some(self.validator_signing_data(
+                    validator,
+                    context.blinded_envelope().signing_root(domain),
+                )?)
+            } else {
+                None
+            };
+            (*self
+                .signature_collector
+                .sign_proposer_packet(metadata, validator.public_key, block_data, envelope_data)
+                .await
+                .map_err(SpecificError::from)?)
+            .clone()
+        } else {
+            self.collect_signature(
                 PartialSignatureKind::PostConsensus,
                 Role::Proposer,
                 CollectionMode::SingleValidator,
@@ -1303,7 +1259,8 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 signing_root,
                 header.slot,
             )
-            .await?;
+            .await?
+        };
         Ok(signable_block.to_signed_block(signature))
     }
 
@@ -2478,13 +2435,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 /// decoding logic.
 fn decode_decided_block<E: EthSpec>(
     completed_data: &ProposerConsensusData,
-) -> Result<UnsignedBlock<E>, DecodeError> {
-    // Under the Gloas fork (EIP-7732), DataSSZ carries a plain BeaconBlock — decode directly.
+) -> Result<(UnsignedBlock<E>, Option<Hash256>), DecodeError> {
+    // Gloas carries the block and payload commitment in one decided wrapper.
     // Pre-Gloas: try blinded first, fall back to full block contents.
     if ForkName::from(completed_data.version) >= ForkName::Gloas {
-        completed_data
-            .decode_block()
-            .map(|block| UnsignedBlock::Full(FullBlockContents::Block(block)))
+        completed_data.decode_gloas_proposal().map(|proposal| {
+            (
+                UnsignedBlock::Full(FullBlockContents::Block(BeaconBlock::Gloas(proposal.block))),
+                Some(proposal.payload_root),
+            )
+        })
     } else {
         completed_data
             .decode_blinded_block()
@@ -2494,6 +2454,7 @@ fn decode_decided_block<E: EthSpec>(
                     .decode_block_contents()
                     .map(UnsignedBlock::Full)
             })
+            .map(|block| (block, None))
     }
 }
 
@@ -2501,7 +2462,10 @@ fn decode_decided_block<E: EthSpec>(
 mod decode_decided_block_tests {
     use ssv_types::{
         ValidatorIndex,
-        consensus::{BEACON_ROLE_PROPOSER, DataVersion, ProposerConsensusData, ValidatorDuty},
+        consensus::{
+            BEACON_ROLE_PROPOSER, DataVersion, GloasProposalData, ProposerConsensusData,
+            ValidatorDuty,
+        },
     };
     use ssz_types::VariableList;
     use types::{
@@ -2525,54 +2489,54 @@ mod decode_decided_block_tests {
     }
 
     #[test]
-    fn gloas_full_block_decodes_via_full_path() {
-        let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
-        let data = ProposerConsensusData {
-            duty: test_duty(),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(block.as_ssz_bytes()).unwrap(),
-        };
+    fn gloas_full_block_and_payload_root_decode_together() {
+        for (builder_index, payload_root) in [
+            (BUILDER_INDEX_SELF_BUILD, Hash256::repeat_byte(0x42)),
+            (7, Hash256::ZERO),
+        ] {
+            // Arrange: self-build and external wrappers both retain their payload field.
+            let spec = ChainSpec::mainnet();
+            let mut gloas_block = BeaconBlockGloas::<MainnetEthSpec>::empty(&spec);
+            gloas_block
+                .body
+                .signed_execution_payload_bid
+                .message
+                .builder_index = builder_index;
+            let block = BeaconBlock::Gloas(gloas_block.clone());
+            let blinded: BeaconBlock<MainnetEthSpec, BlindedPayload<MainnetEthSpec>> =
+                block.to_ref().into();
+            assert_eq!(
+                block.as_ssz_bytes(),
+                blinded.as_ssz_bytes(),
+                "Gloas full and blinded projections must be byte-identical"
+            );
+            let data = ProposerConsensusData {
+                duty: test_duty(),
+                version: DataVersion::from(ForkName::Gloas),
+                data_ssz: VariableList::new(
+                    GloasProposalData {
+                        block: gloas_block,
+                        payload_root,
+                    }
+                    .as_ssz_bytes(),
+                )
+                .unwrap(),
+            };
 
-        match decode_decided_block::<MainnetEthSpec>(&data) {
-            Ok(UnsignedBlock::Full(FullBlockContents::Block(decoded_block))) => {
-                assert_eq!(decoded_block, block);
+            // Act: decode the decided wrapper once, retaining both components.
+            let decoded = decode_decided_block::<MainnetEthSpec>(&data);
+
+            // Assert: the full block and its actual payload root are returned together.
+            match decoded {
+                Ok((
+                    UnsignedBlock::Full(FullBlockContents::Block(decoded_block)),
+                    decoded_root,
+                )) => {
+                    assert_eq!(decoded_block, block);
+                    assert_eq!(decoded_root, Some(payload_root));
+                }
+                other => panic!("Expected a full Gloas block and payload root, got {other:?}"),
             }
-            other => panic!(
-                "Expected Ok(UnsignedBlock::Full(FullBlockContents::Block(_))), got {:?}",
-                other
-            ),
-        }
-    }
-
-    #[test]
-    fn gloas_blinded_projection_decodes_via_full_path() {
-        let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
-        let blinded: BeaconBlock<MainnetEthSpec, BlindedPayload<MainnetEthSpec>> =
-            block.to_ref().into();
-
-        // Pin the byte-identity invariant where full and blinded projections are identical.
-        assert_eq!(
-            block.as_ssz_bytes(),
-            blinded.as_ssz_bytes(),
-            "Gloas full and blinded projections must be byte-identical"
-        );
-
-        let data = ProposerConsensusData {
-            duty: test_duty(),
-            version: DataVersion::from(ForkName::Gloas),
-            data_ssz: VariableList::new(blinded.as_ssz_bytes()).unwrap(),
-        };
-
-        match decode_decided_block::<MainnetEthSpec>(&data) {
-            Ok(UnsignedBlock::Full(FullBlockContents::Block(decoded_block))) => {
-                assert_eq!(decoded_block, block);
-            }
-            other => panic!(
-                "Expected Ok(UnsignedBlock::Full(FullBlockContents::Block(_))), got {:?}",
-                other
-            ),
         }
     }
 
@@ -2600,7 +2564,7 @@ mod decode_decided_block_tests {
         };
 
         match decode_decided_block::<MainnetEthSpec>(&data) {
-            Ok(UnsignedBlock::Blinded(decoded_blinded)) => {
+            Ok((UnsignedBlock::Blinded(decoded_blinded), None)) => {
                 assert_eq!(decoded_blinded, blinded);
             }
             other => panic!("Expected Ok(UnsignedBlock::Blinded(_)), got {:?}", other),
@@ -2622,7 +2586,7 @@ mod decode_decided_block_tests {
         };
 
         match decode_decided_block::<MainnetEthSpec>(&data) {
-            Ok(UnsignedBlock::Full(_)) => {}
+            Ok((UnsignedBlock::Full(_), None)) => {}
             other => panic!("Expected Ok(UnsignedBlock::Full(_)), got {:?}", other),
         }
     }
@@ -3220,38 +3184,29 @@ pub enum SpecificError {
         builder_index: u64,
     },
     /// The decided block committed to an external builder's bid, so no self-build envelope
-    /// duty exists for the slot: nothing will be disseminated, and the reveal belongs to the
+    /// duty exists for the slot, and the reveal belongs to the
     /// external builder. This is an intentional no-op, not a failure.
     EnvelopeExternalBuild {
         builder_index: u64,
     },
-    /// Another operator built the decided block. This operator's envelope share is signed by
-    /// the detached non-builder task started from `sign_block`, not from Lighthouse's envelope
-    /// callback, which has nothing to publish here. This is an intentional non-publish, not a
-    /// failure.
-    EnvelopeNonBuilderDelegated {
+    /// This operator does not hold the decided block's locally produced contents.
+    EnvelopeNotLocal {
         slot: Slot,
     },
+    /// Stateless self-build production did not supply the payload root required by QBFT.
+    MissingLocalPayloadRoot,
     /// The envelope duty started at or after the payload-due deadline (50% of the slot), past
     /// which the envelope cannot satisfy this slot.
     EnvelopeDeadlinePassed {
         slot: Slot,
     },
-    /// No dissemination arrived before the payload-due deadline.
-    DisseminationTimeout {
-        slot: Slot,
-    },
-    /// The disseminated envelope bytes did not decode as a blinded envelope.
-    DisseminationUndecodable(ssz::DecodeError),
-    /// Building or sending the builder's dissemination broadcast failed.
-    DisseminationBroadcastFailed(CollectionError),
     /// A blinded envelope failed a decision binding against the decided block context
     /// (SIP-94 §6). Carries the first mismatching field.
     EnvelopeBindingMismatch {
         field: &'static str,
     },
     /// The builder's local BN returned an envelope whose payload block hash differs from the
-    /// decided bid's; disseminating it would spread a payload the decision does not commit to.
+    /// decided bid's.
     EnvelopeBuilderInconsistent {
         local: ExecutionBlockHash,
         decided: ExecutionBlockHash,
@@ -3532,7 +3487,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         validator_pubkey: PublicKeyBytes,
         block: UnsignedBlock<E>,
         current_slot: Slot,
-        _local_payload_root: Option<Hash256>,
+        local_payload_root: Option<Hash256>,
     ) -> Result<SignedBlock<E>, Error> {
         let (block_type, block_slot) = match block {
             UnsignedBlock::Full(FullBlockContents::BlockContents(ref contents)) => {
@@ -3594,7 +3549,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 );
 
                 let decided_block = self
-                    .decide_abstract_block(&validator, &cluster, &blinded_block)
+                    .decide_abstract_block(&validator, &cluster, &blinded_block, local_payload_root)
                     .await?;
 
                 trace!(
@@ -3623,8 +3578,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     checkpoint = instrumentation::checkpoints::BLOCK_SIGNED,
                     "Block threshold signature completed"
                 );
-
-                self.spawn_non_builder_envelope_signing(&validator, &cluster, blinded_block.slot());
 
                 let publish_decision =
                     select_publish_block(signed_block, &blinded_block, local_full_block);
@@ -4265,9 +4218,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 Span::current().record("outcome", outcome);
             };
 
-            // The decided bid names an external builder: no self-build envelope duty exists
-            // for the slot. Nothing will be disseminated (the reveal belongs to the external
-            // builder), so return before the non-builder path can wait for it (SIP-94 §6).
+            // External builders publish their own envelopes; this callback only serves self-builds.
             if context.builder_index != BUILDER_INDEX_SELF_BUILD {
                 info!(
                     builder_index = context.builder_index,
@@ -4279,29 +4230,15 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 }));
             }
 
-            // Another operator built the decided block. Its envelope reaches this operator by
-            // dissemination and is signed by the task `sign_block` spawned once the block was
-            // threshold-signed (`sign_disseminated_envelope`); that task needs nothing from this
-            // callback, which Lighthouse only reaches after fetching this operator's own envelope
-            // from its beacon node. The caller publishes every `Ok`, and there is nothing to
-            // publish, so return the sentinel (SIP-94 §6).
+            // A valid signature alone is not publishable without the decided payload bytes.
             if !context.built_locally {
-                info!(
-                    "Decided block was built by another operator, its envelope is signed by the non-builder task (expected)"
-                );
-                return Err(Error::SpecificError(
-                    SpecificError::EnvelopeNonBuilderDelegated { slot },
-                ));
+                return Err(Error::SpecificError(SpecificError::EnvelopeNotLocal { slot }));
             }
 
             let deadline = self
                 .envelope_deadline(slot)
                 .inspect_err(|_| record_outcome(metrics::ENVELOPE_OUTCOME_FAILED))?;
 
-            // The builder operator disseminates its own blinded envelope and signs it; the
-            // other operators sign the disseminated copy from their non-builder task (SIP-94 §6).
-            // Bind the local BN's envelope to the decided bid before disseminating: a
-            // stale or inconsistent BN response must not go out under our signature.
             if envelope.payload.block_hash != context.block_hash {
                 warn!(
                     local = ?envelope.payload.block_hash,
@@ -4325,45 +4262,27 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                 Error::SpecificError(err)
             })?;
 
-            let dissemination = EnvelopeDissemination {
-                slot,
-                envelope: try_to_variable_list(
-                    local_blinded.as_ssz_bytes(),
-                    |provided, max| {
-                        record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                        Error::SpecificError(SpecificError::DataTooLarge(format!(
-                            "Envelope too large for dissemination: {provided} > {max}"
-                        )))
-                    },
-                )?,
-            };
-            self.signature_collector
-                .broadcast_dissemination(
-                    validator_pubkey,
-                    cluster.committee_id(),
-                    dissemination,
-                )
-                .map_err(|err| {
-                    warn!(?err, "Envelope dissemination broadcast failed");
-                    record_outcome(metrics::ENVELOPE_OUTCOME_FAILED);
-                    Error::SpecificError(SpecificError::DisseminationBroadcastFailed(err))
-                })?;
-
             let epoch = slot.epoch(E::slots_per_epoch());
             let domain_hash = self.get_domain(epoch, Domain::BeaconBuilder);
             let signing_root = local_blinded.signing_root(domain_hash);
             let remaining = deadline.saturating_duration_since(Instant::now());
             let signature = Self::collect_within(
                 remaining,
-                self.collect_signature(
-                    PartialSignatureKind::Envelope,
-                    Role::EnvelopeProposer,
-                    CollectionMode::SingleValidator,
-                    &validator,
-                    &cluster,
-                    signing_root,
-                    slot,
-                ),
+                async {
+                    let metadata = self.signature_metadata(
+                        PartialSignatureKind::PostConsensus, Role::Proposer, &cluster, slot,
+                    )?;
+                    let block_signing_root = SigningData {
+                        object_root: context.beacon_block_root,
+                        domain: self.get_domain(epoch, Domain::BeaconProposer),
+                    }.tree_hash_root();
+                    self.signature_collector.wait_for_registered_signature(
+                        metadata, validator_index, validator_pubkey, signing_root,
+                        Some(block_signing_root),
+                    ).await.map(|signature| (*signature).clone()).map_err(|err| {
+                        Error::SpecificError(SpecificError::from(err))
+                    })
+                },
             )
             .await
             .inspect_err(|err| {

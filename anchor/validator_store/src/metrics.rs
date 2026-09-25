@@ -281,16 +281,12 @@ pub static REQUEST_AUTH_RECONSTRUCTION_FAILURES: LazyLock<Result<IntCounterVec>>
         )
     });
 
-/// The builder path disseminated, signed, and returned the envelope for publication.
+/// The local builder returned the reconstructed envelope signature for publication.
 pub const ENVELOPE_OUTCOME_PUBLISHED: &str = "published";
-/// A non-builder signed the disseminated envelope and intentionally skipped publication;
-/// never a failure.
-pub const ENVELOPE_OUTCOME_NOT_BUILT_LOCALLY: &str = "not_built_locally";
 /// The decided block committed to an external builder's bid: no self-build envelope duty
 /// exists for the slot, so the operator neither waits nor signs; never a failure.
 pub const ENVELOPE_OUTCOME_EXTERNAL_BUILD: &str = "external_build";
-/// The duty failed: deadline passed, dissemination missing/undecodable/mismatched, the
-/// builder's envelope was inconsistent, broadcast failed, or signature collection failed.
+/// The envelope was inconsistent, its deadline passed, or signature collection failed.
 pub const ENVELOPE_OUTCOME_FAILED: &str = "failed";
 
 pub static ENVELOPE_SIGNING_OUTCOMES: LazyLock<Result<IntCounterVec>> = LazyLock::new(|| {

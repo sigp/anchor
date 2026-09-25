@@ -19,6 +19,7 @@ fn test_context(seed: u8) -> DecidedBlockContext {
         beacon_block_root: Hash256::from([seed; 32]),
         parent_block_root: Hash256::from([seed.wrapping_add(1); 32]),
         execution_requests_root: Hash256::from([seed.wrapping_add(2); 32]),
+        payload_root: Hash256::from([seed.wrapping_add(4); 32]),
         builder_index: seed as u64,
         block_hash: ExecutionBlockHash::from_root(Hash256::from([seed.wrapping_add(3); 32])),
         built_locally: false,
@@ -523,5 +524,37 @@ async fn out_of_order_old_insert_does_not_disturb_a_newer_root() {
             .expect("the newer root must survive an out-of-order older insert"),
         newer_root,
         "an out-of-order older insert must not evict or alter a newer live root"
+    );
+}
+
+#[tokio::test]
+async fn same_block_with_conflicting_payload_root_preserves_first_decision() {
+    // Arrange: both contexts identify the same block but disagree on the decided payload.
+    let state = ValidatorStoreTestState::new(1);
+    set_clock_to_slot(&state.harness, RECORD_SLOT);
+    let mut conflicting = state.context;
+    conflicting.payload_root = Hash256::repeat_byte(0xFE);
+    state
+        .harness
+        .validator_store
+        .record_decided_block_context(state.pubkey, Slot::new(RECORD_SLOT), state.context)
+        .unwrap();
+
+    // Act: try to rewrite only the payload binding.
+    let result = state.harness.validator_store.record_decided_block_context(
+        state.pubkey,
+        Slot::new(RECORD_SLOT),
+        conflicting,
+    );
+
+    // Assert: a payload conflict is a consensus conflict even when the block roots match.
+    assert!(matches!(result, Err(SpecificError::DecidedRootConflict(_))));
+    assert_eq!(
+        state
+            .harness
+            .validator_store
+            .get_decided_block_context(state.pubkey, Slot::new(RECORD_SLOT))
+            .unwrap(),
+        state.context
     );
 }

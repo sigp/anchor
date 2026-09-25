@@ -630,15 +630,10 @@ impl Client {
 
         let (outcome_tx, outcome_rx) = mpsc::channel::<message_receiver::Outcome>(9000);
 
-        // Shared between the message receiver (writer) and the validator store's envelope duty
-        // runner (reader); SIP-94 §6.
-        let dissemination_store = Arc::new(dissemination_store::DisseminationStore::new());
-
         let message_receiver = NetworkMessageReceiver::<E, _, _>::new(
             processor_senders.clone(),
             qbft_manager.clone(),
             signature_collector.clone(),
-            dissemination_store.clone(),
             database.watch(),
             is_synced.clone(),
             outcome_tx,
@@ -672,7 +667,6 @@ impl Client {
         let validator_store = AnchorValidatorStore::<_, E, _>::new(
             database.clone(),
             Box::new(signature_collector),
-            dissemination_store,
             qbft_manager,
             slashing_protection,
             config.disable_slashing_protection,
@@ -779,6 +773,7 @@ impl Client {
         // the cache's only `prune()` caller.
         let request_auth_cache = RequestAuthCache::default();
         let mut block_service_builder = BlockServiceBuilder::new()
+            .stateless_block_production(true)
             .slot_clock(slot_clock.clone())
             .validator_store(validator_store.clone())
             .beacon_nodes(beacon_nodes.clone())

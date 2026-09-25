@@ -626,3 +626,121 @@ fn test_leader_waits_when_highest_prepared_data_missing() {
 
     // Test passes if we reach this point without panicking
 }
+
+/// A prepared Gloas value must retain its payload root when the next leader has another
+/// local candidate. Exercise the real prepare, timeout, round-change and proposal paths.
+#[test]
+fn gloas_prepared_reproposal_preserves_the_entire_wrapper() {
+    use ssv_types::{
+        ValidatorIndex,
+        consensus::{
+            BEACON_ROLE_PROPOSER, DataVersion, GloasProposalData, ProposerConsensusData,
+            ValidatorDuty,
+        },
+    };
+    use types::{
+        BeaconBlockGloas, ChainSpec, EmptyBlock, ForkName, MainnetEthSpec, Slot,
+        consts::gloas::BUILDER_INDEX_SELF_BUILD,
+    };
+
+    // Arrange: operator 1 proposes one payload root; the next leader has a different root.
+    let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(&ChainSpec::mainnet());
+    block
+        .body
+        .signed_execution_payload_bid
+        .message
+        .builder_index = BUILDER_INDEX_SELF_BUILD;
+    let value = |payload_root| ProposerConsensusData {
+        duty: ValidatorDuty {
+            r#type: BEACON_ROLE_PROPOSER,
+            pub_key: ssz::Decode::from_ssz_bytes(&[0u8; 48]).unwrap(),
+            slot: Slot::new(0),
+            validator_index: ValidatorIndex(0),
+            committee_index: 0,
+            committee_length: 0,
+            committees_at_slot: 0,
+            validator_committee_index: 0,
+            validator_sync_committee_indices: Default::default(),
+        },
+        version: DataVersion::from(ForkName::Gloas),
+        data_ssz: VariableList::new(
+            GloasProposalData {
+                block: block.clone(),
+                payload_root,
+            }
+            .as_ssz_bytes(),
+        )
+        .unwrap(),
+    };
+    let prepared = value(Hash256::repeat_byte(1));
+    let other = value(Hash256::repeat_byte(2));
+    let expected_bytes = prepared.as_ssz_bytes();
+    assert_ne!(expected_bytes, other.as_ssz_bytes());
+    let queue = Rc::new(RefCell::new(VecDeque::new()));
+    let mut instances = Vec::new();
+    for operator in 1..=4u64 {
+        let sender = Rc::clone(&queue);
+        let config = ConfigBuilder::<DefaultLeaderFunction>::new(
+            operator.into(),
+            InstanceHeight::default(),
+            (1..=4).map(OperatorId::from).collect(),
+        )
+        .build()
+        .unwrap();
+        instances.push(Qbft::new(
+            config,
+            if operator == 2 {
+                other.clone()
+            } else {
+                prepared.clone()
+            },
+            Box::new(NoDataValidation),
+            MessageId::from([0; 56]),
+            move |message| {
+                sender
+                    .borrow_mut()
+                    .push_back((OperatorId(operator), message))
+            },
+        ));
+    }
+
+    // Act: deliver proposal and prepare messages, withholding commits until a round timeout.
+    loop {
+        let Some((sender, message)) = queue.borrow_mut().pop_front() else {
+            break;
+        };
+        if message.qbft_message.qbft_message_type == QbftMessageType::Commit {
+            continue;
+        }
+        for instance in &mut instances {
+            instance
+                .receive(convert_unsigned_to_signed(message.clone(), sender))
+                .unwrap();
+        }
+    }
+    for instance in &mut instances {
+        assert_eq!(instance.last_prepared_value, Some(prepared.hash()));
+        assert!(instance.completed.is_none());
+        instance.end_round();
+    }
+    let mut reproposal_seen = false;
+    loop {
+        let Some((sender, message)) = queue.borrow_mut().pop_front() else {
+            break;
+        };
+        if message.qbft_message.qbft_message_type == QbftMessageType::Proposal {
+            // Assert: the new leader copies every decided byte, including PayloadRoot.
+            assert_eq!(sender, OperatorId(2));
+            assert_eq!(message.unsigned_message.full_data, expected_bytes);
+            assert_eq!(message.qbft_message.root, prepared.hash());
+            reproposal_seen = true;
+        }
+        for instance in &mut instances {
+            instance
+                .receive(convert_unsigned_to_signed(message.clone(), sender))
+                .unwrap();
+        }
+    }
+    assert!(reproposal_seen, "round two must emit the prepared proposal");
+    assert!(instances.iter().all(|instance| matches!(instance.completed, Some(Completed::Success(root)) if root == prepared.hash())));
+}

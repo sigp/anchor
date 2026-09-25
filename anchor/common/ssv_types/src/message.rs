@@ -15,7 +15,6 @@ use types::{Hash256, Slot};
 use crate::{
     MAX_SIGNATURES, OperatorId, RSA_SIGNATURE_SIZE,
     consensus::{PrepareJustificationLength, QbftMessage, RoundChangeJustificationLength},
-    dissemination::EnvelopeDissemination,
     msgid::MessageId,
     partial_sig::PartialSignatureMessages,
     try_to_variable_list,
@@ -82,9 +81,6 @@ pub type SSVMessageDataLen = Sum<Prod<U726, U1000>, U932>;
 pub enum MsgType {
     SSVConsensusMsgType = 0,
     SSVPartialSignatureMsgType = 1,
-    /// Envelope dissemination for the SIP-94 §6 self-build duty: the builder operator
-    /// broadcasts a `BlindedExecutionPayloadEnvelope` for the committee to threshold-sign.
-    SSVEnvelopeDisseminationMsgType = 3,
 }
 
 impl TreeHash for MsgType {
@@ -116,7 +112,7 @@ impl TryFrom<u64> for MsgType {
             1 => Ok(MsgType::SSVPartialSignatureMsgType),
             // 2 is ssv-spec's DKG message type, which Anchor does not implement; the
             // discriminant stays reserved so the numbering matches the shared spec.
-            3 => Ok(MsgType::SSVEnvelopeDisseminationMsgType),
+            // 3 was retired with the separate envelope dissemination flow.
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -250,11 +246,6 @@ impl SSVMessage {
                     });
                 }
             }
-            // No per-type cap tighter than the `SSVMessageDataLen` bound already enforced by
-            // the `data` list type: the blinded envelope is a few hundred bytes in practice,
-            // and its Gloas progressive request lists carry no type-level maximum to derive a
-            // tighter cap from.
-            MsgType::SSVEnvelopeDisseminationMsgType => {}
         }
         Ok(())
     }
@@ -301,11 +292,6 @@ impl SSVMessage {
                 .map(|msg| Slot::new(msg.height)),
             MsgType::SSVPartialSignatureMsgType => {
                 PartialSignatureMessages::from_ssz_bytes(&self.data)
-                    .ok()
-                    .map(|msg| msg.slot)
-            }
-            MsgType::SSVEnvelopeDisseminationMsgType => {
-                EnvelopeDissemination::from_ssz_bytes(&self.data)
                     .ok()
                     .map(|msg| msg.slot)
             }
@@ -743,17 +729,12 @@ mod tests {
         let encoded = msg_type.as_ssz_bytes();
         let decoded = MsgType::from_ssz_bytes(&encoded).unwrap();
         assert_eq!(decoded, msg_type);
-
-        let msg_type = MsgType::SSVEnvelopeDisseminationMsgType;
-        let encoded = msg_type.as_ssz_bytes();
-        let decoded = MsgType::from_ssz_bytes(&encoded).unwrap();
-        assert_eq!(decoded, msg_type);
     }
 
     #[test]
     fn test_msgtype_decode_invalid_variant() {
-        // 2 is ssv-spec's DKG type, unimplemented in Anchor; 4 is past the last variant.
-        for invalid in [2u64, 4u64] {
+        // 2 is unimplemented DKG, 3 is retired dissemination, and 4 is unassigned.
+        for invalid in [2u64, 3u64, 4u64] {
             let result = MsgType::from_ssz_bytes(&invalid.to_le_bytes());
             assert!(
                 matches!(result, Err(DecodeError::NoMatchingVariant)),

@@ -11,7 +11,8 @@ use eth2::types::FullBlockContents;
 use ssv_types::{
     OperatorId, ValidatorIndex,
     consensus::{
-        BEACON_ROLE_PROPOSER, DataVersion, ProposerConsensusData, QbftData, ValidatorDuty,
+        BEACON_ROLE_PROPOSER, DataVersion, GloasProposalData, ProposerConsensusData, QbftData,
+        ValidatorDuty,
     },
 };
 use ssz::Encode;
@@ -71,6 +72,12 @@ impl ValidatorStoreTestState {
     fn gloas_block(&self) -> BeaconBlock<MainnetEthSpec> {
         let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(&self.harness.spec);
         block.slot = Slot::new(DUTY_SLOT);
+        block.parent_root = Hash256::repeat_byte(0x41);
+        block
+            .body
+            .signed_execution_payload_bid
+            .message
+            .parent_block_root = Hash256::repeat_byte(0x42);
         BeaconBlock::Gloas(block)
     }
 }
@@ -93,8 +100,9 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
             .message;
         DecidedBlockContext {
             beacon_block_root: expected_root,
-            parent_block_root: bid.parent_block_root,
+            parent_block_root: block.parent_root(),
             execution_requests_root: bid.execution_requests_root,
+            payload_root: Hash256::ZERO,
             builder_index: bid.builder_index,
             block_hash: bid.block_hash,
             // The echoing mock decides exactly the proposed block, so the write site must
@@ -118,7 +126,17 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
             validator_sync_committee_indices: Default::default(),
         },
         version: DataVersion::from(ForkName::Gloas),
-        data_ssz: VariableList::new(block.as_ssz_bytes()).expect("block bytes should fit"),
+        data_ssz: VariableList::new(
+            GloasProposalData {
+                block: match block.clone() {
+                    BeaconBlock::Gloas(block) => block,
+                    _ => unreachable!(),
+                },
+                payload_root: Hash256::ZERO,
+            }
+            .as_ssz_bytes(),
+        )
+        .expect("proposal bytes should fit"),
     }
     .hash();
 
@@ -177,6 +195,7 @@ async fn conflicting_root_aborts_before_threshold_signing() {
                 beacon_block_root: Hash256::from([0xEE; 32]),
                 parent_block_root: Hash256::ZERO,
                 execution_requests_root: Hash256::ZERO,
+                payload_root: Hash256::ZERO,
                 builder_index: 0,
                 block_hash: ExecutionBlockHash::zero(),
                 built_locally: false,

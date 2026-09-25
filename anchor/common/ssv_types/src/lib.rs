@@ -5,7 +5,6 @@ pub use share::Share;
 mod cluster;
 mod committee;
 pub mod consensus;
-pub mod dissemination;
 pub mod domain_type;
 pub mod message;
 pub mod msgid;

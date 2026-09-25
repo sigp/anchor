@@ -17,7 +17,6 @@ use std::{
 
 use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::{NetworkDatabase, PendingStateUpdates};
-use dissemination_store::DisseminationStore;
 use fork::{Fork, ForkSchedule};
 use futures::StreamExt;
 use parking_lot::Mutex;
@@ -33,7 +32,6 @@ use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share,
     ValidatorIndex, ValidatorMetadata,
     consensus::{AggregatorCommitteeConsensusData, BeaconVote, GloasBeaconVote, QbftDataValidator},
-    dissemination::EnvelopeDissemination,
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
@@ -187,17 +185,6 @@ impl<E: EthSpec> ConsensusDecider<E> for MockConsensusDecider {
 
 // ==================== Mock signature collector ====================
 
-/// One captured `broadcast_dissemination` call.
-#[derive(Debug, Clone)]
-pub(super) struct CapturedDissemination {
-    pub(super) validator_pubkey: PublicKeyBytes,
-    pub(super) committee_id: CommitteeId,
-    pub(super) dissemination: EnvelopeDissemination,
-}
-
-/// Shared storage for captured `broadcast_dissemination` calls.
-pub(super) type CapturedDisseminations = Arc<Mutex<Vec<CapturedDissemination>>>;
-
 /// Shared storage for captured `sign_and_collect` calls.
 pub(super) type CapturedCalls = Arc<Mutex<Vec<CapturedSignatureCall>>>;
 
@@ -207,6 +194,8 @@ pub(super) struct CapturedSignatureCall {
     /// Only the root is captured, not the full `ValidatorSigningData`, so the capture never
     /// holds key share material.
     pub(super) signing_root: Hash256,
+    pub(super) envelope_signing_root: Option<Hash256>,
+    pub(super) wait_only: bool,
     pub(super) validator_pubkey: PublicKeyBytes,
     /// When the call was made.
     pub(super) captured_at: Instant,
@@ -228,9 +217,6 @@ type FailingPubkeys = Arc<Mutex<HashSet<PublicKeyBytes>>>;
 /// over both failure modes.
 struct MockSignatureCollector {
     captured: CapturedCalls,
-    captured_disseminations: CapturedDisseminations,
-    /// Set from `HarnessOptions::dissemination_failure`; every broadcast fails with this error.
-    dissemination_failure: Option<CollectionError>,
     /// Set from `HarnessOptions::collector_failure`; every call fails with this error.
     failure: Option<CollectionError>,
     fails: Arc<AtomicBool>,
@@ -280,6 +266,8 @@ impl SignatureCollecting for MockSignatureCollector {
             requester,
             metadata,
             signing_root: signing_data.root,
+            envelope_signing_root: None,
+            wait_only: false,
             validator_pubkey: signing_data.validator_pubkey,
             captured_at: Instant::now(),
         });
@@ -291,12 +279,14 @@ impl SignatureCollecting for MockSignatureCollector {
         metadata: SignatureMetadata,
         pubkey: PublicKeyBytes,
         block: ValidatorSigningData,
-        _envelope: Option<ValidatorSigningData>,
+        envelope: Option<ValidatorSigningData>,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
         self.captured.lock().push(CapturedSignatureCall {
             requester: SignatureRequester::SingleValidator { pubkey },
             metadata,
             signing_root: block.root,
+            envelope_signing_root: envelope.map(|data| data.root),
+            wait_only: false,
             validator_pubkey: block.validator_pubkey,
             captured_at: Instant::now(),
         });
@@ -309,7 +299,7 @@ impl SignatureCollecting for MockSignatureCollector {
         _index: ValidatorIndex,
         validator_pubkey: PublicKeyBytes,
         root: Hash256,
-        _required_companion: Option<Hash256>,
+        required_companion: Option<Hash256>,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
         self.captured.lock().push(CapturedSignatureCall {
             requester: SignatureRequester::SingleValidator {
@@ -317,29 +307,12 @@ impl SignatureCollecting for MockSignatureCollector {
             },
             metadata,
             signing_root: root,
+            envelope_signing_root: required_companion,
+            wait_only: true,
             validator_pubkey,
             captured_at: Instant::now(),
         });
         self.collection_result(validator_pubkey)
-    }
-
-    fn broadcast_dissemination(
-        &self,
-        validator_pubkey: PublicKeyBytes,
-        committee_id: CommitteeId,
-        dissemination: EnvelopeDissemination,
-    ) -> Result<(), CollectionError> {
-        if let Some(failure) = self.dissemination_failure.clone() {
-            return Err(failure);
-        }
-        self.captured_disseminations
-            .lock()
-            .push(CapturedDissemination {
-                validator_pubkey,
-                committee_id,
-                dissemination,
-            });
-        Ok(())
     }
 }
 
@@ -347,38 +320,26 @@ impl SignatureCollecting for MockSignatureCollector {
 /// handles.
 fn create_mock_collector(
     failure: Option<CollectionError>,
-    dissemination_failure: Option<CollectionError>,
     hang: bool,
 ) -> (
     Box<dyn SignatureCollecting>,
     CapturedCalls,
-    CapturedDisseminations,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     FailingPubkeys,
 ) {
     let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
-    let captured_disseminations: CapturedDisseminations = Arc::new(Mutex::new(Vec::new()));
     let fails = Arc::new(AtomicBool::new(false));
     let hangs = Arc::new(AtomicBool::new(hang));
     let failing_pubkeys: FailingPubkeys = Arc::new(Mutex::new(HashSet::new()));
     let mock = MockSignatureCollector {
         captured: Arc::clone(&captured),
-        captured_disseminations: Arc::clone(&captured_disseminations),
-        dissemination_failure,
         failure,
         fails: Arc::clone(&fails),
         hangs: Arc::clone(&hangs),
         failing_pubkeys: Arc::clone(&failing_pubkeys),
     };
-    (
-        Box::new(mock),
-        captured,
-        captured_disseminations,
-        fails,
-        hangs,
-        failing_pubkeys,
-    )
+    (Box::new(mock), captured, fails, hangs, failing_pubkeys)
 }
 
 // ==================== Committee setup ====================
@@ -502,8 +463,6 @@ pub(super) fn create_committee_setup(
 pub(super) struct HarnessOptions {
     /// When set, every `sign_and_collect` call fails with this error after being captured.
     pub(super) collector_failure: Option<CollectionError>,
-    /// Every `broadcast_dissemination` call fails with this error.
-    pub(super) dissemination_failure: Option<CollectionError>,
     /// When `true`, every `sign_and_collect` call captures the call and then returns a future that
     /// never resolves, modeling a quorum that never forms. Used to drive the production
     /// collection-timeout path. Takes precedence over `collector_failure`.
@@ -529,7 +488,6 @@ impl Default for HarnessOptions {
     fn default() -> Self {
         Self {
             collector_failure: None,
-            dissemination_failure: None,
             collector_hangs: false,
             // Slashing protection is disabled by default; most tests do not exercise it. When a
             // test enables it, the harness registers every configured validator in the slashing
@@ -578,12 +536,8 @@ pub(super) struct ValidatorStoreTestHarness {
         Arc<AnchorValidatorStore<ManualSlotClock, MainnetEthSpec, MockConsensusDecider>>,
     committee_setups: Vec<CommitteeSetup>,
     pub(super) captured_calls: CapturedCalls,
-    pub(super) captured_disseminations: CapturedDisseminations,
     /// Timeout origins supplied by the real signing and committee consensus callers.
     pub(super) captured_consensus_timeouts: Arc<Mutex<Vec<TimeoutMode>>>,
-    /// The dissemination handoff store the store awaits on; tests insert into it to stand in
-    /// for the message receiver.
-    pub(super) dissemination_store: Arc<DisseminationStore>,
     /// Set by [`Self::fail_signature_collection`]; read by the mock collector on every call.
     signature_collection_fails: Arc<AtomicBool>,
     /// Filled by [`Self::hang_signature_collection`]; read by the mock collector on every call.
@@ -675,17 +629,10 @@ impl ValidatorStoreTestHarness {
         let (
             mock_collector,
             captured_calls,
-            captured_disseminations,
             signature_collection_fails,
             signature_collection_hangs,
             failing_pubkeys,
-        ) = create_mock_collector(
-            options.collector_failure,
-            options.dissemination_failure,
-            options.collector_hangs,
-        );
-
-        let dissemination_store = Arc::new(DisseminationStore::new());
+        ) = create_mock_collector(options.collector_failure, options.collector_hangs);
 
         // Database
         let database = Arc::new(
@@ -771,7 +718,6 @@ impl ValidatorStoreTestHarness {
         let validator_store = AnchorValidatorStore::new(
             database,
             mock_collector,
-            Arc::clone(&dissemination_store),
             Arc::new(decider),
             Arc::clone(&slashing_protection),
             options.disable_slashing_protection,
@@ -793,9 +739,7 @@ impl ValidatorStoreTestHarness {
             validator_store,
             committee_setups,
             captured_calls,
-            captured_disseminations,
             captured_consensus_timeouts,
-            dissemination_store,
             signature_collection_fails,
             signature_collection_hangs,
             failing_pubkeys,
