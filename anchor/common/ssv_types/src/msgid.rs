@@ -23,7 +23,6 @@ pub enum Role {
     AggregatorCommittee,
     PTCAttester,
     ProposerPreferences,
-    EnvelopeProposer,
 }
 
 impl From<Role> for [u8; 4] {
@@ -38,7 +37,6 @@ impl From<Role> for [u8; 4] {
             Role::AggregatorCommittee => [6, 0, 0, 0],
             Role::PTCAttester => [7, 0, 0, 0],
             Role::ProposerPreferences => [8, 0, 0, 0],
-            Role::EnvelopeProposer => [9, 0, 0, 0],
         }
     }
 }
@@ -57,7 +55,7 @@ impl TryFrom<&[u8]> for Role {
             [6, 0, 0, 0] => Ok(Role::AggregatorCommittee),
             [7, 0, 0, 0] => Ok(Role::PTCAttester),
             [8, 0, 0, 0] => Ok(Role::ProposerPreferences),
-            [9, 0, 0, 0] => Ok(Role::EnvelopeProposer),
+            // Role 9 was retired when envelope signing joined the proposer duty.
             _ => Err(DecodeError::NoMatchingVariant),
         }
     }
@@ -83,19 +81,17 @@ impl Role {
             Role::Committee | Role::Aggregator | Role::AggregatorCommittee => Some(12),
             Role::Proposer => Some(2),
             Role::SyncCommittee => Some(6),
-            // These roles don't use QBFT consensus. EnvelopeProposer disseminates and
-            // threshold-signs the decided envelope without a consensus round (SIP-94 §6).
+            // These roles do not use QBFT consensus.
             Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences
-            | Role::EnvelopeProposer => None,
+            | Role::ProposerPreferences => None,
         }
     }
 
     /// Returns true if this role runs a QBFT consensus round, i.e. it has a
     /// max QBFT round. The roles that do not (ValidatorRegistration, VoluntaryExit,
-    /// PTCAttester, ProposerPreferences, EnvelopeProposer) return false.
+    /// PTCAttester, ProposerPreferences) return false.
     pub fn is_qbft_role(self) -> bool {
         self.max_round().is_some()
     }
@@ -186,8 +182,7 @@ impl MessageId {
             | Role::ValidatorRegistration
             | Role::VoluntaryExit
             | Role::PTCAttester
-            | Role::ProposerPreferences
-            | Role::EnvelopeProposer => PublicKeyBytes::deserialize(&self.0[8..])
+            | Role::ProposerPreferences => PublicKeyBytes::deserialize(&self.0[8..])
                 .ok()
                 .map(DutyExecutor::Validator),
         }
@@ -274,6 +269,7 @@ mod tests {
 
     #[test]
     fn role_decoding_invalid_variant() {
+        assert!(Role::try_from([9, 0, 0, 0].as_slice()).is_err());
         assert!(Role::try_from([255, 0, 0, 0].as_slice()).is_err());
         assert!(Role::try_from([0, 1, 0, 0].as_slice()).is_err());
     }
@@ -434,7 +430,6 @@ mod tests {
             Role::VoluntaryExit,
             Role::PTCAttester,
             Role::ProposerPreferences,
-            Role::EnvelopeProposer,
         ] {
             assert!(!role.is_qbft_role(), "{role:?} must not run QBFT");
             assert!(
@@ -469,59 +464,12 @@ mod tests {
             Role::ValidatorRegistration,
             Role::VoluntaryExit,
             Role::PTCAttester,
-            Role::EnvelopeProposer,
         ] {
             assert!(
                 role.monotonic_slot_role(),
                 "{role:?} must be a monotonic-slot role"
             );
         }
-    }
-
-    /// Tests that EnvelopeProposer is a validator-scoped non-QBFT role: the envelope
-    /// duty disseminates and threshold-signs without a consensus round (SIP-94 §6).
-    #[test]
-    fn envelope_proposer_is_validator_scoped_non_qbft_role() {
-        assert!(
-            !Role::EnvelopeProposer.is_committee_role(),
-            "EnvelopeProposer is per-validator, not a committee role"
-        );
-        assert_eq!(
-            Role::EnvelopeProposer.max_round(),
-            None,
-            "EnvelopeProposer has no consensus round"
-        );
-        assert!(
-            !Role::EnvelopeProposer.is_qbft_role(),
-            "EnvelopeProposer does not run QBFT (max_round is None)"
-        );
-        assert!(
-            Role::EnvelopeProposer.monotonic_slot_role(),
-            "EnvelopeProposer signers advance slot-by-slot; lower slots are stale"
-        );
-
-        // Wire byte 9 for EnvelopeProposer check.
-        let bytes: [u8; 4] = Role::EnvelopeProposer.into();
-        assert_eq!(bytes, [9, 0, 0, 0], "EnvelopeProposer wire byte is 9");
-        assert_eq!(
-            Role::try_from(bytes.as_slice()).unwrap(),
-            Role::EnvelopeProposer,
-            "wire byte 9 decodes back to EnvelopeProposer"
-        );
-
-        // duty_executor resolves to Validator (per-proposer, pubkey-scoped).
-        let domain = DomainType([0, 0, 0, 1]);
-        let pk = PublicKeyBytes::empty();
-        let msg_id = MessageId::new(
-            &domain,
-            Role::EnvelopeProposer,
-            &DutyExecutor::Validator(pk),
-        );
-        assert_eq!(
-            msg_id.duty_executor(),
-            Some(DutyExecutor::Validator(pk)),
-            "EnvelopeProposer resolves to a validator-scoped duty executor"
-        );
     }
 
     /// Pins the proposer QBFT and sync-committee round caps.

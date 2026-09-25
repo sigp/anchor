@@ -367,7 +367,6 @@ async fn test_proposer_preferences_local_positive_reaches_collector_despite_http
         processor.clone(),
         qbft,
         collector.clone(),
-        Arc::new(dissemination_store::DisseminationStore::new()),
         database.watch(),
         synced_rx,
         outcome_tx,

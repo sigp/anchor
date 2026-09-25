@@ -25,9 +25,8 @@ use typenum::{
 use types::{
     AggregateAndProof, AggregateAndProofBase, AggregateAndProofElectra, AggregateAndProofGloas,
     Attestation, AttestationBase, AttestationData, AttestationElectra, AttestationGloas,
-    BeaconBlock, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex, Domain, EthSpec,
-    ExecutionPayloadEnvelope, ExecutionRequestsGloas, ForkName, Hash256, SignedRoot, Slot,
-    SyncCommitteeContribution,
+    BeaconBlock, BeaconBlockGloas, BlindedBeaconBlock, ChainSpec, Checkpoint, CommitteeIndex,
+    Domain, EthSpec, ForkName, Hash256, Slot, SyncCommitteeContribution,
 };
 
 use crate::{CommitteeId, ValidatorIndex, message::*, partial_sig::PartialSignatureKind};
@@ -265,10 +264,14 @@ impl ProposerConsensusData {
         FullBlockContents::from_ssz_bytes_for_fork(&self.data_ssz, fork)
     }
 
-    /// Decode as a full beacon block shape.
-    pub fn decode_block<E: EthSpec>(&self) -> Result<BeaconBlock<E>, DecodeError> {
-        let fork = ForkName::from(self.version);
-        BeaconBlock::from_ssz_bytes_for_fork(&self.data_ssz, fork)
+    /// Decode the Gloas value, including the payload commitment agreed by QBFT.
+    pub fn decode_gloas_proposal<E: EthSpec>(&self) -> Result<GloasProposalData<E>, DecodeError> {
+        if ForkName::from(self.version) != ForkName::Gloas {
+            return Err(DecodeError::NoMatchingVariant);
+        }
+        let proposal = GloasProposalData::<E>::from_ssz_bytes(&self.data_ssz)?;
+        proposal.validate_payload_root()?;
+        Ok(proposal)
     }
 }
 
@@ -285,50 +288,28 @@ impl QbftData for ProposerConsensusData {
     }
 }
 
-/// Blinded envelope disseminated and threshold-signed for the envelope duty (SIP-94 §6).
-///
-/// Under ePBS (EIP-7732), the cluster signs this blinded form rather than the full
-/// multi-MB `ExecutionPayloadEnvelope`. The builder operator substitutes the full `payload` field
-/// with its tree-hash root, preserving SSZ merkleization parity: the blinded envelope's root
-/// equals the full envelope's root, so a signature over the blinded signing root is valid for
-/// the full envelope.
-///
-/// EIP-7688 makes the full `ExecutionPayloadEnvelope` a progressive container, so this mirror
-/// must merkleize progressively too or the parity above breaks (SIP-94 §6).
-#[derive(Clone, Debug, PartialEq, Encode, Decode, TreeHash)]
-#[tree_hash(
-    struct_behaviour = "progressive_container",
-    active_fields(1, 1, 1, 1, 1)
-)]
-pub struct BlindedExecutionPayloadEnvelope<E: EthSpec> {
-    /// Tree-hash root of the full `payload` (`ExecutionPayloadGloas`).
+/// Gloas proposer value. The payload itself never crosses the SSV network.
+#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+pub struct GloasProposalData<E: EthSpec> {
+    pub block: BeaconBlockGloas<E>,
     pub payload_root: Hash256,
-    /// Execution requests (deposits, withdrawals, consolidations, plus Gloas-added
-    /// `builder_deposits` and `builder_exits`), copied verbatim from the full envelope.
-    pub execution_requests: ExecutionRequestsGloas<E>,
-    /// Builder index: `u64::MAX` (self-build) or the builder's registry index for external
-    /// builds. Used to attribute the payload source.
-    pub builder_index: u64,
-    /// Root of the beacon block that this envelope is proposed within. Used to bind the
-    /// envelope to the proposing beacon block.
-    pub beacon_block_root: Hash256,
-    /// Root of the parent beacon block, used for fork-choice context.
-    pub parent_beacon_block_root: Hash256,
 }
 
-impl<E: EthSpec> SignedRoot for BlindedExecutionPayloadEnvelope<E> {}
-
-impl<E: EthSpec> BlindedExecutionPayloadEnvelope<E> {
-    /// Build the blinded envelope from the full `ExecutionPayloadEnvelope`, substituting the
-    /// `payload` field with its tree-hash root.
-    pub fn from_full(full: &ExecutionPayloadEnvelope<E>) -> Self {
-        Self {
-            payload_root: full.payload.tree_hash_root(),
-            execution_requests: full.execution_requests.clone(),
-            builder_index: full.builder_index,
-            beacon_block_root: full.beacon_block_root,
-            parent_beacon_block_root: full.parent_beacon_block_root,
+impl<E: EthSpec> GloasProposalData<E> {
+    pub fn validate_payload_root(&self) -> Result<(), DecodeError> {
+        let self_build = self
+            .block
+            .body
+            .signed_execution_payload_bid
+            .message
+            .builder_index
+            == types::consts::gloas::BUILDER_INDEX_SELF_BUILD;
+        if self_build == self.payload_root.is_zero() {
+            return Err(DecodeError::BytesInvalid(
+                "payload root must be nonzero exactly for a self-build bid".into(),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -458,16 +439,12 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
             });
         }
 
-        // Decode the block header to ensure the value is decodable (even when slashing
-        // protection is disabled). Under Gloas (EIP-7732), DataSSZ is decoded directly as a plain
-        // BeaconBlock. This behaviour is not behaviourally load-bearing as the execution
-        // payload is decoupled from the block body. The outcome of `decode_blinded_block`
-        // and `decode_block` are identical for this variant. The Pre-Gloas branch
-        // preserves the existing try-blinded-then-full fallback.
+        // Gloas commits to both the block and payload root. Earlier forks retain their
+        // blinded-first decoding, including the full-contents fallback.
         let header = if fork >= ForkName::Gloas {
             value
-                .decode_block::<E>()
-                .map(|block| block.block_header())
+                .decode_gloas_proposal::<E>()
+                .map(|proposal| BeaconBlock::Gloas(proposal.block).block_header())
                 .map_err(DataValidationError::DecodeError)?
         } else {
             value
@@ -1618,8 +1595,8 @@ mod tests {
     use ssz::ProgressiveBitList;
     use ssz_types::{BitList, BitVector};
     use types::{
-        BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, ExecutionPayloadGloas,
-        MainnetEthSpec, SyncCommitteeContribution, test_utils::generate_deterministic_keypair,
+        BeaconBlockDeneb, BeaconBlockGloas, Checkpoint, EmptyBlock, Epoch, MainnetEthSpec,
+        SignedRoot, SyncCommitteeContribution, test_utils::generate_deterministic_keypair,
     };
 
     use super::*;
@@ -3343,17 +3320,24 @@ mod tests {
     /// SSZ bytes for a Gloas block variant.
     fn decode_block_round_trip() {
         let spec = ChainSpec::mainnet();
-        let block = BeaconBlock::Gloas(BeaconBlockGloas::<MainnetEthSpec>::empty(&spec));
+        let block = BeaconBlockGloas::<MainnetEthSpec>::empty(&spec);
 
-        let consensus_data =
-            proposer_consensus_data(Slot::new(0), ForkName::Gloas, block.as_ssz_bytes());
+        let consensus_data = proposer_consensus_data(
+            Slot::new(0),
+            ForkName::Gloas,
+            GloasProposalData {
+                block: block.clone(),
+                payload_root: Hash256::ZERO,
+            }
+            .as_ssz_bytes(),
+        );
 
         let decoded = consensus_data
-            .decode_block::<MainnetEthSpec>()
+            .decode_gloas_proposal::<MainnetEthSpec>()
             .expect("Gloas block should decode from DataSSZ");
 
         assert_eq!(
-            decoded, block,
+            decoded.block, block,
             "decoded Gloas block should equal the original block"
         );
     }
@@ -3467,7 +3451,126 @@ mod tests {
     fn gloas_block_bytes(spec: &ChainSpec, slot: Slot) -> Vec<u8> {
         let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(spec);
         block.slot = slot;
-        BeaconBlock::Gloas(block).as_ssz_bytes()
+        GloasProposalData {
+            block,
+            payload_root: Hash256::ZERO,
+        }
+        .as_ssz_bytes()
+    }
+
+    /// Fixture and expected chain root copied from go-ssv at
+    /// 56916c7982d905cd74c04d973ca9b10e3b257eb0:
+    /// protocol/v2/types/gloas/testdata/devnet8_gloas_block_144352.ssz and
+    /// protocol/v2/types/gloas/beacon_block_golden_test.go.
+    #[test]
+    fn gloas_proposal_matches_go_devnet8_fixture_bytes_and_block_root() {
+        // Arrange: the fixture is a SignedBeaconBlock, whose message starts at offset 100.
+        let signed_bytes = include_bytes!("../testdata/devnet8_gloas_block_144352.ssz");
+        assert_eq!(&signed_bytes[..4], &100u32.to_le_bytes());
+        let block_bytes = &signed_bytes[100..];
+        let block = BeaconBlockGloas::<MainnetEthSpec>::from_ssz_bytes(block_bytes).unwrap();
+        let mut root_bytes = [0u8; 32];
+        root_bytes[0] = 1;
+        let payload_root = Hash256::from(root_bytes);
+        let expected_root = Hash256::from_slice(
+            &hex::decode("1f6c7bd0c7a6dc446057bacc566df52117dbfb3ee586148948271d6821cf22f1")
+                .unwrap(),
+        );
+
+        // Act: encode Anchor's actual wrapper with Go's fixed PayloadRoot fixture.
+        let bytes = GloasProposalData {
+            block: block.clone(),
+            payload_root,
+        }
+        .as_ssz_bytes();
+        let mut expected_bytes = 36u32.to_le_bytes().to_vec();
+        expected_bytes.extend_from_slice(payload_root.as_slice());
+        expected_bytes.extend_from_slice(block_bytes);
+
+        // Assert: SSZ bytes and the progressive block root agree with the other client.
+        assert_eq!(block.slot, Slot::new(144352));
+        assert_eq!(BeaconBlock::Gloas(block).canonical_root(), expected_root);
+        assert_eq!(bytes, expected_bytes);
+        let decoded = GloasProposalData::<MainnetEthSpec>::from_ssz_bytes(&bytes).unwrap();
+        assert_eq!(decoded.payload_root, payload_root);
+        assert_eq!(decoded.block.as_ssz_bytes(), block_bytes);
+    }
+
+    #[test]
+    fn gloas_proposal_ssz_layout_preserves_block_and_payload_root() {
+        // Arrange: the Go container has a variable block followed by a fixed 32-byte root.
+        let spec = gloas_scheduled_spec();
+        let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(&spec);
+        block.slot = gloas_era_slot();
+        block
+            .body
+            .signed_execution_payload_bid
+            .message
+            .builder_index = types::consts::gloas::BUILDER_INDEX_SELF_BUILD;
+        let payload_root = Hash256::repeat_byte(0x42);
+        let block_bytes = block.as_ssz_bytes();
+        let proposal = GloasProposalData {
+            block,
+            payload_root,
+        };
+
+        // Act: encode the real proposal type and decode it through the consensus helper.
+        let bytes = proposal.as_ssz_bytes();
+        let consensus = proposer_consensus_data(gloas_era_slot(), ForkName::Gloas, bytes.clone());
+        let decoded = consensus.decode_gloas_proposal::<MainnetEthSpec>().unwrap();
+
+        // Assert: the independently assembled container matches the cross-client SSZ layout.
+        let mut expected = 36u32.to_le_bytes().to_vec();
+        expected.extend_from_slice(payload_root.as_slice());
+        expected.extend_from_slice(&block_bytes);
+        assert_eq!(bytes, expected);
+        assert_eq!(decoded.payload_root, payload_root);
+        assert_eq!(decoded.block.as_ssz_bytes(), block_bytes);
+        let reproposal = ProposerConsensusData::from_ssz_bytes(&consensus.as_ssz_bytes()).unwrap();
+        assert_eq!(reproposal.data_ssz, consensus.data_ssz);
+    }
+
+    #[test]
+    fn gloas_proposal_payload_root_presence_matches_builder_kind() {
+        for self_build in [false, true] {
+            for root_present in [false, true] {
+                // Arrange: exercise all four builder/root combinations.
+                let spec = gloas_scheduled_spec();
+                let mut block = BeaconBlockGloas::<MainnetEthSpec>::empty(&spec);
+                block.slot = gloas_era_slot();
+                block
+                    .body
+                    .signed_execution_payload_bid
+                    .message
+                    .builder_index = if self_build {
+                    types::consts::gloas::BUILDER_INDEX_SELF_BUILD
+                } else {
+                    42
+                };
+                let proposal = GloasProposalData {
+                    block,
+                    payload_root: if root_present {
+                        Hash256::repeat_byte(1)
+                    } else {
+                        Hash256::ZERO
+                    },
+                };
+                let consensus = proposer_consensus_data(
+                    gloas_era_slot(),
+                    ForkName::Gloas,
+                    proposal.as_ssz_bytes(),
+                );
+                let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
+
+                // Act: both the decode path and QBFT proposal validator must enforce the rule.
+                let decoded = consensus.decode_gloas_proposal::<MainnetEthSpec>();
+                let validated = validator.do_validation(&consensus, &consensus);
+
+                // Assert: self-build has a nonzero root; external builders have the zero root.
+                assert_eq!(decoded.is_ok(), self_build == root_present);
+                assert_eq!(validated.is_ok(), self_build == root_present);
+            }
+        }
     }
 
     /// SSZ bytes of an empty Deneb `FullBlockContents` whose block's internal slot equals `slot`.
@@ -3677,83 +3780,6 @@ mod tests {
         let result = validator.do_validation(&value, &our_value);
 
         assert_block_slot_mismatch(result, slot, slot + 1);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════
-    // BlindedExecutionPayloadEnvelope tests (ePBS envelope root parity)
-    // ═══════════════════════════════════════════════════════════════════════════════
-
-    /// Builds a small full `ExecutionPayloadEnvelope` with the given `builder_index` and
-    /// `beacon_block_root`. Payload and requests stay at their (small) defaults so the blinded
-    /// form is cheap to encode.
-    fn envelope_test_full_envelope(
-        builder_index: u64,
-        beacon_block_root: Hash256,
-    ) -> ExecutionPayloadEnvelope<MainnetEthSpec> {
-        ExecutionPayloadEnvelope {
-            payload: ExecutionPayloadGloas::<MainnetEthSpec>::default(),
-            execution_requests: ExecutionRequestsGloas::<MainnetEthSpec>::default(),
-            builder_index,
-            beacon_block_root,
-            parent_beacon_block_root: Hash256::from_low_u64_be(0x2222),
-        }
-    }
-
-    /// Build a full envelope, blind it, and assert:
-    /// 1. `blinded.tree_hash_root() == full.tree_hash_root()`.
-    /// 2. `payload_root` really is the payload's hash.
-    /// 3. The blinded form survives SSZ encode/decode.
-    #[test]
-    fn blinded_execution_payload_envelope_root_parity() {
-        // Construct a full ExecutionPayloadEnvelope with test data.
-        let full_envelope = envelope_test_full_envelope(42, Hash256::from_low_u64_be(0x1111));
-
-        // Create blinded envelope from full.
-        let blinded = BlindedExecutionPayloadEnvelope::from_full(&full_envelope);
-
-        // This equality is load-bearing for the envelope signing duty.
-        assert_eq!(
-            blinded.tree_hash_root(),
-            full_envelope.tree_hash_root(),
-            "BlindedExecutionPayloadEnvelope root must equal full ExecutionPayloadEnvelope root"
-        );
-
-        assert_eq!(
-            blinded.payload_root,
-            full_envelope.payload.tree_hash_root(),
-            "payload_root must equal the full payload's tree-hash root"
-        );
-
-        // Fixed expected root (SIP-94 §6): equivalence must be pinned against a constant,
-        // not only same-implementation parity, so a silent merkleization change (e.g. a
-        // tree_hash dependency bump altering progressive-container hashing) fails loudly.
-        // Cross-checked against the consensus-specs pyspec (remerkleable) at pin a5a1bc630,
-        // which merkleizes the same fixture (ExecutionPayloadEnvelope as a
-        // ProgressiveContainer with active_fields [1, 1, 1, 1, 1]) to this exact root, so
-        // the vector is a second-implementation check, not same-implementation parity.
-        // go-ssv parity remains to be added when its implementation exists.
-        let fixed_expected_root = Hash256::from_slice(
-            &hex::decode("9af9a50572381e869605147c3d6220c969d6f12087d94393ec0440660f752c5e")
-                .expect("fixture root hex must decode"),
-        );
-        assert_eq!(
-            blinded.tree_hash_root(),
-            fixed_expected_root,
-            "the blinded envelope fixture root must match the pinned vector"
-        );
-
-        let encoded = blinded.as_ssz_bytes();
-        let decoded = BlindedExecutionPayloadEnvelope::<MainnetEthSpec>::from_ssz_bytes(&encoded)
-            .expect("SSZ decode should succeed");
-        assert_eq!(
-            blinded, decoded,
-            "SSZ round-trip must preserve BlindedExecutionPayloadEnvelope"
-        );
-        assert_eq!(
-            blinded.tree_hash_root(),
-            decoded.tree_hash_root(),
-            "SSZ round-trip must preserve tree-hash root"
-        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════

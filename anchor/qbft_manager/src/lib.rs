@@ -292,7 +292,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Committee | Role::AggregatorCommittee)
                     // These roles don't use QBFT consensus
                     | Some(
-                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences | Role::EnvelopeProposer,
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
                     )
                     | None => {
                         error!(?msg_id, "Unexpected role/executor combination in msg id");
@@ -360,7 +360,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                     Some(Role::Aggregator | Role::Proposer | Role::SyncCommittee)
                     // These roles don't use QBFT consensus
                     | Some(
-                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences | Role::EnvelopeProposer,
+                        Role::ValidatorRegistration | Role::VoluntaryExit | Role::PTCAttester | Role::ProposerPreferences,
                     )
                     | None => Err(QbftError::InconsistentMessageId),
                 }

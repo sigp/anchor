@@ -48,10 +48,6 @@ pub enum PartialSignatureKind {
     // BuilderRequestAuth object (validator-scoped, non-QBFT; rides Role::ProposerPreferences
     // as the role's second kind per SIP-94 §5's builder request auth extension)
     RequestAuth = 9,
-    // EnvelopePartialSig is a standalone single-validator partial signature over the
-    // disseminated BlindedExecutionPayloadEnvelope root (validator-scoped, non-QBFT;
-    // SIP-94 §6's self-build envelope signing round)
-    Envelope = 10,
 }
 
 impl TryFrom<u64> for PartialSignatureKind {
@@ -69,7 +65,7 @@ impl TryFrom<u64> for PartialSignatureKind {
             7 => Ok(PartialSignatureKind::PTCAttester),
             8 => Ok(PartialSignatureKind::ProposerPreferences),
             9 => Ok(PartialSignatureKind::RequestAuth),
-            10 => Ok(PartialSignatureKind::Envelope),
+            // Kind 10 was retired when envelope shares joined PostConsensus packets.
             _ => Err(()),
         }
     }
@@ -209,7 +205,6 @@ mod tests {
             PartialSignatureKind::PTCAttester,
             PartialSignatureKind::ProposerPreferences,
             PartialSignatureKind::RequestAuth,
-            PartialSignatureKind::Envelope,
         ];
 
         for variant in variants {
@@ -245,7 +240,6 @@ mod tests {
             (PartialSignatureKind::PTCAttester, 7u64),
             (PartialSignatureKind::ProposerPreferences, 8u64),
             (PartialSignatureKind::RequestAuth, 9u64),
-            (PartialSignatureKind::Envelope, 10u64),
         ];
 
         for (variant, expected_value) in test_cases {
@@ -263,6 +257,7 @@ mod tests {
 
     #[test]
     fn partial_signature_kind_ssz_decode_invalid_variant() {
+        assert!(PartialSignatureKind::from_ssz_bytes(&10u64.to_le_bytes()).is_err());
         let invalid_value = 11u64.to_le_bytes();
         let result = PartialSignatureKind::from_ssz_bytes(&invalid_value);
         assert!(matches!(result, Err(DecodeError::NoMatchingVariant)));

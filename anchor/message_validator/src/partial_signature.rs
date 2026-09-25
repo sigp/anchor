@@ -111,12 +111,12 @@ fn validate_partial_signature_message_semantics(
         return Err(ValidationFailure::InconsistentSigners);
     }
 
-    // Rule: a multi-entry RequestAuth packet names one validator (SIP-94 §5: every auth root of a
-    // packet belongs to the same duty and validator). This is a packet-internal structural check,
-    // so it runs before the membership loop below: that loop depends on the local validator view
-    // and maps to the Ignore-class `ValidatorIndexMismatch`, which must not mask a malformed
-    // packet as a local-metadata gap.
-    if is_request_auth_batch_role_kind(validation_context.role, partial_signature_messages.kind)
+    // Multi-entry validator packets must name one validator, independently of the local
+    // membership view. Check this before metadata-dependent index validation.
+    let same_validator =
+        is_request_auth_batch_role_kind(validation_context.role, partial_signature_messages.kind)
+            || is_gloas_proposer_post(validation_context, partial_signature_messages);
+    if same_validator
         && partial_signature_messages.messages.iter().any(|message| {
             message.validator_index != partial_signature_messages.messages[0].validator_index
         })
@@ -155,7 +155,6 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
             kind == PartialSignatureKind::ProposerPreferences
                 || kind == PartialSignatureKind::RequestAuth
         }
-        Role::EnvelopeProposer => kind == PartialSignatureKind::Envelope,
         Role::Aggregator => {
             kind == PartialSignatureKind::PostConsensus
                 || kind == PartialSignatureKind::SelectionProofPartialSig
@@ -177,12 +176,21 @@ fn partial_signature_type_matches_role(kind: PartialSignatureKind, role: Role) -
     }
 }
 
-/// The one validator-scoped (role, kind) pair whose packets may carry several entries:
-/// `RequestAuth` on `Role::ProposerPreferences`, one entry per configured builder entry (the
-/// proposed SIP-94 §5/§7 amendment). Every other validator-scoped packet, including
-/// `ProposerPreferences` on the same role, keeps the one-entry rule.
+/// Builder authorization packets contain one entry per configured builder.
 fn is_request_auth_batch_role_kind(role: Role, kind: PartialSignatureKind) -> bool {
     role == Role::ProposerPreferences && kind == PartialSignatureKind::RequestAuth
+}
+
+fn is_gloas_proposer_post(
+    context: &ValidationContext<impl SlotClock>,
+    messages: &PartialSignatureMessages,
+) -> bool {
+    context.role == Role::Proposer
+        && messages.kind == PartialSignatureKind::PostConsensus
+        && context
+            .spec
+            .fork_name_at_epoch(messages.slot.epoch(context.slots_per_epoch))
+            .gloas_enabled()
 }
 
 /// Validates partial signature messages based on duty logic.
@@ -353,13 +361,24 @@ fn validate_partial_sig_messages_by_duty_logic(
                 });
             }
         }
-        // Per-validator roles only allow one signature
+        Role::Proposer => {
+            let limit = if is_gloas_proposer_post(validation_context, partial_signature_messages) {
+                2
+            } else {
+                1
+            };
+            if message_count > limit {
+                return Err(ValidationFailure::TooManyPartialSignatureMessages {
+                    got: message_count,
+                    limit,
+                });
+            }
+        }
+        // Other per-validator duties keep singleton packets.
         Role::Aggregator
-        | Role::Proposer
         | Role::ValidatorRegistration
         | Role::VoluntaryExit
-        | Role::PTCAttester
-        | Role::EnvelopeProposer => {
+        | Role::PTCAttester => {
             if message_count > 1 {
                 return Err(ValidationFailure::TooManyPartialSignatureMessages {
                     got: message_count,
@@ -517,6 +536,230 @@ mod tests {
             operator_pub_keys,
             fork_schedule,
             spec: spec_with_gloas(None),
+        }
+    }
+
+    fn signed_proposer_test_packet(
+        role: Role,
+        kind: PartialSignatureKind,
+        private_key: &Rsa<Private>,
+        entries: &[(u8, OperatorId, ValidatorIndex)],
+    ) -> SignedSSVMessage {
+        let messages = PartialSignatureMessages {
+            kind,
+            slot: Slot::new(0),
+            messages: VariableList::new(
+                entries
+                    .iter()
+                    .map(|(root, signer, index)| PartialSignatureMessage {
+                        partial_signature: Signature::empty(),
+                        signing_root: Hash256::repeat_byte(*root),
+                        signer: *signer,
+                        validator_index: *index,
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        };
+        let message = SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            create_message_id_for_test(role),
+            messages.as_ssz_bytes(),
+        )
+        .unwrap();
+        let key = PKey::from_rsa(private_key.clone()).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &key).unwrap();
+        signer.update(&message.as_ssz_bytes()).unwrap();
+        SignedSSVMessage::new(
+            vec![signer.sign_to_vec().unwrap().try_into().unwrap()],
+            vec![OperatorId(1)],
+            message,
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn gloas_proposer_pair_is_order_independent_and_uses_one_packet_budget() {
+        for roots in [[1, 2], [2, 1]] {
+            // Arrange: one authenticated proposer packet with a block and envelope entry.
+            let (committee, private_key, keys) = four_node_committee_and_keypair();
+            let entries = roots.map(|root| (root, OperatorId(1), ValidatorIndex(0)));
+            let message = signed_proposer_test_packet(
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                &private_key,
+                &entries,
+            );
+            let mut state = DutyState::new(2 * SLOTS_PER_EPOCH_TEST as usize);
+            let validate = |state: &mut DutyState| {
+                let mut context = create_test_validation_context_with_fork(
+                    &message,
+                    &committee,
+                    Role::Proposer,
+                    &keys,
+                    None,
+                );
+                context.spec = spec_with_gloas(Some(0));
+                validate_partial_signature_message(
+                    context,
+                    state,
+                    Arc::new(MockDutiesProvider::default()),
+                )
+            };
+
+            // Act: admit the pair, then try to send another packet in the same round.
+            let first = validate(&mut state);
+            let repeated = validate(&mut state);
+
+            // Assert: entry order is irrelevant, and two entries spend only one packet allowance.
+            assert!(first.is_ok(), "pair order {roots:?}: {first:?}");
+            assert!(matches!(
+                repeated,
+                Err(ValidationFailure::InvalidPartialSignatureTypeCount { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn proposer_two_entry_allowance_is_gloas_post_consensus_only() {
+        for (role, kind, gloas, count, accepted) in [
+            (
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                true,
+                1,
+                true,
+            ),
+            (
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                true,
+                2,
+                true,
+            ),
+            (
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                true,
+                3,
+                false,
+            ),
+            (
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                false,
+                1,
+                true,
+            ),
+            (
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                false,
+                2,
+                false,
+            ),
+            (
+                Role::Proposer,
+                PartialSignatureKind::RandaoPartialSig,
+                true,
+                1,
+                true,
+            ),
+            (
+                Role::Proposer,
+                PartialSignatureKind::RandaoPartialSig,
+                true,
+                2,
+                false,
+            ),
+            (
+                Role::Aggregator,
+                PartialSignatureKind::PostConsensus,
+                true,
+                2,
+                false,
+            ),
+        ] {
+            // Arrange: hold membership and signing fixed while varying the fork/kind/count.
+            let (committee, private_key, keys) = four_node_committee_and_keypair();
+            let entries = (1..=count)
+                .map(|root| (root, OperatorId(1), ValidatorIndex(0)))
+                .collect::<Vec<_>>();
+            let message = signed_proposer_test_packet(role, kind, &private_key, &entries);
+            let mut context =
+                create_test_validation_context_with_fork(&message, &committee, role, &keys, None);
+            context.spec = spec_with_gloas(gloas.then_some(0));
+
+            // Act: use the complete admission path, including RSA verification and duty checks.
+            let result = validate_partial_signature_message(
+                context,
+                &mut DutyState::new(2 * SLOTS_PER_EPOCH_TEST as usize),
+                Arc::new(MockDutiesProvider::default()),
+            );
+
+            // Assert: the allowance cannot leak into RANDAO, other duties or pre-Gloas slots.
+            if accepted {
+                assert!(
+                    result.is_ok(),
+                    "{role:?}/{kind:?}/{gloas}/{count}: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(ValidationFailure::TooManyPartialSignatureMessages { .. })
+                    ),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gloas_proposer_pair_rejects_inconsistent_signer_or_validator() {
+        for different_signer in [false, true] {
+            // Arrange: both entries belong to a real committee, but disagree internally.
+            let (committee, private_key, keys) = four_node_committee_and_keypair();
+            let second = if different_signer {
+                (2, OperatorId(2), ValidatorIndex(0))
+            } else {
+                (2, OperatorId(1), ValidatorIndex(1))
+            };
+            let message = signed_proposer_test_packet(
+                Role::Proposer,
+                PartialSignatureKind::PostConsensus,
+                &private_key,
+                &[(1, OperatorId(1), ValidatorIndex(0)), second],
+            );
+            let mut context = create_test_validation_context_with_fork(
+                &message,
+                &committee,
+                Role::Proposer,
+                &keys,
+                None,
+            );
+            context.spec = spec_with_gloas(Some(0));
+
+            // Act: structural validation must precede locally known index membership.
+            let result = validate_partial_signature_message(
+                context,
+                &mut DutyState::new(2 * SLOTS_PER_EPOCH_TEST as usize),
+                Arc::new(MockDutiesProvider::default()),
+            );
+
+            // Assert: neither inconsistency can be admitted or hidden as a missing local duty.
+            if different_signer {
+                assert!(matches!(
+                    result,
+                    Err(ValidationFailure::InconsistentSigners)
+                ));
+            } else {
+                assert!(
+                    matches!(result, Err(ValidationFailure::InconsistentValidatorIndices)),
+                    "{result:?}"
+                );
+            }
         }
     }
 
@@ -2306,254 +2549,6 @@ mod tests {
         ));
     }
 
-    // ==================== EnvelopeProposer partial-signature tests ====================
-    //
-    // `EnvelopeProposer` (wire byte [9,0,0,0]) is the validator-scoped self-build role:
-    // binds the `Envelope` kind, gated to the Ethereum Gloas (ePBS) fork, caps its packet at
-    // one message, and uses the SHORT `1 + LATE_SLOT_ALLOWANCE` (3-slot) lateness bucket.
-
-    /// Helper to create a SignedSSVMessage for EnvelopeProposer testing.
-    fn create_signed_envelope_proposer_message(
-        signer_id: OperatorId,
-        private_key: &Rsa<Private>,
-        slot: Slot,
-        signing_root: Hash256,
-    ) -> SignedSSVMessage {
-        let partial_sig_messages = PartialSignatureMessages {
-            kind: PartialSignatureKind::Envelope,
-            slot,
-            messages: VariableList::new(vec![PartialSignatureMessage {
-                partial_signature: Signature::empty(),
-                signing_root,
-                signer: signer_id,
-                // ValidatorIndex(0) is in the test committee's validator_indices.
-                validator_index: ValidatorIndex(0),
-            }])
-            .unwrap(),
-        };
-
-        let msg_id = create_message_id_for_test(Role::EnvelopeProposer);
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVPartialSignatureMsgType,
-            msg_id,
-            partial_sig_messages.as_ssz_bytes(),
-        )
-        .unwrap();
-
-        let p_key = PKey::from_rsa(private_key.clone()).unwrap();
-        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
-        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
-
-        SignedSSVMessage::new(vec![signature], vec![signer_id], ssv_msg, vec![]).unwrap()
-    }
-
-    /// Helper to create a ValidationContext for EnvelopeProposer testing.
-    fn create_envelope_proposer_context<'a>(
-        signed_msg: &'a SignedSSVMessage,
-        committee_info: &'a crate::CommitteeInfo,
-        operator_pub_keys: &'a HashMap<OperatorId, Rsa<Public>>,
-        current_slot: Slot,
-    ) -> ValidationContext<'a, ManualSlotClock> {
-        let now = SystemTime::now();
-        let slot_clock = ManualSlotClock::new(
-            current_slot,
-            now.duration_since(UNIX_EPOCH).unwrap(),
-            Duration::from_secs(12),
-        );
-
-        ValidationContext {
-            signed_ssv_message: signed_msg,
-            committee_info,
-            role: Role::EnvelopeProposer,
-            received_at: now,
-            slots_per_epoch: SLOTS_PER_EPOCH_TEST,
-            epochs_per_sync_committee_period: 256,
-            sync_committee_size: 512,
-            slot_clock,
-            operator_pub_keys,
-            fork_schedule: generate_fork_schedule(Fork::Boole),
-            // EnvelopeProposer only exists post-Gloas; activate from epoch 0.
-            spec: spec_with_gloas(Some(0)),
-        }
-    }
-
-    /// `EnvelopeProposer` only accepts the `Envelope` kind (the Gloas fork gate is
-    /// covered once in `consensus_message.rs` via the shared `validate_role_for_fork`).
-    /// Asserts that this kind mismatch maps to
-    /// `ValidationFailure::PartialSignatureTypeRoleMismatch` and is rejected (not ignored).
-    #[test]
-    fn envelope_proposer_binds_envelope_kind() {
-        assert!(
-            partial_signature_type_matches_role(
-                PartialSignatureKind::Envelope,
-                Role::EnvelopeProposer,
-            ),
-            "EnvelopeProposer must accept the Envelope kind"
-        );
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::PartialSignatureTypeRoleMismatch),
-            MessageAcceptance::Reject,
-            "kind mismatch must be Reject",
-        );
-        assert!(
-            !partial_signature_type_matches_role(
-                PartialSignatureKind::PostConsensus,
-                Role::EnvelopeProposer,
-            ),
-            "EnvelopeProposer must reject non-Envelope kinds, including PostConsensus"
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_rejects_multiple_messages_per_packet() {
-        // EnvelopeProposer is validator-scoped: exactly one Envelope message per packet.
-        // The per-validator `> 1` bound rejects a second message, which also subsumes the
-        // validator-index occurrence cap (two messages for the same index would already trip
-        // `> 1`).
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-
-        // ValidatorIndex(123) is in the test committee's validator_indices, so each message
-        // passes the per-validator index check; the second message then trips the `> 1` bound.
-        let messages: Vec<_> = (0..2)
-            .map(|_| PartialSignatureMessage {
-                partial_signature: Signature::empty(),
-                signing_root: Hash256::from([0u8; 32]),
-                signer: OperatorId(1),
-                validator_index: ValidatorIndex(123),
-            })
-            .collect();
-
-        let partial_sig_messages = PartialSignatureMessages {
-            kind: PartialSignatureKind::Envelope,
-            slot: Slot::new(1),
-            messages: VariableList::new(messages).unwrap(),
-        };
-
-        let msg_id = create_message_id_for_test(Role::EnvelopeProposer);
-        let ssv_msg = SSVMessage::new(
-            MsgType::SSVPartialSignatureMsgType,
-            msg_id,
-            partial_sig_messages.as_ssz_bytes(),
-        )
-        .unwrap();
-
-        let p_key = PKey::from_rsa(private_key).unwrap();
-        let mut signer = Signer::new(MessageDigest::sha256(), &p_key).unwrap();
-        signer.update(&ssv_msg.as_ssz_bytes()).unwrap();
-        let signature = signer.sign_to_vec().unwrap().try_into().unwrap();
-
-        let signed_msg =
-            SignedSSVMessage::new(vec![signature], vec![OperatorId(1)], ssv_msg, vec![]).unwrap();
-
-        let validation_context =
-            create_envelope_proposer_context(&signed_msg, &committee_info, &map, Slot::new(1));
-
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut DutyState::new(64),
-            Arc::new(MockDutiesProvider {
-                voluntary_exit_duty_count: 0,
-                ..Default::default()
-            }),
-        );
-
-        assert_validation_error(
-            result,
-            |failure| {
-                matches!(
-                    failure,
-                    ValidationFailure::TooManyPartialSignatureMessages { limit: 1, .. }
-                )
-            },
-            "TooManyPartialSignatureMessages (EnvelopeProposer cap 1 per packet)",
-        );
-
-        // Check that more than 1 partial signature message in a packet is rejected and not ignored.
-        assert_eq!(
-            MessageAcceptance::from(&ValidationFailure::TooManyPartialSignatureMessages {
-                got: 2,
-                limit: 1
-            }),
-            MessageAcceptance::Reject,
-            "packet-count overflow must be Reject",
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_within_ttl_accepted() {
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-        let signed_msg = create_signed_partial_sig_message(
-            Role::EnvelopeProposer,
-            PartialSignatureKind::Envelope,
-            OperatorId(1),
-            &private_key,
-        );
-
-        // `EnvelopeProposer` uses the SHORT slot-bound TTL (`1 + LATE_SLOT_ALLOWANCE` = 3 slots);
-        // two slots late is inside it. `create_ttl_validation_context` sets a pre-Gloas spec, so
-        // override it (the role only exists post-Gloas).
-        let mut validation_context = create_ttl_validation_context(
-            &signed_msg,
-            &committee_info,
-            Role::EnvelopeProposer,
-            &map,
-            LATE_SLOT_ALLOWANCE_TEST,
-            generate_fork_schedule(Fork::Boole),
-        );
-        validation_context.spec = spec_with_gloas(Some(0));
-
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut DutyState::new(64),
-            Arc::new(MockDutiesProvider {
-                voluntary_exit_duty_count: 0,
-                ..Default::default()
-            }),
-        );
-
-        assert!(result.is_ok(), "Expected ok but got: {result:?}");
-    }
-
-    #[test]
-    fn envelope_proposer_beyond_short_ttl_rejected() {
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-        let signed_msg = create_signed_partial_sig_message(
-            Role::EnvelopeProposer,
-            PartialSignatureKind::Envelope,
-            OperatorId(1),
-            &private_key,
-        );
-
-        // 20 slots late is still inside the long (committee) TTL of 34 slots; rejecting it pins
-        // `EnvelopeProposer` to the short slot-bound bucket (`1 + LATE_SLOT_ALLOWANCE` = 3 slots).
-        // Override the helper's pre-Gloas spec (the role only exists post-Gloas).
-        let mut validation_context = create_ttl_validation_context(
-            &signed_msg,
-            &committee_info,
-            Role::EnvelopeProposer,
-            &map,
-            COMMITTEE_TTL_BUCKET_SLOTS,
-            generate_fork_schedule(Fork::Boole),
-        );
-        validation_context.spec = spec_with_gloas(Some(0));
-
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut DutyState::new(64),
-            Arc::new(MockDutiesProvider {
-                voluntary_exit_duty_count: 0,
-                ..Default::default()
-            }),
-        );
-
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::LateSlotMessage { .. }),
-            "LateSlotMessage (EnvelopeProposer past short TTL)",
-        );
-    }
-
     // ==================== ProposerPreferences tests ====================
     //
     // ProposerPreferences (wire byte [8,0,0,0]) is validator-scoped and non-QBFT.
@@ -3235,7 +3230,6 @@ mod tests {
             Role::VoluntaryExit,
             Role::AggregatorCommittee,
             Role::PTCAttester,
-            Role::EnvelopeProposer,
         ] {
             for (earliness, accepted) in [
                 (Duration::from_millis(50), true),
@@ -3379,37 +3373,6 @@ mod tests {
             result,
             |failure| matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
             "EarlySlotMessage (non-ProposerPreferences role has no future-slot allowance)",
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_future_slot_still_early() {
-        // `EnvelopeProposer` message slot is its PRESENT emission slot (no future-slot allowance).
-        // This case is rejected.
-
-        // Creates `EnvelopeProposer` packet with an envelope slot of 1.
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-        let signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(1),
-            Hash256::from([0x44; 32]),
-        );
-        // Current slot set to 0. Envelope slot 1 = one slot (12s) in the future.
-        let ctx =
-            create_envelope_proposer_context(&signed_msg, &committee_info, &map, Slot::new(0));
-
-        // Validate the message and raise the error.
-        let result = validate_partial_signature_message(
-            ctx,
-            &mut DutyState::new(64),
-            Arc::new(MockDutiesProvider::default()),
-        );
-
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
-            "EarlySlotMessage (EnvelopeProposer has no future-slot allowance. One slot ahead is early)",
         );
     }
 
@@ -3836,7 +3799,6 @@ mod tests {
             Role::AggregatorCommittee,
             Role::PTCAttester,
             Role::ProposerPreferences,
-            Role::EnvelopeProposer,
         ];
         // Compile-time guard tied to `all_roles` above: adding a `Role` variant breaks this
         // match, forcing the array (and thus the sweep) to be extended rather than silently
@@ -3851,8 +3813,7 @@ mod tests {
                 | Role::VoluntaryExit
                 | Role::AggregatorCommittee
                 | Role::PTCAttester
-                | Role::ProposerPreferences
-                | Role::EnvelopeProposer => {}
+                | Role::ProposerPreferences => {}
             }
         }
         for role in all_roles {
@@ -5106,64 +5067,6 @@ mod tests {
         );
     }
 
-    /// Runs the full `EnvelopeProposer` (role 9) partial-signature pipeline, driving
-    /// `proposer_assignment_at_slot` DIRECTLY with `proposer_assignment` and allowing the caller
-    /// to supply the `committee_info`. Mirrors `run_proposer_preferences_with_assignment` for the
-    /// shared `Role::ProposerPreferences | Role::EnvelopeProposer` arm, which is keyed on the
-    /// message-id validator PUBKEY and does not consult `committee_info.validator_indices`.
-    fn run_envelope_proposer_with_assignment(
-        committee_info: crate::CommitteeInfo,
-        proposer_assignment: DutyAssignment,
-    ) -> Result<ValidatedSSVMessage, ValidationFailure> {
-        let (_, private_key, map) = four_node_committee_and_keypair();
-        let signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(0),
-            Hash256::from([0x33; 32]),
-        );
-        let validation_context =
-            create_envelope_proposer_context(&signed_msg, &committee_info, &map, Slot::new(0));
-
-        validate_partial_signature_message(
-            validation_context,
-            &mut DutyState::new(64),
-            Arc::new(MockDutiesProvider {
-                proposer_assignment,
-                ..Default::default()
-            }),
-        )
-    }
-
-    #[test]
-    fn test_envelope_proposer_assigned_pubkey_accepted_with_unresolved_local_index() {
-        // #1147: the shared `Role::ProposerPreferences | Role::EnvelopeProposer` arm is keyed on
-        // the message-id validator PUBKEY via `proposer_assignment_at_slot`, and no longer reads
-        // `committee_info.validator_indices`. A locally-unresolved validator index (empty
-        // `validator_indices`) must therefore NOT block an otherwise-assigned EnvelopeProposer
-        // (role 9) through the FULL partial-signature pipeline. The old index-based path would
-        // have failed to find a validator index on empty indices and rejected (UnexpectedFailure).
-
-        // Arrange: reuse the consistent role-9 committee + signing key, but override to NO resolved
-        // local validator indices, and a mock reporting the pubkey IS the assigned proposer.
-        let (committee_info, _, _) = four_node_committee_and_keypair();
-        let committee_info = crate::CommitteeInfo {
-            committee_members: committee_info.committee_members,
-            validator_indices: vec![],
-        };
-
-        // Act
-        let result =
-            run_envelope_proposer_with_assignment(committee_info, DutyAssignment::Assigned);
-
-        // Assert: accepted purely on the pubkey-keyed assignment, index resolution irrelevant.
-        assert!(
-            result.is_ok(),
-            "Expected assigned pubkey to be accepted despite an unresolved local validator \
-             index, got: {result:?}"
-        );
-    }
-
     #[test]
     fn test_proposer_preferences_assignment_some_true_accepted() {
         // #1142: `proposer_assignment_at_slot` == `Assigned` (assigned proposer) -> accepted.
@@ -5268,40 +5171,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_local_proposer_positive_does_not_override_envelope_assignment() {
-        // Arrange: an otherwise-valid envelope has positive producer evidence but a negative
-        // tracker.
-        let (committee, private_key, keys) = four_node_committee_and_keypair();
-        let slot = Slot::new(0);
-        let message = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            slot,
-            Hash256::repeat_byte(0x33),
-        );
-        let context = create_envelope_proposer_context(&message, &committee, &keys, slot);
-
-        // Act: use the full envelope partial-signature pipeline with the new evidence active.
-        let result = validate_partial_signature_message(
-            context,
-            &mut DutyState::new(2 * SLOTS_PER_EPOCH_TEST as usize),
-            Arc::new(MockDutiesProvider {
-                proposer_assignment: DutyAssignment::NotAssigned,
-                local_proposer_assignment: true,
-                ..Default::default()
-            }),
-        );
-
-        // Assert: the preference exception must not admit envelopes or change peer scoring.
-        let failure = result.unwrap_err();
-        assert!(matches!(failure, ValidationFailure::NoDuty));
-        assert!(matches!(
-            MessageAcceptance::from(&failure),
-            MessageAcceptance::Ignore
-        ));
     }
 
     #[test]
@@ -5612,225 +5481,6 @@ mod tests {
                 )
             },
             "RoleNotActiveAfterFork for Aggregator",
-        );
-    }
-
-    // ==================== EnvelopeProposer proposer-assignment arm ====================
-    //
-    // `validate_beacon_duty`'s `Role::ProposerPreferences | Role::EnvelopeProposer` arm (keyed on
-    // the message's `slot`) rejects with `NoDuty` only when the slot's epoch is known AND the
-    // validator is NOT the assigned proposer; an unknown epoch is tolerated and no RANDAO
-    // tolerance applies.
-
-    /// Runs the `EnvelopeProposer` proposer-assignment arm of `validate_beacon_duty` with the
-    /// mock's two knobs, returning the result for the caller to assert on. `randao_msg` is always
-    /// false for `EnvelopeProposer` (no RANDAO tolerance applies).
-    fn run_envelope_beacon_duty(
-        epoch_known: bool,
-        is_proposer: bool,
-    ) -> Result<(), ValidationFailure> {
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-        let signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(0),
-            Hash256::from([0x33; 32]),
-        );
-        let validation_context =
-            create_envelope_proposer_context(&signed_msg, &committee_info, &map, Slot::new(0));
-
-        validate_beacon_duty(
-            &validation_context,
-            Slot::new(0),
-            false,
-            Arc::new(MockDutiesProvider {
-                proposer_assignment: proposer_assignment_from_knobs(epoch_known, is_proposer),
-                ..Default::default()
-            }),
-        )
-    }
-
-    #[test]
-    fn envelope_proposer_tolerates_unknown_proposer_epoch() {
-        // Before the epoch's proposer duties are fetched, tolerate (Ok), not drop as NoDuty.
-        let result = run_envelope_beacon_duty(false, false);
-        assert!(
-            result.is_ok(),
-            "unknown proposer epoch must be tolerated for EnvelopeProposer, got: {result:?}"
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_known_epoch_non_proposer_is_no_duty() {
-        // Known epoch, not the assigned proposer -> reject with NoDuty.
-        let result = run_envelope_beacon_duty(true, false);
-        assert_validation_error(
-            result,
-            |failure| matches!(failure, ValidationFailure::NoDuty),
-            "NoDuty (known epoch, validator not the assigned proposer)",
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_known_epoch_proposer_ok() {
-        // Known epoch and the assigned proposer -> accept.
-        let result = run_envelope_beacon_duty(true, true);
-        assert!(
-            result.is_ok(),
-            "Expected assigned proposer to be accepted for EnvelopeProposer, got: {result:?}"
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_partial_sig_accepted_at_disseminated_slot() {
-        // Envelope disseminations and Envelope partial sigs share one max_slot per signer (both
-        // create the signer state for a new slot). Record a dissemination at slot 1, then
-        // validate a same-slot Envelope partial. The guard is strict (`max_slot > message_slot`),
-        // so the `max_slot == message_slot` equality boundary must be tolerated (Ok): that is the
-        // builder's normal same-slot dissemination-then-share sequence.
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-
-        // Arrange: Seed DutyState at slot 1 with the state effect the dissemination validator
-        // applies once all its rules pass (those rules are covered in `dissemination.rs`; what
-        // this test pins is the shared max_slot).
-        let mut duty_state = crate::duty_state::DutyState::new(64);
-        duty_state.record_dissemination(Slot::new(1), &OperatorId(1));
-
-        // Arrange: Envelope partial sig at slot 1 (equal to the disseminated slot).
-        let partial_sig_signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(1),
-            Hash256::from([0x33; 32]),
-        );
-        let validation_context = create_envelope_proposer_context(
-            &partial_sig_signed_msg,
-            &committee_info,
-            &map,
-            Slot::new(1),
-        );
-
-        // Act: Validate the same-slot Envelope partial sig against the seeded DutyState.
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
-
-        // Assert: Must be accepted at the equality boundary.
-        assert!(
-            result.is_ok(),
-            "EnvelopeProposer Envelope partial at slot 1 must be accepted when the signer's disseminated max_slot already equals 1: the strict monotonic guard (max_slot > message_slot) must tolerate the max_slot == message_slot equality boundary, the builder's normal same-slot dissemination-then-share sequence, got: {result:?}"
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_dissemination_advances_blocks_lower_partial_sig() {
-        // §7 monotonic-slot rule, dissemination-advances direction: a dissemination at slot 10
-        // must block a later Envelope partial sig at the lower slot 5.
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-
-        // Arrange: Seed DutyState at slot 10 via the dissemination validator's state effect.
-        let mut duty_state = crate::duty_state::DutyState::new(64);
-        duty_state.record_dissemination(Slot::new(10), &OperatorId(1));
-
-        // Arrange: Envelope partial sig at slot 5 (lower than 10).
-        let partial_sig_signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(5),
-            Hash256::from([0x33; 32]),
-        );
-        let validation_context = create_envelope_proposer_context(
-            &partial_sig_signed_msg,
-            &committee_info,
-            &map,
-            Slot::new(10),
-        );
-
-        // Act: Validate Envelope partial sig at slot 5 against advanced DutyState.
-        let result = validate_partial_signature_message(
-            validation_context,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
-
-        // Assert: Must be rejected as SlotAlreadyAdvanced.
-        assert_validation_error(
-            result,
-            |failure| {
-                matches!(
-                    failure,
-                    crate::ValidationFailure::SlotAlreadyAdvanced { .. }
-                )
-            },
-            "EnvelopeProposer Envelope partial below the signer's disseminated slot must be SlotAlreadyAdvanced",
-        );
-    }
-
-    #[test]
-    fn envelope_proposer_repeated_envelope_partial_rejected() {
-        // Validate an EnvelopeProposer Envelope partial at slot 5 (accepted; records the
-        // pre-consensus count), then validate a second Envelope partial for the same
-        // signer/slot against the same DutyState. The shared pre-consensus seen-message
-        // guard must reject the second as InvalidPartialSignatureTypeCount.
-
-        let (committee_info, private_key, map) = four_node_committee_and_keypair();
-
-        // Arrange: First Envelope partial at slot 5.
-        let first_signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(5),
-            Hash256::from([0x33; 32]),
-        );
-        let first_context = create_envelope_proposer_context(
-            &first_signed_msg,
-            &committee_info,
-            &map,
-            Slot::new(5),
-        );
-
-        let mut duty_state = crate::duty_state::DutyState::new(64);
-
-        let first_result = validate_partial_signature_message(
-            first_context,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
-        assert!(
-            first_result.is_ok(),
-            "First EnvelopeProposer Envelope partial must be accepted"
-        );
-
-        // A second Envelope partial for the same signer/slot (only the root differs).
-        let second_signed_msg = create_signed_envelope_proposer_message(
-            OperatorId(1),
-            &private_key,
-            Slot::new(5),
-            Hash256::from([0x44; 32]),
-        );
-        let second_context = create_envelope_proposer_context(
-            &second_signed_msg,
-            &committee_info,
-            &map,
-            Slot::new(5),
-        );
-        let second_result = validate_partial_signature_message(
-            second_context,
-            &mut duty_state,
-            Arc::new(MockDutiesProvider::default()),
-        );
-
-        assert_validation_error(
-            second_result,
-            |failure| {
-                matches!(
-                    failure,
-                    crate::ValidationFailure::InvalidPartialSignatureTypeCount { .. }
-                )
-            },
-            "Repeated EnvelopeProposer Envelope partial for the same signer/slot must be rejected",
         );
     }
 
