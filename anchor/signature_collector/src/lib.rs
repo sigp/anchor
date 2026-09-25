@@ -249,7 +249,8 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                 );
                 let _ = sender.send(CollectorMessage {
                     kind: CollectorMessageKind::RegisterNotifier {
-                        notify: result_tx,
+                        notify: Some(result_tx),
+                        required_companion: None,
                         threshold: cloned_metadata.threshold,
                         validator_pubkey,
                     },
@@ -388,6 +389,156 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
 
         // We resolve the collector future - if we are lucky, the signature is even already done
         // because we received enough shares before this fn was even called.
+        Ok(result_rx.await?)
+    }
+
+    /// Sign a proposer packet once and wait only for its block signature.
+    /// The envelope collector reconstructs independently, even before its callback waits.
+    pub async fn sign_proposer_packet(
+        self: &Arc<Self>,
+        metadata: SignatureMetadata,
+        pubkey: PublicKeyBytes,
+        block: ValidatorSigningData,
+        envelope: Option<ValidatorSigningData>,
+    ) -> Result<Arc<Signature>, CollectionError> {
+        if metadata.role != Role::Proposer
+            || metadata.kind != PartialSignatureKind::PostConsensus
+            || pubkey != block.validator_pubkey
+            || envelope.as_ref().is_some_and(|envelope| {
+                envelope.index != block.index
+                    || envelope.validator_pubkey != block.validator_pubkey
+                    || envelope.root == block.root
+            })
+        {
+            return Err(CollectionError::InvalidProposerPacket);
+        }
+        let signer = self
+            .operator_id
+            .get()
+            .ok_or(CollectionError::OwnOperatorIdUnknown)?;
+        let (result_tx, result_rx) = oneshot::channel();
+        let mut registrations = Vec::with_capacity(2);
+        if let Some(envelope) = &envelope {
+            registrations.push((envelope.root, None, Some(block.root)));
+        }
+        registrations.push((block.root, Some(result_tx), None));
+        for (root, notify, required_companion) in registrations {
+            // Queue the envelope policy before block completion can release the callback.
+            // A dropped acknowledgement also stops publication after failed admission.
+            let (registered_tx, registered_rx) = oneshot::channel();
+            let manager = self.clone();
+            let metadata = metadata.clone();
+            let index = block.index;
+            self.processor.permitless.send_immediate(
+                move |drop_on_finish| {
+                    if manager.is_stale_slot(metadata.slot) {
+                        return;
+                    }
+                    let sender = manager.get_or_spawn(root, index, metadata.slot);
+                    if sender
+                        .send(CollectorMessage {
+                            kind: CollectorMessageKind::RegisterNotifier {
+                                notify,
+                                threshold: metadata.threshold,
+                                validator_pubkey: pubkey,
+                                required_companion,
+                            },
+                            _drop_on_finish: drop_on_finish,
+                        })
+                        .is_ok()
+                    {
+                        let _ = registered_tx.send(());
+                    }
+                },
+                COLLECTOR_MESSAGE_NAME,
+            )?;
+            registered_rx.await?;
+        }
+        let manager = self.clone();
+        self.processor.urgent_consensus.send_blocking(
+            move || {
+                if manager.is_stale_slot(metadata.slot) {
+                    return;
+                }
+                let mut messages = vec![block.partial_signature_message(block.root, signer)];
+                if let Some(envelope) = &envelope {
+                    messages.push(envelope.partial_signature_message(envelope.root, signer));
+                }
+                let msg = match manager.create_message(
+                    &metadata,
+                    messages.clone(),
+                    &DutyExecutor::Validator(pubkey),
+                ) {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        error!(%err, "Failed to create proposer partial signature packet");
+                        return;
+                    }
+                };
+                if let Err(err) =
+                    manager
+                        .message_sender
+                        .sign_and_send(msg, metadata.committee_id, None)
+                {
+                    error!(?err, "Failed to send proposer partial signature packet");
+                }
+                // Preserve the same companion evidence as authenticated network packets.
+                if block.share.is_some() {
+                    let _ = manager.receive_partial_signature_with_companion(
+                        messages[0].clone(),
+                        metadata.slot,
+                        envelope.as_ref().map(|data| data.root),
+                        true,
+                    );
+                }
+                if envelope.as_ref().is_some_and(|data| data.share.is_some()) {
+                    let _ = manager.receive_partial_signature_with_companion(
+                        messages[1].clone(),
+                        metadata.slot,
+                        Some(block.root),
+                        true,
+                    );
+                }
+            },
+            SIGNER_NAME,
+        )?;
+        Ok(result_rx.await?)
+    }
+
+    /// Wait for an already registered root without signing, publishing, or recreating it.
+    pub async fn wait_for_registered_signature(
+        self: &Arc<Self>,
+        metadata: SignatureMetadata,
+        index: ValidatorIndex,
+        validator_pubkey: PublicKeyBytes,
+        root: Hash256,
+        required_companion: Option<Hash256>,
+    ) -> Result<Arc<Signature>, CollectionError> {
+        let (result_tx, result_rx) = oneshot::channel();
+        let manager = self.clone();
+        self.processor.permitless.send_immediate(
+            move |drop_on_finish| {
+                if manager.is_stale_slot(metadata.slot) {
+                    return;
+                }
+                let Some(collector) = manager.signature_collectors.get(&(root, index)) else {
+                    return;
+                };
+                if collector.for_slot != metadata.slot {
+                    return;
+                }
+                let _ = collector.sender.send(CollectorMessage {
+                    kind: CollectorMessageKind::RegisterNotifier {
+                        notify: Some(result_tx),
+                        threshold: metadata.threshold,
+                        validator_pubkey,
+                        required_companion,
+                    },
+                    _drop_on_finish: drop_on_finish,
+                });
+            },
+            COLLECTOR_MESSAGE_NAME,
+        )?;
         Ok(result_rx.await?)
     }
 
@@ -692,10 +843,52 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         Ok(())
     }
 
+    /// Retain same-packet evidence for authenticated proposer post-consensus shares.
+    pub fn receive_proposer_partial_signatures(
+        self: &Arc<Self>,
+        messages: PartialSignatureMessages,
+    ) -> Result<(), CollectionError> {
+        if messages.kind != PartialSignatureKind::PostConsensus {
+            return self.receive_partial_signatures(messages);
+        }
+        for message in &messages.messages {
+            let companion_root = (messages.messages.len() == 2)
+                .then(|| {
+                    messages
+                        .messages
+                        .iter()
+                        .find(|other| {
+                            other.signing_root != message.signing_root
+                                && other.validator_index == message.validator_index
+                                && other.signer == message.signer
+                        })
+                        .map(|other| other.signing_root)
+                })
+                .flatten();
+            self.receive_partial_signature_with_companion(
+                message.clone(),
+                messages.slot,
+                companion_root,
+                true,
+            )?;
+        }
+        Ok(())
+    }
+
     fn receive_partial_signature(
         self: &Arc<Self>,
         message: PartialSignatureMessage,
         slot: Slot,
+    ) -> Result<(), CollectionError> {
+        self.receive_partial_signature_with_companion(message, slot, None, false)
+    }
+
+    fn receive_partial_signature_with_companion(
+        self: &Arc<Self>,
+        message: PartialSignatureMessage,
+        slot: Slot,
+        companion_root: Option<Hash256>,
+        check_slot: bool,
     ) -> Result<(), CollectionError> {
         trace!(
             ?slot,
@@ -707,6 +900,9 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         let manager = self.clone();
         self.processor.permitless.send_immediate(
             move |drop_on_finish| {
+                if check_slot && manager.is_stale_slot(slot) {
+                    return;
+                }
                 let sender =
                     manager.get_or_spawn(message.signing_root, message.validator_index, slot);
                 if sender
@@ -714,6 +910,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         kind: CollectorMessageKind::PartialSignature {
                             operator_id: message.signer,
                             signature: Box::new(message.partial_signature),
+                            companion_root,
                         },
                         _drop_on_finish: drop_on_finish,
                     })
@@ -898,7 +1095,8 @@ struct CollectorMessage<G = DropOnFinish> {
 enum CollectorMessageKind {
     /// A new task is waiting for the result of this collector instance.
     RegisterNotifier {
-        notify: oneshot::Sender<Arc<Signature>>,
+        notify: Option<oneshot::Sender<Arc<Signature>>>,
+        required_companion: Option<Hash256>,
         threshold: u64,
         validator_pubkey: PublicKeyBytes,
     },
@@ -909,6 +1107,7 @@ enum CollectorMessageKind {
         operator_id: OperatorId,
         /// The signature, boxed because else Clippy complains.
         signature: Box<Signature>,
+        companion_root: Option<Hash256>,
     },
 }
 
@@ -918,6 +1117,7 @@ pub enum CollectionError {
     QueueFullError,
     CollectionTimeout,
     EmptySignature,
+    InvalidProposerPacket,
     OwnOperatorIdUnknown,
     RecoverError(bls_lagrange::Error),
     /// Building or sending an envelope dissemination failed (SIP-94 §6).
@@ -957,6 +1157,23 @@ pub trait SignatureCollecting: Send + Sync {
         signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>>;
 
+    fn sign_proposer_packet(
+        &self,
+        metadata: SignatureMetadata,
+        pubkey: PublicKeyBytes,
+        block: ValidatorSigningData,
+        envelope: Option<ValidatorSigningData>,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>>;
+
+    fn wait_for_registered_signature(
+        &self,
+        metadata: SignatureMetadata,
+        index: ValidatorIndex,
+        validator_pubkey: PublicKeyBytes,
+        root: Hash256,
+        required_companion: Option<Hash256>,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>>;
+
     /// Broadcasts an envelope dissemination for the builder operator (SIP-94 §6): the
     /// operator-signed carrier every committee member validates and threshold-signs over.
     fn broadcast_dissemination(
@@ -979,6 +1196,36 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
             metadata,
             requester,
             signing_data,
+        ))
+    }
+
+    fn sign_proposer_packet(
+        &self,
+        metadata: SignatureMetadata,
+        pubkey: PublicKeyBytes,
+        block: ValidatorSigningData,
+        envelope: Option<ValidatorSigningData>,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
+        Box::pin(SignatureCollectorManager::sign_proposer_packet(
+            self, metadata, pubkey, block, envelope,
+        ))
+    }
+
+    fn wait_for_registered_signature(
+        &self,
+        metadata: SignatureMetadata,
+        index: ValidatorIndex,
+        validator_pubkey: PublicKeyBytes,
+        root: Hash256,
+        required_companion: Option<Hash256>,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
+        Box::pin(SignatureCollectorManager::wait_for_registered_signature(
+            self,
+            metadata,
+            index,
+            validator_pubkey,
+            root,
+            required_companion,
         ))
     }
 
@@ -1031,9 +1278,10 @@ async fn signature_collector_loop<G: Send + 'static>(
                 notify,
                 threshold,
                 validator_pubkey,
+                required_companion,
             } => {
                 if state
-                    .register_request(notify, threshold, validator_pubkey)
+                    .register_request(notify, threshold, validator_pubkey, required_companion)
                     .is_break()
                 {
                     return;
@@ -1042,8 +1290,9 @@ async fn signature_collector_loop<G: Send + 'static>(
             CollectorMessageKind::PartialSignature {
                 operator_id,
                 signature,
+                companion_root,
             } => {
-                state.add_partial_signature(operator_id, *signature);
+                state.add_partial_signature(operator_id, *signature, companion_root);
             }
         }
 
@@ -1195,6 +1444,15 @@ struct CollectorRegistration {
     threshold: u64,
     validator_pubkey: PublicKeyBytes,
     decompressed_validator_pubkey: PublicKey,
+    required_companion: Option<Hash256>,
+}
+
+/// A share and its bounded authenticated proposer packet witnesses.
+struct CollectedShare {
+    signature: Signature,
+    // A proposer can send in at most two rounds. Identical signatures may gain a witness
+    // in the later round, but conflicting signature bytes cannot borrow that evidence.
+    companion_roots: [Option<Hash256>; 2],
 }
 
 /// Invariant: once `full_signature` is `Some`, both `signature_share` and
@@ -1202,7 +1460,7 @@ struct CollectorRegistration {
 struct SignatureCollectorState {
     signing_root: Hash256,
     notifiers: Vec<oneshot::Sender<Arc<Signature>>>,
-    signature_share: HashMap<OperatorId, Signature>,
+    signature_share: HashMap<OperatorId, CollectedShare>,
     full_signature: Option<Arc<Signature>>,
     registration: Option<CollectorRegistration>,
 }
@@ -1220,9 +1478,9 @@ impl SignatureCollectorState {
 
     /// Register a task waiting for the reconstructed signature.
     ///
-    /// The first registration fixes the threshold and validator master public
-    /// key. Later registrations must match both. A matching caller receives a
-    /// cached verified signature immediately, or is queued until reconstruction
+    /// The first registration fixes the threshold, validator master public key,
+    /// and required companion root. Later registrations must match all three. A matching caller
+    /// receives a cached verified signature immediately, or is queued until reconstruction
     /// completes.
     ///
     /// Returns `Break` if the master public key is malformed or a later
@@ -1230,13 +1488,15 @@ impl SignatureCollectorState {
     /// queued notifiers.
     fn register_request(
         &mut self,
-        notify: oneshot::Sender<Arc<Signature>>,
+        notify: Option<oneshot::Sender<Arc<Signature>>>,
         new_threshold: u64,
         validator_pubkey: PublicKeyBytes,
+        required_companion: Option<Hash256>,
     ) -> ControlFlow<()> {
         if let Some(registration) = &self.registration {
             if new_threshold != registration.threshold
                 || validator_pubkey != registration.validator_pubkey
+                || required_companion != registration.required_companion
             {
                 error!(
                     new_threshold,
@@ -1258,9 +1518,17 @@ impl SignatureCollectorState {
                 threshold: new_threshold,
                 validator_pubkey,
                 decompressed_validator_pubkey,
+                required_companion,
             });
+            if let Some(required_root) = required_companion {
+                self.signature_share
+                    .retain(|_, share| share.companion_roots.contains(&Some(required_root)));
+            }
         }
 
+        let Some(notify) = notify else {
+            return ControlFlow::Continue(());
+        };
         if let Some(full_signature) = &self.full_signature {
             if notify.send(Arc::clone(full_signature)).is_err() {
                 warn!("Failed to send recovered signature");
@@ -1277,23 +1545,46 @@ impl SignatureCollectorState {
     /// Late shares arriving after reconstruction are silently dropped.
     /// Conflicting shares from the same operator are logged but not fatal,
     /// since the source of the discrepancy is not knowable here.
-    fn add_partial_signature(&mut self, operator_id: OperatorId, signature: Signature) {
+    fn add_partial_signature(
+        &mut self,
+        operator_id: OperatorId,
+        signature: Signature,
+        companion_root: Option<Hash256>,
+    ) {
         if self.full_signature.is_some() {
             return;
         }
 
+        if self
+            .registration
+            .as_ref()
+            .and_then(|registration| registration.required_companion)
+            .is_some_and(|required_root| companion_root != Some(required_root))
+        {
+            return;
+        }
         match self.signature_share.entry(operator_id) {
             hash_map::Entry::Vacant(entry) => {
-                entry.insert(signature);
+                entry.insert(CollectedShare {
+                    signature,
+                    companion_roots: [companion_root, None],
+                });
             }
-            hash_map::Entry::Occupied(entry) => {
-                if entry.get() != &signature {
+            hash_map::Entry::Occupied(mut entry) => {
+                if entry.get().signature != signature {
                     // We can not know which signature is correct. This is serious
                     // misbehaviour from the operator!
                     error!(
                         ?operator_id,
                         "Received conflicting signatures from operator"
                     );
+                } else if let Some(root) = companion_root {
+                    let roots = &mut entry.get_mut().companion_roots;
+                    if !roots.contains(&Some(root))
+                        && let Some(empty) = roots.iter_mut().find(|root| root.is_none())
+                    {
+                        *empty = Some(root);
+                    }
                 }
             }
         }
@@ -1341,11 +1632,11 @@ impl SignatureCollectorState {
         share_pubkeys: &HashMap<OperatorId, PublicKeyBytes>,
     ) -> Vec<OperatorId> {
         let mut invalid_operator_ids = vec![];
-        self.signature_share.retain(|operator_id, signature| {
+        self.signature_share.retain(|operator_id, share| {
             let is_valid = share_pubkeys
                 .get(operator_id)
                 .and_then(|public_key| public_key.decompress().ok())
-                .is_some_and(|public_key| signature.verify(&public_key, self.signing_root));
+                .is_some_and(|public_key| share.signature.verify(&public_key, self.signing_root));
             if !is_valid {
                 invalid_operator_ids.push(*operator_id);
             }
@@ -1357,12 +1648,12 @@ impl SignatureCollectorState {
 }
 
 fn combine_signatures(
-    shares: &HashMap<OperatorId, Signature>,
+    shares: &HashMap<OperatorId, CollectedShare>,
 ) -> Result<Signature, CollectionError> {
     let (ids, signatures): (Vec<_>, Vec<_>) = shares
         .iter()
-        .map(|(operator_id, signature)| {
-            KeyId::try_from(**operator_id).map(|key_id| (key_id, signature.clone()))
+        .map(|(operator_id, share)| {
+            KeyId::try_from(**operator_id).map(|key_id| (key_id, share.signature.clone()))
         })
         .collect::<Result<_, _>>()?;
 

@@ -69,7 +69,7 @@ fn register_notifier(
     let (notify, receiver) = oneshot::channel();
     assert!(
         state
-            .register_request(notify, THRESHOLD, validator_pubkey)
+            .register_request(Some(notify), THRESHOLD, validator_pubkey, None)
             .is_continue()
     );
     receiver
@@ -80,7 +80,7 @@ fn add_valid_share(
     operator_id: OperatorId,
     secret_key: &SecretKey,
 ) {
-    state.add_partial_signature(operator_id, secret_key.sign(SIGNING_ROOT));
+    state.add_partial_signature(operator_id, secret_key.sign(SIGNING_ROOT), None);
 }
 
 fn complete_ready_reconstruction(state: &mut SignatureCollectorState) {
@@ -597,7 +597,8 @@ async fn register_manager_notifier(
                 sender
                     .send(CollectorMessage {
                         kind: CollectorMessageKind::RegisterNotifier {
-                            notify,
+                            notify: Some(notify),
+                            required_companion: None,
                             threshold: THRESHOLD,
                             validator_pubkey,
                         },
@@ -2032,7 +2033,7 @@ async fn wrong_root_share_is_pruned_then_a_fourth_honest_share_completes() {
 
     add_valid_share(&mut state, keys.shares[0].0, &keys.shares[0].1);
     add_valid_share(&mut state, keys.shares[1].0, &keys.shares[1].1);
-    state.add_partial_signature(keys.shares[2].0, keys.shares[2].1.sign(WRONG_ROOT));
+    state.add_partial_signature(keys.shares[2].0, keys.shares[2].1.sign(WRONG_ROOT), None);
     let failure = expect_master_verification_failure(&state);
 
     assert!(
@@ -2062,7 +2063,7 @@ async fn empty_share_is_pruned_and_same_operator_can_replace_it() {
     add_valid_share(&mut state, keys.shares[0].0, &keys.shares[0].1);
     add_valid_share(&mut state, keys.shares[1].0, &keys.shares[1].1);
     let invalid_operator = keys.shares[2].0;
-    state.add_partial_signature(invalid_operator, Signature::empty());
+    state.add_partial_signature(invalid_operator, Signature::empty(), None);
     let failure = expect_combination_failure(&state);
 
     assert!(
@@ -2090,13 +2091,13 @@ async fn buffered_bad_shares_are_pruned_and_honest_quorum_retries_immediately() 
     for (operator_id, secret_key) in &keys.shares[..THRESHOLD as usize] {
         add_valid_share(&mut state, *operator_id, secret_key);
     }
-    state.add_partial_signature(keys.shares[3].0, keys.shares[3].1.sign(WRONG_ROOT));
-    state.add_partial_signature(keys.shares[4].0, Signature::empty());
+    state.add_partial_signature(keys.shares[3].0, keys.shares[3].1.sign(WRONG_ROOT), None);
+    state.add_partial_signature(keys.shares[4].0, Signature::empty(), None);
 
     let (notify, mut receiver) = oneshot::channel();
     assert!(
         state
-            .register_request(notify, THRESHOLD, validator_pubkey)
+            .register_request(Some(notify), THRESHOLD, validator_pubkey, None)
             .is_continue()
     );
     let failure = expect_combination_failure(&state);
@@ -2148,7 +2149,7 @@ async fn individually_valid_shares_with_wrong_master_key_are_fatal() {
 
     add_valid_share(&mut state, keys.shares[0].0, &keys.shares[0].1);
     add_valid_share(&mut state, keys.shares[1].0, &keys.shares[1].1);
-    state.add_partial_signature(keys.shares[2].0, keys.shares[2].1.sign(SIGNING_ROOT));
+    state.add_partial_signature(keys.shares[2].0, keys.shares[2].1.sign(SIGNING_ROOT), None);
     let failure = expect_master_verification_failure(&state);
 
     assert!(
@@ -2171,7 +2172,7 @@ fn malformed_and_conflicting_registrations_exit_before_notifying() {
     let (notify, _) = oneshot::channel();
     assert!(
         malformed_state
-            .register_request(notify, THRESHOLD, malformed)
+            .register_request(Some(notify), THRESHOLD, malformed, None)
             .is_break()
     );
 
@@ -2180,7 +2181,7 @@ fn malformed_and_conflicting_registrations_exit_before_notifying() {
     let (notify, _) = oneshot::channel();
     assert!(
         threshold_state
-            .register_request(notify, THRESHOLD + 1, validator_pubkey)
+            .register_request(Some(notify), THRESHOLD + 1, validator_pubkey, None)
             .is_break()
     );
 
@@ -2195,7 +2196,7 @@ fn malformed_and_conflicting_registrations_exit_before_notifying() {
     let conflicting_pubkey = split_random_master().master.public_key().compress();
     assert!(
         cached_state
-            .register_request(notify, THRESHOLD, conflicting_pubkey)
+            .register_request(Some(notify), THRESHOLD, conflicting_pubkey, None)
             .is_break()
     );
 }
@@ -2214,7 +2215,7 @@ async fn empty_malformed_and_failed_database_lookups_are_fatal() {
     let mut empty_receiver = register_notifier(&mut empty_state, validator_pubkey);
     add_valid_share(&mut empty_state, keys.shares[0].0, &keys.shares[0].1);
     add_valid_share(&mut empty_state, keys.shares[1].0, &keys.shares[1].1);
-    empty_state.add_partial_signature(keys.shares[2].0, keys.shares[2].1.sign(WRONG_ROOT));
+    empty_state.add_partial_signature(keys.shares[2].0, keys.shares[2].1.sign(WRONG_ROOT), None);
     let failure = expect_master_verification_failure(&empty_state);
     assert!(
         enter_fallback(&mut empty_state, failure, empty_database)
@@ -2277,17 +2278,20 @@ async fn collector_loop_database_failure_closes_notifier_without_caching() {
 
     let (notify, result_rx) = oneshot::channel();
     send(CollectorMessageKind::RegisterNotifier {
-        notify,
+        notify: Some(notify),
+        required_companion: None,
         threshold: THRESHOLD,
         validator_pubkey,
     });
     for (operator_id, secret_key) in &keys.shares[..(THRESHOLD - 1) as usize] {
         send(CollectorMessageKind::PartialSignature {
+            companion_root: None,
             operator_id: *operator_id,
             signature: Box::new(secret_key.sign(SIGNING_ROOT)),
         });
     }
     send(CollectorMessageKind::PartialSignature {
+        companion_root: None,
         operator_id: keys.shares[(THRESHOLD - 1) as usize].0,
         signature: Box::new(keys.shares[(THRESHOLD - 1) as usize].1.sign(WRONG_ROOT)),
     });
@@ -2324,12 +2328,14 @@ async fn guard_dropped_before_first_poll_exits_without_processing() {
 
     let (notify, result_rx) = oneshot::channel();
     send(CollectorMessageKind::RegisterNotifier {
-        notify,
+        notify: Some(notify),
+        required_companion: None,
         threshold: THRESHOLD,
         validator_pubkey,
     });
     for (operator_id, secret_key) in &keys.shares[..THRESHOLD as usize] {
         send(CollectorMessageKind::PartialSignature {
+            companion_root: None,
             operator_id: *operator_id,
             signature: Box::new(secret_key.sign(SIGNING_ROOT)),
         });
@@ -2395,17 +2401,20 @@ async fn collector_map_removal_cancels_fallback_wait() {
 
     let (notify, mut result_rx) = oneshot::channel();
     send(CollectorMessageKind::RegisterNotifier {
-        notify,
+        notify: Some(notify),
+        required_companion: None,
         threshold: THRESHOLD,
         validator_pubkey,
     });
     for (operator_id, secret_key) in &keys.shares[..(THRESHOLD - 1) as usize] {
         send(CollectorMessageKind::PartialSignature {
+            companion_root: None,
             operator_id: *operator_id,
             signature: Box::new(secret_key.sign(SIGNING_ROOT)),
         });
     }
     send(CollectorMessageKind::PartialSignature {
+        companion_root: None,
         operator_id: keys.shares[(THRESHOLD - 1) as usize].0,
         signature: Box::new(keys.shares[(THRESHOLD - 1) as usize].1.sign(WRONG_ROOT)),
     });
@@ -2445,4 +2454,478 @@ async fn collector_map_removal_cancels_fallback_wait() {
         .semaphore
         .try_acquire()
         .expect("cancelled fallback should not retain a semaphore permit");
+}
+
+// ==================== Proposer block and envelope packets ====================
+
+const PROPOSER_BLOCK_ROOT: Hash256 = Hash256::repeat_byte(0xB1);
+const PROPOSER_ENVELOPE_ROOT: Hash256 = Hash256::repeat_byte(0xE1);
+const PROPOSER_VALIDATOR_INDEX: ValidatorIndex = ValidatorIndex(42);
+const SECOND_COMPANION_ROOT: Hash256 = Hash256::repeat_byte(0xB2);
+const THIRD_COMPANION_ROOT: Hash256 = Hash256::repeat_byte(0xB3);
+
+fn proposer_scenario(sender: Arc<dyn MessageSender>) -> BatchScenario {
+    let mut scenario = BatchScenario::new(sender);
+    scenario.metadata.kind = PartialSignatureKind::PostConsensus;
+    scenario.metadata.role = Role::Proposer;
+    scenario
+}
+
+fn proposer_signing_data(scenario: &BatchScenario, root: Hash256) -> ValidatorSigningData {
+    ValidatorSigningData {
+        root,
+        index: PROPOSER_VALIDATOR_INDEX,
+        validator_pubkey: scenario.validator_pubkey,
+        share: Some(scenario.validator_key.clone()),
+    }
+}
+
+fn seed_proposer_packets(scenario: &BatchScenario, roots: &[Hash256]) {
+    for (operator_id, share) in &scenario.remote_shares {
+        scenario
+            .manager
+            .receive_proposer_partial_signatures(PartialSignatureMessages {
+                kind: PartialSignatureKind::PostConsensus,
+                slot: scenario.metadata.slot,
+                messages: VariableList::new(
+                    roots
+                        .iter()
+                        .map(|root| PartialSignatureMessage {
+                            partial_signature: share.sign(*root),
+                            signing_root: *root,
+                            signer: *operator_id,
+                            validator_index: PROPOSER_VALIDATOR_INDEX,
+                        })
+                        .collect(),
+                )
+                .expect("proposer packet must fit"),
+            })
+            .expect("proposer packet should enter the processor");
+    }
+}
+
+async fn sign_proposer_packet(scenario: &BatchScenario, with_envelope: bool) -> Arc<Signature> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        scenario.manager.sign_proposer_packet(
+            scenario.metadata.clone(),
+            scenario.validator_pubkey,
+            proposer_signing_data(scenario, PROPOSER_BLOCK_ROOT),
+            with_envelope.then(|| proposer_signing_data(scenario, PROPOSER_ENVELOPE_ROOT)),
+        ),
+    )
+    .await
+    .expect("block quorum should finish independently of the envelope")
+    .expect("proposer block signature should reconstruct")
+}
+
+async fn wait_for_proposer_envelope(scenario: &BatchScenario) -> Arc<Signature> {
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        scenario.manager.wait_for_registered_signature(
+            scenario.metadata.clone(),
+            PROPOSER_VALIDATOR_INDEX,
+            scenario.validator_pubkey,
+            PROPOSER_ENVELOPE_ROOT,
+            Some(PROPOSER_BLOCK_ROOT),
+        ),
+    )
+    .await
+    .expect("envelope quorum should finish")
+    .expect("registered envelope signature should remain available")
+}
+
+/// Early authenticated packets can list the block or the envelope first. Both roots must
+/// reconstruct with the local share, while local signing emits exactly one two-entry packet.
+#[tokio::test(flavor = "multi_thread")]
+async fn proposer_pair_sends_once_and_retains_early_shares_in_both_orders() {
+    for roots in [
+        [PROPOSER_BLOCK_ROOT, PROPOSER_ENVELOPE_ROOT],
+        [PROPOSER_ENVELOPE_ROOT, PROPOSER_BLOCK_ROOT],
+    ] {
+        // Arrange: remote quorum needs our locally injected shares to complete.
+        let sender = Arc::new(RecordingMessageSender::new(0));
+        let scenario = proposer_scenario(Arc::clone(&sender) as Arc<dyn MessageSender>);
+        seed_proposer_packets(&scenario, &roots);
+        drain_batch_processor_work(&scenario.manager).await;
+
+        // Act: one signing operation registers both roots; a later callback only waits.
+        let block = sign_proposer_packet(&scenario, true).await;
+        let envelope = wait_for_proposer_envelope(&scenario).await;
+        let repeated_envelope = wait_for_proposer_envelope(&scenario).await;
+
+        // Assert: independent results and one local wire packet, including both local shares.
+        assert_eq!(
+            block.as_ref(),
+            &scenario.validator_master.sign(PROPOSER_BLOCK_ROOT)
+        );
+        assert_eq!(
+            envelope.as_ref(),
+            &scenario.validator_master.sign(PROPOSER_ENVELOPE_ROOT)
+        );
+        assert_eq!(repeated_envelope, envelope);
+        assert_eq!(
+            sender.attempts(),
+            1,
+            "wait-only callbacks must not broadcast"
+        );
+        let messages = sender.messages();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].ssv_message.msg_id().role(),
+            Some(Role::Proposer)
+        );
+        let packet = PartialSignatureMessages::from_ssz_bytes(messages[0].ssv_message.data())
+            .expect("local proposer payload should decode");
+        assert_eq!(packet.kind, PartialSignatureKind::PostConsensus);
+        assert_eq!(packet.messages.len(), 2);
+        assert_eq!(
+            packet
+                .messages
+                .iter()
+                .map(|entry| entry.signing_root)
+                .collect::<Vec<_>>(),
+            vec![PROPOSER_BLOCK_ROOT, PROPOSER_ENVELOPE_ROOT],
+        );
+        for entry in &packet.messages {
+            assert_eq!(entry.signer, TEST_OPERATOR_ID);
+            assert_eq!(entry.validator_index, PROPOSER_VALIDATOR_INDEX);
+            assert_eq!(
+                entry.partial_signature,
+                scenario.validator_key.sign(entry.signing_root)
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proposer_block_only_packet_finishes_without_creating_envelope_collector() {
+    // Arrange: external-builder proposals carry only block shares.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = proposer_scenario(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    seed_proposer_packets(&scenario, &[PROPOSER_BLOCK_ROOT]);
+
+    // Act: no envelope signing data is supplied.
+    let block = sign_proposer_packet(&scenario, false).await;
+
+    // Assert: one root, one packet, and no unused envelope registration.
+    assert_eq!(
+        block.as_ref(),
+        &scenario.validator_master.sign(PROPOSER_BLOCK_ROOT)
+    );
+    assert!(
+        !scenario
+            .manager
+            .signature_collectors
+            .contains_key(&(PROPOSER_ENVELOPE_ROOT, PROPOSER_VALIDATOR_INDEX,))
+    );
+    let messages = sender.messages();
+    assert_eq!(messages.len(), 1);
+    let packet = PartialSignatureMessages::from_ssz_bytes(messages[0].ssv_message.data())
+        .expect("block-only packet should decode");
+    assert_eq!(packet.messages.len(), 1);
+    assert_eq!(packet.messages[0].signing_root, PROPOSER_BLOCK_ROOT);
+}
+
+/// Block-only final packets can complete the block before any remote envelope share arrives.
+#[tokio::test(flavor = "multi_thread")]
+async fn proposer_block_threshold_does_not_wait_for_envelope_threshold() {
+    // Arrange: enough block shares, only our local envelope share.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = proposer_scenario(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    seed_proposer_packets(&scenario, &[PROPOSER_BLOCK_ROOT]);
+
+    // Act: block completion must precede the later envelope quorum.
+    let block = sign_proposer_packet(&scenario, true).await;
+    assert_eq!(
+        block.as_ref(),
+        &scenario.validator_master.sign(PROPOSER_BLOCK_ROOT)
+    );
+    seed_proposer_packets(&scenario, &[PROPOSER_ENVELOPE_ROOT, PROPOSER_BLOCK_ROOT]);
+    let envelope = wait_for_proposer_envelope(&scenario).await;
+
+    // Assert: waiting for the second root never produces another packet.
+    assert_eq!(
+        envelope.as_ref(),
+        &scenario.validator_master.sign(PROPOSER_ENVELOPE_ROOT)
+    );
+    assert_eq!(sender.attempts(), 1);
+}
+
+#[test]
+fn proposer_envelope_rejects_unpaired_and_wrong_companion_shares_before_and_after_registration() {
+    for early in [true, false] {
+        for companion in [None, Some(WRONG_ROOT)] {
+            // Arrange: all signatures are cryptographically valid, but their packet is invalid.
+            let keys = split_random_master();
+            let mut state = SignatureCollectorState::new(SIGNING_ROOT);
+            if !early {
+                assert!(
+                    state
+                        .register_request(
+                            None,
+                            THRESHOLD,
+                            keys.master.public_key().compress(),
+                            Some(PROPOSER_BLOCK_ROOT)
+                        )
+                        .is_continue()
+                );
+            }
+            for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+                state.add_partial_signature(*operator, share.sign(SIGNING_ROOT), companion);
+            }
+
+            // Act: register the decided block requirement after any early arrivals.
+            if early {
+                assert!(
+                    state
+                        .register_request(
+                            None,
+                            THRESHOLD,
+                            keys.master.public_key().compress(),
+                            Some(PROPOSER_BLOCK_ROOT)
+                        )
+                        .is_continue()
+                );
+            }
+
+            // Assert: BLS validity alone cannot satisfy the envelope quorum.
+            assert!(matches!(state.try_reconstruct(), Ok(None)));
+            assert!(state.full_signature.is_none());
+        }
+    }
+}
+
+#[test]
+fn proposer_identical_share_from_second_round_can_supply_missing_companion() {
+    for registered_before_second_round in [true, false] {
+        // Arrange: the first packet carries the wrong block root.
+        let keys = split_random_master();
+        let mut state = SignatureCollectorState::new(SIGNING_ROOT);
+        for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+            state.add_partial_signature(*operator, share.sign(SIGNING_ROOT), Some(WRONG_ROOT));
+        }
+        if registered_before_second_round {
+            assert!(
+                state
+                    .register_request(
+                        None,
+                        THRESHOLD,
+                        keys.master.public_key().compress(),
+                        Some(PROPOSER_BLOCK_ROOT)
+                    )
+                    .is_continue()
+            );
+            assert!(matches!(state.try_reconstruct(), Ok(None)));
+        }
+
+        // Act: a permitted later-round packet has identical envelope bytes and the decided block.
+        for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+            state.add_partial_signature(
+                *operator,
+                share.sign(SIGNING_ROOT),
+                Some(PROPOSER_BLOCK_ROOT),
+            );
+        }
+        if !registered_before_second_round {
+            assert!(
+                state
+                    .register_request(
+                        None,
+                        THRESHOLD,
+                        keys.master.public_key().compress(),
+                        Some(PROPOSER_BLOCK_ROOT)
+                    )
+                    .is_continue()
+            );
+        }
+        complete_ready_reconstruction(&mut state);
+
+        // Assert: the second packet supplies the required provenance without duplicate weight.
+        assert_eq!(
+            state.full_signature.as_deref(),
+            Some(&keys.master.sign(SIGNING_ROOT))
+        );
+    }
+}
+
+#[test]
+fn proposer_companion_provenance_is_bound_to_signature_bytes() {
+    // Arrange: a valid envelope share first arrives with the wrong companion.
+    let keys = split_random_master();
+    let mut state = SignatureCollectorState::new(SIGNING_ROOT);
+    for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+        state.add_partial_signature(*operator, share.sign(SIGNING_ROOT), Some(WRONG_ROOT));
+    }
+
+    // Act: different signature bytes from those operators claim the expected companion.
+    for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+        state.add_partial_signature(*operator, share.sign(WRONG_ROOT), Some(PROPOSER_BLOCK_ROOT));
+    }
+    assert!(
+        state
+            .register_request(
+                None,
+                THRESHOLD,
+                keys.master.public_key().compress(),
+                Some(PROPOSER_BLOCK_ROOT)
+            )
+            .is_continue()
+    );
+
+    // Assert: no root evidence from the conflicting signature transfers to the first signature.
+    assert!(matches!(state.try_reconstruct(), Ok(None)));
+}
+
+#[test]
+fn proposer_companion_provenance_keeps_two_distinct_roots_and_ignores_duplicates() {
+    for expected_companion in [SECOND_COMPANION_ROOT, THIRD_COMPANION_ROOT] {
+        // Arrange: before decision, each share sees one repeated and two distinct companions.
+        let keys = split_random_master();
+        let mut state = SignatureCollectorState::new(SIGNING_ROOT);
+        for companion in [
+            PROPOSER_BLOCK_ROOT,
+            PROPOSER_BLOCK_ROOT,
+            SECOND_COMPANION_ROOT,
+            THIRD_COMPANION_ROOT,
+        ] {
+            for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+                state.add_partial_signature(*operator, share.sign(SIGNING_ROOT), Some(companion));
+            }
+        }
+
+        // Act: bind this root to a decided block after the early packets.
+        assert!(
+            state
+                .register_request(
+                    None,
+                    THRESHOLD,
+                    keys.master.public_key().compress(),
+                    Some(expected_companion)
+                )
+                .is_continue()
+        );
+
+        // Assert: duplicate evidence used no slot; a third distinct witness exceeded the bound.
+        if expected_companion == SECOND_COMPANION_ROOT {
+            complete_ready_reconstruction(&mut state);
+            assert_eq!(
+                state.full_signature.as_deref(),
+                Some(&keys.master.sign(SIGNING_ROOT))
+            );
+        } else {
+            assert!(matches!(state.try_reconstruct(), Ok(None)));
+        }
+    }
+}
+
+#[test]
+fn proposer_without_notifier_caches_result_for_a_later_waiter() {
+    // Arrange: the envelope is registered eagerly, without a waiting callback.
+    let keys = split_random_master();
+    let validator_pubkey = keys.master.public_key().compress();
+    let mut state = SignatureCollectorState::new(SIGNING_ROOT);
+    assert!(
+        state
+            .register_request(None, THRESHOLD, validator_pubkey, Some(PROPOSER_BLOCK_ROOT))
+            .is_continue()
+    );
+    for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+        state.add_partial_signature(
+            *operator,
+            share.sign(SIGNING_ROOT),
+            Some(PROPOSER_BLOCK_ROOT),
+        );
+    }
+
+    // Act: reconstruct before Lighthouse asks for the envelope, then register the callback.
+    complete_ready_reconstruction(&mut state);
+    let (notify, mut receiver) = oneshot::channel();
+    assert!(
+        state
+            .register_request(
+                Some(notify),
+                THRESHOLD,
+                validator_pubkey,
+                Some(PROPOSER_BLOCK_ROOT)
+            )
+            .is_continue()
+    );
+
+    // Assert: the retained signature resolves the callback immediately.
+    expect_signature(&mut receiver, &keys.master.sign(SIGNING_ROOT));
+}
+
+#[test]
+fn proposer_admission_policy_cannot_change_before_or_after_reconstruction() {
+    for cached in [false, true] {
+        for (initial, conflicting) in [
+            (None, Some(PROPOSER_BLOCK_ROOT)),
+            (Some(PROPOSER_BLOCK_ROOT), None),
+            (Some(PROPOSER_BLOCK_ROOT), Some(WRONG_ROOT)),
+        ] {
+            // Arrange: first registration fixes the policy for this root.
+            let keys = split_random_master();
+            let pubkey = keys.master.public_key().compress();
+            let mut state = SignatureCollectorState::new(SIGNING_ROOT);
+            assert!(
+                state
+                    .register_request(None, THRESHOLD, pubkey, initial)
+                    .is_continue()
+            );
+            if cached {
+                for (operator, share) in &keys.shares[..THRESHOLD as usize] {
+                    state.add_partial_signature(*operator, share.sign(SIGNING_ROOT), initial);
+                }
+                complete_ready_reconstruction(&mut state);
+            }
+
+            // Act: a later caller tries to weaken, strengthen, or change the companion policy.
+            let (notify, mut receiver) = oneshot::channel();
+            let result = state.register_request(Some(notify), THRESHOLD, pubkey, conflicting);
+
+            // Assert: even a cached signature must not bypass registration compatibility.
+            assert!(result.is_break());
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(oneshot::error::TryRecvError::Closed)
+            ));
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proposer_wait_after_expiry_does_not_recreate_collector_or_send() {
+    // Arrange: both roots completed, then normal slot cleanup expires them.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = proposer_scenario(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    seed_proposer_packets(&scenario, &[PROPOSER_BLOCK_ROOT, PROPOSER_ENVELOPE_ROOT]);
+    sign_proposer_packet(&scenario, true).await;
+    wait_for_proposer_envelope(&scenario).await;
+    let current_slot = scenario.metadata.slot + SIGNATURE_COLLECTOR_RETAIN_SLOTS + 1;
+    scenario.manager.slot_clock.set_slot(current_slot.as_u64());
+    scenario
+        .manager
+        .remove_stale_entries(current_slot.saturating_sub(SIGNATURE_COLLECTOR_RETAIN_SLOTS));
+    assert!(scenario.manager.signature_collectors.is_empty());
+
+    // Act: the delayed callback attempts a lookup after the retention window.
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        scenario.manager.wait_for_registered_signature(
+            scenario.metadata.clone(),
+            PROPOSER_VALIDATOR_INDEX,
+            scenario.validator_pubkey,
+            PROPOSER_ENVELOPE_ROOT,
+            Some(PROPOSER_BLOCK_ROOT),
+        ),
+    )
+    .await
+    .expect("an expired lookup should fail promptly");
+    drain_batch_processor_work(&scenario.manager).await;
+
+    // Assert: wait-only lookup cannot resurrect state or produce a fresh local packet.
+    assert!(result.is_err());
+    assert!(scenario.manager.signature_collectors.is_empty());
+    assert_eq!(sender.attempts(), 1);
 }

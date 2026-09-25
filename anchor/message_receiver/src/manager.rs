@@ -14,7 +14,7 @@ use operator_doppelganger::OperatorDoppelgangerService;
 use qbft_manager::QbftManager;
 use signature_collector::SignatureCollectorManager;
 use slot_clock::SlotClock;
-use ssv_types::msgid::DutyExecutor;
+use ssv_types::msgid::{DutyExecutor, Role};
 use tokio::sync::{mpsc, mpsc::error::TrySendError, watch};
 use tracing::{debug, debug_span, error, trace};
 
@@ -192,10 +192,12 @@ impl<E: types::EthSpec, S: SlotClock + 'static, D: DutiesProvider> MessageReceiv
                         }
                     }
                     ValidatedSSVMessage::PartialSignatureMessages(messages) => {
-                        if let Err(err) = receiver
-                            .signature_collector
-                            .receive_partial_signatures(messages)
-                        {
+                        let result = if msg_id.role() == Some(Role::Proposer) {
+                            receiver.signature_collector.receive_proposer_partial_signatures(messages)
+                        } else {
+                            receiver.signature_collector.receive_partial_signatures(messages)
+                        };
+                        if let Err(err) = result {
                             error!(gossipsub_message_id = ?message_id, ssv_msg_id = ?msg_id, ?err, "Unable to receive partial signature message");
                         }
                     }
