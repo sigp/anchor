@@ -470,6 +470,17 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
             });
         }
 
+        // SIP-94 §4: every operator signs the block root with the duty validator's key and the
+        // beacon node verifies it against `proposer_index`, so a foreign index must fail
+        // consensus here rather than lose the slot at publication. Gloas-only, like go-ssv.
+        let duty_validator_index = u64::from(value.duty.validator_index);
+        if fork >= ForkName::Gloas && header.proposer_index != duty_validator_index {
+            return Err(DataValidationError::BlockProposerIndexMismatch {
+                expected: duty_validator_index,
+                got: header.proposer_index,
+            });
+        }
+
         if !self.disable_slashing_protection {
             let epoch = header.slot.epoch(E::slots_per_epoch());
 
@@ -518,6 +529,8 @@ pub enum DataValidationError {
     VersionMismatch { expected: ForkName, got: ForkName },
     #[error("wrong block slot: expected {expected}, got {got}")]
     BlockSlotMismatch { expected: Slot, got: Slot },
+    #[error("wrong block proposer index: expected {expected}, got {got}")]
+    BlockProposerIndexMismatch { expected: u64, got: u64 },
     #[error("Block proposal would be slashable: {0}")]
     SlashableBlockProposal(NotSafe),
 }
@@ -3780,6 +3793,66 @@ mod tests {
         let result = validator.do_validation(&value, &our_value);
 
         assert_block_slot_mismatch(result, slot, slot + 1);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // do_validation Block Proposer-Index Pin Tests (SIP-94 §4)
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    #[test]
+    /// Tests that a Gloas block whose `proposer_index` is not the duty validator is rejected
+    /// with `BlockProposerIndexMismatch`. The protection-enabled leg proves the pin fires before
+    /// the slashing gate: the empty slashing DB would reject any proposal that reached it.
+    fn do_validation_rejects_gloas_block_proposer_index_mismatch() {
+        for disable_slashing_protection in [true, false] {
+            let spec = gloas_scheduled_spec();
+            let slot = gloas_era_slot();
+            // The helper block's proposer_index is 0; the duty names validator 1.
+            let mut our_value =
+                proposer_consensus_data(slot, ForkName::Gloas, gloas_block_bytes(&spec, slot));
+            our_value.duty.validator_index = ValidatorIndex(1);
+            let value = our_value.clone();
+
+            let (_dir, validator) =
+                test_block_proposal_validator(Arc::new(spec), disable_slashing_protection);
+            let result = validator.do_validation(&value, &our_value);
+
+            assert!(
+                matches!(
+                    result,
+                    Err(DataValidationError::BlockProposerIndexMismatch {
+                        expected: 1,
+                        got: 0
+                    })
+                ),
+                "expected BlockProposerIndexMismatch {{ expected: 1, got: 0 }}, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    /// Tests that the proposer-index pin is Gloas-only, matching SIP-94 §4, ssv-spec, and
+    /// go-ssv: a Deneb block whose `proposer_index` is not the duty validator still validates.
+    fn do_validation_accepts_pre_gloas_block_proposer_index_mismatch() {
+        let spec = gloas_scheduled_spec();
+        let slot = deneb_era_slot();
+        // The helper block's proposer_index is 0; the duty names validator 1.
+        let mut our_value = proposer_consensus_data(
+            slot,
+            ForkName::Deneb,
+            deneb_block_contents_bytes(&spec, slot),
+        );
+        our_value.duty.validator_index = ValidatorIndex(1);
+        let value = our_value.clone();
+
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(spec), true);
+        let result = validator.do_validation(&value, &our_value);
+
+        assert!(
+            result.is_ok(),
+            "a pre-Gloas proposer-index mismatch should still validate, got {:?}",
+            result.err()
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
