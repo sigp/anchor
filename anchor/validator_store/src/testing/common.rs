@@ -240,6 +240,33 @@ struct MockSignatureCollector {
     failing_pubkeys: FailingPubkeys,
 }
 
+impl MockSignatureCollector {
+    fn collection_result(
+        &self,
+        validator_pubkey: PublicKeyBytes,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
+        // Stands in for a root whose quorum never arrives: the future stays pending, so the
+        // caller's deadline is what ends the wait.
+        // `std::future::pending::<Result<Arc<Signature>, CollectionError>>()` is `Send`, which
+        // satisfies the returned future's bound.
+        if self.hangs.load(Ordering::Relaxed) {
+            return Box::pin(std::future::pending());
+        }
+        // Stands in for any root that never reaches quorum; the caller only distinguishes
+        // success from failure.
+        if self.fails.load(Ordering::Relaxed)
+            || self.failing_pubkeys.lock().contains(&validator_pubkey)
+        {
+            return Box::pin(async { Err(CollectionError::CollectionTimeout) });
+        }
+        if let Some(failure) = self.failure.clone() {
+            return Box::pin(async move { Err(failure) });
+        }
+        let sig = Signature::infinity().expect("infinity signature");
+        Box::pin(async move { Ok(Arc::new(sig)) })
+    }
+}
+
 impl SignatureCollecting for MockSignatureCollector {
     fn sign_and_collect(
         &self,
@@ -256,28 +283,44 @@ impl SignatureCollecting for MockSignatureCollector {
             validator_pubkey: signing_data.validator_pubkey,
             captured_at: Instant::now(),
         });
-        // Stands in for a root whose quorum never arrives: the future stays pending, so the
-        // caller's deadline is what ends the wait.
-        // `std::future::pending::<Result<Arc<Signature>, CollectionError>>()` is `Send`, which
-        // satisfies the returned future's bound.
-        if self.hangs.load(Ordering::Relaxed) {
-            return Box::pin(std::future::pending());
-        }
-        // Stands in for any root that never reaches quorum; the caller only distinguishes
-        // success from failure.
-        if self.fails.load(Ordering::Relaxed)
-            || self
-                .failing_pubkeys
-                .lock()
-                .contains(&signing_data.validator_pubkey)
-        {
-            return Box::pin(async { Err(CollectionError::CollectionTimeout) });
-        }
-        if let Some(failure) = self.failure.clone() {
-            return Box::pin(async move { Err(failure) });
-        }
-        let sig = Signature::infinity().expect("infinity signature");
-        Box::pin(async move { Ok(Arc::new(sig)) })
+        self.collection_result(signing_data.validator_pubkey)
+    }
+
+    fn sign_proposer_packet(
+        &self,
+        metadata: SignatureMetadata,
+        pubkey: PublicKeyBytes,
+        block: ValidatorSigningData,
+        _envelope: Option<ValidatorSigningData>,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
+        self.captured.lock().push(CapturedSignatureCall {
+            requester: SignatureRequester::SingleValidator { pubkey },
+            metadata,
+            signing_root: block.root,
+            validator_pubkey: block.validator_pubkey,
+            captured_at: Instant::now(),
+        });
+        self.collection_result(block.validator_pubkey)
+    }
+
+    fn wait_for_registered_signature(
+        &self,
+        metadata: SignatureMetadata,
+        _index: ValidatorIndex,
+        validator_pubkey: PublicKeyBytes,
+        root: Hash256,
+        _required_companion: Option<Hash256>,
+    ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>> {
+        self.captured.lock().push(CapturedSignatureCall {
+            requester: SignatureRequester::SingleValidator {
+                pubkey: validator_pubkey,
+            },
+            metadata,
+            signing_root: root,
+            validator_pubkey,
+            captured_at: Instant::now(),
+        });
+        self.collection_result(validator_pubkey)
     }
 
     fn broadcast_dissemination(

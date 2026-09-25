@@ -61,6 +61,7 @@ pub fn classify_collection_failure(error: &Error) -> CollectionFailureClass {
                 }
                 CollectionError::QueueFullError
                 | CollectionError::OwnOperatorIdUnknown
+                | CollectionError::InvalidProposerPacket
                 | CollectionError::EmptySignature
                 | CollectionError::RecoverError(_)
                 | CollectionError::DisseminationSendFailed(_) => CollectionFailureClass::Infra,
