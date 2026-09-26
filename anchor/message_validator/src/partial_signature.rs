@@ -3177,7 +3177,8 @@ mod tests {
                     Arc::new(MockDutiesProvider::default()),
                 );
 
-                // Assert: the tolerance boundary is inclusive and one nanosecond earlier is Ignore.
+                // Assert: the tolerance boundary is inclusive and one nanosecond earlier is Ignore,
+                // so the margin widens the epoch-aligned bound once, not twice.
                 if before_boundary {
                     let failure = result.expect_err("before the epoch-aligned boundary is early");
                     assert!(
@@ -3209,7 +3210,7 @@ mod tests {
     }
 
     #[test]
-    fn test_other_roles_keep_clock_error_tolerance() {
+    fn test_other_roles_admit_early_message_margin() {
         // Arrange: timing validation reads the explicit role, slot, clock, and receipt time.
         let (committee_info, private_key, map) = four_node_committee_and_keypair();
         let genesis = UNIX_EPOCH + Duration::from_secs(1_000_000);
@@ -3221,6 +3222,8 @@ mod tests {
             Hash256::repeat_byte(1),
         );
         let slot_start = proposer_preferences_slot_start(genesis, slot.as_u64());
+        // go-ssv parity (ssvlabs/ssv#2901): `clockErrorTolerance + earlyMessageMargin`.
+        let bound = Duration::from_millis(1_050);
         for role in [
             Role::Committee,
             Role::Aggregator,
@@ -3231,11 +3234,7 @@ mod tests {
             Role::AggregatorCommittee,
             Role::PTCAttester,
         ] {
-            for (earliness, accepted) in [
-                (Duration::from_millis(50), true),
-                (Duration::from_millis(50) + Duration::from_nanos(1), false),
-                (Duration::from_millis(1_050), false),
-            ] {
+            for (earliness, accepted) in [(bound, true), (bound + Duration::from_nanos(1), false)] {
                 let mut context = create_proposer_preferences_context_at(
                     &signed,
                     &committee_info,
@@ -3245,14 +3244,14 @@ mod tests {
                 );
                 context.role = role;
 
-                // Act: exercise the shared timing check for every other role.
+                // Act: exercise the shared timing check for every slot-aligned role.
                 let result = validate_slot_time(slot, &context);
 
-                // Assert: the extra second is restricted to ProposerPreferences.
+                // Assert: the margin is inclusive and one nanosecond beyond it is Ignore.
                 if accepted {
                     assert!(result.is_ok(), "{role:?} at {earliness:?}: {result:?}");
                 } else {
-                    let failure = result.expect_err("other roles retain the 50ms boundary");
+                    let failure = result.expect_err("beyond the early margin is early");
                     assert!(
                         matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
                         "{role:?} at {earliness:?}: {failure:?}"
@@ -3323,10 +3322,10 @@ mod tests {
 
     #[test]
     fn test_non_proposer_preferences_future_slot_still_early() {
-        // Regression pin: the earliness allowance is STRICTLY role-scoped to
+        // Regression pin: the epoch-aligned earliness allowance is STRICTLY role-scoped to
         // ProposerPreferences. A non-role-8 message (ValidatorRegistration) with a future envelope
         // slot must still be rejected as early, even one slot ahead, which is well inside
-        // the ProposerPreferences allowance but not available to any other role.
+        // the ProposerPreferences allowance but beyond every other role's sub-slot early margin.
         let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
         let (private_key, public_key) = generate_test_key_pair();
         let map =
@@ -3374,6 +3373,193 @@ mod tests {
             |failure| matches!(failure, ValidationFailure::EarlySlotMessage { .. }),
             "EarlySlotMessage (non-ProposerPreferences role has no future-slot allowance)",
         );
+    }
+
+    // ============ Early-arrival margin on the proposer path (ssvlabs/ssv#3026) ============
+    //
+    // A sender whose clock runs fast emits a slot's RANDAO partial just before the slot starts
+    // for everyone else. If peers Ignore it, RANDAO never reaches threshold and the block is
+    // missed. Every slot-aligned role admits arrival up to `CLOCK_ERROR_TOLERANCE +
+    // EARLY_MESSAGE_MARGIN` before its slot starts (ssvlabs/ssv#2901 parity); lateness is
+    // unchanged.
+
+    /// How early a fast sender's partials arrive in the ssvlabs/ssv#3026 scenario.
+    const FAST_SENDER_EARLINESS: Duration = Duration::from_millis(150);
+    /// First slot of an epoch past genesis, where `validate_beacon_duty` tolerates an unfetched
+    /// proposer schedule for RANDAO.
+    const EPOCH_START_PROPOSAL_SLOT: u64 = 2 * SLOTS_PER_EPOCH_TEST;
+    /// A later slot of the same epoch, where `validate_beacon_duty` consults the proposer schedule.
+    const MID_EPOCH_PROPOSAL_SLOT: u64 = EPOCH_START_PROPOSAL_SLOT + 1;
+    const FIRST_SIGNER: OperatorId = OperatorId(1);
+    const SECOND_SIGNER: OperatorId = OperatorId(2);
+
+    /// Two committee operators with their own RSA keys, on the genesis-slot-0 clock of
+    /// `create_proposer_preferences_context_at`. `duties` defaults to a mock that assigns the
+    /// validator as proposer at every slot.
+    struct ProposerFixture {
+        committee_info: crate::CommitteeInfo,
+        private_keys: HashMap<OperatorId, Rsa<Private>>,
+        map: HashMap<OperatorId, Rsa<Public>>,
+        genesis: SystemTime,
+        duties: Arc<MockDutiesProvider>,
+    }
+
+    impl ProposerFixture {
+        fn new() -> Self {
+            let mut private_keys = HashMap::new();
+            let mut map = HashMap::new();
+            for signer in [FIRST_SIGNER, SECOND_SIGNER] {
+                let (private_key, public_key) = generate_test_key_pair();
+                private_keys.insert(signer, private_key);
+                map.insert(signer, public_key);
+            }
+            Self {
+                committee_info: create_committee_info(FOUR_NODE_COMMITTEE),
+                private_keys,
+                map,
+                genesis: UNIX_EPOCH + Duration::from_secs(1_000_000),
+                duties: Arc::new(MockDutiesProvider::default()),
+            }
+        }
+
+        fn slot_start(&self, slot: u64) -> SystemTime {
+            proposer_preferences_slot_start(self.genesis, slot)
+        }
+
+        /// Validates `signer`'s `Role::Proposer` packet of `kind` for `slot` through the complete
+        /// partial-signature path against `duty_state`. The slot clock reads `received_at`, so
+        /// the first-slot RANDAO tolerance sees the receipt instant.
+        fn deliver(
+            &self,
+            duty_state: &mut DutyState,
+            signer: OperatorId,
+            kind: PartialSignatureKind,
+            slot: u64,
+            received_at: SystemTime,
+        ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+            let signed = create_signed_partial_sig_message_at(
+                Role::Proposer,
+                kind,
+                signer,
+                &self.private_keys[&signer],
+                Slot::new(slot),
+            );
+            let mut context = create_proposer_preferences_context_at(
+                &signed,
+                &self.committee_info,
+                &self.map,
+                self.genesis,
+                received_at,
+            );
+            context.role = Role::Proposer;
+            context
+                .slot_clock
+                .set_current_time(received_at.duration_since(UNIX_EPOCH).unwrap());
+            validate_partial_signature_message(context, duty_state, self.duties.clone())
+        }
+    }
+
+    /// An empty `DutyState` sized as production sizes the `Role::Proposer` ring.
+    fn proposer_duty_state() -> DutyState {
+        DutyState::new(crate::stored_slot_count(
+            Role::Proposer,
+            SLOTS_PER_EPOCH_TEST,
+            &spec_with_gloas(Some(0)),
+        ))
+    }
+
+    #[test]
+    fn test_proposer_randao_from_fast_sender_clock_accepted() {
+        // Arrange: the assigned proposer's RANDAO partial arrives while the wall clock still
+        // reads the previous slot.
+        let fixture = ProposerFixture::new();
+        let received_at = fixture.slot_start(MID_EPOCH_PROPOSAL_SLOT) - FAST_SENDER_EARLINESS;
+
+        // Act
+        let result = fixture.deliver(
+            &mut proposer_duty_state(),
+            FIRST_SIGNER,
+            PartialSignatureKind::RandaoPartialSig,
+            MID_EPOCH_PROPOSAL_SLOT,
+            received_at,
+        );
+
+        // Assert: Ignoring it at every peer keeps RANDAO below threshold and misses the block.
+        assert!(
+            result.is_ok(),
+            "RANDAO {FAST_SENDER_EARLINESS:?} early must be relayed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_proposer_first_slot_randao_from_fast_sender_clock_tolerates_unknown_epoch() {
+        // Arrange: RANDAO for an epoch's first slot arrives while the wall clock reads the
+        // previous epoch's last slot, before the new epoch's proposers are fetched. The mock also
+        // denies the assignment, so only the first-slot RANDAO tolerance can admit it.
+        let fixture = ProposerFixture {
+            duties: Arc::new(MockDutiesProvider {
+                epoch_known_for_proposers: false,
+                validator_is_proposer: false,
+                ..Default::default()
+            }),
+            ..ProposerFixture::new()
+        };
+        let received_at = fixture.slot_start(EPOCH_START_PROPOSAL_SLOT) - FAST_SENDER_EARLINESS;
+
+        // Act
+        let result = fixture.deliver(
+            &mut proposer_duty_state(),
+            FIRST_SIGNER,
+            PartialSignatureKind::RandaoPartialSig,
+            EPOCH_START_PROPOSAL_SLOT,
+            received_at,
+        );
+
+        // Assert
+        assert!(
+            result.is_ok(),
+            "first-slot RANDAO {FAST_SENDER_EARLINESS:?} early must be relayed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_proposer_early_next_slot_randao_slot_advance_is_per_signer() {
+        // Arrange: one shared state; the validator proposes at N and N + 1, and every packet
+        // arrives `FAST_SENDER_EARLINESS` before N + 1 starts, i.e. late in slot N.
+        let fixture = ProposerFixture::new();
+        let mut duty_state = proposer_duty_state();
+        let slot_n = MID_EPOCH_PROPOSAL_SLOT;
+        let received_at = fixture.slot_start(slot_n + 1) - FAST_SENDER_EARLINESS;
+        let mut deliver =
+            |signer, kind, slot| fixture.deliver(&mut duty_state, signer, kind, slot, received_at);
+
+        // Act: the first signer's N + 1 RANDAO lands before its slot-N post-consensus; the
+        // second signer's arrive in order.
+        let first_early_randao = deliver(
+            FIRST_SIGNER,
+            PartialSignatureKind::RandaoPartialSig,
+            slot_n + 1,
+        );
+        let first_post = deliver(FIRST_SIGNER, PartialSignatureKind::PostConsensus, slot_n);
+        let second_post = deliver(SECOND_SIGNER, PartialSignatureKind::PostConsensus, slot_n);
+        let second_early_randao = deliver(
+            SECOND_SIGNER,
+            PartialSignatureKind::RandaoPartialSig,
+            slot_n + 1,
+        );
+
+        // Assert: the early RANDAO is accepted in either order. Accepting it advances only that
+        // signer, so its later slot-N packet is Ignore (as in ssvlabs/ssv#2901) while the other
+        // signer's is not.
+        assert!(first_early_randao.is_ok(), "{first_early_randao:?}");
+        let failure = first_post.expect_err("the first signer already advanced to N + 1");
+        assert!(
+            matches!(failure, ValidationFailure::SlotAlreadyAdvanced { .. }),
+            "{failure:?}"
+        );
+        assert_eq!(MessageAcceptance::from(&failure), MessageAcceptance::Ignore);
+        assert!(second_post.is_ok(), "{second_post:?}");
+        assert!(second_early_randao.is_ok(), "{second_early_randao:?}");
     }
 
     // ============ ProposerPreferences dedup criteria (#1131, #1254) ============
