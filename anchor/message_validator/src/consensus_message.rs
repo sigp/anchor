@@ -618,18 +618,23 @@ mod tests {
 
         // Set up slot clock where current time is before slot start time (message too early)
         let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(2);
         let slot_clock = ManualSlotClock::new(
             Slot::new(0),
-            // Slot 1 starts in 1 second from now
+            // Slot 1 starts in 2 seconds from now
             now.duration_since(UNIX_EPOCH).unwrap(),
-            Duration::from_secs(1),
+            slot_duration,
         );
+        // One nanosecond beyond the early-arrival bound for slot 1, during slot 0
+        let received_at = now + slot_duration
+            - (crate::CLOCK_ERROR_TOLERANCE + crate::EARLY_MESSAGE_MARGIN)
+            - Duration::from_nanos(1);
 
         let validation_context = ValidationContext {
             signed_ssv_message: &signed_msg,
             committee_info: &committee_info,
             role: Role::Committee,
-            received_at: now,
+            received_at,
             slots_per_epoch: 32,
             epochs_per_sync_committee_period: 256,
             sync_committee_size: 512,
@@ -653,6 +658,55 @@ mod tests {
             |failure| matches!(failure, EarlySlotMessage { got: _ }),
             "EarlySlotMessage",
         );
+    }
+
+    #[test]
+    fn test_early_message_within_margin_accepted() {
+        // Arrange: the slot-1 leader's proposal from a sender whose clock runs fast
+        // (ssvlabs/ssv#3026), received before slot 1 starts.
+        const FAST_SENDER_EARLINESS: Duration = Duration::from_millis(150);
+        let (leader_key, leader_public_key) = generate_test_key_pair();
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        let map = HashMap::from([(OperatorId(2), leader_public_key)]);
+        let qbft_message =
+            QbftMessageBuilder::new(Role::Committee, QbftMessageType::Proposal).build();
+        let signed_msg = create_signed_consensus_message(
+            qbft_message,
+            vec![OperatorId(2)],
+            vec![],
+            vec![leader_key],
+        );
+
+        let now = SystemTime::now();
+        let slot_duration = Duration::from_secs(1);
+        let slot_clock = ManualSlotClock::new(
+            Slot::new(0),
+            now.duration_since(UNIX_EPOCH).unwrap(),
+            slot_duration,
+        );
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: now + slot_duration - FAST_SENDER_EARLINESS,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock,
+            operator_pub_keys: &map,
+            fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
+        };
+
+        // Act
+        let result = validate_ssv_message(
+            validation_context,
+            &mut DutyState::new(2),
+            Arc::new(MockDutiesProvider::default()),
+        );
+
+        // Assert
+        assert_qbft_message_accepted(result, "QBFT message received just before its slot");
     }
 
     #[test]

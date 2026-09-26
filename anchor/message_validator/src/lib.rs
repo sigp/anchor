@@ -746,12 +746,12 @@ impl<S: SlotClock + 'static, D: DutiesProvider> Validator<S, D> {
 ///   (SIP-94 §7 retention). Exactness needs MORE than the acceptance window: a count query for the
 ///   epoch of the oldest acceptable slot probes back to that epoch's FIRST slot, so the ring must
 ///   cover `earliness + lateness + slots_per_epoch`, plus one slot padding the sub-slot timing
-///   margins (early-arrival margin, `LATE_MESSAGE_MARGIN`, and clock tolerance at both ends).
+///   margins (`EARLY_MESSAGE_MARGIN`, `LATE_MESSAGE_MARGIN`, and clock tolerance at both ends).
 ///
 /// The default arm covers the widest default-role window (lateness `slots_per_epoch +
-/// LATE_SLOT_ALLOWANCE`, no earliness). `ProposerPreferences` spans the proposer lookahead into
-/// the future (its envelope slot is a future `proposal_slot`) with a 2-slot lateness; its
-/// epoch-aligned lead is at most 63 slots with mainnet parameters (SIP-94 §7). Its
+/// LATE_SLOT_ALLOWANCE`, no whole-slot earliness). `ProposerPreferences` spans the proposer
+/// lookahead into the future (its envelope slot is a future `proposal_slot`) with a 2-slot
+/// lateness; its epoch-aligned lead is at most 63 slots with mainnet parameters (SIP-94 §7). Its
 /// lookahead-sized ring exceeds its bound (`63 + 2 + 32 + 1 = 98 <= 128`) with headroom.
 /// The combined timing margins fit within the one-slot padding at mainnet's 12-second slots.
 ///
@@ -911,7 +911,8 @@ pub(crate) fn validate_beacon_duty(
     // Rule: For a proposal duty message, check if the validator is assigned to it
     if role == Role::Proposer {
         // Tolerate missing duties for RANDAO signatures during the first slot of an epoch,
-        // while duties are still being fetched from the Beacon node.
+        // while duties are still being fetched from the Beacon node. The local clock may still
+        // read the previous slot, since `EARLY_MESSAGE_MARGIN` admits the message before its slot.
 
         let is_first_slot_of_epoch = epoch.start_slot(validation_context.slots_per_epoch) == slot;
 
@@ -1050,9 +1051,15 @@ pub(crate) fn validate_role_for_fork(
 
 /// clockErrorTolerance is the maximum amount of clock error we expect to see between nodes.
 const CLOCK_ERROR_TOLERANCE: Duration = Duration::from_millis(50);
-/// Extra early-arrival margin at the SIP-94 §7 proposer-preferences epoch boundary,
-/// allowing partials sent near that boundary to arrive despite clock skew.
-const PROPOSER_PREFERENCES_EARLY_MESSAGE_MARGIN: Duration = Duration::from_secs(1);
+/// earlyMessageMargin is how far before its earliest arrival a message of any role may land, on
+/// top of `CLOCK_ERROR_TOLERANCE`: the early-side counterpart of `LATE_MESSAGE_MARGIN`.
+///
+/// RANDAO and selection-proof partials are sent once on the sender's slot tick and never re-sent,
+/// so a sender clock slightly ahead of ours must not cost the duty. Accepting early is safe
+/// because the signature collector and QBFT instances hold such messages until the local duty
+/// starts. For monotonic-slot roles, a signer's early message for the next slot advances its
+/// slot, so its own previous-slot messages arriving after it are `SlotAlreadyAdvanced` sooner.
+const EARLY_MESSAGE_MARGIN: Duration = Duration::from_secs(1);
 /// lateMessageMargin is the duration past a message's TTL in which it is still considered valid.
 ///
 /// This margin is added to the deadline calculation after converting slot-based TTL to time.
@@ -1071,12 +1078,7 @@ pub(crate) fn validate_slot_time(
 ) -> Result<(), ValidationFailure> {
     // Check if the message is too early
     let earliness = message_earliness(msg_slot, validation_context)?;
-    let early_message_margin = if validation_context.role == Role::ProposerPreferences {
-        PROPOSER_PREFERENCES_EARLY_MESSAGE_MARGIN
-    } else {
-        Duration::ZERO
-    };
-    if earliness > CLOCK_ERROR_TOLERANCE + early_message_margin {
+    if earliness > CLOCK_ERROR_TOLERANCE + EARLY_MESSAGE_MARGIN {
         return Err(ValidationFailure::EarlySlotMessage {
             got: format!("early by {earliness:?}"),
         });
