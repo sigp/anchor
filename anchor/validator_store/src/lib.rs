@@ -4123,6 +4123,17 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         })
     }
 
+    /// `target_gas_limit` is in the proposer preferences signing root, so every operator in a
+    /// cluster must sign the same value (SIP-94 §5). Anchor therefore always uses `--gas-limit`
+    /// and ignores the network's gas limit schedule, unlike Lighthouse when its limit is unset.
+    fn proposal_data_at_epoch(
+        &self,
+        pubkey: &PublicKeyBytes,
+        _epoch: Epoch,
+    ) -> Option<ProposalData> {
+        self.proposal_data(pubkey)
+    }
+
     fn sign_attestations(
         self: &Arc<Self>,
         attestations: Vec<AttestationToSign>,
