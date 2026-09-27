@@ -4123,6 +4123,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         })
     }
 
+    // Anchor always has a configured gas limit, which Lighthouse's own store also prefers over
+    // the network's gas limit schedule, so the epoch does not affect the result.
+    fn proposal_data_at_epoch(
+        &self,
+        pubkey: &PublicKeyBytes,
+        _epoch: Epoch,
+    ) -> Option<ProposalData> {
+        self.proposal_data(pubkey)
+    }
+
     fn sign_attestations(
         self: &Arc<Self>,
         attestations: Vec<AttestationToSign>,
