@@ -4123,8 +4123,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         })
     }
 
-    // Anchor always has a configured gas limit, which Lighthouse's own store also prefers over
-    // the network's gas limit schedule, so the epoch does not affect the result.
+    /// `target_gas_limit` is in the proposer preferences signing root, so every operator in a
+    /// cluster must sign the same value (SIP-94 §5). Anchor therefore always uses `--gas-limit`
+    /// and ignores the network's gas limit schedule, unlike Lighthouse when its limit is unset.
     fn proposal_data_at_epoch(
         &self,
         pubkey: &PublicKeyBytes,
