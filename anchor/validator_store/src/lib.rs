@@ -1,4 +1,5 @@
 mod aggregator_post_consensus;
+mod committee_selection;
 mod instrumentation;
 pub mod metadata_service;
 mod metrics;
@@ -48,8 +49,7 @@ use ssv_types::{
         AggregatorCommitteeConsensusData, AggregatorCommitteeDataValidator, BEACON_ROLE_AGGREGATOR,
         BEACON_ROLE_PROPOSER, BEACON_ROLE_SYNC_COMMITTEE_CONTRIBUTION, BeaconVote,
         BeaconVoteValidator, Contribution, ContributionWrapper, Contributions,
-        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, SelectionProofBatchId,
-        ValidatorDuty,
+        ProposerConsensusData, ProposerConsensusDataValidator, QbftData, ValidatorDuty,
     },
     msgid::Role,
     partial_sig::PartialSignatureKind,
@@ -212,6 +212,12 @@ pub struct AnchorValidatorStore<
     voting_context_tx: watch::Sender<Option<Arc<VotingContext>>>,
     /// Watch channel for `VotingAssignments` (cached at slot start)
     voting_assignments_tx: watch::Sender<Option<Arc<VotingAssignments>>>,
+    /// `(committee, slot)` keys whose Boole+ selection batch has already been started.
+    ///
+    /// Registered first-insert-only by [`Self::update_voting_assignments`], so each committee
+    /// sends at most one selection batch per slot however often assignments are republished.
+    /// See [`crate::committee_selection`].
+    committee_selections: Mutex<HashSet<(CommitteeId, Slot)>>,
     /// Watch channel for `AggregationAssignments` (cached at 2/3 slot)
     aggregation_assignments_tx: watch::Sender<Option<Arc<AggregationAssignments<E>>>>,
     gas_limit: u64,
@@ -385,6 +391,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             fork_schedule,
             voting_context_tx: watch::channel(None).0,
             voting_assignments_tx: watch::channel(None).0,
+            committee_selections: Mutex::new(HashSet::new()),
             aggregation_assignments_tx: watch::channel(None).0,
             gas_limit,
             builder_boost_factor,
@@ -670,57 +677,29 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             committee_id,
         };
 
-        let (requester, encrypted_private_key) = {
-            let state = self.database.state();
-            let requester = match collection_mode {
-                CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
-                    pubkey: validator.public_key,
-                },
-                CollectionMode::SingleValidatorBatch {
-                    subnet_id,
-                    descriptor,
-                } => SignatureRequester::SingleValidatorBatch {
-                    pubkey: validator.public_key,
-                    subnet_id,
-                    descriptor,
-                },
-                CollectionMode::Committee {
-                    validator_partial_signature_batch_size,
-                    base_hash,
-                } => SignatureRequester::Committee {
-                    validator_partial_signature_batch_size,
-                    base_hash,
-                },
-            };
-            let encrypted_private_key = state
-                .shares()
-                .get_by(&validator.public_key)
-                .ok_or(Error::UnknownPubkey(validator.public_key))?
-                .encrypted_private_key;
-            (requester, encrypted_private_key)
+        let requester = match collection_mode {
+            CollectionMode::LocalOnly => SignatureRequester::LocalOnly,
+            CollectionMode::SingleValidator => SignatureRequester::SingleValidator {
+                pubkey: validator.public_key,
+            },
+            CollectionMode::SingleValidatorBatch {
+                subnet_id,
+                descriptor,
+            } => SignatureRequester::SingleValidatorBatch {
+                pubkey: validator.public_key,
+                subnet_id,
+                descriptor,
+            },
+            CollectionMode::Committee {
+                validator_partial_signature_batch_size,
+                base_hash,
+            } => SignatureRequester::Committee {
+                validator_partial_signature_batch_size,
+                base_hash,
+            },
         };
 
-        let decrypted_key_share = if let Some(operator_key) = &self.private_key {
-            let key = self
-                .decrypted_keys
-                .lock()
-                .try_get_or_insert(encrypted_private_key, || {
-                    decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
-                        .map_err(|_| SpecificError::KeyShareDecryptionFailed)
-                })
-                .cloned()?;
-            Some(key)
-        } else {
-            // We are in imposter mode and cannot decrypt the share.
-            None
-        };
-
-        let signing_data = ValidatorSigningData {
-            root: signing_root,
-            index: validator.index.ok_or(SpecificError::MissingIndex)?,
-            validator_pubkey: validator.public_key,
-            share: decrypted_key_share,
-        };
+        let signing_data = self.validator_signing_data(validator, signing_root)?;
 
         let _timer =
             validator_metrics::start_timer_vec(&validator_metrics::SIGNING_TIMES, &["ssv"]);
@@ -729,6 +708,40 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             self.signature_collector
                 .sign_and_collect(metadata, requester, signing_data);
         Ok((*collector.await.map_err(SpecificError::from)?).clone())
+    }
+
+    fn validator_signing_data(
+        &self,
+        validator: &ValidatorMetadata,
+        root: Hash256,
+    ) -> Result<ValidatorSigningData, Error> {
+        let encrypted_private_key = self
+            .database
+            .state()
+            .shares()
+            .get_by(&validator.public_key)
+            .ok_or(Error::UnknownPubkey(validator.public_key))?
+            .encrypted_private_key;
+        let share = if let Some(operator_key) = &self.private_key {
+            Some(
+                self.decrypted_keys
+                    .lock()
+                    .try_get_or_insert(encrypted_private_key, || {
+                        decrypt_key_share(operator_key, encrypted_private_key, validator.public_key)
+                            .map_err(|_| SpecificError::KeyShareDecryptionFailed)
+                    })
+                    .cloned()?,
+            )
+        } else {
+            // We are in imposter mode and cannot decrypt the share.
+            None
+        };
+        Ok(ValidatorSigningData {
+            root,
+            index: validator.index.ok_or(SpecificError::MissingIndex)?,
+            validator_pubkey: validator.public_key,
+            share,
+        })
     }
 
     async fn decide_abstract_block(
@@ -929,8 +942,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
 
     /// Update validator voting assignments (called by `MetadataService` at slot start).
     ///
-    /// This publishes the `VotingAssignments` to all subscribers via the watch channel.
-    pub fn update_voting_assignments(&self, voting_assignments: VotingAssignments) {
+    /// This starts each Boole+ committee's selection batch (see the `committee_selection` module),
+    /// then publishes the `VotingAssignments` to all subscribers via the watch channel.
+    pub fn update_voting_assignments(self: &Arc<Self>, voting_assignments: VotingAssignments) {
+        self.start_committee_selections(&voting_assignments);
         self.voting_assignments_tx
             .send_replace(Some(Arc::new(voting_assignments)));
     }
@@ -990,6 +1005,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         self.aggregation_assignments_tx
             .send_replace(Some(Arc::new(info)));
         new_executions
+    }
+
+    /// How far into its slot a selection proof is still useful: the selection callbacks stop
+    /// waiting, and the slot pipeline stops sending committee selection batches, at this point.
+    fn selection_proof_due(&self) -> Duration {
+        // Stop at two thirds of the slot. If the selection proof is not ready by then, we will not
+        // produce an aggregation anyway.
+        self.spec.get_slot_duration() * 2 / 3
     }
 
     /// Return [`SpecificError::Timeout`] if the given future does not complete at `delay` into the
@@ -1825,10 +1848,8 @@ struct VotingContext {
 /// Cached validator voting assignments for a slot.
 ///
 /// This struct caches voting assignments computed at slot start and reuses it at 1/3 slot,
-/// eliminating redundant computation. It supports two different counting patterns:
-///
-/// 1. **Committee messages** (attestation + sync): `+1` per sync validator
-/// 2. **Selection proofs** (aggregator committee): `+N` per sync validator (N = subnets)
+/// eliminating redundant computation. Publishing it also starts each Boole+ committee's selection
+/// batch (see the `committee_selection` module).
 #[derive(Debug, Clone)]
 pub struct VotingAssignments {
     /// The slot this voting assignments is about.
@@ -1848,37 +1869,6 @@ impl VotingAssignments {
     /// Derives this from the keys of `sync_validators_by_subnet`.
     pub fn sync_validators(&self) -> Vec<ValidatorIndex> {
         self.sync_validators_by_subnet.keys().copied().collect()
-    }
-
-    /// Counts expected signatures for selection proof collection.
-    ///
-    /// For each validator in the committee:
-    /// - `+1` if the validator is attesting
-    /// - `+N` if the validator is in sync committee (N = number of subnets)
-    ///
-    /// This counting pattern is used for aggregator committee pre-consensus where
-    /// each sync validator produces one selection proof per subnet they participate in.
-    pub fn selection_proof_count_for_committee<F>(&self, is_in_committee: F) -> usize
-    where
-        F: Fn(&ValidatorIndex) -> bool,
-    {
-        let mut count = 0;
-
-        // Count attesting validators: +1 each
-        for validator_idx in &self.attesting_validators {
-            if is_in_committee(validator_idx) {
-                count += 1;
-            }
-        }
-
-        // Count sync validators: +N each (N = number of subnets)
-        for (validator_idx, subnets) in &self.sync_validators_by_subnet {
-            if is_in_committee(validator_idx) {
-                count += subnets.len();
-            }
-        }
-
-        count
     }
 
     /// Counts expected signatures for voting message collection.
@@ -2048,6 +2038,8 @@ fn prepare_decided_sync_contributions<E: EthSpec>(
 
 #[derive(Clone)]
 enum CollectionMode {
+    /// Sign and inject the local share only; see [`SignatureRequester::LocalOnly`].
+    LocalOnly,
     SingleValidator,
     SingleValidatorBatch {
         /// Subnet requested by the current Lighthouse callback.
@@ -2662,18 +2654,14 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             let signing_root = slot.signing_root(domain_hash);
             let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
 
-            // Stop at two thirds of the slot. If the selection proof is not ready by then, we
-            // will not produce an aggregation anyway.
-            let delay = self.spec.get_slot_duration() * 2 / 3;
+            let delay = self.selection_proof_due();
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
-                let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
                 // Defensive check: the validator should be present in `VotingAssignments` because
                 // both this call and `VotingAssignments` come from `DutiesService`. If not, we
-                // have an inconsistency, for example a stale cache after a poll timeout, and
-                // should not participate with the wrong batch size.
+                // have an inconsistency, for example a stale cache after a poll timeout.
                 if !voting_assignments
                     .attesting_committees
                     .contains_key(&validator_pubkey)
@@ -2685,41 +2673,22 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     .into());
                 }
 
-                // Build a set of validator indices in this committee.
-                // This handles divergent operator views, since we only count validators we have
-                // shares for.
-                let committee_validator_indices =
-                    self.get_committee_validator_indices(&committee_id);
-
-                // Count how many selection-proof partial signatures belong in this batch.
-                let validator_partial_signature_batch_size = voting_assignments
-                    .selection_proof_count_for_committee(|idx| {
-                        committee_validator_indices.contains(idx)
-                    });
-
-                // Compute a deterministic batch ID. Every operator in the committee must derive
-                // the same `base_hash`.
-                let batch_id = SelectionProofBatchId::new(slot, committee_id);
-                let base_hash = batch_id.hash();
-
                 trace!(
                     %slot,
                     validator_index = ?validator.index,
                     "Producing committee selection proof"
                 );
 
-                let collection_mode = CollectionMode::Committee {
-                    validator_partial_signature_batch_size,
-                    base_hash,
-                };
-
+                // The slot pipeline sends the committee's complete selection batch when it
+                // publishes `VotingAssignments`. This callback only contributes its share locally
+                // and waits for the proof to be reconstructed.
                 self.timeout_within_slot(
                     slot,
                     delay,
                     self.collect_signature(
                         PartialSignatureKind::AggregatorCommitteePartialSig,
                         Role::AggregatorCommittee,
-                        collection_mode,
+                        CollectionMode::LocalOnly,
                         &validator,
                         &cluster,
                         signing_root,
@@ -2772,20 +2741,16 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
             .signing_root(domain_hash);
             let (validator, cluster) = self.get_validator_and_cluster(*validator_pubkey)?;
 
-            // Stop at two thirds of the slot. If the selection proof is not ready by then, we
-            // will not produce an aggregation anyway.
-            let delay = self.spec.get_slot_duration() * 2 / 3;
+            let delay = self.selection_proof_due();
 
             let signature = if self.fork_schedule.active_fork(epoch) >= Fork::Boole {
                 // Under Boole, sync selection proofs use the same committee path as attestation
                 // selection proofs.
-                let committee_id = cluster.committee_id();
                 let voting_assignments = self.get_voting_assignments(slot).await?;
 
                 // Defensive check: the validator should be present in `VotingAssignments` because
                 // both this call and `VotingAssignments` come from `DutiesService`. If not, we
-                // have an inconsistency, for example a stale cache after a poll timeout, and
-                // should not participate with the wrong batch size.
+                // have an inconsistency, for example a stale cache after a poll timeout.
                 let validator_index = validator.index.ok_or(SpecificError::MissingIndex)?;
                 if !voting_assignments
                     .sync_validators_by_subnet
@@ -2798,23 +2763,6 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     .into());
                 }
 
-                // Build a set of validator indices in this committee.
-                // This handles divergent operator views, since we only count validators we have
-                // shares for.
-                let committee_validator_indices =
-                    self.get_committee_validator_indices(&committee_id);
-
-                // Count how many selection-proof partial signatures belong in this batch.
-                let validator_partial_signature_batch_size = voting_assignments
-                    .selection_proof_count_for_committee(|idx| {
-                        committee_validator_indices.contains(idx)
-                    });
-
-                // Use the same deterministic batch ID as attestation selection proofs so both
-                // attestation and sync selection proofs are sent in one committee message.
-                let batch_id = SelectionProofBatchId::new(slot, committee_id);
-                let base_hash = batch_id.hash();
-
                 trace!(
                     %slot,
                     ?validator_index,
@@ -2822,18 +2770,13 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
                     "Producing committee sync selection proof"
                 );
 
-                let collection_mode = CollectionMode::Committee {
-                    validator_partial_signature_batch_size,
-                    base_hash,
-                };
-
                 self.timeout_within_slot(
                     slot,
                     delay,
                     self.collect_signature(
                         PartialSignatureKind::AggregatorCommitteePartialSig,
                         Role::AggregatorCommittee,
-                        collection_mode,
+                        CollectionMode::LocalOnly,
                         &validator,
                         &cluster,
                         signing_root,
@@ -3424,44 +3367,8 @@ mod tests {
     }
 
     #[test]
-    fn test_selection_proof_count_with_multi_subnet_validators() {
-        // Create voting assignments with:
-        // - Validators 1, 2 attesting
-        // - Validator 3 in 1 subnet (contributes 1)
-        // - Validator 4 in 3 subnets (contributes 3)
-        // - Validator 5 in 2 subnets (contributes 2)
-        let voting_assignments = create_test_voting_assignments(
-            vec![1, 2],
-            vec![(3, vec![0]), (4, vec![0, 1, 2]), (5, vec![0, 1])],
-        );
-
-        // All validators in committee
-        let all_in_committee = |_: &ValidatorIndex| true;
-        let count = voting_assignments.selection_proof_count_for_committee(all_in_committee);
-        // 2 attesting + 1 + 3 + 2 sync = 8
-        assert_eq!(count, 8);
-    }
-
-    #[test]
-    fn test_selection_proof_count_with_filter() {
-        let voting_assignments = create_test_voting_assignments(
-            vec![1, 2, 3],
-            vec![
-                (4, vec![0, 1]),    // 2 subnets
-                (5, vec![0, 1, 2]), // 3 subnets
-            ],
-        );
-
-        // Only validators 1, 2, 4 are in the committee
-        let in_committee = |idx: &ValidatorIndex| matches!(idx.0, 1 | 2 | 4);
-        let count = voting_assignments.selection_proof_count_for_committee(in_committee);
-        // 2 attesting (1, 2) + 2 sync subnets (validator 4) = 4
-        assert_eq!(count, 4);
-    }
-
-    #[test]
     fn test_committee_message_count_with_multi_subnet_validators() {
-        // Same setup as selection proof test, but counting should be flat
+        // Sync validators in several subnets still count once each
         let voting_assignments = create_test_voting_assignments(
             vec![1, 2],
             vec![
@@ -3495,41 +3402,10 @@ mod tests {
     }
 
     #[test]
-    fn test_counting_difference_between_methods() {
-        // Demonstrate the key difference between the two counting methods
-        let voting_assignments = create_test_voting_assignments(
-            vec![1], // 1 attesting validator
-            vec![
-                (2, vec![0, 1, 2, 3]), // Validator in 4 subnets
-            ],
-        );
-
-        let all_in_committee = |_: &ValidatorIndex| true;
-
-        // Selection proof: 1 + 4 = 5
-        let selection_count =
-            voting_assignments.selection_proof_count_for_committee(all_in_committee);
-        assert_eq!(selection_count, 5);
-
-        // Voting message: 1 + 1 = 2
-        let message_count = voting_assignments.voting_message_count_for_committee(all_in_committee);
-        assert_eq!(message_count, 2);
-
-        // The difference highlights the counting patterns:
-        // - Selection proofs need one proof per subnet per validator
-        // - Voting messages need one message per validator regardless of subnets
-    }
-
-    #[test]
     fn test_position_multiplicity_does_not_inflate_boole_counts() {
         let voting_assignments = create_test_voting_assignments(vec![], vec![(1, vec![0, 0, 1])]);
         let all_in_committee = |_: &ValidatorIndex| true;
 
-        assert_eq!(
-            voting_assignments.selection_proof_count_for_committee(all_in_committee),
-            2,
-            "Boole selection-proof batching counts unique subnet keys"
-        );
         assert_eq!(
             voting_assignments.voting_message_count_for_committee(all_in_committee),
             1,
@@ -3554,11 +3430,6 @@ mod tests {
         voting_assignments.attesting_validators = vec![ValidatorIndex(1), ValidatorIndex(2)];
 
         let all_in_committee = |_: &ValidatorIndex| true;
-
-        // Selection proof: 2 attesting + (1 + 2) sync = 5
-        let selection_count =
-            voting_assignments.selection_proof_count_for_committee(all_in_committee);
-        assert_eq!(selection_count, 5);
 
         // Voting message: 2 attesting + 2 sync = 4
         let message_count = voting_assignments.voting_message_count_for_committee(all_in_committee);
