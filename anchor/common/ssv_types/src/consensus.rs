@@ -396,12 +396,22 @@ impl<E: EthSpec> ProposerConsensusDataValidator<E> {
         match value.duty.r#type {
             BEACON_ROLE_AGGREGATOR => {
                 // SIP-94 §2: `version` is leader-supplied and selects the decode shape (and
-                // thus the signing-root merkleization), so bind it to our own candidate before
-                // decoding. The proposer branch pins `version` to the duty-slot fork in
-                // `validate_block_proposal` instead.
-                if value.version != our_value.version {
+                // thus the signing-root merkleization), so it must select the shape of the fork
+                // scheduled at the duty slot (pinned to our own duty by the `SlotMismatch` check
+                // above) before decoding. Compare shapes, not labels: honest leaders label the
+                // same Electra-shaped aggregate `Electra` (Anchor) or `Fulu` (go-ssv, from the
+                // beacon node).
+                let expected = self.spec.fork_name_at_slot::<E>(value.duty.slot);
+                let expected_shape = DataVersion::from(expected)
+                    .wire_shape()
+                    .map_err(DataValidationError::ForkDecode)?;
+                let proposed_shape = value
+                    .version
+                    .wire_shape()
+                    .map_err(DataValidationError::ForkDecode)?;
+                if proposed_shape != expected_shape {
                     return Err(DataValidationError::VersionMismatch {
-                        expected: ForkName::from(our_value.version),
+                        expected,
                         got: ForkName::from(value.version),
                     });
                 }
@@ -898,6 +908,7 @@ pub enum ForkDecodeError {
 }
 
 /// The wire shape a fork selects for attestation-family containers.
+#[derive(PartialEq, Eq)]
 enum WireShape {
     Base,
     Electra,
@@ -4122,14 +4133,23 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    // do_validation Aggregator-Branch Version Binding Tests (SIP-94 §2)
+    // do_validation Aggregator-Branch Scheduled Shape Binding Tests (SIP-94 §2)
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    /// Builds an aggregator-duty `ProposerConsensusData` stamped with `fork`, carrying
-    /// `data_ssz`. The duty slot is arbitrary: the aggregator branch binds `version` to our own
-    /// candidate, not to the fork schedule.
-    fn aggregator_consensus_data(fork: ForkName, data_ssz: Vec<u8>) -> ProposerConsensusData {
-        let mut duty = test_proposer_duty(Slot::new(1000));
+    /// A slot in mainnet's Fulu era (epoch 450000: >= Fulu's 411392, < [`GLOAS_TEST_EPOCH`]).
+    fn fulu_era_slot() -> Slot {
+        Epoch::new(450000).start_slot(MainnetEthSpec::slots_per_epoch())
+    }
+
+    /// Builds an aggregator-duty `ProposerConsensusData` at `slot`, stamped with `fork` and
+    /// carrying `data_ssz`. The aggregator branch binds `version` to the wire shape of the fork
+    /// scheduled at `slot`, so the slot selects the expected shape.
+    fn aggregator_consensus_data(
+        slot: Slot,
+        fork: ForkName,
+        data_ssz: Vec<u8>,
+    ) -> ProposerConsensusData {
+        let mut duty = test_proposer_duty(slot);
         duty.r#type = BEACON_ROLE_AGGREGATOR;
         ProposerConsensusData {
             duty,
@@ -4139,43 +4159,94 @@ mod tests {
     }
 
     #[test]
-    /// Tests that the aggregator branch rejects a value whose leader-supplied `version` differs
-    /// from our own candidate's, BEFORE any decoding: the value is well-formed for its claimed
-    /// version, so the rejection can only come from the version binding.
-    fn do_validation_rejects_aggregator_version_mismatch() {
-        let our_value = aggregator_consensus_data(
-            ForkName::Electra,
-            electra_shape_aggregate_and_proof().as_ssz_bytes(),
-        );
-        let value = aggregator_consensus_data(
-            ForkName::Deneb,
-            base_shape_aggregate_and_proof().as_ssz_bytes(),
-        );
-
+    /// Tests that at a Fulu slot the aggregator branch accepts a go-ssv style value labelled
+    /// `Fulu` while our own candidate is labelled `Electra` (Anchor's label): both labels select
+    /// the Electra shape, so the differing labels must not cause a rejection.
+    fn do_validation_accepts_fulu_labelled_aggregate_against_electra_candidate() {
+        let bytes = electra_shape_aggregate_and_proof().as_ssz_bytes();
+        let our_value =
+            aggregator_consensus_data(fulu_era_slot(), ForkName::Electra, bytes.clone());
+        let value = aggregator_consensus_data(fulu_era_slot(), ForkName::Fulu, bytes);
         let (_dir, validator) = test_block_proposal_validator(Arc::new(ChainSpec::mainnet()), true);
-        let result = validator.do_validation(&value, &our_value);
 
-        assert_version_mismatch(result, ForkName::Electra, ForkName::Deneb);
-    }
-
-    #[test]
-    /// Tests that the aggregator branch accepts a value whose `version` matches our candidate's
-    /// and whose bytes decode under that version's shape.
-    fn do_validation_accepts_aggregator_matching_version() {
-        let our_value = aggregator_consensus_data(
-            ForkName::Electra,
-            electra_shape_aggregate_and_proof().as_ssz_bytes(),
-        );
-        let value = our_value.clone();
-
-        let (_dir, validator) = test_block_proposal_validator(Arc::new(ChainSpec::mainnet()), true);
         let result = validator.do_validation(&value, &our_value);
 
         assert!(
             result.is_ok(),
-            "matching aggregator version should validate, got {:?}",
+            "Fulu-labelled Electra-shaped aggregate should validate at a Fulu slot, got {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    /// Tests that at a Fulu slot the aggregator branch accepts an Anchor style value labelled
+    /// `Electra` while our own candidate is labelled `Fulu`: the reverse of the mixed-cluster
+    /// case above.
+    fn do_validation_accepts_electra_labelled_aggregate_against_fulu_candidate() {
+        let bytes = electra_shape_aggregate_and_proof().as_ssz_bytes();
+        let our_value = aggregator_consensus_data(fulu_era_slot(), ForkName::Fulu, bytes.clone());
+        let value = aggregator_consensus_data(fulu_era_slot(), ForkName::Electra, bytes);
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(ChainSpec::mainnet()), true);
+
+        let result = validator.do_validation(&value, &our_value);
+
+        assert!(
+            result.is_ok(),
+            "Electra-labelled aggregate should validate at a Fulu slot, got {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    /// Tests that at a Gloas slot the aggregator branch rejects values labelled `Fulu` or
+    /// `Electra` even when our own candidate is labelled `Electra`: the scheduled fork, not our
+    /// label, is authoritative. The bytes decode under both the Electra and Gloas shapes
+    /// (EIP-7495), and the control shows the same bytes labelled `Gloas` are accepted, so the
+    /// rejection can only come from the label.
+    fn do_validation_rejects_pre_gloas_labelled_aggregate_at_gloas_slot() {
+        let bytes = gloas_shape_aggregate_and_proof().as_ssz_bytes();
+        let our_value =
+            aggregator_consensus_data(gloas_era_slot(), ForkName::Electra, bytes.clone());
+        let (_dir, validator) =
+            test_block_proposal_validator(Arc::new(gloas_scheduled_spec()), true);
+
+        let control = aggregator_consensus_data(gloas_era_slot(), ForkName::Gloas, bytes.clone());
+        let control_result = validator.do_validation(&control, &our_value);
+        assert!(
+            control_result.is_ok(),
+            "Gloas-labelled aggregate should validate at a Gloas slot, got {:?}",
+            control_result.err()
+        );
+
+        for label in [ForkName::Fulu, ForkName::Electra] {
+            let value = aggregator_consensus_data(gloas_era_slot(), label, bytes.clone());
+
+            let result = validator.do_validation(&value, &our_value);
+
+            assert_version_mismatch(result, ForkName::Gloas, label);
+        }
+    }
+
+    #[test]
+    /// Tests that at a Fulu slot the aggregator branch rejects a value labelled `Deneb` whose
+    /// bytes are well-formed for the Base shape: `Deneb` selects a different wire shape than
+    /// the scheduled Fulu fork.
+    fn do_validation_rejects_base_shape_labelled_aggregate_at_fulu_slot() {
+        let our_value = aggregator_consensus_data(
+            fulu_era_slot(),
+            ForkName::Fulu,
+            electra_shape_aggregate_and_proof().as_ssz_bytes(),
+        );
+        let value = aggregator_consensus_data(
+            fulu_era_slot(),
+            ForkName::Deneb,
+            base_shape_aggregate_and_proof().as_ssz_bytes(),
+        );
+        let (_dir, validator) = test_block_proposal_validator(Arc::new(ChainSpec::mainnet()), true);
+
+        let result = validator.do_validation(&value, &our_value);
+
+        assert_version_mismatch(result, ForkName::Fulu, ForkName::Deneb);
     }
 
     #[test]
