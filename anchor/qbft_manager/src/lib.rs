@@ -1,4 +1,4 @@
-use std::{fmt::Debug, future::Future, hash::Hash, num::NonZeroU64, sync::Arc};
+use std::{fmt::Debug, future::Future, hash::Hash, num::NonZeroU64, sync::Arc, time::Duration};
 
 use bls::PublicKeyBytes;
 use dashmap::DashMap;
@@ -34,6 +34,7 @@ use tracing::{Instrument, debug_span, error, warn};
 use types::{ChainSpec, Epoch, EthSpec, Hash256, Slot};
 
 use crate::instance::qbft_instance;
+pub use crate::timeout::{LEGACY_PROPOSER_ROUND_TIMEOUT, PROPOSER_ROUND_TIMEOUT};
 
 mod instance;
 mod instrumentation;
@@ -60,7 +61,11 @@ pub enum TimeoutMode {
     SlotTime { round_deadline_origin: Instant },
     /// Per-round timeouts. Resets on round changes.
     /// Used for: block proposals.
-    Relative { current_round_start_time: Instant },
+    Relative {
+        current_round_start_time: Instant,
+        /// Duration of each quick round, e.g. [`PROPOSER_ROUND_TIMEOUT`].
+        round_timeout: Duration,
+    },
 }
 
 // Unique Identifier for a committee and its corresponding QBFT instance

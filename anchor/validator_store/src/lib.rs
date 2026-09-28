@@ -376,6 +376,8 @@ pub struct AnchorValidatorStore<
     prefer_builder_proposals: bool,
     /// See [`ProposerDelays`] and [`await_proposer_delay`] for the semantics.
     proposer_delays: ProposerDelays,
+    /// Quick-round timeout of proposer QBFT instances.
+    proposer_round_timeout: Duration,
     strict_mfp: bool,
     is_synced: watch::Receiver<bool>,
     task_executor: TaskExecutor,
@@ -558,6 +560,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         builder_boost_factor: Option<u64>,
         prefer_builder_proposals: bool,
         proposer_delays: ProposerDelays,
+        proposer_round_timeout: Duration,
         strict_mfp: bool,
         is_synced: watch::Receiver<bool>,
         task_executor: TaskExecutor,
@@ -583,6 +586,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
             builder_boost_factor,
             prefer_builder_proposals,
             proposer_delays,
+            proposer_round_timeout,
             strict_mfp,
             is_synced,
             task_executor,
@@ -970,6 +974,7 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
         let timer = metrics::start_timer_vec(&metrics::CONSENSUS_TIMES, &[metrics::BLOCK]);
         let timeout_mode = TimeoutMode::Relative {
             current_round_start_time: self.get_instant_in_slot(slot, Duration::ZERO)?,
+            round_timeout: self.proposer_round_timeout,
         };
 
         // Define the proposer instance identity for QBFT consensus

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use bls::{FixedBytesExtended, PublicKeyBytes};
 use eth2::types::FullBlockContents;
+use qbft_manager::{LEGACY_PROPOSER_ROUND_TIMEOUT, PROPOSER_ROUND_TIMEOUT, TimeoutMode};
 use slot_clock::SlotClock;
 use ssv_types::{
     OperatorId,
@@ -617,5 +618,46 @@ async fn envelope_wait_uses_configured_payload_deadline() {
         let calls = harness.captured_calls.lock();
         assert_eq!(calls.len(), 1);
         assert!(calls[0].wait_only);
+    }
+}
+
+#[tokio::test]
+async fn block_consensus_uses_configured_proposer_round_timeout() {
+    for round_timeout in [PROPOSER_ROUND_TIMEOUT, LEGACY_PROPOSER_ROUND_TIMEOUT] {
+        // Arrange: the operator's configured quick-round timeout, SIP-102 or legacy.
+        let (setup, pubkey) = committee();
+        let harness = ValidatorStoreTestHarness::new_with_options(
+            vec![setup],
+            OperatorId(1),
+            HarnessOptions {
+                proposer_round_timeout: round_timeout,
+                ..options()
+            },
+        );
+
+        // Act: run a Gloas block duty through the real consensus call.
+        harness
+            .validator_store
+            .sign_block(
+                pubkey,
+                UnsignedBlock::Full(FullBlockContents::Block(block(
+                    &harness.spec,
+                    EXTERNAL_BUILDER,
+                ))),
+                Slot::new(TEST_SLOT),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Assert: QBFT receives per-round timeouts with exactly the configured budget.
+        let captured = harness.captured_consensus_timeouts.lock().clone();
+        assert!(
+            matches!(
+                captured.as_slice(),
+                [TimeoutMode::Relative { round_timeout: actual, .. }] if *actual == round_timeout
+            ),
+            "block consensus must use the configured {round_timeout:?} round timeout, got {captured:?}"
+        );
     }
 }

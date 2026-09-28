@@ -679,6 +679,7 @@ impl Client {
             config.builder_boost_factor,
             config.prefer_builder_proposals,
             config.proposer_delays,
+            config.proposer_round_timeout,
             config.strict_mfp,
             is_synced.clone(),
             executor.clone(),

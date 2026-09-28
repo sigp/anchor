@@ -1,4 +1,5 @@
 use super::*;
+use crate::{LEGACY_PROPOSER_ROUND_TIMEOUT, PROPOSER_ROUND_TIMEOUT};
 
 // very important: set paused to true for deterministic timer
 #[tokio::test(start_paused = true)]
@@ -79,6 +80,50 @@ async fn test_timeout(round_timeout_to_test: usize) {
 /// after the sleep_until, not cumulative timeouts from start_time.
 #[tokio::test(start_paused = true)]
 async fn test_relative_mode_timeout() {
+    // Start the instance 4 seconds in the future (simulating slot timing).
+    let total_time = run_from_now_until_timed_out(
+        |now| TimeoutMode::Relative {
+            current_round_start_time: now + Duration::from_secs(4),
+            round_timeout: PROPOSER_ROUND_TIMEOUT,
+        },
+        3,
+    )
+    .await;
+
+    // Relative mode waits until current_round_start_time, then runs 3 single 1.5 second rounds.
+    // SlotTime would measure cumulative 2 second deadlines from the same instant and time out
+    // at 4 + 2 + 2 + 2 = 10 seconds instead.
+    assert_eq!(total_time, Duration::from_millis(8_500));
+}
+
+/// Test that the `round_timeout` carried by `TimeoutMode::Relative` is the budget the instance
+/// timer actually uses, so the `--legacy-proposer-round-timeout` rollback restores 2 second
+/// rounds rather than only changing a config value.
+#[tokio::test(start_paused = true)]
+async fn test_relative_mode_uses_configured_round_timeout() {
+    for (round_timeout, expected) in [
+        (PROPOSER_ROUND_TIMEOUT, Duration::from_secs(3)),
+        (LEGACY_PROPOSER_ROUND_TIMEOUT, Duration::from_secs(4)),
+    ] {
+        let elapsed = run_from_now_until_timed_out(
+            |now| TimeoutMode::Relative {
+                current_round_start_time: now,
+                round_timeout,
+            },
+            2,
+        )
+        .await;
+
+        assert_eq!(elapsed, expected, "round_timeout {round_timeout:?}");
+    }
+}
+
+/// Run a single instance, building its timeout mode from the current instant, and return the
+/// elapsed time until it reports `Completed::TimedOut` after `max_rounds` rounds.
+async fn run_from_now_until_timed_out(
+    timeout_mode: impl FnOnce(Instant) -> TimeoutMode,
+    max_rounds: usize,
+) -> Duration {
     let (sender_tx, _sender_rx) = unbounded_channel();
     let (message_tx, message_rx) = unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
@@ -88,9 +133,7 @@ async fn test_relative_mode_timeout() {
         Arc::new(message_sender),
     ));
 
-    let slot_start_time = Instant::now();
-    // Set start_time 4 seconds in the future (simulating slot timing)
-    let qbft_start_time = slot_start_time + Duration::from_secs(4);
+    let now = Instant::now();
 
     message_tx
         .send(crate::QbftMessage {
@@ -102,15 +145,13 @@ async fn test_relative_mode_timeout() {
                     Role::Committee,
                     &DutyExecutor::Committee(CommitteeId::default()),
                 ),
-                timeout_mode: TimeoutMode::Relative {
-                    current_round_start_time: qbft_start_time,
-                },
+                timeout_mode: timeout_mode(now),
                 config: qbft::ConfigBuilder::new(
                     OperatorId(1),
                     InstanceHeight::from(0),
                     IndexSet::from([1, 2, 3, 4].map(OperatorId)),
                 )
-                .with_max_rounds(3) // Test 3 rounds
+                .with_max_rounds(max_rounds)
                 .build()
                 .unwrap(),
                 on_completed: result_tx,
@@ -120,99 +161,7 @@ async fn test_relative_mode_timeout() {
         .unwrap();
 
     assert!(matches!(result_rx.await, Ok(Completed::TimedOut)));
-
-    let total_time = Instant::now() - slot_start_time;
-
-    // For Relative mode:
-    // - Wait 4 seconds until current_round_start_time
-    // - Round 1: 2 seconds (single round timeout, not cumulative)
-    // - Round 2: 2 seconds
-    // - Round 3: 2 seconds
-    // Total: 4 + 2 + 2 + 2 = 10 seconds
-    //
-    // If it were SlotTime mode, the instance would start immediately, but the cumulative
-    // deadlines are measured from the same instant:
-    // - Round 1 ends at round_deadline_origin + 2 = 6 seconds total
-    // - Round 2 ends at round_deadline_origin + 4 = 8 seconds total
-    // - Round 3 ends at round_deadline_origin + 6 = 10 seconds total
-    // Which happens to be the same for this test, but the key difference is
-    // Relative mode sleeps until the round start and resets it to Instant::now()
-
-    let expected = Duration::from_secs(4 + 2 + 2 + 2);
-    assert_eq!(total_time, expected);
-}
-
-/// Test that SlotTime and Relative modes compute their round deadlines differently.
-/// SlotTime measures cumulative deadlines from `round_deadline_origin`, while Relative restarts
-/// each round to `Instant::now()`.
-#[tokio::test(start_paused = true)]
-async fn test_relative_vs_slottime_timing_difference() {
-    // With the origin at `now`, both modes complete at the same instant, but via
-    // different calculations (cumulative-from-origin vs per-round-from-now)
-
-    async fn run_with_mode(use_relative: bool) -> Duration {
-        let (sender_tx, _sender_rx) = unbounded_channel();
-        let (message_tx, message_rx) = unbounded_channel();
-        let (result_tx, result_rx) = oneshot::channel();
-        let message_sender = MockMessageSender::new(sender_tx, OperatorId(1));
-        let _handle = tokio::spawn(qbft_instance::<BeaconVote>(
-            message_rx,
-            Arc::new(message_sender),
-        ));
-
-        let now = Instant::now();
-
-        let timeout_mode = if use_relative {
-            TimeoutMode::Relative {
-                current_round_start_time: now,
-            }
-        } else {
-            TimeoutMode::SlotTime {
-                round_deadline_origin: now,
-            }
-        };
-
-        message_tx
-            .send(crate::QbftMessage {
-                kind: QbftMessageKind::Initialize(QbftInitialization {
-                    initial: setup::generate_test_data(0).0,
-                    validator: Box::new(NoDataValidation),
-                    message_id: MessageId::new(
-                        &DomainType::default(),
-                        Role::Committee,
-                        &DutyExecutor::Committee(CommitteeId::default()),
-                    ),
-                    timeout_mode,
-                    config: qbft::ConfigBuilder::new(
-                        OperatorId(1),
-                        InstanceHeight::from(0),
-                        IndexSet::from([1, 2, 3, 4].map(OperatorId)),
-                    )
-                    .with_max_rounds(2)
-                    .build()
-                    .unwrap(),
-                    on_completed: result_tx,
-                }),
-                drop_on_finish: None,
-            })
-            .unwrap();
-
-        assert!(matches!(result_rx.await, Ok(Completed::TimedOut)));
-        Instant::now() - now
-    }
-
-    let slottime_duration = run_with_mode(false).await;
-    let relative_duration = run_with_mode(true).await;
-
-    // Both should complete in 4 seconds (2 rounds * 2 seconds each)
-    // The difference is in HOW they calculate it:
-    // - SlotTime: cumulative from the fixed round_deadline_origin
-    // - Relative: single-round from current_round_start_time (reset each round)
-    //
-    // With the origin at now, both arrive at the same deadlines, but the internal
-    // calculations differ.
-    assert_eq!(slottime_duration, Duration::from_secs(4));
-    assert_eq!(relative_duration, Duration::from_secs(4));
+    Instant::now() - now
 }
 
 /// Test that `SlotTime` round deadlines are a pure function of `round_deadline_origin`: an instance

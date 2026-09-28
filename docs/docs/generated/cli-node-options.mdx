@@ -287,6 +287,14 @@ Payload Building Options:
                
                [default: 36000000]
 
+         --legacy-proposer-round-timeout
+               Restore the pre-SIP-102 2s proposer QBFT round timeout instead
+               of the SIP-102 1.5s one. This is a committee-wide protocol
+               parameter, not a local performance knob: configure it
+               identically across all operators of every shared committee. A
+               rollback only takes effect once at most f operators of a
+               committee still run the SIP-102 timeout.
+
          --operator-dg <OPERATOR_DG>
                Enable operator doppelgänger protection. When enabled, the node
                blocks all outgoing messages and monitors the network for

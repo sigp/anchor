@@ -123,6 +123,7 @@ impl Uninitialized {
         let mut timeout_mode = init.timeout_mode;
         if let TimeoutMode::Relative {
             current_round_start_time,
+            ..
         } = &mut timeout_mode
         {
             tokio::time::sleep_until(*current_round_start_time).await;
@@ -316,6 +317,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                             && initialized.qbft.get_round() > old
                             && let TimeoutMode::Relative {
                                 current_round_start_time,
+                                ..
                             } = &mut initialized.timeout_mode
                         {
                             debug!(
@@ -337,6 +339,7 @@ pub async fn qbft_instance<D: QbftData<Hash = Hash256>>(
                     // Reset timer for new round in Relative mode
                     if let TimeoutMode::Relative {
                         current_round_start_time,
+                        ..
                     } = &mut initialized.timeout_mode
                     {
                         *current_round_start_time = Instant::now();
