@@ -19,7 +19,7 @@ use types::Epoch;
 /// This represents the network identity that is constant throughout the network's lifetime.
 /// It identifies which SSV network we're connected to.
 ///
-/// For built-in networks (mainnet, holesky, hoodi), the name matches the network name.
+/// For built-in networks (mainnet, holesky, hoodi, sepolia), the name matches the network name.
 /// For custom networks loaded via `--testnet-dir`, the name comes from `ssv_network_name.txt`.
 pub type SsvNetworkName = String;
 
@@ -75,6 +75,7 @@ impl SsvNetworkConfig {
             "mainnet" => get_hardcoded!(mainnet),
             "holesky" => get_hardcoded!(holesky),
             "hoodi" => get_hardcoded!(hoodi),
+            "sepolia" => get_hardcoded!(sepolia),
             _ => return Ok(None),
         };
         let Some(eth2_network) = Eth2NetworkConfig::constant(name)? else {
@@ -202,7 +203,7 @@ fn read<T: FromStr>(file: &Path) -> Result<T, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, io::Write};
+    use std::{collections::HashMap, io::Write, net::Ipv4Addr};
 
     use fork::ALAN_TOPIC_PREFIX;
     use tempfile::TempDir;
@@ -213,6 +214,15 @@ mod tests {
     const MAINNET: &str = "mainnet";
     const HOLESKY: &str = "holesky";
     const HOODI: &str = "hoodi";
+    const SEPOLIA: &str = "sepolia";
+
+    // Sepolia network configuration (go-ssv networkconfig/sepolia.go)
+    const SEPOLIA_CONTRACT_ADDRESS: &str = "0x261419B48F36EdF420743E9f91bABF4856e76f99";
+    const SEPOLIA_CONTRACT_BLOCK: u64 = 7795814;
+    const SEPOLIA_DOMAIN_TYPE: DomainType = DomainType([0x00, 0x00, 0x05, 0x69]);
+    const SEPOLIA_BOOT_NODE_IP4: Ipv4Addr = Ipv4Addr::new(35, 163, 92, 101);
+    const SEPOLIA_BOOT_NODE_TCP4: u16 = 5002;
+    const SEPOLIA_BOOT_NODE_UDP4: u16 = 4002;
 
     // Test network configuration
     const TEST_NETWORK_NAME: &str = "test-network";
@@ -299,9 +309,52 @@ mod tests {
     }
 
     #[test]
+    fn test_constant_sepolia_loads_valid_config() {
+        // Act
+        let config = SsvNetworkConfig::constant(SEPOLIA).unwrap().unwrap();
+
+        // Assert
+        assert_valid_fork_schedule(&config);
+    }
+
+    #[test]
+    fn test_constant_sepolia_matches_go_ssv_network_config() {
+        // Act
+        let config = SsvNetworkConfig::constant(SEPOLIA).unwrap().unwrap();
+
+        // Assert
+        assert_eq!(
+            config.ssv_contract,
+            SEPOLIA_CONTRACT_ADDRESS.parse::<Address>().unwrap()
+        );
+        assert_eq!(config.ssv_contract_block, SEPOLIA_CONTRACT_BLOCK);
+        assert_eq!(
+            config.fork_schedule.domain_type(Fork::Alan),
+            Some(SEPOLIA_DOMAIN_TYPE)
+        );
+        assert_eq!(config.fork_schedule.fork_epoch(Fork::Boole), None);
+
+        let boot_nodes = config.ssv_boot_nodes.unwrap();
+        assert_eq!(boot_nodes.len(), 1);
+        assert_eq!(boot_nodes[0].ip4(), Some(SEPOLIA_BOOT_NODE_IP4));
+        assert_eq!(boot_nodes[0].tcp4(), Some(SEPOLIA_BOOT_NODE_TCP4));
+        assert_eq!(boot_nodes[0].udp4(), Some(SEPOLIA_BOOT_NODE_UDP4));
+
+        assert_eq!(
+            config.eth2_network.config.config_name.as_deref(),
+            Some(SEPOLIA)
+        );
+    }
+
+    #[test]
     fn test_constant_networks_have_correct_network_names() {
         // Arrange & Act & Assert
-        let test_cases = [(MAINNET, MAINNET), (HOLESKY, HOLESKY), (HOODI, HOODI)];
+        let test_cases = [
+            (MAINNET, MAINNET),
+            (HOLESKY, HOLESKY),
+            (HOODI, HOODI),
+            (SEPOLIA, SEPOLIA),
+        ];
 
         for (network, expected_name) in test_cases {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
@@ -319,7 +372,7 @@ mod tests {
     fn test_builtin_network_fork_domains_are_globally_unique() {
         let mut domains = HashMap::new();
 
-        for network in [MAINNET, HOLESKY, HOODI] {
+        for network in [MAINNET, HOLESKY, HOODI, SEPOLIA] {
             let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
 
             for &fork in Fork::all() {
