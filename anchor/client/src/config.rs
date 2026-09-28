@@ -12,10 +12,11 @@ use network::{DEFAULT_DISC_PORT, DEFAULT_TCP_PORT, ListenAddr, ListenAddress};
 use network_utils::unused_port::{
     unused_tcp4_port, unused_tcp6_port, unused_udp4_port, unused_udp6_port,
 };
+use qbft_manager::{LEGACY_PROPOSER_ROUND_TIMEOUT, PROPOSER_ROUND_TIMEOUT};
 use sensitive_url::SensitiveUrl;
 use ssv_types::OperatorId;
 use tower_http::cors::AllowOrigin;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 /// Proposer delay above which startup requires `--allow-dangerous-proposer-delay`.
 ///
@@ -141,6 +142,9 @@ pub struct Config {
     /// block, giving builders longer to bid for it. One value per side of the Gloas fork, each
     /// disabled at zero.
     pub proposer_delays: ProposerDelays,
+    /// Quick-round timeout of proposer QBFT instances: SIP-102's 1.5s unless the operator
+    /// restored the legacy 2s with `--legacy-proposer-round-timeout`.
+    pub proposer_round_timeout: Duration,
     /// Controls whether the latency measurement service is enabled
     pub disable_latency_measurement_service: bool,
     /// Enables the beacon head monitor that reacts to head updates from connected beacon nodes.
@@ -197,6 +201,7 @@ impl Config {
             builder_boost_factor: None,
             prefer_builder_proposals: false,
             proposer_delays: ProposerDelays::default(),
+            proposer_round_timeout: PROPOSER_ROUND_TIMEOUT,
             gas_limit: 36_000_000,
             disable_latency_measurement_service: false,
             enable_beacon_head_monitor: true,
@@ -325,6 +330,16 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
             allow_dangerous_proposer_delay,
         )?,
     };
+
+    if cli_args.legacy_proposer_round_timeout {
+        // Record the rollback so a cross-operator postmortem can tell which timeout this node ran.
+        info!(
+            proposer_round_timeout = ?LEGACY_PROPOSER_ROUND_TIMEOUT,
+            sip102_proposer_round_timeout = ?PROPOSER_ROUND_TIMEOUT,
+            "Legacy proposer round timeout enabled, using the pre-SIP-102 timeout"
+        );
+        config.proposer_round_timeout = LEGACY_PROPOSER_ROUND_TIMEOUT;
+    }
 
     // Http API server
     config.http_api.enabled = cli_args.http_api_options.http;

@@ -654,6 +654,17 @@ pub struct Node {
 
     #[clap(
         long,
+        help = "Restore the pre-SIP-102 2s proposer QBFT round timeout instead of the SIP-102 \
+                1.5s one. This is a committee-wide protocol parameter, not a local performance \
+                knob: configure it identically across all operators of every shared committee. \
+                A rollback only takes effect once at most f operators of a committee still run \
+                the SIP-102 timeout.",
+        display_order = 0
+    )]
+    pub legacy_proposer_round_timeout: bool,
+
+    #[clap(
+        long,
         help = "Enable parallel querying and scoring of attestation data across multiple beacon \
                 nodes. When enabled, Anchor queries all configured beacon nodes simultaneously \
                 and selects the attestation data with the highest score based on checkpoint \

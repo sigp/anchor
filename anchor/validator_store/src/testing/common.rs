@@ -21,7 +21,9 @@ use fork::{Fork, ForkSchedule};
 use futures::StreamExt;
 use parking_lot::Mutex;
 use qbft::Completed;
-use qbft_manager::{ConsensusDecider, QbftDecidable, QbftError, TimeoutMode};
+use qbft_manager::{
+    ConsensusDecider, PROPOSER_ROUND_TIMEOUT, QbftDecidable, QbftError, TimeoutMode,
+};
 use signature_collector::{
     CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
     ValidatorSigningData,
@@ -482,6 +484,8 @@ pub(super) struct HarnessOptions {
     /// Proposer delays wired into the store. Both default to zero so most tests assert
     /// timing-free behaviour.
     pub(super) proposer_delays: ProposerDelays,
+    /// Proposer QBFT quick-round timeout wired into the store. Defaults to the SIP-102 value.
+    pub(super) proposer_round_timeout: Duration,
 }
 
 impl Default for HarnessOptions {
@@ -497,6 +501,7 @@ impl Default for HarnessOptions {
             decider: MockConsensusDecider::echoing(),
             active_fork: Fork::Boole,
             proposer_delays: ProposerDelays::default(),
+            proposer_round_timeout: PROPOSER_ROUND_TIMEOUT,
         }
     }
 }
@@ -730,6 +735,7 @@ impl ValidatorStoreTestHarness {
             None,
             false,
             options.proposer_delays,
+            options.proposer_round_timeout,
             false,
             is_synced_rx,
             executor,

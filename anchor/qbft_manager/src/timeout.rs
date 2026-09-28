@@ -8,6 +8,12 @@ const QUICK_TIMEOUT_THRESHOLD: u64 = 8; // Round 8
 const QUICK_TIMEOUT: u64 = 2; // 2 Seconds
 const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 
+/// Proposer quick-round timeout from SIP-102: a 2s round started ~1.1-1.5s into a Gloas slot
+/// would begin round 2 after the 3s attestation deadline.
+pub const PROPOSER_ROUND_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Pre-SIP-102 proposer quick-round timeout, restored by `--legacy-proposer-round-timeout`.
+pub const LEGACY_PROPOSER_ROUND_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Calculate when the current round should timeout.
 ///
 /// For `SlotTime` mode: Cumulative timeout from a fixed origin instant.
@@ -19,7 +25,7 @@ const SLOW_TIMEOUT: u64 = 120; // 2 Minutes
 ///
 /// For `Relative` mode: Single round timeout from the current round's start time.
 ///   The timer resets when the round advances.
-///   Round ends at: current_round_start_time + timeout for this round only.
+///   Round ends at: current_round_start_time + round_timeout for rounds up to 8, then 2 minutes.
 ///   Used for block proposals (matches Go-SSV behavior).
 pub fn calculate_round_timeout(round: u64, timeout_mode: TimeoutMode) -> Option<Instant> {
     match timeout_mode {
@@ -28,7 +34,8 @@ pub fn calculate_round_timeout(round: u64, timeout_mode: TimeoutMode) -> Option<
         } => round_deadline_origin.checked_add(cumulative_timeout(round)?),
         TimeoutMode::Relative {
             current_round_start_time,
-        } => current_round_start_time.checked_add(single_round_timeout(round)),
+            round_timeout,
+        } => current_round_start_time.checked_add(single_round_timeout(round, round_timeout)),
     }
 }
 
@@ -47,9 +54,9 @@ fn cumulative_timeout(round: u64) -> Option<Duration> {
     }
 }
 
-fn single_round_timeout(round: u64) -> Duration {
+fn single_round_timeout(round: u64, round_timeout: Duration) -> Duration {
     if round <= QUICK_TIMEOUT_THRESHOLD {
-        Duration::from_secs(QUICK_TIMEOUT)
+        round_timeout
     } else {
         Duration::from_secs(SLOW_TIMEOUT)
     }
