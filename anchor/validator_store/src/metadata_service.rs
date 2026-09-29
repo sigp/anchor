@@ -5,7 +5,10 @@ use std::{
     time::Duration,
 };
 
-use beacon_node_fallback::{BeaconNodeFallback, beacon_head_monitor::HeadEvent};
+use beacon_node_fallback::{
+    BeaconNodeFallback,
+    beacon_head_monitor::{HeadEvent, head_event_or_deadline},
+};
 use bls::PublicKeyBytes;
 use eth2::{
     BeaconNodeHttpClient,
@@ -27,7 +30,7 @@ use ssv_types::{
 use ssz::Encode;
 use task_executor::TaskExecutor;
 use tokio::{
-    sync::mpsc,
+    sync::broadcast,
     time::{Instant, sleep, sleep_until},
 };
 use tracing::{Instrument, debug, error, info, info_span, trace, warn};
@@ -226,7 +229,7 @@ fn slot_vote_from_attestation_data<E: EthSpec>(
 }
 
 /// The head root a same-slot head event fixed for `slot`, consumed by the SIP-94 same-slot
-/// index check. `wait_for_head_event` matched the event against an earlier clock read, so the
+/// index check. `head_event_or_deadline` matched the event against an earlier clock read, so the
 /// slot is checked again here: an event for the previous slot must not be attached to this
 /// slot's context.
 fn same_slot_head_root(slot: Slot, head_event: Option<&HeadEvent>) -> Option<Hash256> {
@@ -290,31 +293,6 @@ pub struct MetadataService<E: EthSpec, T: SlotClock + 'static> {
     executor: TaskExecutor,
     spec: Arc<ChainSpec>,
     weighted_attestation_data: bool,
-}
-
-/// Wait for a head event matching the current slot reported by `slot_clock`.
-///
-/// Drops events whose slot doesn't match the current slot and keeps waiting.
-/// Resolves to `None` if the channel is closed or `slot_clock.now()` fails.
-async fn wait_for_head_event<T: SlotClock>(
-    receiver: &mut mpsc::Receiver<HeadEvent>,
-    slot_clock: &T,
-) -> Option<HeadEvent> {
-    loop {
-        match receiver.recv().await {
-            Some(head_event) => {
-                let current_slot = slot_clock.now()?;
-                if head_event.slot == current_slot {
-                    return Some(head_event);
-                }
-                // Head event slot doesn't match current; drop and keep waiting.
-            }
-            None => {
-                warn!("Head monitor channel closed unexpectedly");
-                return None;
-            }
-        }
-    }
 }
 
 /// Drive `publish` once per slot, shortly after each slot boundary.
@@ -386,7 +364,7 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
 
     pub fn start_update_service(
         self,
-        mut head_monitor_rx: Option<mpsc::Receiver<HeadEvent>>,
+        mut head_monitor_rx: Option<broadcast::Receiver<HeadEvent>>,
     ) -> Result<(), String> {
         let slot_duration = self.spec.get_slot_duration();
         let duration_to_next_slot = self
@@ -452,16 +430,12 @@ impl<E: EthSpec, T: SlotClock + 'static> MetadataService<E, T> {
                     sleep(duration_to_next_slot).await;
 
                     let fallback = self_clone_phase2.spec.get_attestation_due::<E>(next_slot);
-                    let head_event = match head_monitor_rx.as_mut() {
-                        Some(rx) => tokio::select! {
-                            _ = sleep(fallback) => None,
-                            event = wait_for_head_event(rx, &self_clone_phase2.slot_clock) => event,
-                        },
-                        None => {
-                            sleep(fallback).await;
-                            None
-                        }
-                    };
+                    let head_event = head_event_or_deadline(
+                        &mut head_monitor_rx,
+                        &self_clone_phase2.slot_clock,
+                        fallback,
+                    )
+                    .await;
 
                     let trigger = if head_event.is_some() {
                         metrics::TRIGGER_HEAD_EVENT
@@ -2901,13 +2875,9 @@ mod tests {
     }
 
     use slot_clock::ManualSlotClock;
-    use tokio::time::{Duration as TokioDuration, timeout};
 
     const TEST_SLOT: u64 = 100;
     const SLOT_DURATION_SECS: u64 = 12;
-    const CHANNEL_CAPACITY: usize = 8;
-    const FAST_RESOLVE_TIMEOUT: TokioDuration = TokioDuration::from_secs(1);
-    const TIMER_ARM_DURATION: TokioDuration = TokioDuration::from_millis(50);
 
     fn make_test_slot_clock() -> ManualSlotClock {
         let clock = ManualSlotClock::new(
@@ -2917,10 +2887,6 @@ mod tests {
         );
         clock.set_slot(TEST_SLOT);
         clock
-    }
-
-    fn make_head_event_channel() -> (mpsc::Sender<HeadEvent>, mpsc::Receiver<HeadEvent>) {
-        mpsc::channel(CHANNEL_CAPACITY)
     }
 
     fn make_head_event(slot: u64) -> HeadEvent {
@@ -2960,40 +2926,6 @@ mod tests {
             same_slot_head_root(Slot::new(TEST_SLOT), Some(&event)),
             None
         );
-    }
-
-    // A head event for the current slot should resolve the wait immediately.
-    #[tokio::test(start_paused = true)]
-    async fn wait_for_head_event_returns_matching_slot_event() {
-        let slot_clock = make_test_slot_clock();
-        let (tx, mut rx) = make_head_event_channel();
-        tx.send(make_head_event(TEST_SLOT)).await.unwrap();
-
-        let result = timeout(
-            FAST_RESOLVE_TIMEOUT,
-            wait_for_head_event(&mut rx, &slot_clock),
-        )
-        .await
-        .unwrap();
-
-        let event = result.unwrap();
-        assert_eq!(event.slot, Slot::new(TEST_SLOT));
-    }
-
-    // A stale event (past slot) gets dropped, so the timer arm wins the race.
-    #[tokio::test(start_paused = true)]
-    async fn wait_for_head_event_drops_stale_events() {
-        let slot_clock = make_test_slot_clock();
-        let (tx, mut rx) = make_head_event_channel();
-        tx.send(make_head_event(TEST_SLOT - 1)).await.unwrap();
-
-        let from_head_event = tokio::select! {
-            biased;
-            _ = tokio::time::sleep(TIMER_ARM_DURATION) => false,
-            _ = wait_for_head_event(&mut rx, &slot_clock) => true,
-        };
-
-        assert!(!from_head_event);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════
