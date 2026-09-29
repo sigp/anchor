@@ -50,8 +50,8 @@ use tokio::{
     net::TcpListener,
     select,
     sync::{
-        Mutex,
-        mpsc::{self, error::TrySendError, unbounded_channel},
+        broadcast,
+        mpsc::{self, unbounded_channel},
     },
     time::{Instant, interval, sleep},
 };
@@ -91,7 +91,7 @@ const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
 const HTTP_GET_DEPOSIT_SNAPSHOT_QUOTIENT: u32 = 4;
 const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
-// Mirrors Lighthouse's value at `validator_client/src/lib.rs:75`.
+// Mirrors Lighthouse's `MAX_HEAD_EVENT_QUEUE_LEN` in `validator_client/src/lib.rs`.
 const MAX_HEAD_EVENT_QUEUE_LEN: usize = 1_024;
 
 pub struct Client {}
@@ -380,72 +380,16 @@ impl Client {
 
         // Only the beacon_nodes are used for attestation duties, so proposer_nodes do not need a
         // head_send ref.
-        let (attestation_head_monitor_rx, metadata_head_monitor_rx) =
-            if config.enable_beacon_head_monitor {
-                let (head_event_tx, mut head_event_rx) =
-                    mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
-                let (attestation_service_tx, attestation_service_rx) =
-                    mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
-                let (metadata_service_tx, metadata_service_rx) =
-                    mpsc::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
-                beacon_nodes.set_head_send(Arc::new(head_event_tx));
+        if config.enable_beacon_head_monitor {
+            let (head_monitor_tx, _) = broadcast::channel::<HeadEvent>(MAX_HEAD_EVENT_QUEUE_LEN);
+            beacon_nodes.set_head_send(head_monitor_tx);
+        }
 
-                executor.spawn(
-                    async move {
-                        while let Some(head_event) = head_event_rx.recv().await {
-                            // LH's `HeadEvent` doesn't derive Clone, so rebuild for each
-                            // downstream. All fields are Copy so this is essentially free.
-                            let HeadEvent {
-                                beacon_node_index,
-                                slot,
-                                beacon_block_root,
-                            } = head_event;
-                            let to_attest = HeadEvent {
-                                beacon_node_index,
-                                slot,
-                                beacon_block_root,
-                            };
-                            let to_meta = HeadEvent {
-                                beacon_node_index,
-                                slot,
-                                beacon_block_root,
-                            };
-                            // try_send avoids back-pressuring LH's SSE poll task during
-                            // cold-start when consumers aren't draining yet.
-                            match attestation_service_tx.try_send(to_attest) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(_)) => metrics::inc_counter_vec(
-                                    &metrics::HEAD_EVENT_FANOUT_DROPS,
-                                    &["attestation_service"],
-                                ),
-                                Err(TrySendError::Closed(_)) => {
-                                    warn!("head event fan-out: attestation downstream closed");
-                                    return;
-                                }
-                            }
-                            match metadata_service_tx.try_send(to_meta) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(_)) => metrics::inc_counter_vec(
-                                    &metrics::HEAD_EVENT_FANOUT_DROPS,
-                                    &["metadata_service"],
-                                ),
-                                Err(TrySendError::Closed(_)) => {
-                                    warn!("head event fan-out: metadata downstream closed");
-                                    return;
-                                }
-                            }
-                        }
-                    },
-                    "head_event_fanout",
-                );
-                (
-                    // Mutex required by `AttestationServiceBuilder::head_monitor_rx`'s signature.
-                    Some(Mutex::new(attestation_service_rx)),
-                    Some(metadata_service_rx),
-                )
-            } else {
-                (None, None)
-            };
+        // Subscribe before the head monitor starts so that no events are sent while the
+        // channel has no receivers.
+        let attestation_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
+        let sync_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
+        let metadata_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
 
         let beacon_nodes = Arc::new(beacon_nodes);
         start_fallback_updater_service::<_, E>(executor.clone(), beacon_nodes.clone())?;
@@ -821,6 +765,7 @@ impl Client {
             slot_clock.clone(),
             beacon_nodes.clone(),
             executor.clone(),
+            sync_head_monitor_rx,
         );
 
         if config.with_weighted_attestation_data && num_nodes < 2 {
