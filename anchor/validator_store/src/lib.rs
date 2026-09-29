@@ -4321,8 +4321,10 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> ValidatorStore
         validator_pubkey: PublicKeyBytes,
         data: PayloadAttestationData,
     ) -> Result<PayloadAttestationMessage, Error> {
-        // LH fetched `data` at the 75% slot cutoff and abstained on no-block already, so this
-        // method only signs what it is handed: no beacon node fetch and no slashing protection.
+        // LH fetched `data` either early, from the beacon node that reported the payload available
+        // (only when it matched that block root with payload and blob data both present), or at the
+        // 75% slot cutoff, and abstained on no-block already. So this method only signs what it is
+        // handed: no beacon node fetch and no slashing protection.
         let (validator, cluster) = self.get_validator_and_cluster(validator_pubkey)?;
         // Resolve the beacon index up front: the message needs it anyway, and a missing index
         // must surface as a pre-collection error rather than routing through the

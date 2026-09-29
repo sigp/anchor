@@ -365,6 +365,16 @@ Payload Building Options:
                reduced bandwidth and more predictable usage of the primary
                beacon node (rather than the fastest BN).
 
+         --disable-payload-available-monitor
+               Disable the payload available monitor. This monitor listens for
+               notifications from beacon nodes that a slot's execution payload
+               envelope was imported and, for a payload attestation (PTC) duty,
+               checks that beacon node early: it signs as soon as the node
+               reports the payload present and blob data available. Otherwise
+               signing falls back to the payload attestation deadline (75% of
+               the slot). This monitor is enabled by default and has no effect
+               before the Gloas fork.
+
 Logging Options:
          --logfile-debug-level <LOGFILE_DEBUG_LEVEL>
                Specifies the verbosity level used when emitting logs to the log
