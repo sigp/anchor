@@ -95,6 +95,7 @@ const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 // Mirrors Lighthouse's `MAX_HEAD_EVENT_QUEUE_LEN` in `validator_client/src/lib.rs`.
 const MAX_HEAD_EVENT_QUEUE_LEN: usize = 1_024;
 
+// Mirrors Lighthouse's `MAX_PAYLOAD_AVAILABLE_EVENT_QUEUE_LEN` in `validator_client/src/lib.rs`.
 const MAX_PAYLOAD_AVAILABLE_EVENT_QUEUE_LEN: usize = 1_024;
 
 pub struct Client {}
