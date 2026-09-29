@@ -12,6 +12,7 @@ Use project Make targets by default.
 - `make test` - all tests, release mode (standard)
 - `make test-debug` - all tests, debug mode
 - `make nextest-release` / `make nextest-debug` - nextest runner
+- `make test-spec-tests` / `make nextest-spec-tests` - `spec_tests` with `fake_crypto` (full proposer block coverage)
 - `cargo test -p <crate>` - specific crate
 - `make check-benches` - compile benchmarks without running
 

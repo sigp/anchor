@@ -101,6 +101,26 @@ jobs:
     - name: Show cache stats
       if: env.SELF_HOSTED_RUNNERS == 'true'
       run: sccache --show-stats
+  spec-tests-fake-crypto:
+    name: spec-tests-fake-crypto
+    needs: [check-labels]
+    if: needs.check-labels.outputs.skip_ci != 'true'
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: Get latest version of stable Rust
+      if: env.SELF_HOSTED_RUNNERS == 'false'
+      uses: moonrepo/setup-rust@v1
+      with:
+          cache: false
+          cache-target: release
+          bins: cargo-nextest
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Run spec_tests with fake_crypto
+      run: make nextest-spec-tests
   check-fmt:
     name: check-fmt
     runs-on: ubuntu-22.04
@@ -224,6 +244,7 @@ jobs:
       'check-labels',
       'release-tests-ubuntu',
       'debug-tests-ubuntu',
+      'spec-tests-fake-crypto',
       'check-fmt',
       'check-code',
       'check-msrv',
