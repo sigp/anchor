@@ -149,6 +149,9 @@ pub struct Config {
     pub disable_latency_measurement_service: bool,
     /// Enables the beacon head monitor that reacts to head updates from connected beacon nodes.
     pub enable_beacon_head_monitor: bool,
+    /// Enables the payload available monitor that triggers early payload attestations when a
+    /// connected beacon node reports the slot's execution payload available.
+    pub enable_payload_available_monitor: bool,
     /// Enable operator doppelgänger protection (blocks messages and monitors for twins)
     pub operator_dg: bool,
     /// Number of epochs to monitor for twins after grace period
@@ -205,6 +208,7 @@ impl Config {
             gas_limit: 36_000_000,
             disable_latency_measurement_service: false,
             enable_beacon_head_monitor: true,
+            enable_payload_available_monitor: true,
             operator_dg: false,
             operator_dg_wait_epochs: 2,
             strict_mfp: false,
@@ -387,6 +391,7 @@ pub fn from_cli(mut cli_args: Node, global_config: GlobalConfig) -> Result<Confi
     config.impostor = cli_args.impostor.map(OperatorId);
     config.disable_latency_measurement_service = cli_args.disable_latency_measurement_service;
     config.enable_beacon_head_monitor = !cli_args.disable_beacon_head_monitor;
+    config.enable_payload_available_monitor = !cli_args.disable_payload_available_monitor;
 
     // Operator doppelgänger protection
     config.operator_dg = cli_args.operator_dg;

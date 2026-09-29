@@ -584,6 +584,17 @@ pub struct Node {
 
     #[clap(
         long,
+        help = "Disable the payload available monitor. This monitor listens for notifications from \
+                beacon nodes that a slot's execution payload envelope was imported and, for a \
+                payload attestation (PTC) duty, checks that beacon node early: it signs as soon as \
+                the node reports the payload present and blob data available. Otherwise signing \
+                falls back to the payload attestation deadline (75% of the slot). This monitor is \
+                enabled by default and has no effect before the Gloas fork."
+    )]
+    pub disable_payload_available_monitor: bool,
+
+    #[clap(
+        long,
         help = "Disable slashing protection for all validator clients. DO NOT ENABLE THIS UNLESS YOU HAVE A MORE THAN SUFFICIENT REASON TO",
         hide = true,
         display_order = 0

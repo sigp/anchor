@@ -20,7 +20,8 @@ use anchor_validator_store::{
     registration_service::RegistrationService,
 };
 use beacon_node_fallback::{
-    BeaconNodeFallback, CandidateBeaconNode, beacon_head_monitor::HeadEvent,
+    BeaconNodeFallback, CandidateBeaconNode,
+    beacon_head_monitor::{HeadEvent, PayloadAvailableEvent},
     start_fallback_updater_service,
 };
 use bls::PublicKeyBytes;
@@ -50,7 +51,7 @@ use tokio::{
     net::TcpListener,
     select,
     sync::{
-        broadcast,
+        Mutex, broadcast,
         mpsc::{self, unbounded_channel},
     },
     time::{Instant, interval, sleep},
@@ -93,6 +94,8 @@ const HTTP_GET_VALIDATOR_BLOCK_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_DEFAULT_TIMEOUT_QUOTIENT: u32 = 4;
 // Mirrors Lighthouse's `MAX_HEAD_EVENT_QUEUE_LEN` in `validator_client/src/lib.rs`.
 const MAX_HEAD_EVENT_QUEUE_LEN: usize = 1_024;
+
+const MAX_PAYLOAD_AVAILABLE_EVENT_QUEUE_LEN: usize = 1_024;
 
 pub struct Client {}
 
@@ -390,6 +393,17 @@ impl Client {
         let attestation_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
         let sync_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
         let metadata_head_monitor_rx = beacon_nodes.subscribe_to_head_events();
+
+        // Gate on the same predicate as the payload attestation service below: LH starts the
+        // monitor whenever a Gloas epoch is set, including `FAR_FUTURE`, where the service (and so
+        // this receiver) would never run.
+        let payload_available_rx =
+            (config.enable_payload_available_monitor && spec.is_gloas_scheduled()).then(|| {
+                let (payload_available_tx, payload_available_rx) =
+                    mpsc::channel::<PayloadAvailableEvent>(MAX_PAYLOAD_AVAILABLE_EVENT_QUEUE_LEN);
+                beacon_nodes.set_payload_available_send(Arc::new(payload_available_tx));
+                Mutex::new(payload_available_rx)
+            });
 
         let beacon_nodes = Arc::new(beacon_nodes);
         start_fallback_updater_service::<_, E>(executor.clone(), beacon_nodes.clone())?;
@@ -844,7 +858,7 @@ impl Client {
                 beacon_nodes.clone(),
                 executor.clone(),
                 spec.clone(),
-                None,
+                payload_available_rx,
             )
             .start_update_service()
             .map_err(|e| format!("Unable to start payload attestation service: {e}"))?;
