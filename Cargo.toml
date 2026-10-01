@@ -73,25 +73,25 @@ ssv_types = { path = "anchor/common/ssv_types" }
 subnet_service = { path = "anchor/subnet_service" }
 version = { path = "anchor/common/version" }
 
-# Lighthouse unstable (8b927cedd175ae90670b8e7814cba331fbded0a3)
-beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-bls = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-builder_store = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-builder_types = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-eth2 = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-metrics = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-network_utils = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-task_executor = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-types = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-validator_services = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-validator_store = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
-workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "8b927cedd175ae90670b8e7814cba331fbded0a3" }
+# Lighthouse v8.3.0-rc.0 (4920af726c9999399c7678d4dce9d1f45d0383a1)
+beacon_node_fallback = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+bls = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+builder_store = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+builder_types = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+eth2 = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+eth2_keystore = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+eth2_network_config = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+health_metrics = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+metrics = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+network_utils = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+slashing_protection = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+slot_clock = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+task_executor = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+types = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+validator_metrics = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+validator_services = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+validator_store = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
+workspace_members = { git = "https://github.com/sigp/lighthouse", rev = "4920af726c9999399c7678d4dce9d1f45d0383a1" }
 
 alloy = { version = "1.2.1", features = [
     "sol-types",
@@ -188,12 +188,12 @@ zeroize = "1.8.1"
 # effect from the root workspace, so Lighthouse's copy is inert here and these must
 # be kept in sync with it or the `types` crate will not compile.
 # FIXME(eip-7688): EIP-7688 development patches
-ssz_types = { git = "https://github.com/sigp/ssz_types", rev = "9203d56ad2d7bc5f12133d043e085843f81edcd6" }
-milhouse = { git = "https://github.com/sigp/milhouse", rev = "c70f128976ac0d60ea65a978dabd117a921c36ee" }
-ethereum_ssz = { git = "https://github.com/sigp/ethereum_ssz", rev = "2059c21ba52cd3a7e39a8ad537012b761812a393" }
-ethereum_ssz_derive = { git = "https://github.com/sigp/ethereum_ssz", rev = "2059c21ba52cd3a7e39a8ad537012b761812a393" }
-tree_hash = { git = "https://github.com/sigp/tree_hash", rev = "03d9fa474586c125f306dd7a00cf46284575a01f" }
-tree_hash_derive = { git = "https://github.com/sigp/tree_hash", rev = "03d9fa474586c125f306dd7a00cf46284575a01f" }
+ssz_types = { git = "https://github.com/sigp/ssz_types", rev = "8955d22edc7633f26fe3b5ac933facb5121d717a" }
+milhouse = { git = "https://github.com/sigp/milhouse", rev = "d67aabd2a7c405b3c16f4aaff159b137dc5b5e38" }
+ethereum_ssz = { git = "https://github.com/sigp/ethereum_ssz", rev = "974f78f421fbf70cba4e8f84e0fa28c23ad54f34" }
+ethereum_ssz_derive = { git = "https://github.com/sigp/ethereum_ssz", rev = "974f78f421fbf70cba4e8f84e0fa28c23ad54f34" }
+tree_hash = { git = "https://github.com/sigp/tree_hash", rev = "e5ea1875edddf12438506c3751cbb313f9c52d08" }
+tree_hash_derive = { git = "https://github.com/sigp/tree_hash", rev = "e5ea1875edddf12438506c3751cbb313f9c52d08" }
 
 libp2p = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
 libp2p-core = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
