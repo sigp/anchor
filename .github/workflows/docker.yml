@@ -47,7 +47,7 @@ jobs:
             VERSION_SUFFIX: ${{ needs.extract-version.outputs.VERSION_SUFFIX }}
         steps:
             - name: Checkout sources
-              uses: actions/checkout@v6
+              uses: actions/checkout@v7
 
             - name: Dockerhub login
               run: |
