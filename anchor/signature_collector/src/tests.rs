@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc, Condvar, LazyLock, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
@@ -26,7 +26,7 @@ use ssv_types::{
 use ssz::Decode;
 use task_executor::test_utils::TestRuntime;
 use tokio::sync::{Mutex, oneshot};
-use types::{Graffiti, SyncSubnetId};
+use types::{Epoch, Graffiti, SyncSubnetId};
 
 use super::*;
 
@@ -40,6 +40,409 @@ const BATCH_TEST_SLOT: Slot = Slot::new(64);
 const SLOTS_PER_EPOCH: u64 = 32;
 
 static METRIC_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+// ==================== Boole committee selection ====================
+
+/// Distinct Alan and Boole domains, so a message ID shows which fork's domain it was built with.
+const ALAN_DOMAIN: DomainType = DomainType([0x00, 0x00, 0x31, 0x12]);
+const BOOLE_DOMAIN: DomainType = DomainType([0x00, 0x00, 0x31, 0x13]);
+const SELECTION_COMMITTEE: CommitteeId = CommitteeId([0x07; 32]);
+
+/// A Boole schedule: Alan and Boole both active from genesis, with distinct domains.
+fn boole_fork_schedule() -> Arc<ForkSchedule> {
+    Arc::new(
+        ForkSchedule::from_fork_configs(
+            BTreeMap::from([
+                (Fork::Alan, (Epoch::new(0), ALAN_DOMAIN)),
+                (Fork::Boole, (Epoch::new(0), BOOLE_DOMAIN)),
+            ]),
+            "test",
+        )
+        .expect("the test fork schedule is valid"),
+    )
+}
+
+fn selection_scenario(sender: Arc<dyn MessageSender>) -> BatchScenario {
+    BatchScenario::new_with_max_workers_and_fork_schedule(sender, 4, boole_fork_schedule())
+}
+
+/// Selection entries for two validators with independent keys, deliberately out of order:
+/// validator 10 signs root 1 with the scenario's share, and validator 20 roots 2 and 3 with its
+/// own key's share, which is returned alongside.
+fn unordered_selection_entries(scenario: &BatchScenario) -> (Vec<ValidatorSigningData>, SecretKey) {
+    let sibling = split_random_master();
+    let sibling_pubkey = sibling.master.public_key().compress();
+    let sibling_share = sibling.shares[0].1.clone();
+    let entry = |root, index, validator_pubkey, share: &SecretKey| ValidatorSigningData {
+        root: Hash256::repeat_byte(root),
+        index: ValidatorIndex(index),
+        validator_pubkey,
+        share: Some(share.clone()),
+    };
+    (
+        vec![
+            entry(3, 20, sibling_pubkey, &sibling_share),
+            entry(1, 10, scenario.validator_pubkey, &scenario.validator_key),
+            entry(2, 20, sibling_pubkey, &sibling_share),
+        ],
+        sibling_share,
+    )
+}
+
+fn selection_batch(entries: Vec<ValidatorSigningData>) -> Arc<CommitteeSelectionBatch> {
+    Arc::new(
+        CommitteeSelectionBatch::new(BATCH_TEST_SLOT, SELECTION_COMMITTEE, entries)
+            .expect("the test selection batch is valid"),
+    )
+}
+
+/// Signing a batch signs each entry with its own validator's share into one Boole committee
+/// message, in ascending (validator index, root) order whatever order the entries came in, and
+/// sends nothing.
+#[tokio::test]
+async fn sign_committee_selection_signs_each_entry_with_its_validators_share() {
+    // Arrange
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = selection_scenario(sender.clone());
+    let (entries, sibling_share) = unordered_selection_entries(&scenario);
+    let expected = [
+        (
+            ValidatorIndex(10),
+            Hash256::repeat_byte(1),
+            &scenario.validator_key,
+        ),
+        (ValidatorIndex(20), Hash256::repeat_byte(2), &sibling_share),
+        (ValidatorIndex(20), Hash256::repeat_byte(3), &sibling_share),
+    ];
+
+    // Act
+    let message = scenario
+        .manager
+        .sign_committee_selection(selection_batch(entries))
+        .await
+        .expect("signing the batch succeeds");
+
+    // Assert
+    assert!(message.full_data.is_empty());
+    assert_eq!(
+        message.ssv_message.msg_type(),
+        &MsgType::SSVPartialSignatureMsgType
+    );
+    assert_eq!(
+        message.ssv_message.msg_id(),
+        &MessageId::new(
+            &BOOLE_DOMAIN,
+            Role::AggregatorCommittee,
+            &DutyExecutor::Committee(SELECTION_COMMITTEE),
+        )
+    );
+    let signed = PartialSignatureMessages::from_ssz_bytes(message.ssv_message.data())
+        .expect("the committee message decodes");
+    assert_eq!(
+        signed.kind,
+        PartialSignatureKind::AggregatorCommitteePartialSig
+    );
+    assert_eq!(signed.slot, BATCH_TEST_SLOT);
+    assert_eq!(signed.messages.len(), expected.len());
+    for (message, (index, root, share)) in signed.messages.iter().zip(expected) {
+        assert_eq!(message.validator_index, index);
+        assert_eq!(message.signing_root, root);
+        assert_eq!(message.signer, TEST_OPERATOR_ID);
+        assert_eq!(message.partial_signature, share.sign(root));
+    }
+    drain_batch_processor_work(&scenario.manager).await;
+    assert_eq!(sender.attempts(), 0, "signing never sends");
+}
+
+/// Without shares (impostor mode) the committee message keeps its shape, with empty signatures.
+#[tokio::test]
+async fn sign_committee_selection_without_shares_keeps_the_shape_with_empty_signatures() {
+    // Arrange
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = selection_scenario(sender.clone());
+    let (entries, _) = unordered_selection_entries(&scenario);
+    let entries = entries
+        .into_iter()
+        .map(|entry| ValidatorSigningData {
+            share: None,
+            ..entry
+        })
+        .collect();
+
+    // Act
+    let message = scenario
+        .manager
+        .sign_committee_selection(selection_batch(entries))
+        .await
+        .expect("signing the batch succeeds");
+
+    // Assert
+    let signed = PartialSignatureMessages::from_ssz_bytes(message.ssv_message.data())
+        .expect("the committee message decodes");
+    assert_eq!(
+        signed
+            .messages
+            .iter()
+            .map(|message| (message.validator_index, message.signing_root))
+            .collect::<Vec<_>>(),
+        vec![
+            (ValidatorIndex(10), Hash256::repeat_byte(1)),
+            (ValidatorIndex(20), Hash256::repeat_byte(2)),
+            (ValidatorIndex(20), Hash256::repeat_byte(3)),
+        ]
+    );
+    assert!(signed.messages.iter().all(|message| {
+        message.partial_signature == Signature::empty() && message.signer == TEST_OPERATOR_ID
+    }));
+    drain_batch_processor_work(&scenario.manager).await;
+    assert_eq!(sender.attempts(), 0, "signing never sends");
+}
+
+/// Fails the first send attempt with `NotSynced` and admits the rest, recording what each attempt
+/// was handed.
+#[derive(Default)]
+struct FlakyCommitteeSender {
+    attempts: StdMutex<Vec<(Vec<u8>, CommitteeId)>>,
+}
+
+impl MessageSender for FlakyCommitteeSender {
+    fn sign_and_send(
+        &self,
+        message: UnsignedSSVMessage,
+        committee_id: CommitteeId,
+        _additional_message_callback: Option<Box<dyn FnOnce(&SignedSSVMessage) + Send + 'static>>,
+    ) -> Result<(), MessageSenderError> {
+        let mut attempts = self
+            .attempts
+            .lock()
+            .expect("attempt capture lock should not be poisoned");
+        attempts.push((message.as_ssz_bytes(), committee_id));
+        if attempts.len() == 1 {
+            Err(MessageSenderError::NotSynced)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn send(
+        &self,
+        _message: SignedSSVMessage,
+        _committee_id: CommitteeId,
+    ) -> Result<(), MessageSenderError> {
+        Ok(())
+    }
+}
+
+/// `send_committee_message` hands the message and committee to the sender unchanged and returns
+/// the sender's result, error or success.
+#[tokio::test]
+async fn send_committee_message_passes_the_senders_result_through() {
+    // Arrange
+    let sender = Arc::new(FlakyCommitteeSender::default());
+    let scenario = selection_scenario(sender.clone());
+    let (entries, _) = unordered_selection_entries(&scenario);
+    let message = scenario
+        .manager
+        .sign_committee_selection(selection_batch(entries))
+        .await
+        .expect("signing the batch succeeds");
+
+    // Act
+    let first = scenario
+        .manager
+        .send_committee_message(message.clone(), SELECTION_COMMITTEE);
+    let second = scenario
+        .manager
+        .send_committee_message(message.clone(), SELECTION_COMMITTEE);
+
+    // Assert
+    assert!(matches!(first, Err(MessageSenderError::NotSynced)));
+    assert!(second.is_ok());
+    assert_eq!(
+        *sender
+            .attempts
+            .lock()
+            .expect("attempt capture lock should not be poisoned"),
+        vec![(message.as_ssz_bytes(), SELECTION_COMMITTEE); 2]
+    );
+}
+
+/// A `LocalOnly` request never sends. It injects this operator's share, which together with the
+/// two peer shares reaches the threshold of three, whether the peers arrive before or after the
+/// request registers.
+#[tokio::test]
+async fn local_only_injects_own_share_and_reconstructs_without_sending() {
+    // Arrange
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = selection_scenario(sender.clone());
+    let validator_index = ValidatorIndex(10);
+    let signing_data = |root| ValidatorSigningData {
+        root,
+        index: validator_index,
+        validator_pubkey: scenario.validator_pubkey,
+        share: Some(scenario.validator_key.clone()),
+    };
+    let peers_first_root = Hash256::repeat_byte(0x41);
+    let request_first_root = Hash256::repeat_byte(0x42);
+
+    // Act and assert: the peer shares are buffered before the request registers.
+    scenario.seed_remote_shares(peers_first_root, validator_index);
+    let signature = tokio::time::timeout(
+        Duration::from_secs(5),
+        scenario.manager.sign_and_collect(
+            scenario.metadata.clone(),
+            SignatureRequester::LocalOnly,
+            signing_data(peers_first_root),
+        ),
+    )
+    .await
+    .expect("the request resolves promptly")
+    .expect("the signature is reconstructed");
+    assert_eq!(*signature, scenario.validator_master.sign(peers_first_root));
+
+    // Act and assert: the request registers and injects its share before the peers arrive.
+    let manager = Arc::clone(&scenario.manager);
+    let metadata = scenario.metadata.clone();
+    let request = signing_data(request_first_root);
+    let pending = tokio::spawn(async move {
+        manager
+            .sign_and_collect(metadata, SignatureRequester::LocalOnly, request)
+            .await
+    });
+    wait_until(|| {
+        scenario
+            .manager
+            .signature_collectors
+            .contains_key(&(request_first_root, validator_index))
+    })
+    .await;
+    drain_batch_processor_work(&scenario.manager).await;
+    assert!(
+        !pending.is_finished(),
+        "this operator's share alone is below the threshold"
+    );
+    scenario.seed_remote_shares(request_first_root, validator_index);
+    let signature = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .expect("the request resolves promptly")
+        .expect("the request task completes")
+        .expect("the signature is reconstructed");
+    assert_eq!(
+        *signature,
+        scenario.validator_master.sign(request_first_root)
+    );
+
+    drain_batch_processor_work(&scenario.manager).await;
+    assert_eq!(sender.attempts(), 0, "a LocalOnly request never sends");
+}
+
+/// Without a known operator ID there is no signer, so signing a batch fails before signing or
+/// sending anything.
+#[tokio::test]
+async fn sign_committee_selection_without_own_operator_id_fails() {
+    // Arrange: a database without this operator, so its ID stays unknown.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let runtime = TestRuntime::default();
+    let processor = spawn_processor(ProcessorConfig::default(), runtime.task_executor.clone());
+    let database = Arc::new(
+        NetworkDatabase::new_in_memory(&generators::pubkey::random_rsa(), TEST_NETWORK)
+            .expect("in-memory database should open"),
+    );
+    let operator_id = OwnOperatorId::new(database.watch());
+    assert_eq!(operator_id.get(), None);
+    let manager = SignatureCollectorManager::new(
+        processor,
+        operator_id,
+        database,
+        boole_fork_schedule(),
+        SLOTS_PER_EPOCH,
+        sender.clone(),
+        ManualSlotClock::new(Slot::new(0), Duration::ZERO, Duration::from_secs(12)),
+    )
+    .expect("manager should be created");
+    let batch = selection_batch(vec![ValidatorSigningData {
+        root: SIGNING_ROOT,
+        index: ValidatorIndex(10),
+        validator_pubkey: SecretKey::random().public_key().compress(),
+        share: Some(SecretKey::random()),
+    }]);
+
+    // Act
+    let result = manager.sign_committee_selection(batch).await;
+
+    // Assert
+    assert!(matches!(result, Err(CollectionError::OwnOperatorIdUnknown)));
+    assert_eq!(sender.attempts(), 0);
+}
+
+/// `count` entries for distinct validators, each with its own index and pubkey and one root, so
+/// no identity check rejects them. The pubkeys are unvalidated bytes, as the batch never
+/// decompresses them.
+fn distinct_selection_entries(count: usize) -> Vec<ValidatorSigningData> {
+    (0..count)
+        .map(|position| {
+            let mut pubkey = [0; 48];
+            pubkey[..8].copy_from_slice(&(position as u64).to_le_bytes());
+            ValidatorSigningData {
+                root: Hash256::repeat_byte(1),
+                index: ValidatorIndex(position),
+                validator_pubkey: PublicKeyBytes::deserialize(&pubkey).expect("valid length"),
+                share: None,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn committee_selection_batch_checks_bounds_and_identity() {
+    let entry = ValidatorSigningData {
+        root: Hash256::repeat_byte(1),
+        index: ValidatorIndex(10),
+        validator_pubkey: SecretKey::random().public_key().compress(),
+        share: None,
+    };
+    let build =
+        |entries| CommitteeSelectionBatch::new(BATCH_TEST_SLOT, CommitteeId::default(), entries);
+    assert!(build(Vec::new()).is_err());
+    assert!(build(vec![entry.clone(), entry.clone()]).is_err());
+    // Only the envelope length bound separates these two.
+    let max_entries = PartialSignatureMessagesLen::USIZE;
+    assert_eq!(
+        build(distinct_selection_entries(max_entries))
+            .unwrap()
+            .signing_data()
+            .len(),
+        max_entries
+    );
+    assert!(build(distinct_selection_entries(max_entries + 1)).is_err());
+    for count in [1, 5] {
+        let entries = (1..=count)
+            .map(|root| ValidatorSigningData {
+                root: Hash256::repeat_byte(root),
+                ..entry.clone()
+            })
+            .collect();
+        assert_eq!(build(entries).unwrap().signing_data().len(), count as usize);
+    }
+    let six = (1..=6)
+        .map(|root| ValidatorSigningData {
+            root: Hash256::repeat_byte(root),
+            ..entry.clone()
+        })
+        .collect();
+    assert!(build(six).is_err());
+    let other_pubkey = ValidatorSigningData {
+        root: Hash256::repeat_byte(2),
+        validator_pubkey: SecretKey::random().public_key().compress(),
+        ..entry.clone()
+    };
+    assert!(build(vec![entry.clone(), other_pubkey]).is_err());
+    let other_index = ValidatorSigningData {
+        index: ValidatorIndex(11),
+        ..entry.clone()
+    };
+    assert!(build(vec![entry, other_index]).is_err());
+}
 
 struct TestKeys {
     master: SecretKey,
@@ -335,6 +738,15 @@ impl BatchScenario {
     }
 
     fn new_with_max_workers(message_sender: Arc<dyn MessageSender>, max_workers: usize) -> Self {
+        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
+        Self::new_with_max_workers_and_fork_schedule(message_sender, max_workers, fork_schedule)
+    }
+
+    fn new_with_max_workers_and_fork_schedule(
+        message_sender: Arc<dyn MessageSender>,
+        max_workers: usize,
+        fork_schedule: Arc<ForkSchedule>,
+    ) -> Self {
         let runtime = TestRuntime::default();
         let processor = spawn_processor(
             ProcessorConfig {
@@ -348,7 +760,6 @@ impl BatchScenario {
             NetworkDatabase::new_in_memory(&rsa_pubkey, TEST_NETWORK)
                 .expect("in-memory database should open"),
         );
-        let fork_schedule = Arc::new(ForkSchedule::new(Fork::Alan, DomainType::default(), "test"));
         let slot_clock = ManualSlotClock::new(
             Slot::new(0),
             Duration::from_secs(0),

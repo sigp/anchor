@@ -270,8 +270,10 @@ async fn pre_boole_accepts_exactly_thirteen_positions() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn boole_keeps_committee_mode_and_counts_unique_subnets() {
+/// At Boole the callback only signs locally, and the committee batch the slot pipeline sends has
+/// one entry per distinct subnet, not per position.
+#[tokio::test(start_paused = true)]
+async fn boole_signs_locally_and_batches_unique_subnets() {
     let harness = harness_with_fork(Fork::Boole);
     let validator = harness.validator_metadata(COMMITTEE_INDEX, VALIDATOR_INDEX);
     let validator_index = validator
@@ -291,13 +293,27 @@ async fn boole_keeps_committee_mode_and_counts_unique_subnets() {
         .produce_sync_selection_proof(&validator.public_key, Slot::new(TEST_SLOT), subnet)
         .await
         .expect("Boole sync selection proof should be produced");
+    run_past_selection_deadline().await;
 
     let captured = harness.captured_calls.lock();
+    assert_eq!(captured.len(), 1);
     assert!(matches!(
-        &captured[0].requester,
-        SignatureRequester::Committee {
-            validator_partial_signature_batch_size: 2,
-            ..
-        }
+        captured[0].requester,
+        SignatureRequester::LocalOnly
     ));
+    let batches = harness.committee_selection.signed_batches();
+    assert_eq!(batches.len(), 1);
+    let mut roots = batches[0]
+        .signing_data()
+        .iter()
+        .map(|entry| entry.root)
+        .collect::<Vec<_>>();
+    roots.sort_unstable();
+    let mut expected = [0, 1].map(|subnet| {
+        harness
+            .validator_store
+            .compute_sync_selection_root(Slot::new(TEST_SLOT), subnet)
+    });
+    expected.sort_unstable();
+    assert_eq!(roots, expected);
 }
