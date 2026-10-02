@@ -124,6 +124,9 @@ pub struct QbftInitialization<D: QbftData> {
     config: qbft::Config<DefaultLeaderFunction>,
     /// The channel to send the final result to.
     on_completed: oneshot::Sender<Completed<D>>,
+    /// Pre-computed handoff budget in milliseconds (slot_duration_ms - slot_elapsed_ms).
+    /// Set by the proposer caller; `None` for non-proposer instances.
+    handoff_budget_ms: Option<u64>,
 }
 
 // Map from an identifier to a sender for the instance
@@ -150,6 +153,19 @@ pub struct QbftManager<E: EthSpec, S: SlotClock> {
     fork_schedule: Arc<ForkSchedule>,
     // Slot clock for determining the current epoch
     slot_clock: S,
+}
+
+/// Compute how much slot time remains for `duty_slot` at the current instant.
+///
+/// Returns `(start_of(duty_slot) + slot_duration) − now`, saturating to 0. Anchoring on the
+/// duty slot's own boundary (rather than the current slot) keeps the budget correct even when
+/// the proposer starts consensus late, past the end of the duty slot.
+///
+/// Returns `None` when the slot clock cannot determine the required times.
+fn compute_handoff_budget_ms<S: SlotClock>(slot_clock: &S, duty_slot: Slot) -> Option<u64> {
+    let slot_end = slot_clock.start_of(duty_slot)? + slot_clock.slot_duration();
+    let now = slot_clock.now_duration()?;
+    Some(slot_end.saturating_sub(now).as_millis() as u64)
 }
 
 impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
@@ -231,6 +247,16 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
             )
             .build()?;
 
+        // The handoff budget only applies to proposer instances, where remaining slot time
+        // bounds how long block-value collection may run. It is computed here, where the duty
+        // slot (`instance_height`) and role are both in scope.
+        let handoff_budget_ms = if message_id.role() == Some(Role::Proposer) {
+            let duty_slot = Slot::new(*instance_height as u64);
+            compute_handoff_budget_ms(&self.slot_clock, duty_slot)
+        } else {
+            None
+        };
+
         // Get or spawn a new qbft instance. This will return the sender that we can use to send
         // new messages to the specific instance
         let sender = D::get_or_spawn_instance(self, id);
@@ -245,6 +271,7 @@ impl<E: EthSpec, S: SlotClock + Clone + 'static> QbftManager<E, S> {
                         timeout_mode,
                         config,
                         on_completed: result_sender,
+                        handoff_budget_ms,
                     }),
                     drop_on_finish: Some(drop_on_finish),
                 });
@@ -535,5 +562,105 @@ impl From<RecvError> for QbftError {
 impl From<ConfigBuilderError> for QbftError {
     fn from(value: ConfigBuilderError) -> Self {
         QbftError::ConfigBuilderError(value)
+    }
+}
+
+#[cfg(test)]
+mod handoff_budget_tests {
+    use std::time::Duration;
+
+    use slot_clock::{ManualSlotClock, SlotClock};
+    use types::Slot;
+
+    use super::compute_handoff_budget_ms;
+
+    // Slot duration used across the timing scenarios below (mainnet-like 12s slots).
+    const SLOT_DURATION_SECS: u64 = 12;
+
+    /// Builds a `ManualSlotClock` with genesis slot 0 and pins its current time.
+    ///
+    /// `current_secs` is the absolute time (from the UNIX epoch) reported by
+    /// `now_duration`, letting each test place "now" precisely within a slot.
+    fn clock_at(genesis_secs: u64, slot_duration_secs: u64, current_secs: u64) -> ManualSlotClock {
+        let clock = ManualSlotClock::new(
+            Slot::new(0),
+            Duration::from_secs(genesis_secs),
+            Duration::from_secs(slot_duration_secs),
+        );
+        clock.set_current_time(Duration::from_secs(current_secs));
+        clock
+    }
+
+    #[test]
+    fn full_budget_at_slot_start() {
+        // Arrange: genesis at 0s means slot 1 starts at 12s; place "now" exactly
+        // at that boundary so the entire slot still lies ahead.
+        let clock = clock_at(0, SLOT_DURATION_SECS, 12);
+
+        // Act
+        let budget = compute_handoff_budget_ms(&clock, Slot::new(1));
+
+        // Assert: standing at the slot start leaves the full 12s slot as budget.
+        assert_eq!(
+            budget,
+            Some(12_000),
+            "at the start of the duty slot the full slot duration should remain"
+        );
+    }
+
+    #[test]
+    fn partial_elapsed() {
+        // Arrange: slot 1 starts at 12s; "now" at 15s means 3s have elapsed.
+        let clock = clock_at(0, SLOT_DURATION_SECS, 15);
+
+        // Act
+        let budget = compute_handoff_budget_ms(&clock, Slot::new(1));
+
+        // Assert: 12s slot minus 3s elapsed leaves 9s of budget.
+        assert_eq!(
+            budget,
+            Some(9_000),
+            "budget should be the slot duration minus the elapsed time within the slot"
+        );
+    }
+
+    #[test]
+    fn saturates_to_zero_past_slot_end() {
+        // Arrange: slot 1 spans 12s..24s; "now" at 25s is 1s past the slot's end.
+        //
+        // This is the late-start case: the proposer only begins consensus after the
+        // duty slot has already elapsed. Because the budget is anchored on the duty
+        // slot's own boundary (24s) rather than the current slot, it must saturate to
+        // zero. The original modulo-based computation anchored on the current slot and
+        // would have reported a non-zero budget here, so this scenario guards against
+        // that regression.
+        let clock = clock_at(0, SLOT_DURATION_SECS, 25);
+
+        // Act
+        let budget = compute_handoff_budget_ms(&clock, Slot::new(1));
+
+        // Assert: past the duty slot's end there is no budget left.
+        assert_eq!(
+            budget,
+            Some(0),
+            "starting after the duty slot has ended must saturate the budget to zero"
+        );
+    }
+
+    #[test]
+    fn returns_none_on_overflow() {
+        // Arrange: a normally-configured clock. `start_of` converts the slot offset
+        // into a u32 (Duration::checked_mul takes a u32), so `u64::MAX` overflows that
+        // conversion and cannot yield a start time.
+        let clock = clock_at(0, SLOT_DURATION_SECS, 12);
+
+        // Act
+        let budget = compute_handoff_budget_ms(&clock, Slot::new(u64::MAX));
+
+        // Assert: an undeterminable slot start propagates as `None`.
+        assert_eq!(
+            budget, None,
+            "an overflowing slot must yield None because the slot start cannot be determined"
+        );
     }
 }
