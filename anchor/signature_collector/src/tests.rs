@@ -600,6 +600,405 @@ async fn register_manager_notifier(
         .expect("collector should remain active")
 }
 
+// ==================== Committee send-once tests ====================
+
+fn committee_metadata(scenario: &BatchScenario) -> SignatureMetadata {
+    SignatureMetadata {
+        kind: PartialSignatureKind::PostConsensus,
+        role: Role::Committee,
+        ..scenario.metadata.clone()
+    }
+}
+
+fn committee_request(batch_size: usize, base_hash: Hash256) -> SignatureRequester {
+    SignatureRequester::Committee {
+        validator_partial_signature_batch_size: batch_size,
+        base_hash,
+    }
+}
+
+fn committee_signing_data(
+    scenario: &BatchScenario,
+    root: Hash256,
+    index: usize,
+) -> ValidatorSigningData {
+    ValidatorSigningData {
+        root,
+        index: ValidatorIndex(index),
+        validator_pubkey: scenario.validator_pubkey,
+        share: Some(scenario.validator_key.clone()),
+    }
+}
+
+async fn collect_committee_signature(
+    scenario: &BatchScenario,
+    metadata: SignatureMetadata,
+    requester: SignatureRequester,
+    signing_data: ValidatorSigningData,
+) -> Arc<Signature> {
+    for (operator_id, share) in &scenario.remote_shares {
+        scenario
+            .manager
+            .receive_partial_signature(
+                PartialSignatureMessage {
+                    partial_signature: share.sign(signing_data.root),
+                    signing_root: signing_data.root,
+                    signer: *operator_id,
+                    validator_index: signing_data.index,
+                },
+                metadata.slot,
+            )
+            .expect("remote share should enter the processor");
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        scenario
+            .manager
+            .sign_and_collect(metadata, requester, signing_data),
+    )
+    .await
+    .expect("committee callback should reconstruct promptly")
+    .expect("committee callback should collect a signature")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn committee_post_consensus_surplus_and_different_decided_values_send_once() {
+    // Arrange: callbacks from several decided values still share one committee slot.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let metadata = committee_metadata(&scenario);
+    let first_hash = Hash256::repeat_byte(0x80);
+    let second_hash = Hash256::repeat_byte(0x81);
+
+    // Act: complete the first batch, then supply enough surplus callbacks for more batches.
+    for (index, hash) in [
+        first_hash,
+        first_hash,
+        first_hash,
+        first_hash,
+        second_hash,
+        second_hash,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        collect_committee_signature(
+            &scenario,
+            metadata.clone(),
+            committee_request(2, hash),
+            committee_signing_data(&scenario, SIGNING_ROOT, index),
+        )
+        .await;
+    }
+
+    // Assert: the retained terminal record suppresses every later send attempt.
+    assert_eq!(
+        sender.attempts(),
+        1,
+        "one committee slot must consume only one send attempt"
+    );
+    let sent = sender.messages();
+    assert_eq!(sent.len(), 1);
+    let messages = PartialSignatureMessages::from_ssz_bytes(sent[0].ssv_message.data())
+        .expect("committee batch should decode");
+    assert_eq!(messages.slot, metadata.slot);
+    assert_eq!(messages.kind, PartialSignatureKind::PostConsensus);
+    assert_eq!(messages.messages.len(), 2);
+    assert_eq!(
+        sent[0].ssv_message.msg_id(),
+        &MessageId::new(
+            &DomainType::default(),
+            Role::Committee,
+            &DutyExecutor::Committee(metadata.committee_id),
+        )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn committee_post_consensus_concurrent_callbacks_send_once() {
+    // Arrange: hold the first send while a second callback is queued for the same slot.
+    let (sender, entered) = BlockingMessageSender::new();
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let metadata = committee_metadata(&scenario);
+    let mut first = Box::pin(collect_committee_signature(
+        &scenario,
+        metadata.clone(),
+        committee_request(1, SIGNING_ROOT),
+        committee_signing_data(&scenario, SIGNING_ROOT, 0),
+    ));
+    let mut second = Box::pin(collect_committee_signature(
+        &scenario,
+        metadata,
+        committee_request(1, SIGNING_ROOT),
+        committee_signing_data(&scenario, SIGNING_ROOT, 1),
+    ));
+
+    // Act: explicitly poll both callers while the first synchronous admission is in flight.
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(first.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(5)))
+        .await
+        .expect("sender wait should not panic")
+        .expect("first callback should reach the sender");
+    let second_poll =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(second.as_mut().poll(cx))).await;
+    sender.release();
+    let first_signature = first.await;
+    let second_signature = match second_poll {
+        std::task::Poll::Ready(signature) => signature,
+        std::task::Poll::Pending => second.await,
+    };
+    assert_eq!(first_signature, second_signature);
+
+    // Assert: concurrent arrivals consume the same terminal attempt.
+    assert_eq!(sender.attempts(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn committee_post_consensus_underfilled_slots_and_committees_are_independent() {
+    // Arrange: reuse one decided hash across adjacent slots and a separate committee.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let first = committee_metadata(&scenario);
+    let mut next_slot = first.clone();
+    next_slot.slot += 1;
+    let mut other_committee = first.clone();
+    other_committee.committee_id = CommitteeId([0x82; 32]);
+    let batches = [first, next_slot, other_committee];
+
+    // Act: every batch remains underfilled after its first callback.
+    for (index, metadata) in batches.iter().enumerate() {
+        collect_committee_signature(
+            &scenario,
+            metadata.clone(),
+            committee_request(2, SIGNING_ROOT),
+            committee_signing_data(&scenario, SIGNING_ROOT, index * 2),
+        )
+        .await;
+    }
+    assert_eq!(
+        sender.attempts(),
+        0,
+        "different slots must not fill each other's batch"
+    );
+    for (index, metadata) in batches.iter().enumerate() {
+        collect_committee_signature(
+            &scenario,
+            metadata.clone(),
+            committee_request(2, SIGNING_ROOT),
+            committee_signing_data(&scenario, SIGNING_ROOT, index * 2 + 1),
+        )
+        .await;
+    }
+
+    // Assert: each independent batch sends its own slot, committee ID, and validator pair.
+    assert_eq!(sender.attempts(), batches.len());
+    for (index, (sent, metadata)) in sender.messages().iter().zip(&batches).enumerate() {
+        let messages = PartialSignatureMessages::from_ssz_bytes(sent.ssv_message.data())
+            .expect("batch should decode");
+        assert_eq!(messages.slot, metadata.slot);
+        assert_eq!(
+            messages
+                .messages
+                .iter()
+                .map(|message| message.validator_index)
+                .collect::<Vec<_>>(),
+            vec![ValidatorIndex(index * 2), ValidatorIndex(index * 2 + 1)]
+        );
+        assert_eq!(
+            sent.ssv_message.msg_id(),
+            &MessageId::new(
+                &DomainType::default(),
+                Role::Committee,
+                &DutyExecutor::Committee(metadata.committee_id)
+            )
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn committee_post_consensus_failed_send_consumes_attempt() {
+    // Arrange: fail admission synchronously before any message is recorded.
+    let sender = Arc::new(RecordingMessageSender::new(1));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let metadata = committee_metadata(&scenario);
+
+    // Act: later callbacks still reconstruct, including one with a different decided hash.
+    for (index, hash) in [SIGNING_ROOT, SIGNING_ROOT, WRONG_ROOT]
+        .into_iter()
+        .enumerate()
+    {
+        let signature = collect_committee_signature(
+            &scenario,
+            metadata.clone(),
+            committee_request(1, hash),
+            committee_signing_data(&scenario, SIGNING_ROOT, index),
+        )
+        .await;
+        assert_eq!(
+            signature.as_ref(),
+            &scenario.validator_master.sign(SIGNING_ROOT)
+        );
+    }
+
+    // Assert: synchronous failure is terminal for the committee slot.
+    assert_eq!(sender.attempts(), 1);
+    assert!(sender.messages().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn committee_requester_other_roles_and_kinds_keep_decided_value_batches() {
+    // Arrange: both the role and kind must match before slot-level suppression applies.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario = BatchScenario::new(Arc::clone(&sender) as Arc<dyn MessageSender>);
+    let cases = [
+        (
+            Role::AggregatorCommittee,
+            PartialSignatureKind::PostConsensus,
+        ),
+        (Role::Committee, PartialSignatureKind::ContributionProofs),
+    ];
+
+    for (case_index, (role, kind)) in cases.into_iter().enumerate() {
+        let mut metadata = committee_metadata(&scenario);
+        metadata.role = role;
+        metadata.kind = kind;
+        metadata.committee_id = CommitteeId([case_index as u8; 32]);
+
+        // Act: interleave two decided values, then complete each independent batch.
+        for (index, hash) in [SIGNING_ROOT, WRONG_ROOT, SIGNING_ROOT, WRONG_ROOT]
+            .into_iter()
+            .enumerate()
+        {
+            collect_committee_signature(
+                &scenario,
+                metadata.clone(),
+                committee_request(2, hash),
+                committee_signing_data(&scenario, hash, case_index * 4 + index),
+            )
+            .await;
+            if index == 1 {
+                assert_eq!(sender.attempts(), case_index * 2);
+            }
+        }
+
+        // Assert: each decided value still emits a committee-routed envelope.
+        assert_eq!(sender.attempts(), (case_index + 1) * 2);
+        for (sent, hash) in sender.messages()[case_index * 2..]
+            .iter()
+            .zip([SIGNING_ROOT, WRONG_ROOT])
+        {
+            let messages = PartialSignatureMessages::from_ssz_bytes(sent.ssv_message.data())
+                .expect("batch should decode");
+            assert_eq!(messages.kind, kind);
+            assert_eq!(messages.messages.len(), 2);
+            assert!(
+                messages
+                    .messages
+                    .iter()
+                    .all(|message| message.signing_root == hash)
+            );
+            assert_eq!(
+                sent.ssv_message.msg_id(),
+                &MessageId::new(
+                    &DomainType::default(),
+                    role,
+                    &DutyExecutor::Committee(metadata.committee_id)
+                )
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn committee_post_consensus_cleanup_rejects_queued_stale_send() {
+    // Arrange: retain terminal and underfilled records through the previous-slot boundary.
+    let sender = Arc::new(RecordingMessageSender::new(0));
+    let scenario =
+        BatchScenario::new_with_max_workers(Arc::clone(&sender) as Arc<dyn MessageSender>, 1);
+    let metadata = committee_metadata(&scenario);
+    let mut pending = metadata.clone();
+    pending.committee_id = CommitteeId([0x83; 32]);
+    let mut retained = metadata.clone();
+    retained.slot += 1;
+    for (index, (request_metadata, size)) in [(metadata.clone(), 1), (pending, 2), (retained, 1)]
+        .into_iter()
+        .enumerate()
+    {
+        collect_committee_signature(
+            &scenario,
+            request_metadata,
+            committee_request(size, SIGNING_ROOT),
+            committee_signing_data(&scenario, SIGNING_ROOT, index),
+        )
+        .await;
+    }
+    scenario
+        .manager
+        .slot_clock
+        .set_slot((BATCH_TEST_SLOT + 1).as_u64());
+    scenario.manager.remove_stale_entries(BATCH_TEST_SLOT);
+    assert_eq!(
+        scenario.manager.committee_partial_signature_batches.len(),
+        3
+    );
+
+    let (entered_tx, entered_rx) = std_mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std_mpsc::sync_channel(1);
+    scenario
+        .manager
+        .processor
+        .urgent_consensus
+        .send_blocking(
+            move || {
+                entered_tx
+                    .send(())
+                    .expect("test should await the blocked worker");
+                release_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("test should release the worker");
+            },
+            "committee_test_blocker",
+        )
+        .expect("blocker should enter the processor");
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(5)))
+        .await
+        .expect("worker wait should not panic")
+        .expect("worker should block");
+    let mut queued = Box::pin(scenario.manager.sign_and_collect(
+        metadata,
+        committee_request(1, WRONG_ROOT),
+        committee_signing_data(&scenario, WRONG_ROOT, 3),
+    ));
+
+    // Act: queue the callback before cleanup, then run its signer after its slot becomes stale.
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    scenario
+        .manager
+        .slot_clock
+        .set_slot((BATCH_TEST_SLOT + 2).as_u64());
+    scenario.manager.remove_stale_entries(BATCH_TEST_SLOT + 1);
+    release_tx
+        .send(())
+        .expect("blocked worker should be released");
+    drain_batch_processor_work(&scenario.manager).await;
+    drop(queued);
+
+    // Assert: both old record states are removed and detached work cannot resurrect the batch.
+    assert_eq!(sender.attempts(), 2);
+    assert_eq!(
+        scenario.manager.committee_partial_signature_batches.len(),
+        1
+    );
+}
+
 #[test]
 fn single_validator_batch_envelope_cases() {
     let sender = Arc::new(RecordingMessageSender::new(0));
