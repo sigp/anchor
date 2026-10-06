@@ -9,7 +9,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -18,19 +18,24 @@ use bls::{AggregateSignature, FixedBytesExtended, PublicKeyBytes, Signature};
 use database::{NetworkDatabase, PendingStateUpdates};
 use fork::{Fork, ForkSchedule};
 use futures::StreamExt;
+use message_sender::Error as SendError;
 use parking_lot::Mutex;
 use qbft::Completed;
 use qbft_manager::{ConsensusDecider, QbftDecidable, QbftError, TimeoutMode};
 use signature_collector::{
-    CollectionError, SignatureCollecting, SignatureMetadata, SignatureRequester,
-    ValidatorSigningData,
+    CollectionError, CommitteeSelectionBatch, SignatureCollecting, SignatureMetadata,
+    SignatureRequester, ValidatorSigningData,
 };
 use slashing_protection::SlashingDatabase;
 use slot_clock::{ManualSlotClock, SlotClock};
 use ssv_types::{
     Cluster, ClusterId, CommitteeId, ENCRYPTED_KEY_LENGTH, IndexSet, OperatorId, Share,
-    ValidatorIndex, ValidatorMetadata,
-    consensus::{AggregatorCommitteeConsensusData, QbftDataValidator},
+    ValidatorIndex, ValidatorMetadata, VariableList,
+    consensus::{AggregatorCommitteeConsensusData, QbftDataValidator, UnsignedSSVMessage},
+    domain_type::DomainType,
+    message::{MsgType, SSVMessage},
+    msgid::{DutyExecutor, MessageId, Role},
+    partial_sig::{PartialSignatureKind, PartialSignatureMessage, PartialSignatureMessages},
 };
 use ssz::Encode;
 use task_executor::TaskExecutor;
@@ -53,9 +58,25 @@ use crate::{
 
 pub(super) const TEST_SLOT: u64 = 1;
 pub(super) const SLOT_DURATION_SECS: u64 = 12;
+/// How far into `TEST_SLOT` the harness slot clock sits (just past the 1/3 mark).
+pub(super) const CLOCK_OFFSET_INTO_TEST_SLOT_SECS: u64 = SLOT_DURATION_SECS / 3 + 1;
 /// Bound on any Lighthouse callback stream in these tests; a callback that blocks past it is a
 /// failure, not a slow machine.
 pub(super) const STREAM_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long after a publication at the harness clock its Boole selection deadline (two thirds
+/// into the slot) falls. The committee selection executions it starts send nothing after that.
+pub(super) const SELECTION_DEADLINE_AFTER_PUBLICATION: Duration =
+    Duration::from_secs(SLOT_DURATION_SECS * 2 / 3 - CLOCK_OFFSET_INTO_TEST_SLOT_SECS);
+/// How long [`run_past_selection_deadline`] keeps watching after the deadline, for sends or
+/// signings that should not happen.
+const WATCH_PAST_SELECTION_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Advances past the selection deadline of a publication made at the harness clock, and on for a
+/// watch period, so everything that publication's executions send has been sent. Only meant for
+/// paused time, where it is instant.
+pub(super) async fn run_past_selection_deadline() {
+    tokio::time::sleep(SELECTION_DEADLINE_AFTER_PUBLICATION + WATCH_PAST_SELECTION_DEADLINE).await;
+}
 
 /// What the Lighthouse aggregate callback yields: one result per stream item.
 pub(super) type SignAggregatesResult =
@@ -128,11 +149,29 @@ type FailingPubkeys = Arc<Mutex<HashSet<PublicKeyBytes>>>;
 /// Failing and hanging are different: a failure resolves to an error, which readers count as
 /// `other_error`, while a hang leaves the root pending so the reader's own deadline decides its
 /// fate. Only the hang mode reaches a per-root deadline-expiry path.
+///
+/// Boole committee selection signing and sending go to [`CommitteeSelectionMock`] instead.
+///
+/// Every field is shared, so the harness keeps a clone as its test-side handles.
+#[derive(Clone)]
 struct MockSignatureCollector {
     captured: CapturedCalls,
     fails: Arc<AtomicBool>,
     hangs: Arc<AtomicBool>,
     failing_pubkeys: FailingPubkeys,
+    committee_selection: Arc<CommitteeSelectionMock>,
+}
+
+impl MockSignatureCollector {
+    fn new(our_operator_id: OperatorId) -> Self {
+        Self {
+            captured: Arc::new(Mutex::new(Vec::new())),
+            fails: Arc::new(AtomicBool::new(false)),
+            hangs: Arc::new(AtomicBool::new(false)),
+            failing_pubkeys: Arc::new(Mutex::new(HashSet::new())),
+            committee_selection: Arc::new(CommitteeSelectionMock::new(our_operator_id)),
+        }
+    }
 }
 
 impl SignatureCollecting for MockSignatureCollector {
@@ -167,28 +206,194 @@ impl SignatureCollecting for MockSignatureCollector {
         let sig = Signature::infinity().expect("infinity signature");
         Box::pin(async move { Ok(Arc::new(sig)) })
     }
+
+    fn sign_committee_selection(
+        &self,
+        batch: Arc<CommitteeSelectionBatch>,
+    ) -> Pin<Box<dyn Future<Output = Result<UnsignedSSVMessage, CollectionError>> + Send + '_>>
+    {
+        Box::pin(self.committee_selection.sign(batch))
+    }
+
+    fn send_committee_message(
+        &self,
+        message: UnsignedSSVMessage,
+        committee_id: CommitteeId,
+    ) -> Result<(), SendError> {
+        self.committee_selection.send(message, committee_id)
+    }
 }
 
-/// Creates a mock signature collector, returning the shared captured calls and failure-mode
-/// handles.
-fn create_mock_collector() -> (
-    Box<dyn SignatureCollecting>,
-    CapturedCalls,
-    Arc<AtomicBool>,
-    Arc<AtomicBool>,
-    FailingPubkeys,
-) {
-    let captured: CapturedCalls = Arc::new(Mutex::new(Vec::new()));
-    let fails = Arc::new(AtomicBool::new(false));
-    let hangs = Arc::new(AtomicBool::new(false));
-    let failing_pubkeys: FailingPubkeys = Arc::new(Mutex::new(HashSet::new()));
-    let mock = MockSignatureCollector {
-        captured: Arc::clone(&captured),
-        fails: Arc::clone(&fails),
-        hangs: Arc::clone(&hangs),
-        failing_pubkeys: Arc::clone(&failing_pubkeys),
+// ==================== Mock committee selection ====================
+
+/// One `send_committee_message` attempt seen by the mock collector.
+#[derive(Clone)]
+pub(super) struct CapturedCommitteeSend {
+    pub(super) message: UnsignedSSVMessage,
+    pub(super) committee_id: CommitteeId,
+    /// When the attempt was made.
+    pub(super) sent_at: Instant,
+    /// Whether the mock admitted the message rather than failing the attempt.
+    pub(super) admitted: bool,
+}
+
+/// The mock collector's Boole committee selection half.
+///
+/// It records every `sign_committee_selection` and `send_committee_message` call apart from
+/// [`CapturedCalls`], so the executions that publishing Boole assignments starts leave
+/// `sign_and_collect` assertions untouched. Signing and sending succeed at once unless a test
+/// fails, delays or holds them.
+pub(super) struct CommitteeSelectionMock {
+    signer: OperatorId,
+    signed: Mutex<Vec<Arc<CommitteeSelectionBatch>>>,
+    sends: Mutex<Vec<CapturedCommitteeSend>>,
+    signing_failures_left: AtomicUsize,
+    send_failures_left: AtomicUsize,
+    signing_delay: Mutex<Duration>,
+    /// `false` while signing is held.
+    signing_released: watch::Sender<bool>,
+}
+
+impl CommitteeSelectionMock {
+    fn new(signer: OperatorId) -> Self {
+        Self {
+            signer,
+            signed: Mutex::new(Vec::new()),
+            sends: Mutex::new(Vec::new()),
+            signing_failures_left: AtomicUsize::new(0),
+            send_failures_left: AtomicUsize::new(0),
+            signing_delay: Mutex::new(Duration::ZERO),
+            signing_released: watch::channel(true).0,
+        }
+    }
+
+    /// Every batch handed to `sign_committee_selection`, in call order, including signings that
+    /// failed or have not finished.
+    pub(super) fn signed_batches(&self) -> Vec<Arc<CommitteeSelectionBatch>> {
+        self.signed.lock().clone()
+    }
+
+    /// Every `send_committee_message` attempt, in call order.
+    pub(super) fn sends(&self) -> Vec<CapturedCommitteeSend> {
+        self.sends.lock().clone()
+    }
+
+    /// Fails the next `times` signings; `usize::MAX` fails every one.
+    pub(super) fn fail_signing(&self, times: usize) {
+        self.signing_failures_left.store(times, Ordering::SeqCst);
+    }
+
+    /// Fails the next `times` send attempts; `usize::MAX` fails every one.
+    pub(super) fn fail_sends(&self, times: usize) {
+        self.send_failures_left.store(times, Ordering::SeqCst);
+    }
+
+    /// Makes every later signing take `delay` to finish.
+    pub(super) fn delay_signing(&self, delay: Duration) {
+        *self.signing_delay.lock() = delay;
+    }
+
+    /// Makes signings wait, from their start, until [`Self::release_signing`].
+    pub(super) fn hold_signing(&self) {
+        self.signing_released.send_replace(false);
+    }
+
+    /// Lets held signings continue.
+    pub(super) fn release_signing(&self) {
+        self.signing_released.send_replace(true);
+    }
+
+    async fn sign(
+        &self,
+        batch: Arc<CommitteeSelectionBatch>,
+    ) -> Result<UnsignedSSVMessage, CollectionError> {
+        let ordinal = {
+            let mut signed = self.signed.lock();
+            signed.push(Arc::clone(&batch));
+            signed.len()
+        };
+        let mut released = self.signing_released.subscribe();
+        // The sender lives as long as `self`, which outlives this future.
+        let _ = released.wait_for(|released| *released).await;
+        let delay = *self.signing_delay.lock();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if take_scheduled_failure(&self.signing_failures_left) {
+            return Err(CollectionError::QueueFullError);
+        }
+        Ok(mock_committee_selection_message(
+            &batch,
+            self.signer,
+            ordinal,
+        ))
+    }
+
+    fn send(
+        &self,
+        message: UnsignedSSVMessage,
+        committee_id: CommitteeId,
+    ) -> Result<(), SendError> {
+        let admitted = !take_scheduled_failure(&self.send_failures_left);
+        self.sends.lock().push(CapturedCommitteeSend {
+            message,
+            committee_id,
+            sent_at: Instant::now(),
+            admitted,
+        });
+        if admitted {
+            Ok(())
+        } else {
+            Err(SendError::NotSynced)
+        }
+    }
+}
+
+/// Consumes one scheduled failure from `failures_left`, returning whether there was one.
+fn take_scheduled_failure(failures_left: &AtomicUsize) -> bool {
+    failures_left
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            left.checked_sub(1)
+        })
+        .is_ok()
+}
+
+/// The committee message the mock "signs" for `batch`: every entry in batch order with an empty
+/// signature. `full_data` carries the signing's ordinal, so a message from a second signing never
+/// equals the first even though real BLS signing is deterministic.
+fn mock_committee_selection_message(
+    batch: &CommitteeSelectionBatch,
+    signer: OperatorId,
+    ordinal: usize,
+) -> UnsignedSSVMessage {
+    let messages = batch
+        .signing_data()
+        .iter()
+        .map(|entry| PartialSignatureMessage {
+            partial_signature: Signature::empty(),
+            signing_root: entry.root,
+            signer,
+            validator_index: entry.index,
+        })
+        .collect::<Vec<_>>();
+    let messages = PartialSignatureMessages {
+        kind: PartialSignatureKind::AggregatorCommitteePartialSig,
+        slot: batch.slot(),
+        messages: VariableList::new(messages).expect("a validated batch fits one message"),
     };
-    (Box::new(mock), captured, fails, hangs, failing_pubkeys)
+    UnsignedSSVMessage {
+        ssv_message: SSVMessage::new(
+            MsgType::SSVPartialSignatureMsgType,
+            MessageId::new(
+                &DomainType::default(),
+                Role::AggregatorCommittee,
+                &DutyExecutor::Committee(batch.committee_id()),
+            ),
+            messages.as_ssz_bytes(),
+        )
+        .expect("a validated batch fits one SSV message"),
+        full_data: ordinal.to_le_bytes().to_vec(),
+    }
 }
 
 // ==================== Committee setup ====================
@@ -197,6 +402,26 @@ pub(super) struct CommitteeSetup {
     pub(super) cluster: Cluster,
     pub(super) validators: Vec<ValidatorMetadata>,
     shares: Vec<Share>,
+}
+
+impl CommitteeSetup {
+    /// Replaces validator `validator_idx`'s placeholder public key with `pubkey`, and stores every
+    /// operator's share of it as `encrypted_share`. Only this operator's share is ever decrypted.
+    pub(super) fn set_validator_key(
+        &mut self,
+        validator_idx: usize,
+        pubkey: PublicKeyBytes,
+        encrypted_share: [u8; ENCRYPTED_KEY_LENGTH],
+    ) {
+        let validator = &mut self.validators[validator_idx];
+        for share in &mut self.shares {
+            if share.validator_pubkey == validator.public_key {
+                share.validator_pubkey = pubkey;
+                share.encrypted_private_key = encrypted_share;
+            }
+        }
+        validator.public_key = pubkey;
+    }
 }
 
 /// Standard two-committee topology shared by the Boole+ callback-gate tests
@@ -320,6 +545,8 @@ pub(super) struct ValidatorStoreTestHarness {
     /// Filled by [`Self::fail_signature_collection_for`]; read by the mock collector on every
     /// call.
     failing_pubkeys: FailingPubkeys,
+    /// Records and steers the mock collector's Boole committee selection signing and sending.
+    pub(super) committee_selection: Arc<CommitteeSelectionMock>,
     /// Shares `current_time` with the clone held by the store, so tests can reposition the clock
     /// after construction.
     pub(super) slot_clock: ManualSlotClock,
@@ -394,7 +621,9 @@ impl ValidatorStoreTestHarness {
             Duration::from_secs(SLOT_DURATION_SECS),
         );
         let slot_start = TEST_SLOT * SLOT_DURATION_SECS;
-        slot_clock.set_current_time(Duration::from_secs(slot_start + SLOT_DURATION_SECS / 3 + 1));
+        slot_clock.set_current_time(Duration::from_secs(
+            slot_start + CLOCK_OFFSET_INTO_TEST_SLOT_SECS,
+        ));
 
         let (executor, exit_signal) = create_test_executor();
 
@@ -404,13 +633,7 @@ impl ValidatorStoreTestHarness {
             "test",
         ));
 
-        let (
-            mock_collector,
-            captured_calls,
-            signature_collection_fails,
-            signature_collection_hangs,
-            failing_pubkeys,
-        ) = create_mock_collector();
+        let mock_collector = MockSignatureCollector::new(our_operator_id);
 
         // Database
         let database = Arc::new(
@@ -477,7 +700,7 @@ impl ValidatorStoreTestHarness {
 
         let validator_store = AnchorValidatorStore::new(
             database,
-            mock_collector,
+            Box::new(mock_collector.clone()),
             Arc::new(consensus),
             slashing_protection,
             true, // disable slashing protection for simpler testing
@@ -498,10 +721,11 @@ impl ValidatorStoreTestHarness {
         Self {
             validator_store,
             committee_setups,
-            captured_calls,
-            signature_collection_fails,
-            signature_collection_hangs,
-            failing_pubkeys,
+            captured_calls: mock_collector.captured,
+            signature_collection_fails: mock_collector.fails,
+            signature_collection_hangs: mock_collector.hangs,
+            failing_pubkeys: mock_collector.failing_pubkeys,
+            committee_selection: mock_collector.committee_selection,
             slot_clock,
             is_synced_tx,
             _slashing_db_dir: slashing_db_dir,

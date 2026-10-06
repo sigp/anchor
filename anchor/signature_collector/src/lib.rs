@@ -14,7 +14,7 @@ use bls_lagrange::KeyId;
 use dashmap::{DashMap, Entry};
 use database::{NetworkDatabase, OwnOperatorId};
 use fork::ForkSchedule;
-use message_sender::MessageSender;
+use message_sender::{Error as SendError, MessageSender};
 use parking_lot::Mutex;
 use processor::{Error, Error::Queue, Senders, work::DropOnFinish};
 use slot_clock::SlotClock;
@@ -78,6 +78,83 @@ struct SignatureCollector {
 struct CommitteePartialSignatureBatch {
     batched_validator_partial_signatures: Vec<PartialSignatureMessage>,
     for_slot: Slot,
+}
+
+/// One attestation selection root plus at most four sync committee subnet roots.
+pub const MAX_SELECTION_ROOTS_PER_VALIDATOR: usize = 5;
+
+/// A complete, validated Boole selection-proof worklist for one committee and slot: one entry per
+/// validator and selection root, each carrying that validator's own share.
+pub struct CommitteeSelectionBatch {
+    slot: Slot,
+    committee_id: CommitteeId,
+    entries: Vec<ValidatorSigningData>,
+}
+
+impl std::fmt::Debug for CommitteeSelectionBatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never include secret shares.
+        f.debug_struct("CommitteeSelectionBatch")
+            .field("slot", &self.slot)
+            .field("committee_id", &self.committee_id)
+            .field("entries", &self.entries.len())
+            .finish()
+    }
+}
+
+impl CommitteeSelectionBatch {
+    /// Checks the bounded wire shape once: at least one and at most the message's entry limit,
+    /// unique `(validator index, root)` pairs, at most [`MAX_SELECTION_ROOTS_PER_VALIDATOR`] roots
+    /// per validator, and a consistent public key for each validator index.
+    pub fn new(
+        slot: Slot,
+        committee_id: CommitteeId,
+        mut entries: Vec<ValidatorSigningData>,
+    ) -> Result<Self, CollectionError> {
+        if entries.is_empty() || entries.len() > PartialSignatureMessagesLen::USIZE {
+            return Err(CollectionError::InvalidCommitteeSelectionBatch);
+        }
+        entries.sort_unstable_by_key(|entry| (entry.index.0, entry.root));
+        let mut validators = HashMap::new();
+        let mut roots_for_validator = 0;
+        for (position, entry) in entries.iter().enumerate() {
+            roots_for_validator = match position.checked_sub(1).map(|previous| &entries[previous]) {
+                Some(previous) if previous.index == entry.index => {
+                    if previous.root == entry.root
+                        || previous.validator_pubkey != entry.validator_pubkey
+                    {
+                        return Err(CollectionError::InvalidCommitteeSelectionBatch);
+                    }
+                    roots_for_validator + 1
+                }
+                _ => 1,
+            };
+            if roots_for_validator > MAX_SELECTION_ROOTS_PER_VALIDATOR
+                || validators
+                    .insert(entry.validator_pubkey, entry.index)
+                    .is_some_and(|index| index != entry.index)
+            {
+                return Err(CollectionError::InvalidCommitteeSelectionBatch);
+            }
+        }
+        Ok(Self {
+            slot,
+            committee_id,
+            entries,
+        })
+    }
+
+    pub fn slot(&self) -> Slot {
+        self.slot
+    }
+
+    pub fn committee_id(&self) -> CommitteeId {
+        self.committee_id
+    }
+
+    pub fn signing_data(&self) -> &[ValidatorSigningData] {
+        &self.entries
+    }
 }
 
 /// One unique pre-Boole sync committee subnet and signing root pair.
@@ -268,6 +345,7 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                 trace!(root = ?validator_signing_data.root, "Signed");
 
                 let messages_to_inject = match requester {
+                    SignatureRequester::LocalOnly => vec![message],
                     SignatureRequester::SingleValidator { pubkey } => {
                         // we do not have to wait for other partial signatures - send the message
                         // immediately.
@@ -617,13 +695,87 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         injection_messages
     }
 
+    /// Signs every entry of a Boole selection batch with that validator's own share and builds
+    /// the committee message.
+    ///
+    /// Signing runs once, on the signing pool. Send the result with
+    /// [`Self::send_committee_message`], which never signs, so a retried send offers the same
+    /// message.
+    pub async fn sign_committee_selection(
+        self: &Arc<Self>,
+        batch: Arc<CommitteeSelectionBatch>,
+    ) -> Result<UnsignedSSVMessage, CollectionError> {
+        let Some(signer) = self.operator_id.get() else {
+            return Err(CollectionError::OwnOperatorIdUnknown);
+        };
+        let (result_tx, result_rx) = oneshot::channel();
+        let manager = Arc::clone(self);
+        self.processor.urgent_consensus.send_blocking(
+            move || {
+                let signatures = batch
+                    .entries
+                    .iter()
+                    .map(|entry| entry.partial_signature_message(entry.root, signer))
+                    .collect();
+                let message = manager
+                    .build_message(
+                        PartialSignatureKind::AggregatorCommitteePartialSig,
+                        Role::AggregatorCommittee,
+                        batch.slot,
+                        signatures,
+                        &DutyExecutor::Committee(batch.committee_id),
+                    )
+                    .map_err(|err| {
+                        error!(
+                            %err,
+                            slot = %batch.slot,
+                            committee_id = ?batch.committee_id,
+                            entries = batch.entries.len(),
+                            "Failed to construct committee selection batch"
+                        );
+                        CollectionError::InvalidCommitteeSelectionBatch
+                    });
+                let _ = result_tx.send(message);
+            },
+            SIGNER_NAME,
+        )?;
+        result_rx.await?
+    }
+
+    /// Offers a signed committee message for sending.
+    pub fn send_committee_message(
+        &self,
+        message: UnsignedSSVMessage,
+        committee_id: CommitteeId,
+    ) -> Result<(), SendError> {
+        self.message_sender
+            .sign_and_send(message, committee_id, None)
+    }
+
     fn create_message(
         &self,
         metadata: &SignatureMetadata,
         signatures: Vec<PartialSignatureMessage>,
         duty_executor: &DutyExecutor,
     ) -> Result<UnsignedSSVMessage, CreateMessageError> {
-        let domain = self.domain_type_for_slot(metadata.slot);
+        self.build_message(
+            metadata.kind,
+            metadata.role,
+            metadata.slot,
+            signatures,
+            duty_executor,
+        )
+    }
+
+    fn build_message(
+        &self,
+        kind: PartialSignatureKind,
+        role: Role,
+        slot: Slot,
+        signatures: Vec<PartialSignatureMessage>,
+        duty_executor: &DutyExecutor,
+    ) -> Result<UnsignedSSVMessage, CreateMessageError> {
+        let domain = self.domain_type_for_slot(slot);
         let count = signatures.len();
         let messages = ssv_types::VariableList::new(signatures).map_err(|_| {
             CreateMessageError::TooManySignatures {
@@ -633,15 +785,15 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
         })?;
 
         let partial_sig_messages = PartialSignatureMessages {
-            kind: metadata.kind,
-            slot: metadata.slot,
+            kind,
+            slot,
             messages,
         };
 
         Ok(UnsignedSSVMessage {
             ssv_message: SSVMessage::new(
                 MsgType::SSVPartialSignatureMsgType,
-                MessageId::new(&domain, metadata.role, duty_executor),
+                MessageId::new(&domain, role, duty_executor),
                 partial_sig_messages.as_ssz_bytes(),
             )?,
             full_data: vec![],
@@ -795,6 +947,9 @@ pub struct SignatureMetadata {
 /// committee. This matters because the committee case sends one message for the whole batch.
 #[derive(Debug, Clone)]
 pub enum SignatureRequester {
+    /// Sign and inject the local share without sending anything. Boole selection proofs use this:
+    /// the slot pipeline sends each committee's complete batch separately.
+    LocalOnly,
     /// The only validator signing this is the one passed when `sign_and_collect` is called.
     SingleValidator {
         /// The public key of the validator. Used in the created network message.
@@ -884,6 +1039,7 @@ pub enum CollectionError {
     QueueFullError,
     CollectionTimeout,
     EmptySignature,
+    InvalidCommitteeSelectionBatch,
     OwnOperatorIdUnknown,
     RecoverError(bls_lagrange::Error),
 }
@@ -920,6 +1076,19 @@ pub trait SignatureCollecting: Send + Sync {
         requester: SignatureRequester,
         signing_data: ValidatorSigningData,
     ) -> Pin<Box<dyn Future<Output = Result<Arc<Signature>, CollectionError>> + Send + '_>>;
+
+    /// See [`SignatureCollectorManager::sign_committee_selection`].
+    fn sign_committee_selection(
+        &self,
+        batch: Arc<CommitteeSelectionBatch>,
+    ) -> Pin<Box<dyn Future<Output = Result<UnsignedSSVMessage, CollectionError>> + Send + '_>>;
+
+    /// See [`SignatureCollectorManager::send_committee_message`].
+    fn send_committee_message(
+        &self,
+        message: UnsignedSSVMessage,
+        committee_id: CommitteeId,
+    ) -> Result<(), SendError>;
 }
 
 impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollectorManager<S>> {
@@ -935,6 +1104,24 @@ impl<S: SlotClock + Clone + 'static> SignatureCollecting for Arc<SignatureCollec
             requester,
             signing_data,
         ))
+    }
+
+    fn sign_committee_selection(
+        &self,
+        batch: Arc<CommitteeSelectionBatch>,
+    ) -> Pin<Box<dyn Future<Output = Result<UnsignedSSVMessage, CollectionError>> + Send + '_>>
+    {
+        Box::pin(SignatureCollectorManager::sign_committee_selection(
+            self, batch,
+        ))
+    }
+
+    fn send_committee_message(
+        &self,
+        message: UnsignedSSVMessage,
+        committee_id: CommitteeId,
+    ) -> Result<(), SendError> {
+        SignatureCollectorManager::send_committee_message(self, message, committee_id)
     }
 }
 
