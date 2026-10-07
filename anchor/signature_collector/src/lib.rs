@@ -76,8 +76,15 @@ struct SignatureCollector {
 /// As soon as this operator has produced the full validator batch for the committee round, the
 /// message is sent.
 struct CommitteePartialSignatureBatch {
-    batched_validator_partial_signatures: Vec<PartialSignatureMessage>,
+    /// `None` retains a committee post-consensus record after its send attempt is consumed.
+    batched_validator_partial_signatures: Option<Vec<PartialSignatureMessage>>,
     for_slot: Slot,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum CommitteeBatchKey {
+    CommitteePostConsensus(Slot, CommitteeId),
+    DecidedValue(Hash256, CommitteeId),
 }
 
 /// One unique pre-Boole sync committee subnet and signing root pair.
@@ -142,11 +149,9 @@ pub struct SignatureCollectorManager<S: SlotClock> {
     message_sender: Arc<dyn MessageSender>,
     /// A map from the signing root and signing validator to the corresponding signature collector.
     signature_collectors: DashMap<(Hash256, ValidatorIndex), SignatureCollector>,
-    /// A map from the hash of a decided committee value and committee ID to the local batch of
-    /// validator partial signatures for that committee round.
-    /// Note that this hash may differ from the actual signing root.
-    committee_partial_signature_batches:
-        DashMap<(Hash256, CommitteeId), CommitteePartialSignatureBatch>,
+    /// Local committee batches. Committee post-consensus records remain after a send attempt,
+    /// until slot cleanup, because peers accept only one message per committee and slot.
+    committee_partial_signature_batches: DashMap<CommitteeBatchKey, CommitteePartialSignatureBatch>,
     /// Pre-Boole batches keyed independently by phase and from root-specific collectors. Pending
     /// and admitted records, including records created by detached callback work, are removed by
     /// slot cleanup.
@@ -310,41 +315,12 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
                         validator_partial_signature_batch_size,
                         base_hash,
                     } => {
-                        // Batch one locally produced partial signature per validator before
-                        // sending a single committee message for this round.
-                        let mut entry = match manager
-                            .committee_partial_signature_batches
-                            .entry((base_hash, metadata.committee_id))
-                        {
-                            Entry::Occupied(occupied) => occupied,
-                            Entry::Vacant(vacant) => vacant.insert_entry(CommitteePartialSignatureBatch {
-                                batched_validator_partial_signatures: Vec::with_capacity(
-                                    validator_partial_signature_batch_size,
-                                ),
-                                for_slot: metadata.slot,
-                            }),
-                        };
-                        let validator_partial_signature_batch =
-                            &mut entry.get_mut().batched_validator_partial_signatures;
-
-                        // Add the partial signature we just produced for this validator to the
-                        // local batch.
-                        validator_partial_signature_batch.push(message.clone());
-
-                        trace!(
-                            have = validator_partial_signature_batch.len(),
-                            need = validator_partial_signature_batch_size,
-                            "Checking whether the batch of validator partial signatures is ready to send"
-                        );
-
-                        // Once the local batch of validator partial signatures is complete,
-                        // create and send the committee message.
-                        if validator_partial_signature_batch.len()
-                            == validator_partial_signature_batch_size
-                        {
-                            let signatures =
-                                entry.remove().batched_validator_partial_signatures;
-
+                        if let Some(signatures) = manager.take_ready_committee_batch(
+                            &metadata,
+                            validator_partial_signature_batch_size,
+                            base_hash,
+                            message.clone(),
+                        ) {
                             let msg = match manager.create_message(
                                 &metadata,
                                 signatures,
@@ -539,6 +515,54 @@ impl<S: SlotClock + Clone + 'static> SignatureCollectorManager<S> {
             COLLECTOR_MESSAGE_NAME,
         )?;
         Ok(result_rx.await?)
+    }
+
+    /// Accumulate a callback and take a full batch, releasing the map guard before the caller
+    /// constructs or sends its message. Committee post-consensus consumes its only attempt here,
+    /// including when construction or admission subsequently fails.
+    fn take_ready_committee_batch(
+        &self,
+        metadata: &SignatureMetadata,
+        batch_size: usize,
+        base_hash: Hash256,
+        message: PartialSignatureMessage,
+    ) -> Option<Vec<PartialSignatureMessage>> {
+        let send_once = metadata.role == Role::Committee
+            && metadata.kind == PartialSignatureKind::PostConsensus;
+        let key = if send_once {
+            CommitteeBatchKey::CommitteePostConsensus(metadata.slot, metadata.committee_id)
+        } else {
+            CommitteeBatchKey::DecidedValue(base_hash, metadata.committee_id)
+        };
+        let entry = self.committee_partial_signature_batches.entry(key);
+        // Check after acquiring the entry so delayed callbacks cannot recreate an outgoing batch
+        // after cleanup has removed its terminal record.
+        if send_once && self.is_stale_slot(metadata.slot) {
+            return None;
+        }
+        let mut entry = match entry {
+            Entry::Occupied(occupied) => occupied,
+            Entry::Vacant(vacant) => vacant.insert_entry(CommitteePartialSignatureBatch {
+                batched_validator_partial_signatures: Some(Vec::with_capacity(batch_size)),
+                for_slot: metadata.slot,
+            }),
+        };
+        let batch = entry.get_mut();
+        let signatures = batch.batched_validator_partial_signatures.as_mut()?;
+        signatures.push(message);
+        trace!(
+            have = signatures.len(),
+            need = batch_size,
+            "Checking whether the batch of validator partial signatures is ready to send"
+        );
+        if signatures.len() != batch_size {
+            return None;
+        }
+        let signatures = batch.batched_validator_partial_signatures.take();
+        if !send_once {
+            entry.remove();
+        }
+        signatures
     }
 
     /// Builds and attempts the canonical pre-Boole sync committee batch for one callback.
@@ -1018,8 +1042,9 @@ pub enum SignatureRequester {
         /// `SignatureMetadata::threshold`.
         validator_partial_signature_batch_size: usize,
         /// Identifies which partial signatures belong in the same outgoing committee message.
-        /// We cannot use the signing root because the batched signatures may have different
-        /// signing roots.
+        /// Committee post-consensus instead uses the slot and committee, since peers allow only
+        /// one such message for that slot. We cannot use the signing root because the batched
+        /// signatures may have different signing roots.
         base_hash: Hash256,
     },
 }

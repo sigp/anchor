@@ -60,8 +60,11 @@ pub fn peer_score_params(one_epoch: Duration) -> libp2p::gossipsub::PeerScorePar
         behaviour_penalty_weight,
         behaviour_penalty_threshold: BEHAVIOUR_PENALTY_THRESHOLD,
         behaviour_penalty_decay,
-        ..Default::default() /* Use default values for slow_peer_decay, slow_peer_weight,
-                              * slow_peer_threshold and ip_colocation_factor_whitelist for now */
+        // Decay more strongly at epoch intervals so brief slow-peer bursts do not
+        // retain penalties for many epochs.
+        slow_peer_decay: 0.001,
+        ..Default::default() /* Use default values for slow_peer_weight, slow_peer_threshold
+                              * and ip_colocation_factor_whitelist for now */
     }
 }
 
@@ -131,7 +134,116 @@ pub(crate) fn decay_convergence(decay: f64, rate_per_interval: f64) -> Result<f6
 
 #[cfg(test)]
 mod tests {
+    use std::task::Poll;
+
+    use futures::{StreamExt, future::poll_fn};
+    use libp2p::{
+        Swarm,
+        gossipsub::{
+            Behaviour, ConfigBuilder, Event, IdentTopic, MessageAuthenticity, PublishError,
+        },
+        swarm::{NetworkBehaviour, SwarmEvent},
+    };
+    use libp2p_swarm_test::SwarmExt;
+
     use super::*;
+
+    const TEST_EPOCH: Duration = Duration::from_secs(1);
+    const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+    const SINGLE_SLOW_PEER_SCORE: f64 = -0.2;
+
+    fn scoring_swarm() -> Swarm<Behaviour> {
+        Swarm::new_ephemeral_tokio(|keypair| {
+            let config = ConfigBuilder::default()
+                .connection_handler_queue_len(1)
+                .build()
+                .expect("test gossipsub configuration should be valid");
+            let mut behaviour = Behaviour::new(MessageAuthenticity::Signed(keypair), config)
+                .expect("test gossipsub behaviour should be valid");
+            behaviour
+                .with_peer_score(peer_score_params(TEST_EPOCH), peer_score_thresholds())
+                .expect("production peer score parameters should be valid");
+            behaviour
+        })
+    }
+
+    async fn connected_subscriber() -> (Swarm<Behaviour>, Swarm<Behaviour>, IdentTopic) {
+        let mut sender = scoring_swarm();
+        let mut receiver = scoring_swarm();
+        let topic = IdentTopic::new("slow-peer-decay-regression");
+        receiver.behaviour_mut().subscribe(&topic).unwrap();
+        receiver.listen_on("/memory/0".parse().unwrap()).unwrap();
+        let address = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = receiver.select_next_some().await {
+                break address;
+            }
+        };
+        sender.dial(address).unwrap();
+
+        loop {
+            tokio::select! {
+                event = sender.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::Subscribed { peer_id, topic: subscribed }) = event
+                        && peer_id == *receiver.local_peer_id()
+                        && subscribed == topic.hash()
+                    {
+                        return (sender, receiver, topic);
+                    }
+                }
+                _ = receiver.select_next_some() => {}
+            }
+        }
+    }
+
+    /// A real full connection-handler queue must lose its slow-peer penalty at the
+    /// first score refresh. Memory addresses avoid IP contributions, and the
+    /// production parameters have no topic score contributions.
+    #[tokio::test]
+    async fn test_slow_peer_penalty_clears_on_next_score_refresh() {
+        // Arrange: The receiver alone subscribes, so the sender has no mesh traffic.
+        let (mut sender, receiver, topic) =
+            tokio::time::timeout(TEST_TIMEOUT, connected_subscriber())
+                .await
+                .expect("in-memory subscriber should connect before timeout");
+        let peer_id = *receiver.local_peer_id();
+        assert_eq!(sender.behaviour().peer_score(&peer_id), Some(0.0));
+
+        // Act: Stop polling the swarms and fill the one-message publish queue.
+        sender
+            .behaviour_mut()
+            .publish(topic.clone(), vec![0])
+            .unwrap();
+        assert!(matches!(
+            sender.behaviour_mut().publish(topic, vec![1]),
+            Err(PublishError::AllQueuesFull(1))
+        ));
+        assert_eq!(
+            sender.behaviour().peer_score(&peer_id),
+            Some(SINGLE_SLOW_PEER_SCORE)
+        );
+
+        // Assert: Sample after every public behaviour poll, so a later refresh
+        // cannot hide a nonzero score at the first refresh. The behaviour's own
+        // timer wakes this future; the Tokio timeout is only a hang guard.
+        let first_refreshed_score = tokio::time::timeout(
+            TEST_TIMEOUT,
+            poll_fn(|cx| {
+                loop {
+                    let progress = NetworkBehaviour::poll(sender.behaviour_mut(), cx);
+                    let score = sender.behaviour().peer_score(&peer_id).unwrap();
+                    if score != SINGLE_SLOW_PEER_SCORE {
+                        return Poll::Ready(score);
+                    }
+                    if progress.is_pending() {
+                        return Poll::Pending;
+                    }
+                }
+            }),
+        )
+        .await
+        .expect("slow-peer score should refresh before timeout");
+        assert_eq!(first_refreshed_score, 0.0);
+    }
 
     #[test]
     fn test_peer_score_thresholds() {

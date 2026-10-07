@@ -139,6 +139,8 @@ impl AnchorBehaviour {
             .history_gossip(4)
             .max_publish_messages(500)
             .max_control_messages_sent(500)
+            // Match Lighthouse's control budget to accommodate larger go-ssv gossip RPCs.
+            .max_control_message_size(128 << 10)
             .max_ihave_messages_heartbeat(32)
             // `SignedSSVMessage` has a full data field with max 4,194,532 bytes, so 5M bytes seems
             // like a reasonable upper bound for that and the rest of the message.
