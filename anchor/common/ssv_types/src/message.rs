@@ -212,17 +212,25 @@ impl SSVMessage {
         msg_id: MessageId,
         data: Vec<u8>,
     ) -> Result<Self, SSVMessageError> {
+        let ssv_message = Self::from_parts(msg_type, msg_id, data)?;
+        ssv_message.validate()?;
+        Ok(ssv_message)
+    }
+
+    /// Bounds-checked construction without semantic validation; see [`Self::validate`].
+    pub fn from_parts(
+        msg_type: MsgType,
+        msg_id: MessageId,
+        data: Vec<u8>,
+    ) -> Result<Self, SSVMessageError> {
         let data = try_to_variable_list::<u8, SSVMessageDataLen, _, _>(data, |provided, max| {
             SSVMessageError::SSVDataTooBig { provided, max }
         })?;
-
-        let ssv_message = SSVMessage {
+        Ok(SSVMessage {
             msg_type,
             msg_id,
             data,
-        };
-        ssv_message.validate()?;
-        Ok(ssv_message)
+        })
     }
 
     /// Validate the SSV Message
@@ -474,6 +482,19 @@ impl SignedSSVMessage {
         ssv_message: SSVMessage,
         full_data: Vec<u8>,
     ) -> Result<Self, SignedSSVMessageError> {
+        let signed_ssv_message =
+            Self::from_parts(signatures, operator_ids, ssv_message, full_data)?;
+        signed_ssv_message.validate()?;
+        Ok(signed_ssv_message)
+    }
+
+    /// Bounds-checked construction without semantic validation; see [`Self::validate`].
+    pub fn from_parts(
+        signatures: Vec<[u8; RSA_SIGNATURE_SIZE]>,
+        operator_ids: Vec<OperatorId>,
+        ssv_message: SSVMessage,
+        full_data: Vec<u8>,
+    ) -> Result<Self, SignedSSVMessageError> {
         // Convert Vec<[u8; 256]> to VariableList<VariableList<u8, U256>, U13>
         // First convert each [u8; 256] to VariableList<u8, U256>
         let signature_variable_lists: Vec<VariableList<u8, U256>> = signatures
@@ -498,7 +519,7 @@ impl SignedSSVMessage {
             |provided, max| SignedSSVMessageError::TooManySignatures { provided, max },
         )?;
 
-        let signed_ssv_message = SignedSSVMessage {
+        Ok(SignedSSVMessage {
             signatures,
             operator_ids: try_to_variable_list::<OperatorId, U13, _, _>(
                 operator_ids,
@@ -509,11 +530,7 @@ impl SignedSSVMessage {
                 full_data,
                 |provided, max| SignedSSVMessageError::FullDataTooLong { provided, max },
             )?,
-        };
-
-        signed_ssv_message.validate()?;
-
-        Ok(signed_ssv_message)
+        })
     }
 
     /// Returns a reference to the signatures.
