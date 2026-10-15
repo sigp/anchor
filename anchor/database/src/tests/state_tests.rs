@@ -1,16 +1,46 @@
 #[cfg(test)]
 mod state_database_tests {
-    use ssv_types::Share;
+    use ssv_types::{Cluster, Operator, Share, ValidatorMetadata};
     use types::Address;
 
     use crate::{
         NetworkDatabase, PendingStateUpdates,
         multi_index::UniqueIndex,
         test_utils::{
-            FileTestFixture, InMemoryTestFixture, TEST_NETWORK, assertions, commit_and_publish,
-            generators,
+            DEFAULT_NUM_OPERATORS, FIRST_OPERATOR_ID, FileTestFixture, InMemoryTestFixture,
+            TEST_NETWORK, assertions, commit_and_publish, generators,
         },
     };
+
+    /// Smallest committee size above the fixture default, f=2.
+    const SEVEN_OPERATOR_COMMITTEE: u64 = 7;
+
+    /// The share held by `operator`, which the fixtures treat as this node's own operator.
+    fn own_share(shares: &[Share], operator: &Operator) -> Share {
+        shares
+            .iter()
+            .find(|share| share.operator_id == operator.id)
+            .expect("This operator should hold a share")
+            .clone()
+    }
+
+    /// Insert a validator into the fixture's database and publish the state update.
+    fn insert_validator(
+        fixture: &FileTestFixture,
+        cluster: Cluster,
+        validator: &ValidatorMetadata,
+        shares: Vec<Share>,
+    ) {
+        let mut conn = fixture.data.db.connection().unwrap();
+        let tx = conn.transaction().unwrap();
+        let mut pending = PendingStateUpdates::default();
+        fixture
+            .data
+            .db
+            .insert_validator_tx(cluster, validator, shares, &tx, &mut pending)
+            .expect("Insert should not fail");
+        commit_and_publish(&fixture.data.db, tx, pending);
+    }
 
     #[test]
     // Test that the previously inserted operators are present after restart
@@ -88,22 +118,8 @@ mod state_database_tests {
 
         // Generate new validator information
         let cluster = fixture.cluster.clone();
-        let new_validator = generators::validator::random_metadata(cluster.cluster_id);
-        let mut shares: Vec<Share> = Vec::new();
-        fixture.operators.iter().for_each(|op| {
-            let share =
-                generators::share::random(cluster.cluster_id, op.id, &new_validator.public_key);
-            shares.push(share);
-        });
-        let mut conn = fixture.data.db.connection().unwrap();
-        let tx = conn.transaction().unwrap();
-        let mut pending = PendingStateUpdates::default();
-        fixture
-            .data
-            .db
-            .insert_validator_tx(cluster, &new_validator, shares, &tx, &mut pending)
-            .expect("Insert should not fail");
-        commit_and_publish(&fixture.data.db, tx, pending);
+        let (new_validator, shares) = generators::validator::with_consistent_shares(&cluster);
+        insert_validator(&fixture, cluster, &new_validator, shares);
 
         // Save path and pubkey before dropping db
         let path = fixture.path.clone();
@@ -111,7 +127,6 @@ mod state_database_tests {
 
         // drop and recrate database
         drop(fixture.data.db);
-        drop(conn);
         fixture.data.db =
             NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
 
@@ -119,6 +134,114 @@ mod state_database_tests {
         assert_eq!(fixture.data.db.state().metadata().length(), 2);
         assert_eq!(fixture.data.db.state().shares().length(), 2);
         assert_eq!(fixture.data.db.state().clusters().length(), 1);
+    }
+
+    // ==================== Startup share validation tests ====================
+
+    /// The startup load must drop only the own share of a validator whose stored share public
+    /// keys do not interpolate to its validator public key, while the validator metadata, the
+    /// cluster and every stored share row stay intact.
+    #[test]
+    fn test_reopen_skips_only_shares_that_fail_interpolation() {
+        // Arrange: the fixture validator has consistent shares; add a second validator in the
+        // same cluster whose share public keys are unrelated to its validator key.
+        let mut fixture = FileTestFixture::new();
+        let cluster = fixture.cluster.clone();
+        let consistent_validator = fixture.validator.clone();
+        let inconsistent_validator = generators::validator::random_metadata(cluster.cluster_id);
+        let inconsistent_shares: Vec<Share> = fixture
+            .operators
+            .iter()
+            .map(|op| {
+                generators::share::random(
+                    cluster.cluster_id,
+                    op.id,
+                    &inconsistent_validator.public_key,
+                )
+            })
+            .collect();
+        insert_validator(
+            &fixture,
+            cluster.clone(),
+            &inconsistent_validator,
+            inconsistent_shares,
+        );
+        assert_eq!(fixture.data.db.state().shares().length(), 2);
+        let own_share = own_share(&fixture.shares, &fixture.operators[0]);
+
+        // Act: reload the state from disk.
+        let path = fixture.path.clone();
+        let pubkey = fixture.pubkey.clone();
+        drop(fixture.data.db);
+        fixture.data.db =
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
+
+        // Assert: only the consistent validator's own share is served.
+        let db = &fixture.data.db;
+        assert_eq!(db.state().shares().length(), 1);
+        assertions::share::exists_in_memory(db, &consistent_validator.public_key, &own_share);
+        assertions::share::exists_not_in_memory(db, &inconsistent_validator.public_key);
+
+        // Metadata and cluster membership are untouched by the share check.
+        assertions::validator::exists_in_memory(db, &consistent_validator);
+        assertions::validator::exists_in_memory(db, &inconsistent_validator);
+        assertions::cluster::exists_in_memory(db, &cluster);
+
+        // The share rows for both validators are still stored.
+        for validator in [&consistent_validator, &inconsistent_validator] {
+            let stored = db
+                .get_share_pubkeys_for_validator(&validator.public_key)
+                .expect("Share rows should be readable");
+            assert_eq!(stored.len(), DEFAULT_NUM_OPERATORS as usize);
+        }
+    }
+
+    /// A seven operator committee has quorum five, so the startup check interpolates a degree
+    /// four polynomial. Consistent shares for such a cluster must survive a reopen.
+    #[test]
+    fn test_reopen_keeps_consistent_shares_in_seven_operator_cluster() {
+        // Arrange: extend the default operator set to seven, including this operator, and
+        // register a validator with shares split over all seven.
+        let mut fixture = FileTestFixture::new();
+        let extra_operators: Vec<Operator> = (FIRST_OPERATOR_ID + DEFAULT_NUM_OPERATORS
+            ..FIRST_OPERATOR_ID + SEVEN_OPERATOR_COMMITTEE)
+            .map(generators::operator::with_id)
+            .collect();
+        {
+            let mut conn = fixture.data.db.connection().unwrap();
+            let tx = conn.transaction().unwrap();
+            let mut pending = PendingStateUpdates::default();
+            for operator in &extra_operators {
+                fixture
+                    .data
+                    .db
+                    .insert_operator_tx(operator, &tx, &mut pending)
+                    .expect("Failed to insert operator");
+            }
+            commit_and_publish(&fixture.data.db, tx, pending);
+        }
+        let mut committee = fixture.operators.clone();
+        committee.extend(extra_operators);
+        assert_eq!(committee.len(), SEVEN_OPERATOR_COMMITTEE as usize);
+        let cluster = generators::cluster::with_operators(&committee);
+        let (validator, shares) = generators::validator::with_consistent_shares(&cluster);
+        let own_share = own_share(&shares, &fixture.operators[0]);
+        insert_validator(&fixture, cluster.clone(), &validator, shares);
+
+        // Act: reload the state from disk.
+        let path = fixture.path.clone();
+        let pubkey = fixture.pubkey.clone();
+        drop(fixture.data.db);
+        fixture.data.db =
+            NetworkDatabase::new(&path, &pubkey, TEST_NETWORK).expect("Failed to create database");
+
+        // Assert: the share for the seven operator validator is served alongside the default
+        // fixture validator's share.
+        let db = &fixture.data.db;
+        assert_eq!(db.state().shares().length(), 2);
+        assertions::share::exists_in_memory(db, &validator.public_key, &own_share);
+        assertions::validator::exists_in_memory(db, &validator);
+        assertions::cluster::exists_in_memory(db, &cluster);
     }
 
     #[test]

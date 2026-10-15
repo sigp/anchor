@@ -11,6 +11,7 @@ arbitrary-fuzz = ["arbitrary"]
 arbitrary = { workspace = true, optional = true }
 base64 = { workspace = true }
 bls = { workspace = true }
+bls_lagrange = { workspace = true }
 derive_more = { workspace = true }
 # The "events" feature is required for independent crate compilation (e.g. `cargo test -p subnet_service`).
 # Without it, eth2's Error::status() references an SseEventSource variant that is gated behind
@@ -34,4 +35,5 @@ typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+rand = { workspace = true }
 strum = { workspace = true }

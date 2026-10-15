@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
-use bls::PublicKeyBytes;
+use bls::{Keypair, PublicKeyBytes, SecretKey};
+use bls_lagrange::KeyId;
 use openssl::{pkey::Public, rsa::Rsa};
 use rand::Rng;
 use rusqlite::{Transaction, params};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, ENCRYPTED_KEY_LENGTH, Operator, OperatorId, Share,
-    ValidatorIndex, ValidatorMetadata,
+    ValidatorIndex, ValidatorMetadata, quorum_size,
 };
 use tempfile::TempDir;
 use types::{Address, Graffiti};
@@ -16,6 +17,9 @@ use crate::{NetworkDatabase, PendingStateUpdates, multi_index::UniqueIndex};
 /// Default number of operators for test clusters
 /// 4 operators allows for QBFT quorum (3) with 1 fault tolerance (f=1, n=3f+1=4)
 pub const DEFAULT_NUM_OPERATORS: u64 = 4;
+/// Lowest operator id used by the default fixture. Operator ids double as Shamir key ids when a
+/// validator key is split, and key id zero is rejected, so the default operators start at one.
+pub const FIRST_OPERATOR_ID: u64 = 1;
 const RSA_KEY_SIZE: u32 = 2048;
 /// Test network name for database isolation
 pub const TEST_NETWORK: &str = "test";
@@ -153,7 +157,7 @@ pub fn commit_and_publish(db: &NetworkDatabase, tx: Transaction<'_>, pending: Pe
 
 // Generate default set of operators with pubkey for testing
 fn generate_default_operators() -> (Vec<Operator>, Rsa<Public>) {
-    let operators: Vec<Operator> = (0..DEFAULT_NUM_OPERATORS)
+    let operators: Vec<Operator> = (FIRST_OPERATOR_ID..FIRST_OPERATOR_ID + DEFAULT_NUM_OPERATORS)
         .map(generators::operator::with_id)
         .collect();
     let pubkey = operators[0].rsa_pubkey.clone();
@@ -165,7 +169,8 @@ fn generate_default_operators() -> (Vec<Operator>, Rsa<Public>) {
 // - There are DEFAULT_NUM_OPERATORS operators in the network
 // - There is a single cluster with a single validator
 // - The operators acting on behalf of the validator are all of the operators in the network
-// - Each operator has a piece of the keyshare for the validator
+// - Each operator has a piece of the keyshare for the validator, split from one validator key so
+//   the share public keys pass the startup interpolation check
 fn build_populated_fixture(
     db: NetworkDatabase,
     operators: Vec<Operator>,
@@ -184,14 +189,8 @@ fn build_populated_fixture(
     // Create cluster with these operators
     let cluster = generators::cluster::with_operators(&operators);
 
-    // Generate validator for this cluster
-    let validator = generators::validator::random_metadata(cluster.cluster_id);
-
-    // Generate shares - one per operator
-    let shares: Vec<Share> = operators
-        .iter()
-        .map(|op| generators::share::random(cluster.cluster_id, op.id, &validator.public_key))
-        .collect();
+    // Generate validator for this cluster with one consistent share per operator
+    let (validator, shares) = generators::validator::with_consistent_shares(&cluster);
 
     // Insert validator with cluster and shares
     db.insert_validator_tx(
@@ -281,7 +280,10 @@ pub mod generators {
 
     pub mod share {
         use super::*;
-        // Generate a random keyshare
+
+        // Generate a keyshare whose share public key is unrelated to the validator key. A
+        // validator whose shares are all generated this way fails the startup interpolation
+        // check and is not served after a restart.
         pub fn random(
             cluster_id: ClusterId,
             operator_id: OperatorId,
@@ -295,11 +297,49 @@ pub mod generators {
                 encrypted_private_key: [0u8; ENCRYPTED_KEY_LENGTH],
             }
         }
+
+        // Split `validator_key` over the cluster's operators with the quorum threshold, giving
+        // every operator a share public key that lies on the same polynomial as the validator
+        // public key.
+        pub fn consistent(cluster: &Cluster, validator_key: &Keypair) -> Vec<Share> {
+            let validator_pubkey = validator_key.pk.compress();
+
+            split_pubkeys(&validator_key.sk, cluster.cluster_members.iter().copied())
+                .into_iter()
+                .map(|(operator_id, share_pubkey)| Share {
+                    validator_pubkey,
+                    operator_id,
+                    cluster_id: cluster.cluster_id,
+                    share_pubkey,
+                    encrypted_private_key: [0u8; ENCRYPTED_KEY_LENGTH],
+                })
+                .collect()
+        }
+
+        // Split `validator_secret_key` into one share per operator, in `operator_ids` order,
+        // using the quorum for that committee size as the threshold. Returns each operator's
+        // share public key. Operator ids must be nonzero, as they double as Shamir key ids.
+        pub fn split_pubkeys(
+            validator_secret_key: &SecretKey,
+            operator_ids: impl IntoIterator<Item = OperatorId>,
+        ) -> Vec<(OperatorId, PublicKeyBytes)> {
+            let ids: Vec<KeyId> = operator_ids
+                .into_iter()
+                .map(|operator_id| {
+                    KeyId::try_from(operator_id.0).expect("operator ids must be nonzero key ids")
+                })
+                .collect();
+            let threshold = quorum_size(ids.len()) as u64;
+
+            bls_lagrange::split(validator_secret_key, threshold, ids)
+                .expect("validator key should split over the operators")
+                .into_iter()
+                .map(|(id, secret)| (OperatorId(u64::from(id)), secret.public_key().compress()))
+                .collect()
+        }
     }
 
     pub mod pubkey {
-        use bls::{Keypair, PublicKeyBytes};
-
         use super::*;
 
         // Generate a random RSA public key for operators
@@ -329,6 +369,19 @@ pub mod generators {
                 index: Some(ValidatorIndex(rand::rng().random_range(0..100))),
                 graffiti: Graffiti::default(),
             }
+        }
+
+        // Generate a validator in `cluster` together with one share per cluster operator, all
+        // split from the validator's own key so the share set passes the startup interpolation
+        // check and survives a database reopen.
+        pub fn with_consistent_shares(cluster: &Cluster) -> (ValidatorMetadata, Vec<Share>) {
+            let validator_key = Keypair::random();
+            let validator = ValidatorMetadata {
+                public_key: validator_key.pk.compress(),
+                ..random_metadata(cluster.cluster_id)
+            };
+            let shares = share::consistent(cluster, &validator_key);
+            (validator, shares)
         }
     }
 }

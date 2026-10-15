@@ -84,14 +84,81 @@ pub fn create_valid_shares_data_for_owner_and_nonce(
 /// Generate valid shares data for a specific validator key, owner, and nonce.
 ///
 /// This lets integration tests reuse the same validator pubkey across multiple
-/// `ValidatorAdded` events while still producing owner-specific signatures.
+/// `ValidatorAdded` events while still producing owner-specific signatures. The share public
+/// keys are a real threshold split of `validator_secret_key` over `operator_ids`, so they pass
+/// the event processor's share public key validation.
 pub fn create_valid_shares_data_for_validator_owner_and_nonce(
     operator_ids: &[u64],
     validator_secret_key: &SecretKey,
     owner: Address,
     nonce: u16,
 ) -> (Bytes, PublicKeyBytes) {
+    let share_pubkeys = split_share_public_keys(validator_secret_key, operator_ids);
+    encode_shares_data(
+        operator_ids,
+        validator_secret_key,
+        &share_pubkeys,
+        owner,
+        nonce,
+    )
+}
+
+/// Generate shares data whose owner signature is valid but whose share public keys are not a
+/// consistent split of the validator key: the share for the last operator is replaced with an
+/// independent random key, so it does not lie on the polynomial defined by the other shares.
+///
+/// Returns `(shares_data, validator_public_key)`, like the valid fixture.
+pub fn create_inconsistent_shares_data_for_validator_owner_and_nonce(
+    operator_ids: &[u64],
+    validator_secret_key: &SecretKey,
+    owner: Address,
+    nonce: u16,
+) -> (Bytes, PublicKeyBytes) {
+    let mut share_pubkeys = split_share_public_keys(validator_secret_key, operator_ids);
+    let last = share_pubkeys
+        .last_mut()
+        .expect("operator_ids must not be empty");
+    *last = SecretKey::random().public_key().serialize();
+    encode_shares_data(
+        operator_ids,
+        validator_secret_key,
+        &share_pubkeys,
+        owner,
+        nonce,
+    )
+}
+
+/// Split `validator_secret_key` into one share per operator id, in `operator_ids` order, using
+/// the quorum for that committee size as the threshold. Returns the serialized share pubkeys.
+fn split_share_public_keys(
+    validator_secret_key: &SecretKey,
+    operator_ids: &[u64],
+) -> Vec<[u8; BLS_PUBLIC_KEY_LENGTH]> {
+    generators::share::split_pubkeys(
+        validator_secret_key,
+        operator_ids.iter().copied().map(OperatorId),
+    )
+    .into_iter()
+    .map(|(_, share_pubkey)| share_pubkey.serialize())
+    .collect()
+}
+
+/// Encode `signature || share pubkeys || encrypted keys` the way the contract emits
+/// `ValidatorAdded.shares`, signing `"{owner}:{nonce}"` with the validator key. The encrypted
+/// key bytes are synthetic since the event processor only checks their length.
+fn encode_shares_data(
+    operator_ids: &[u64],
+    validator_secret_key: &SecretKey,
+    share_pubkeys: &[[u8; BLS_PUBLIC_KEY_LENGTH]],
+    owner: Address,
+    nonce: u16,
+) -> (Bytes, PublicKeyBytes) {
     let operator_count = operator_ids.len();
+    assert_eq!(
+        share_pubkeys.len(),
+        operator_count,
+        "one share pubkey per operator"
+    );
 
     // Calculate expected length: signature + (public_keys * count) + (encrypted_keys * count)
     let expected_length = BLS_SIGNATURE_LENGTH
@@ -114,13 +181,9 @@ pub fn create_valid_shares_data_for_validator_owner_and_nonce(
     let signature = validator_secret_key.sign(message);
     shares_bytes.extend_from_slice(&signature.serialize());
 
-    // 2. Add public keys (48 bytes each)
-    for &_operator_id in operator_ids {
-        // Generate public key for each operator
-        let operator_key = SecretKey::random();
-        let pub_key = operator_key.public_key();
-        let pub_key_bytes = pub_key.serialize();
-        shares_bytes.extend_from_slice(&pub_key_bytes);
+    // 2. Add share public keys (48 bytes each), in operator id order
+    for share_pubkey in share_pubkeys {
+        shares_bytes.extend_from_slice(share_pubkey);
     }
 
     // 3. Add encrypted private keys (256 bytes each)
