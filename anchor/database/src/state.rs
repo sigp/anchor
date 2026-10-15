@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use base64::prelude::*;
 use bls::PublicKeyBytes;
@@ -6,8 +9,9 @@ use openssl::{pkey::Public, rsa::Rsa};
 use rusqlite::{OptionalExtension, params};
 use ssv_types::{
     Cluster, ClusterId, ClusterMember, CommitteeId, CommitteeInfo, IndexSet, Operator, OperatorId,
-    Share, ValidatorIndex, ValidatorMetadata,
+    Share, ValidatorIndex, ValidatorMetadata, validate_share_public_keys,
 };
+use tracing::error;
 use types::Address;
 
 use crate::{
@@ -56,6 +60,11 @@ impl NetworkState {
         let validator_map = Self::fetch_validators(&conn)?;
         // 4) ClusterId -> Vec<Share>
         let share_map = id.map(|id| Self::fetch_shares(&conn, id)).transpose()?;
+        // 4b) ValidatorPubkey -> every operator's share pubkey, for validators in our clusters
+        let committee_share_pubkeys = id
+            .map(|id| Self::fetch_committee_share_pubkeys(&conn, id))
+            .transpose()?
+            .unwrap_or_default();
         // 5) Owner -> Nonce (u16)
         let nonces = Self::fetch_nonces(&conn)?;
 
@@ -105,15 +114,36 @@ impl NetworkState {
                     && let Some(shares) = share_map.get(cluster_id)
                 {
                     for share in shares {
-                        if share.validator_pubkey == validator.public_key {
-                            shares_multi.insert_or_update(
-                                &validator.public_key,
-                                cluster_id,
-                                &cluster.owner,
-                                &cluster.committee_id(),
-                                share.clone(),
-                            );
+                        if share.validator_pubkey != validator.public_key {
+                            continue;
                         }
+
+                        // Stored shares may predate the `ValidatorAdded` interpolation check.
+                        // Like go-ssv, keep the rows but do not serve duties for a validator
+                        // whose shares cannot reconstruct its key.
+                        let share_pubkeys = committee_share_pubkeys
+                            .get(&validator.public_key)
+                            .map(Vec::as_slice)
+                            .unwrap_or_default();
+                        if let Err(e) =
+                            validate_share_public_keys(&validator.public_key, share_pubkeys)
+                        {
+                            error!(
+                                validator_pubkey = %validator.public_key,
+                                cluster_id = ?cluster_id,
+                                error = %e,
+                                "Skipping validator with invalid share public keys"
+                            );
+                            continue;
+                        }
+
+                        shares_multi.insert_or_update(
+                            &validator.public_key,
+                            cluster_id,
+                            &cluster.owner,
+                            &cluster.committee_id(),
+                            share.clone(),
+                        );
                     }
                 }
             }
@@ -128,6 +158,30 @@ impl NetworkState {
             },
             single_state,
         })
+    }
+
+    /// Every operator's share public key for each validator in a cluster that operator `id`
+    /// belongs to, keyed by validator public key.
+    fn fetch_committee_share_pubkeys(
+        conn: &PoolConn,
+        id: OperatorId,
+    ) -> Result<HashMap<PublicKeyBytes, Vec<(OperatorId, PublicKeyBytes)>>, DatabaseError> {
+        let parse_pubkey = |pubkey: String| {
+            PublicKeyBytes::from_str(&pubkey)
+                .map_err(|e| DatabaseError::SQLError(format!("Invalid pubkey in shares: {e}")))
+        };
+        let mut stmt = conn.prepare(sql_operations::GET_COMMITTEE_SHARE_PUBKEYS)?;
+        let mut rows = stmt.query(params![id])?;
+        let mut map: HashMap<PublicKeyBytes, Vec<(OperatorId, PublicKeyBytes)>> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let validator_pubkey = parse_pubkey(row.get(0)?)?;
+            let operator_id = OperatorId(row.get(1)?);
+            let share_pubkey = parse_pubkey(row.get(2)?)?;
+            map.entry(validator_pubkey)
+                .or_default()
+                .push((operator_id, share_pubkey));
+        }
+        Ok(map)
     }
 
     // Get the last block that was processed and saved to db

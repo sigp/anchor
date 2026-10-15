@@ -17,7 +17,7 @@ pub mod test_utils;
 
 pub use indexmap::IndexSet;
 pub use round::Round;
-pub use share::ENCRYPTED_KEY_LENGTH;
+pub use share::{ENCRYPTED_KEY_LENGTH, ShareValidationError, validate_share_public_keys};
 pub use ssz_types::{VariableList, typenum};
 use typenum::Unsigned;
 pub use types::{Epoch, Slot};

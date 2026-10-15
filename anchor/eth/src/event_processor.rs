@@ -6,7 +6,9 @@ use bls::PublicKeyBytes;
 use database::{NetworkDatabase, PendingStateUpdates, SlashingProtection};
 use indexmap::IndexSet;
 use rusqlite::{Connection, Transaction};
-use ssv_types::{Cluster, ClusterId, Operator, OperatorId, ValidatorIndex};
+use ssv_types::{
+    Cluster, ClusterId, Operator, OperatorId, ValidatorIndex, validate_share_public_keys,
+};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
@@ -510,6 +512,16 @@ impl EventProcessor {
                 "Signature verification failed".to_string(),
             ));
         }
+
+        // The owner proved it holds the validator key, but the shares may still be inconsistent
+        // with it. Reject those like go-ssv does, so that both clients agree on which validators
+        // a cluster runs.
+        let share_pubkeys: Vec<_> = shares
+            .iter()
+            .map(|share| (share.operator_id, share.share_pubkey))
+            .collect();
+        validate_share_public_keys(&validator_pubkey, &share_pubkeys)
+            .map_err(|e| ExecutionError::InvalidEvent(format!("Invalid share public keys: {e}")))?;
 
         self.validate_validator_added_conflict(&owner, &validator_pubkey, &cluster_id, tx)?;
 

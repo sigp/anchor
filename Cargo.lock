@@ -2417,6 +2417,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bls",
+ "bls_lagrange",
  "once_cell",
  "openssl",
  "r2d2",
@@ -7840,6 +7841,7 @@ dependencies = [
  "arbitrary",
  "base64",
  "bls",
+ "bls_lagrange",
  "derive_more 2.1.1",
  "eth2",
  "ethereum_ssz",
@@ -7848,6 +7850,7 @@ dependencies = [
  "indexmap 2.13.0",
  "openssl",
  "operator_key",
+ "rand 0.9.2",
  "rusqlite",
  "sha2",
  "slashing_protection",
