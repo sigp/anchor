@@ -2349,6 +2349,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bls",
+ "bls_lagrange",
  "once_cell",
  "openssl",
  "r2d2",
@@ -7602,6 +7603,7 @@ dependencies = [
  "arbitrary",
  "base64",
  "bls",
+ "bls_lagrange",
  "derive_more 2.1.1",
  "eth2",
  "ethereum_ssz",

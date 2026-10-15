@@ -5,7 +5,7 @@ pub mod blst;
 
 pub use self::blst::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     InternalError,
     InvalidThreshold,

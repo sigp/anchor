@@ -1110,3 +1110,258 @@ async fn test_validator_exit_channel_failure_is_non_fatal() {
     );
     assert_eq!(test.processor.db.state().get_last_processed_block(), 12402);
 }
+
+/// A `ValidatorAdded` whose share public keys are not a consistent threshold split of the
+/// validator key must be skipped like any other malformed event: nothing is stored for it, but
+/// the owner nonce is still consumed (the contract bumps it regardless), the block still commits,
+/// and a later valid registration from the same owner at the advanced nonce is accepted.
+#[tokio::test]
+async fn test_inconsistent_share_pubkeys_skipped_and_owner_nonce_still_advances() {
+    setup_tracing();
+
+    // Arrange: operators in block N, a registration with inconsistent shares in block N+1, and a
+    // valid registration from the same owner at the advanced nonce in block N+2.
+    let mut test = ProcessorFixture::new_empty();
+    let owner = Address::from_str(TEST_CLUSTER_OWNER).expect("Invalid address");
+    let operator_ids = vec![1u64, 2u64, 3u64, 4u64];
+    let operator_block = 12420;
+    let inconsistent_block = 12421;
+    let valid_block = 12422;
+
+    let mut setup_logs = Vec::new();
+    for (log_index, operator_id) in operator_ids.iter().enumerate() {
+        setup_logs.push(create_operator_added_log_at_position(
+            *operator_id,
+            Address::random(),
+            create_valid_rsa_public_key_bytes(),
+            1000 + *operator_id,
+            operator_block,
+            0,
+            log_index as u64,
+        ));
+    }
+
+    let inconsistent_secret_key = SecretKey::random();
+    let (inconsistent_shares, inconsistent_pubkey_bytes) =
+        create_inconsistent_shares_data_for_validator_owner_and_nonce(
+            &operator_ids,
+            &inconsistent_secret_key,
+            owner,
+            0,
+        );
+    setup_logs.push(create_validator_added_log_at_position(
+        owner,
+        operator_ids.clone(),
+        Bytes::from(inconsistent_pubkey_bytes.serialize().to_vec()),
+        inconsistent_shares,
+        inconsistent_block,
+        0,
+        0,
+    ));
+
+    // Act: process the operators and the inconsistent registration.
+    let result = test
+        .processor
+        .process_logs(setup_logs, true, inconsistent_block);
+
+    // Assert: the batch commits, the inconsistent registration leaves no validator state behind,
+    // and the owner nonce was still consumed.
+    assert!(
+        result.is_ok(),
+        "inconsistent share pubkeys should be skipped, not abort the batch"
+    );
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        inconsistent_block,
+        "the block containing the inconsistent registration should still commit"
+    );
+
+    let inconsistent_pubkey_str =
+        format!("0x{}", hex::encode(inconsistent_pubkey_bytes.serialize()));
+    let cluster_id = compute_cluster_id(owner, &operator_ids);
+    {
+        let mut conn = test
+            .processor
+            .db
+            .connection()
+            .expect("Failed to get database connection");
+        let tx = conn.transaction().expect("Failed to start transaction");
+        assert!(
+            queries::get_validator(&inconsistent_pubkey_str, &tx).is_none(),
+            "no validator metadata should be stored for inconsistent shares"
+        );
+        assert!(
+            queries::get_shares(&inconsistent_pubkey_bytes, &tx).is_none(),
+            "no shares should be stored for inconsistent shares"
+        );
+        assert!(
+            queries::get_cluster(cluster_id, &tx).is_none(),
+            "no cluster should be created for inconsistent shares"
+        );
+    }
+    assert_eq!(
+        test.processor.db.state().metadata().length(),
+        0,
+        "no validator metadata should be loaded in memory for inconsistent shares"
+    );
+    assert_eq!(
+        test.processor.db.state().shares().length(),
+        0,
+        "no shares should be loaded in memory for inconsistent shares"
+    );
+    assert_eq!(
+        test.processor
+            .db
+            .get_nonce_for_owner(owner)
+            .expect("Failed to read owner nonce"),
+        Some(0),
+        "the owner nonce should be consumed by the skipped registration"
+    );
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            panic!("inconsistent registration should not queue index sync: {validator_key:?}");
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {}
+    }
+
+    // Act: the same owner registers a validator with consistent shares at the advanced nonce.
+    let valid_secret_key = SecretKey::random();
+    let (valid_shares, valid_pubkey_bytes) = create_valid_shares_data_for_validator_owner_and_nonce(
+        &operator_ids,
+        &valid_secret_key,
+        owner,
+        1,
+    );
+    let valid_log = create_validator_added_log_at_position(
+        owner,
+        operator_ids.clone(),
+        Bytes::from(valid_pubkey_bytes.serialize().to_vec()),
+        valid_shares,
+        valid_block,
+        0,
+        0,
+    );
+    let result = test
+        .processor
+        .process_logs(vec![valid_log], true, valid_block);
+
+    // Assert: the valid registration is accepted and progress advances past the skipped block.
+    assert!(
+        result.is_ok(),
+        "valid registration at the advanced nonce should succeed"
+    );
+    let valid_pubkey_str = format!("0x{}", hex::encode(valid_pubkey_bytes.serialize()));
+    verify_validator_added(&test.processor, &valid_pubkey_str);
+    verify_cluster_created(&test.processor, owner, &operator_ids);
+    assert_eq!(
+        test.processor.db.state().get_last_processed_block(),
+        valid_block,
+        "processing should advance past the skipped registration's block"
+    );
+    assert_eq!(
+        test.processor
+            .db
+            .get_nonce_for_owner(owner)
+            .expect("Failed to read owner nonce"),
+        Some(1),
+        "the valid registration should consume the next nonce"
+    );
+
+    tokio::select! {
+        validator_key = test.index_sync_rx.recv() => {
+            assert_eq!(
+                validator_key,
+                Some(valid_pubkey_bytes),
+                "only the valid registration should queue index sync"
+            );
+        }
+        _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+            panic!("the valid registration should queue index sync");
+        }
+    }
+}
+
+/// Share public key validation must accept a correct threshold split for every canonical SSV
+/// committee size (4, 7, 10 and 13 operators), not just the 4-operator case the other tests use.
+#[tokio::test]
+async fn test_validator_added_accepts_valid_shares_for_all_committee_sizes() {
+    setup_tracing();
+
+    for committee_size in [4u64, 7, 10, 13] {
+        // Arrange: a fresh network with `committee_size` operators and one valid registration.
+        let mut test = ProcessorFixture::new_empty();
+        let owner = Address::random();
+        let operator_ids: Vec<u64> = (1..=committee_size).collect();
+        let operator_block = 12430;
+        let validator_block = 12431;
+
+        let mut logs = Vec::new();
+        for (log_index, operator_id) in operator_ids.iter().enumerate() {
+            logs.push(create_operator_added_log_at_position(
+                *operator_id,
+                Address::random(),
+                create_valid_rsa_public_key_bytes(),
+                1000 + *operator_id,
+                operator_block,
+                0,
+                log_index as u64,
+            ));
+        }
+
+        let (shares, validator_pubkey_bytes) =
+            create_valid_shares_data_for_owner_and_nonce(&operator_ids, owner, 0);
+        logs.push(create_validator_added_log_at_position(
+            owner,
+            operator_ids.clone(),
+            Bytes::from(validator_pubkey_bytes.serialize().to_vec()),
+            shares,
+            validator_block,
+            0,
+            0,
+        ));
+
+        // Act
+        let result = test.processor.process_logs(logs, true, validator_block);
+
+        // Assert: the registration is accepted and one share per operator is stored.
+        assert!(
+            result.is_ok(),
+            "valid registration with {committee_size} operators should succeed"
+        );
+        let validator_pubkey_str = format!("0x{}", hex::encode(validator_pubkey_bytes.serialize()));
+        verify_validator_added(&test.processor, &validator_pubkey_str);
+        verify_cluster_created(&test.processor, owner, &operator_ids);
+
+        let mut conn = test
+            .processor
+            .db
+            .connection()
+            .expect("Failed to get database connection");
+        let tx = conn.transaction().expect("Failed to start transaction");
+        let stored_shares = queries::get_shares(&validator_pubkey_bytes, &tx)
+            .unwrap_or_else(|| panic!("shares should be stored for {committee_size} operators"));
+        let mut stored_operator_ids: Vec<u64> = stored_shares
+            .iter()
+            .map(|share| share.operator_id.0)
+            .collect();
+        stored_operator_ids.sort_unstable();
+        assert_eq!(
+            stored_operator_ids, operator_ids,
+            "one share per operator should be stored for {committee_size} operators"
+        );
+
+        tokio::select! {
+            validator_key = test.index_sync_rx.recv() => {
+                assert_eq!(
+                    validator_key,
+                    Some(validator_pubkey_bytes),
+                    "registration with {committee_size} operators should queue index sync"
+                );
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                panic!("registration with {committee_size} operators should queue index sync");
+            }
+        }
+    }
+}

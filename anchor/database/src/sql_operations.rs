@@ -111,6 +111,12 @@ pub const GET_SHARES: &str = r#"
     SELECT share_pubkey, encrypted_key, operator_id, cluster_id, validator_pubkey
     FROM shares WHERE operator_id = ?1
 "#;
+pub const GET_COMMITTEE_SHARE_PUBKEYS: &str = r#"
+    SELECT s.validator_pubkey, s.operator_id, s.share_pubkey
+    FROM shares s
+    JOIN cluster_members cm ON cm.cluster_id = s.cluster_id
+    WHERE cm.operator_id = ?1
+"#;
 pub const GET_SHARE_PUBKEYS_FOR_VALIDATOR: &str = r#"
     SELECT operator_id, share_pubkey
     FROM shares WHERE validator_pubkey = ?1

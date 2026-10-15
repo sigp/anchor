@@ -5,11 +5,12 @@ edition = { workspace = true }
 authors = ["Sigma Prime <contact@sigmaprime.io>"]
 
 [features]
-test-utils = []
+test-utils = ["dep:bls_lagrange"]
 
 [dependencies]
 base64 = { workspace = true }
 bls = { workspace = true }
+bls_lagrange = { workspace = true, optional = true }
 once_cell = { workspace = true }
 openssl = { workspace = true }
 r2d2 = { workspace = true }
@@ -25,5 +26,6 @@ tracing = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+bls_lagrange = { workspace = true }
 rand = { workspace = true }
 tempfile = "3.14.0"
