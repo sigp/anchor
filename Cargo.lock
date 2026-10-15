@@ -7612,6 +7612,7 @@ dependencies = [
  "indexmap 2.13.0",
  "openssl",
  "operator_key",
+ "rand 0.9.2",
  "rusqlite",
  "sha2",
  "slashing_protection",

@@ -35,4 +35,5 @@ typenum = { workspace = true }
 types = { workspace = true }
 
 [dev-dependencies]
+rand = { workspace = true }
 strum = { workspace = true }

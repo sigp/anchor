@@ -386,6 +386,16 @@ mod tests {
     /// `1..=n`.
     const SPARSE_IDS: [u64; 4] = [7, 42, 13, 1000];
 
+    /// The committees go-ssv's `TestValidateSharePublicKeys` runs every case against: one of
+    /// each canonical size, mixing contiguous and sparse ids. Mirrored here so both
+    /// implementations are exercised on the same inputs.
+    const GO_SSV_COMMITTEES: [&[u64]; 4] = [
+        &[1, 2, 3, 4],
+        &[5, 17, 23, 42, 100, 101, 999],
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        &[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+    ];
+
     /// SSV quorum threshold: `2f + 1` with `f = (n - 1) / 3`.
     fn quorum_threshold(committee_size: usize) -> usize {
         2 * ((committee_size - 1) / 3) + 1
@@ -478,6 +488,23 @@ mod tests {
         assert_eq!(result, Ok(()));
     }
 
+    #[test]
+    fn test_validate_share_public_keys_accepts_go_ssv_committees() {
+        let rng = &mut StdRng::seed_from_u64(0x5A4E5EED0000000C);
+
+        for ids in GO_SSV_COMMITTEES {
+            // Arrange
+            let (validator_pubkey, shares, threshold) =
+                valid_committee(rng, key_ids(ids.iter().copied()));
+
+            // Act
+            let result = validate_share_public_keys(&validator_pubkey, &shares, threshold);
+
+            // Assert
+            assert_eq!(result, Ok(()), "committee {ids:?} should validate");
+        }
+    }
+
     // ==================== validate_share_public_keys: rejected share sets ====================
 
     /// Replacing a share outside the base set must be reported against that share's id: the base
@@ -566,6 +593,166 @@ mod tests {
                 id: first_remaining_id
             })
         );
+    }
+
+    /// go-ssv "one share replaced": for every position, the share is swapped for the share of a
+    /// different split at the same id. Base and remaining positions report different errors (see
+    /// the two tampered-share tests above), so only rejection is asserted here.
+    #[test]
+    fn test_validate_share_public_keys_rejects_single_replaced_share_at_every_position() {
+        let rng = &mut StdRng::seed_from_u64(0x5A4E5EED0000000D);
+
+        for ids in GO_SSV_COMMITTEES {
+            let (validator_pubkey, shares, threshold) =
+                valid_committee(rng, key_ids(ids.iter().copied()));
+            let (_, other_shares, _) = valid_committee(rng, key_ids(ids.iter().copied()));
+
+            for position in 0..shares.len() {
+                // Arrange
+                let mut tampered = shares.clone();
+                tampered[position].1 = other_shares[position].1;
+
+                // Act
+                let result = validate_share_public_keys(&validator_pubkey, &tampered, threshold);
+
+                // Assert
+                assert!(
+                    result.is_err(),
+                    "committee {ids:?}: replaced share at position {position} must be rejected"
+                );
+            }
+        }
+    }
+
+    /// go-ssv "shares evaluated at wrong ids": the shares lie on one polynomial, but at ids
+    /// offset by 1000 from the ones they are presented with. Interpolating at the presented ids
+    /// evaluates a shifted polynomial whose free coefficient is not the validator key, so the
+    /// first share past the base is reported.
+    #[test]
+    fn test_validate_share_public_keys_rejects_shares_evaluated_at_wrong_ids() {
+        let rng = &mut StdRng::seed_from_u64(0x5A4E5EED0000000E);
+
+        for ids in GO_SSV_COMMITTEES {
+            // Arrange
+            let threshold = quorum_threshold(ids.len());
+            let key = random_key(rng).unwrap();
+            let shifted_shares = split_share_public_keys(
+                rng,
+                &key,
+                threshold,
+                key_ids(ids.iter().map(|id| id + 1000)),
+            );
+            let shares = key_ids(ids.iter().copied())
+                .into_iter()
+                .zip(shifted_shares)
+                .map(|(id, (_, pubkey))| (id, pubkey))
+                .collect::<Vec<_>>();
+            let validator_pubkey = PublicKeyBytes::from(key.public_key());
+
+            // Act
+            let result = validate_share_public_keys(&validator_pubkey, &shares, threshold);
+
+            // Assert
+            assert_eq!(
+                result,
+                Err(SharePublicKeyError::NotReconstructed {
+                    id: ids[threshold - 1]
+                }),
+                "committee {ids:?}: shares at ids + 1000 must be rejected"
+            );
+        }
+    }
+
+    /// go-ssv "polynomial degree too low", for every degree from 0 to `quorum - 2`. Degree 0
+    /// (every share equal to the validator key) is built by hand because `split_with_rng`
+    /// rejects thresholds below 2; the remaining degrees are split at `threshold = degree + 1`.
+    #[test]
+    fn test_validate_share_public_keys_rejects_every_polynomial_degree_below_threshold() {
+        let rng = &mut StdRng::seed_from_u64(0x5A4E5EED0000000F);
+
+        for ids in GO_SSV_COMMITTEES {
+            let threshold = quorum_threshold(ids.len());
+            let key = random_key(rng).unwrap();
+            let validator_pubkey = PublicKeyBytes::from(key.public_key());
+
+            for low_threshold in 1..threshold {
+                // Arrange
+                let shares = if low_threshold == 1 {
+                    key_ids(ids.iter().copied())
+                        .into_iter()
+                        .map(|id| (id, validator_pubkey))
+                        .collect()
+                } else {
+                    split_share_public_keys(rng, &key, low_threshold, key_ids(ids.iter().copied()))
+                };
+
+                // Act
+                let result = validate_share_public_keys(&validator_pubkey, &shares, threshold);
+
+                // Assert
+                assert_eq!(
+                    result,
+                    Err(SharePublicKeyError::DegreeBelowThreshold),
+                    "committee {ids:?}: polynomial degree {} must be rejected",
+                    low_threshold - 1
+                );
+            }
+        }
+    }
+
+    /// go-ssv "polynomial degree too high": shares split at `threshold + 1` lie on a polynomial
+    /// of degree `threshold`, so `threshold` points (the base plus the first remaining share) do
+    /// not determine it and interpolation misses the validator key at that share.
+    #[test]
+    fn test_validate_share_public_keys_rejects_polynomial_degree_above_threshold() {
+        let rng = &mut StdRng::seed_from_u64(0x5A4E5EED00000010);
+
+        for ids in GO_SSV_COMMITTEES {
+            // Arrange
+            let threshold = quorum_threshold(ids.len());
+            let key = random_key(rng).unwrap();
+            let shares =
+                split_share_public_keys(rng, &key, threshold + 1, key_ids(ids.iter().copied()));
+            let validator_pubkey = PublicKeyBytes::from(key.public_key());
+
+            // Act
+            let result = validate_share_public_keys(&validator_pubkey, &shares, threshold);
+
+            // Assert
+            assert_eq!(
+                result,
+                Err(SharePublicKeyError::NotReconstructed {
+                    id: ids[threshold - 1]
+                }),
+                "committee {ids:?}: polynomial degree {threshold} must be rejected"
+            );
+        }
+    }
+
+    /// go-ssv "shares out of order": the first and last share public keys are swapped while the
+    /// ids stay in place, so two shares are presented at the wrong ids.
+    #[test]
+    fn test_validate_share_public_keys_rejects_swapped_first_and_last_share_public_keys() {
+        let rng = &mut StdRng::seed_from_u64(0x5A4E5EED00000011);
+
+        for ids in GO_SSV_COMMITTEES {
+            // Arrange
+            let (validator_pubkey, mut shares, threshold) =
+                valid_committee(rng, key_ids(ids.iter().copied()));
+            let last = shares.len() - 1;
+            let first_pubkey = shares[0].1;
+            shares[0].1 = shares[last].1;
+            shares[last].1 = first_pubkey;
+
+            // Act
+            let result = validate_share_public_keys(&validator_pubkey, &shares, threshold);
+
+            // Assert
+            assert!(
+                result.is_err(),
+                "committee {ids:?}: swapped first and last share public keys must be rejected"
+            );
+        }
     }
 
     // ==================== validate_share_public_keys: input validation ====================
