@@ -93,18 +93,18 @@ async fn stored_root_is_the_decoded_block_root_not_the_qbft_wrapper_hash() {
     let block = validator_store_state.gloas_block();
     let expected_root = block.canonical_root();
     let expected_context = {
-        let bid = &block
+        let signed_bid = block
             .body()
             .signed_execution_payload_bid()
-            .expect("a Gloas block carries a bid")
-            .message;
+            .expect("a Gloas block carries a bid");
+        let bid = signed_bid.message();
         DecidedBlockContext {
             beacon_block_root: expected_root,
             parent_block_root: block.parent_root(),
-            execution_requests_root: bid.execution_requests_root,
+            execution_requests_root: bid.execution_requests_root(),
             payload_root: Hash256::ZERO,
-            builder_index: bid.builder_index,
-            block_hash: bid.block_hash,
+            builder_index: bid.builder_index(),
+            block_hash: bid.block_hash(),
             // The echoing mock decides exactly the proposed block, so the write site must
             // observe the local proposal as the decided one.
             built_locally: true,

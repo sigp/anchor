@@ -7,6 +7,7 @@ authors = ["Sigma Prime <contact@sigmaprime.io>"]
 [dependencies]
 dirs = { workspace = true }
 discv5 = { workspace = true }
+enr = { workspace = true }
 ethereum_ssz = { workspace = true }
 fork = { workspace = true }
 futures = { workspace = true }
@@ -16,7 +17,7 @@ libp2p = { workspace = true }
 message_receiver = { workspace = true }
 metrics = { workspace = true }
 network_utils = { workspace = true }
-peer-store = { package = "libp2p-peer-store", git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+peer-store = { package = "libp2p-peer-store", git = "https://github.com/sigp/rust-libp2p.git", rev = "accba72bb4eafc692ac518339ef2c4080b6f8461" }
 prometheus-client = { workspace = true }
 prost = "0.14.4"
 rand = { workspace = true }
@@ -35,7 +36,7 @@ types = { workspace = true }
 version = { workspace = true }
 
 [dev-dependencies]
-libp2p-swarm-test = { git = "https://github.com/sigp/rust-libp2p.git", rev = "c774d4e71357d7cd2f792c4767d616d2dd369ee3" }
+libp2p-swarm-test = { git = "https://github.com/sigp/rust-libp2p.git", rev = "accba72bb4eafc692ac518339ef2c4080b6f8461" }
 message_receiver = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }

@@ -347,6 +347,28 @@ mod tests {
     }
 
     #[test]
+    fn test_constant_networks_resolve_gloas_fork_epoch() {
+        // Arrange
+        let test_cases = [
+            (HOODI, Some(Epoch::new(132352))),
+            (SEPOLIA, Some(Epoch::new(353024))),
+            (MAINNET, None),
+        ];
+
+        for (network, expected_epoch) in test_cases {
+            // Act
+            let config = SsvNetworkConfig::constant(network).unwrap().unwrap();
+            let spec = config
+                .eth2_network
+                .chain_spec::<types::MainnetEthSpec>()
+                .unwrap();
+
+            // Assert
+            assert_eq!(spec.gloas_fork_epoch, expected_epoch, "{network}");
+        }
+    }
+
+    #[test]
     fn test_constant_networks_have_correct_network_names() {
         // Arrange & Act & Assert
         let test_cases = [

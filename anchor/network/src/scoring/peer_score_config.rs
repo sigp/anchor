@@ -183,7 +183,7 @@ mod tests {
         loop {
             tokio::select! {
                 event = sender.select_next_some() => {
-                    if let SwarmEvent::Behaviour(Event::Subscribed { peer_id, topic: subscribed }) = event
+                    if let SwarmEvent::Behaviour(Event::Subscribed { peer_id, topic: subscribed, .. }) = event
                         && peer_id == *receiver.local_peer_id()
                         && subscribed == topic.hash()
                     {

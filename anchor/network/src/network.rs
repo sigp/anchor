@@ -303,7 +303,7 @@ impl<R: MessageReceiver> Network<R> {
             } => {
                 self.handle_gossipsub_message(propagation_source, message_id, message);
             }
-            gossipsub::Event::Subscribed { peer_id, topic } => {
+            gossipsub::Event::Subscribed { peer_id, topic, .. } => {
                 if let Some(parsed) = topic::parse_topic(&topic) {
                     self.peer_manager().set_peer_subscription(
                         peer_id,

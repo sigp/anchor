@@ -3,10 +3,10 @@ use std::{
     time::Duration,
 };
 
-use discv5::libp2p_identity::PeerId;
 use libp2p::{
     Multiaddr, allow_block_list,
     core::{Endpoint, transport::PortUse},
+    identity::PeerId,
     swarm::{ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour},
 };
 use tracing::debug;

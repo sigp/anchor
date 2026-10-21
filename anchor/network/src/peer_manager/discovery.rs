@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 
-use discv5::libp2p_identity::PeerId;
 use libp2p::{
     Multiaddr,
+    identity::PeerId,
     swarm::{
         FromSwarm, NewExternalAddrOfPeer,
         dial_opts::{DialOpts, PeerCondition},
