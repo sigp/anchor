@@ -86,6 +86,7 @@ const HTTP_PROPOSER_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_SYNC_COMMITTEE_CONTRIBUTION_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_PTC_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
+const HTTP_INCLUSION_LIST_DUTIES_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_PAYLOAD_ATTESTATION_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT: u32 = 4;
 const HTTP_GET_DEBUG_BEACON_STATE_QUOTIENT: u32 = 4;
@@ -286,6 +287,8 @@ impl Client {
                     sync_duties: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
                     sync_aggregators: slot_duration / HTTP_SYNC_DUTIES_TIMEOUT_QUOTIENT,
                     ptc_duties: slot_duration / HTTP_PTC_DUTIES_TIMEOUT_QUOTIENT,
+                    inclusion_list_duties: slot_duration
+                        / HTTP_INCLUSION_LIST_DUTIES_TIMEOUT_QUOTIENT,
                     payload_attestation: slot_duration / HTTP_PAYLOAD_ATTESTATION_TIMEOUT_QUOTIENT,
                     get_beacon_blocks_ssz: slot_duration
                         / HTTP_GET_BEACON_BLOCK_SSZ_TIMEOUT_QUOTIENT,
