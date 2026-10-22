@@ -26,6 +26,13 @@ fn main() -> Result<(), String> {
         unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     }
 
+    // Both rustls crypto backends (ring and aws-lc-rs) are compiled in, so rustls cannot pick a
+    // process-wide default and panics when a TLS client (e.g. the execution-layer websocket) is
+    // created without an explicit provider. Use aws-lc-rs, matching Lighthouse.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| "Failed to install the rustls crypto provider".to_string())?;
+
     let cli = Cli::parse();
 
     let global_config = GlobalConfig::try_from(&cli.global_flags)
