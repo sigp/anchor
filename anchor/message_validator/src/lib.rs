@@ -782,6 +782,17 @@ fn validate_ssv_message(
     duty_state: &mut DutyState,
     duty_provider: Arc<impl DutiesProvider>,
 ) -> Result<ValidatedSSVMessage, ValidationFailure> {
+    // Reject signers outside the committee before they can create duty state.
+    let committee = &validation_context.committee_info.committee_members;
+    if validation_context
+        .signed_ssv_message
+        .operator_ids()
+        .iter()
+        .any(|signer| !committee.contains(signer))
+    {
+        return Err(ValidationFailure::SignerNotInCommittee);
+    }
+
     let ssv_message = validation_context.signed_ssv_message.ssv_message();
 
     match ssv_message.msg_type() {
