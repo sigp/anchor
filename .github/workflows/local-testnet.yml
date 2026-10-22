@@ -13,7 +13,7 @@ jobs:
   build-docker-image:
     runs-on: warp-ubuntu-latest-x64-16x
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build Docker Image
         # has to be Dockerfile.devnet as spec-minimal is necessary
@@ -32,7 +32,7 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-16x
     needs: build-docker-image
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # TEMPORARY: pinned to the fork branch behind ssvlabs/ssv-mini#37, which adds the
           # pre_register_validators flag (main.star Step 4) + the v2.0.0 payable registration fix.
@@ -41,7 +41,7 @@ jobs:
           ref: a940244a1627257ecf2c6043fd87b594eb0faa8c
           path: ssv-mini
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           path: anchor
 
