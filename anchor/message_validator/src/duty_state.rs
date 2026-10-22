@@ -72,6 +72,11 @@ impl DutyState {
             .or_insert_with(|| OperatorState::new(self.stored_slot_count))
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_operators(&self) -> bool {
+        !self.operators.is_empty()
+    }
+
     /// Updates the duty state with new incoming messages.
     ///
     /// For each operator involved in the signed message, this method:
