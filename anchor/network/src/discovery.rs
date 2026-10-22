@@ -9,17 +9,15 @@ use std::{
     task::{Context, Poll},
 };
 
-use discv5::{
-    Discv5, Enr, ProtocolIdentity,
-    enr::{CombinedKey, Error, NodeId},
-    libp2p_identity::{Keypair, PeerId},
-    multiaddr::Multiaddr,
-};
+use discv5::{Discv5, Enr, ProtocolIdentity};
+use enr::{CombinedKey, Error, NodeId};
 use fork::ForkLifecycle;
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use libp2p::{
+    Multiaddr,
     bytes::Bytes,
     core::{Endpoint, transport::PortUse},
+    identity::{Keypair, PeerId},
     swarm::{
         ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler, THandlerInEvent,
         THandlerOutEvent, ToSwarm, dummy,

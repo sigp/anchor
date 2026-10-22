@@ -1079,9 +1079,9 @@ impl<T: SlotClock, E: EthSpec, C: ConsensusDecider<E> + 'static> AnchorValidator
                 // The block's own parent_root, per SIP-94 §6 (the bid carries an equal copy,
                 // enforced by process_execution_payload_bid, but the block is the source).
                 parent_block_root: decided_block.parent_root(),
-                execution_requests_root: bid.message.execution_requests_root,
-                builder_index: bid.message.builder_index,
-                block_hash: bid.message.block_hash,
+                execution_requests_root: bid.message().execution_requests_root(),
+                builder_index: bid.message().builder_index(),
+                block_hash: bid.message().block_hash(),
                 built_locally: block.tree_hash_root() == decided_root,
             };
             self.record_decided_block_context(validator.public_key, slot, context)

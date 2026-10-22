@@ -1,4 +1,4 @@
-use discv5::libp2p_identity::{Keypair, SigningError};
+use libp2p::identity::{Keypair, SigningError};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use subnet_service::{SubnetBits, SubnetId};

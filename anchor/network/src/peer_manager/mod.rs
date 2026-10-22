@@ -4,11 +4,11 @@ use std::{
     time::Duration,
 };
 
-use discv5::libp2p_identity::PeerId;
 use fork::ForkLifecycle;
 use libp2p::{
     Multiaddr,
     core::{Endpoint, transport::PortUse},
+    identity::PeerId,
     swarm::{
         ConnectionClosed, ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, THandler,
         THandlerInEvent, THandlerOutEvent, ToSwarm, behaviour::ConnectionEstablished,

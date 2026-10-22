@@ -7,10 +7,10 @@ use std::{
     task::{Context, Poll},
 };
 
-use discv5::libp2p_identity::Keypair;
 use fork::ForkLifecycle;
 use libp2p::{
     PeerId, StreamProtocol,
+    identity::Keypair,
     request_response::{
         Behaviour as RequestResponseBehaviour, Config, Event as RequestResponseEvent,
         InboundFailure, Message, OutboundFailure, ProtocolSupport, ResponseChannel,
@@ -353,9 +353,8 @@ mod tests {
 
     use std::sync::LazyLock;
 
-    use discv5::libp2p_identity::Keypair;
     use fork::{Fork, ForkConfig, ForkLifecycle};
-    use libp2p::swarm::Swarm;
+    use libp2p::{identity::Keypair, swarm::Swarm};
     use libp2p_swarm_test::{SwarmExt, drive};
     use ssv_types::domain_type::DomainType;
     use tokio::sync::watch;

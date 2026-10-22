@@ -2,9 +2,8 @@ mod generated {
     pub mod message;
 }
 
-use discv5::libp2p_identity::PublicKey;
 pub use generated::message::Envelope;
-use libp2p::identity::DecodingError;
+use libp2p::identity::{DecodingError, PublicKey};
 use prost::{DecodeError, EncodeError, Message};
 use thiserror::Error;
 

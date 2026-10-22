@@ -3,12 +3,12 @@ use std::{
     ops::Deref,
 };
 
-use discv5::libp2p_identity::PeerId;
 use fork::{Fork, ForkLifecycle};
 use libp2p::{
     Multiaddr,
     connection_limits::{self, ConnectionLimits},
     core::{Endpoint, transport::PortUse},
+    identity::PeerId,
     swarm::{ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour},
 };
 use peer_store::memory_store::MemoryStore;
@@ -83,7 +83,7 @@ impl ConnectionManager {
     /// Create connection limits for a given target peer count.
     fn create_connection_limits(target_peers: usize) -> connection_limits::Behaviour {
         let limits = ConnectionLimits::default()
-            .with_max_pending_incoming(Some(5))
+            .with_max_pending_incoming_per_source(Some(2))
             .with_max_pending_outgoing(Some(16))
             .with_max_established_incoming(Some(
                 (target_peers as f32 * (1.0 + PEER_EXCESS_FACTOR - MIN_OUTBOUND_ONLY_FACTOR)).ceil()
