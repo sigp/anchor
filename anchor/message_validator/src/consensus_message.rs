@@ -601,6 +601,51 @@ mod tests {
         assert_qbft_message_accepted(result, "Expected successful validation");
     }
 
+    /// A signer outside the committee must be rejected before it creates duty state.
+    #[test]
+    fn test_signer_not_in_committee_rejected_before_duty_state() {
+        let committee_info = create_committee_info(FOUR_NODE_COMMITTEE);
+        // Current slot, so without the membership check the message reaches the duty-state checks.
+        let qbft_message = QbftMessageBuilder::new(Role::Committee, QbftMessageType::Prepare)
+            .with_height(0)
+            .build();
+        let signed_msg =
+            create_signed_consensus_message(qbft_message, vec![OperatorId(999)], vec![], vec![]);
+
+        let now = SystemTime::now();
+        let validation_context = ValidationContext {
+            signed_ssv_message: &signed_msg,
+            committee_info: &committee_info,
+            role: Role::Committee,
+            received_at: now,
+            slots_per_epoch: 32,
+            epochs_per_sync_committee_period: 256,
+            sync_committee_size: 512,
+            slot_clock: ManualSlotClock::new(
+                Slot::new(0),
+                now.duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(12),
+            ),
+            operator_pub_keys: &HashMap::new(),
+            fork_schedule: generate_fork_schedule(),
+            spec: Arc::new(types::ChainSpec::mainnet()),
+        };
+
+        let mut duty_state = DutyState::new(64);
+        let result = validate_ssv_message(
+            validation_context,
+            &mut duty_state,
+            Arc::new(MockDutiesProvider::default()),
+        );
+
+        assert_validation_error(
+            result,
+            |failure| matches!(failure, ValidationFailure::SignerNotInCommittee),
+            "SignerNotInCommittee",
+        );
+        assert!(!duty_state.has_operators());
+    }
+
     #[test]
     fn test_early_message_fails_validation() {
         // Generate a key pair
