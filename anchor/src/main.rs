@@ -26,6 +26,13 @@ fn main() -> Result<(), String> {
         unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     }
 
+    // libp2p's QUIC transport enables rustls' aws-lc-rs backend alongside ring, so rustls can no
+    // longer pick a process-wide default and panics when a TLS client (e.g. the execution-layer
+    // websocket) is created without an explicit provider. Select ring, as before.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| "Failed to install the rustls crypto provider".to_string())?;
+
     let cli = Cli::parse();
 
     let global_config = GlobalConfig::try_from(&cli.global_flags)

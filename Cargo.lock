@@ -823,6 +823,7 @@ dependencies = [
  "keysplit",
  "logging 0.1.0",
  "predicates",
+ "rustls",
  "task_executor",
  "tempfile",
  "tokio",
