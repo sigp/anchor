@@ -350,7 +350,7 @@ mod tests {
     fn test_constant_networks_resolve_gloas_fork_epoch() {
         // Arrange
         let test_cases = [
-            (HOODI, Some(Epoch::new(132352))),
+            (HOODI, None),
             (SEPOLIA, Some(Epoch::new(353024))),
             (MAINNET, None),
         ];
