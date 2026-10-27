@@ -166,8 +166,10 @@ install-audit:
 # Tracked in sigp/anchor#989. Drop the hickory-proto ignores once libp2p ships
 # a release with hickory >= 0.26.1 (libp2p/rust-libp2p#6395) and we bump our
 # libp2p dep. See the tracking issue for the reachability analysis.
+# RUSTSEC-2026-0387: crypto-bigint 0.5 (via elliptic-curve 0.13) has no patched
+# release. It is a constant-time issue, which Anchor does not rely on.
 audit-CI:
-	cargo audit --ignore RUSTSEC-2026-0118 --ignore RUSTSEC-2026-0119
+	cargo audit --ignore RUSTSEC-2026-0118 --ignore RUSTSEC-2026-0119 --ignore RUSTSEC-2026-0387
 
 # Runs `cargo vendor` to make sure dependencies can be vendored for packaging, reproducibility and archival purpose.
 vendor:
